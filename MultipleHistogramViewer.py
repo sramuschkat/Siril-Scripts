@@ -1,20 +1,30 @@
 """
-Siril Histogram Viewer
+Siril Multiple Histogram Viewer
+Script Version: 1.0.0
+=====================================
 
-Reads the current linear image from Siril, applies autostretch, and displays
+Author: Svenesis-Siril-Scripts project.
+Contact and support: See repository README and Siril forum / scripts repository.
+
+This script reads the current linear image from Siril, applies autostretch, and displays
 a combined RGB histogram with normal/log modes, axis scaling, and Fit Histogram.
-Supports loading linear FITS files and up to 3 comparison stretched FITS files.
+It supports loading linear FITS from Siril and up to 2 comparison stretched FITS files.
+
+Run from Siril via Processing → Scripts (or your configured Scripts menu). Siril uses
+the script's parent folder name as the menu section; to show under "Utility", place
+MultipleHistogramViewer.py inside a folder named Utility in one of Siril's Script Storage
+Directories (Preferences → Scripts).
 
 (c) 2025
 SPDX-License-Identifier: GPL-3.0-or-later
-Contact: Siril forum / scripts repository
-
-Menu section: Siril uses the script's parent folder name as the Scripts menu section.
-To show this script under "Utility", place HistogramViewer.py inside a folder named
-Utility in one of Siril's Script Storage Directories (Preferences → Scripts).
 """
-
 from __future__ import annotations
+
+"""
+CHANGELOG:
+1.0.0 - Initial release
+      - Read linear image from Siril, autostretch, display image and histogram
+"""
 
 import os
 import sys
@@ -51,11 +61,11 @@ VERSION = "1.0.0"
 
 # Layout constants
 LEFT_PANEL_WIDTH = 320
-COL_MIN_WIDTH = 280  # ensure x-axis labels fit when extra columns (FITS 1–3) are visible
+COL_MIN_WIDTH = 280  # ensure x-axis labels fit when extra columns (FITS 1–2) are visible
 COL_MIN_HEIGHT = 480
 VIEW_MIN_WIDTH = 220
 VIEW_MIN_HEIGHT = 180
-STATS_LABEL_MIN_HEIGHT = 60
+STATS_LABEL_MIN_HEIGHT = 105
 FILENAME_BUTTON_MAX_LEN = 40
 HISTOGRAM_BINS = 256
 
@@ -370,6 +380,12 @@ class HistogramWidget(QWidget):
         self._clicked_intensity = None  # intensity at last image click (for vertical line)
         self._clicked_px = None  # pixel x at last click (for label)
         self._clicked_py = None  # pixel y at last click (for label)
+        self.show_legend = False  # set True in enlarge dialog to show channel legend
+
+    def set_show_legend(self, show: bool) -> None:
+        """Enable or disable the channel legend (e.g. for enlarge diagram)."""
+        self.show_legend = show
+        self.update()
 
     def set_clicked_value(
         self, intensity: float | None, px: int | None = None, py: int | None = None
@@ -619,6 +635,26 @@ class HistogramWidget(QWidget):
             painter.setFont(QFont("", 9))
             painter.drawText(int(x_pos) + 4, plot_y0 + 12, label)
 
+        # Legend (only when show_legend is True, e.g. in enlarge dialog)
+        if self.show_legend:
+            font = QFont()
+            font.setPointSize(9)
+            painter.setFont(font)
+            legend_x = plot_x1 - 95
+            legend_y = plot_y0 + 8
+            line_len = 24
+            line_height = 18
+            draw_order = ['RGB', 'R', 'G', 'B', 'L']
+            for i, ch in enumerate(draw_order):
+                if not self.visible.get(ch, False) or ch not in self.histograms or self.histograms[ch].size == 0:
+                    continue
+                color = self.CHANNEL_COLORS.get(ch, QColor(200, 200, 200))
+                y_leg = legend_y + i * line_height
+                painter.setPen(QPen(color, 2 if ch == 'RGB' else 1.5))
+                painter.drawLine(legend_x, y_leg + 4, legend_x + line_len, y_leg + 4)
+                painter.setPen(QColor(220, 220, 220))
+                painter.drawText(legend_x + line_len + 6, y_leg + 12, ch)
+
 
 # ------------------------------------------------------------------------------
 # ENLARGE DIAGRAM DIALOGS (Histogram and 3D)
@@ -647,6 +683,7 @@ class HistogramEnlargeDialog(QDialog):
         hist.set_visibility(**visibility)
         hist.set_log_mode(log_mode)
         hist.set_x_axis_mode("adu", adu_max)
+        hist.set_show_legend(True)
         layout.addWidget(hist, 1)
         btn = QPushButton("Close")
         _nofocus(btn)
@@ -945,15 +982,15 @@ class SurfacePlotDialog(QDialog):
 # MAIN WINDOW
 # ------------------------------------------------------------------------------
 
-class HistogramViewerWindow(QMainWindow):
+class MultipleHistogramViewerWindow(QMainWindow):
     """
-    Main window for the Histogram Viewer.
+    Main window for the Multiple Histogram Viewer.
 
     Displays linear and auto-stretched images with histograms, supports
-    loading FITS from Siril or file, and up to 3 comparison stretched FITS.
+    loading FITS from Siril or file, and up to 2 comparison stretched FITS.
     """
 
-    NUM_EXTRA_STRETCHED = 3
+    NUM_EXTRA_STRETCHED = 2
 
     def _all_histogram_widgets(self) -> list[HistogramWidget]:
         """Return list of all histogram widgets (linear, stretched, extra)."""
@@ -964,7 +1001,7 @@ class HistogramViewerWindow(QMainWindow):
         self.siril = siril or s.SirilInterface()
         self.img_linear = None
         self.img_stretched = None
-        self.img_stretched_extra = [None, None, None]  # 3 slots for already-stretched FITS
+        self.img_stretched_extra = [None] * self.NUM_EXTRA_STRETCHED  # slots for already-stretched FITS
         self.stretched_filenames = [None, None, None]  # filename per slot for display
         self.adu_max = 65535
         self.x_axis_mode = 'adu'
@@ -982,7 +1019,7 @@ class HistogramViewerWindow(QMainWindow):
         left.setFixedWidth(LEFT_PANEL_WIDTH)
         l_layout = QVBoxLayout(left)
         l_layout.setContentsMargins(0, 0, 0, 0)
-        lbl = QLabel("Histogram Viewer")
+        lbl = QLabel(f"Multiple Histogram Viewer {VERSION}")
         lbl.setStyleSheet("font-size: 16pt; font-weight: bold; color: #88aaff; margin-top: 5px;")
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         l_layout.addWidget(lbl)
@@ -992,13 +1029,126 @@ class HistogramViewerWindow(QMainWindow):
         self._build_3d_channel_group(l_layout)
         self._build_image_group(l_layout)
         self._build_stretched_comparisons_group(l_layout)
+        btn_help = QPushButton("Help")
+        _nofocus(btn_help)
+        btn_help.clicked.connect(self._show_help_dialog)
         btn_close = QPushButton("Close")
         _nofocus(btn_close)
         btn_close.setObjectName("CloseButton")
         btn_close.clicked.connect(self.close)
         l_layout.addStretch()
+        l_layout.addWidget(btn_help)
         l_layout.addWidget(btn_close)
         return left
+
+    def _show_help_dialog(self) -> None:
+        """Show a modal Help dialog with usage and controls."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Multiple Histogram Viewer — Help")
+        dlg.setMinimumSize(620, 560)
+        layout = QVBoxLayout(dlg)
+        te = QTextEdit()
+        te.setReadOnly(True)
+        te.setPlainText(
+            "Multiple Histogram Viewer — Help\n"
+            "=================================\n\n"
+            "This script was developed by Sven Ramuschkat.\n"
+            "Web: www.svenesis.org\n"
+            "GitHub: https://github.com/sramuschkat/Siril-Scripts\n\n"
+            "1. GETTING STARTED\n"
+            "------------------\n"
+            "The script reads the current image from Siril, builds a 2%-98% percentile autostretch for "
+            "preview, and shows the Linear and Auto-Stretched views side by side with histograms (or 3D "
+            "surface plots). You can also load a linear FITS file directly and up to 2 stretched FITS for "
+            "comparison.\n\n"
+            "2. LEFT PANEL — VIEW\n"
+            "-------------------\n"
+            "• Histogram — Shows the combined RGB (and per-channel) distribution as a 2D histogram. "
+            "X-axis is always Pixel Value in ADU (0 to your camera’s max, e.g. 0–65535). Y-axis is "
+            "pixel count (or log10(count+1) in Logarithmic mode).\n"
+            "• 3D Surface Plot — Same data as a 3D surface: X/Y = image columns/rows (subsampled), "
+            "Z = pixel value (or log) for the selected 3D channel. Use this to see spatial vs intensity "
+            "distribution.\n\n"
+            "3. LEFT PANEL — DATA-MODE\n"
+            "--------------------------\n"
+            "• Normal — Y-axis (histogram count) is linear. Good for seeing absolute counts.\n"
+            "• Logarithmic — Y-axis is log10(count+1). Use when the peak is huge and the tail is faint; "
+            "log mode makes the faint tail visible.\n\n"
+            "4. LEFT PANEL — HISTOGRAM CHANNELS\n"
+            "-----------------------------------\n"
+            "Checkboxes: RGB, R, G, B, L.\n"
+            "• RGB — Combined distribution (all channels flattened).\n"
+            "• R, G, B — Red, green, blue channel histograms.\n"
+            "• L — Luminance (Rec.709: 0.213R + 0.715G + 0.072B).\n"
+            "Toggle any combination to compare channels. All affect both the inline histogram and the "
+            "Enlarge Diagram view.\n\n"
+            "5. LEFT PANEL — 3D PLOT CHANNELS\n"
+            "--------------------------------\n"
+            "When View is \"3D Surface Plot\", choose which channel drives the Z-axis: RGB (combined), "
+            "R, G, B, or L. Same Rec.709 luminance for L.\n\n"
+            "6. LEFT PANEL — IMAGE\n"
+            "---------------------\n"
+            "• Refresh from Siril — Reload the current image from Siril (e.g. after loading a different "
+            "frame). Recomputes linear/autostretch and all histograms.\n"
+            "• Load linear FITS... — Open a linear FITS file as the primary image instead of Siril’s "
+            "current image. Useful if you want to inspect a file that is not loaded in Siril.\n\n"
+            "7. LEFT PANEL — STRETCHED COMPARISONS\n"
+            "-------------------------------------\n"
+            "• Load stretched FITS 1 / 2 — Load an already-stretched FITS file into that slot. "
+            "The script displays it in a separate column with its own image, histogram/3D, and stats. "
+            "Use this to compare different stretches (e.g. Siril MTF vs VeraLux vs manual) side by side.\n"
+            "• Clear — Remove the file from that slot and hide the column.\n"
+            "Slots are independent; you can use 1 or 2.\n\n"
+            "8. RIGHT PANEL — COLUMNS\n"
+            "------------------------\n"
+            "• Linear — Raw sensor data (normalized 0–1). No stretch; histogram shows the real "
+            "distribution (usually a strong peak at low values and a long tail).\n"
+            "• Auto-Stretched — Internal 2%-98% percentile stretch for quick preview. Values below "
+            "the 2nd percentile clip to 0, above the 98th to 1; in between they are linearly mapped. "
+            "This is not Siril’s full MTF/GHT; it’s for visual comparison only.\n"
+            "• Stretched 1 / 2 — Shown only when you load a file into that slot. Displays the "
+            "loaded stretched FITS with its histogram and stats.\n\n"
+            "9. EACH COLUMN — IMAGE ZOOM\n"
+            "----------------------------\n"
+            "• - (Zoom Out) — Scale down the image in that column.\n"
+            "• Fit — Fit the image to the view while keeping aspect ratio.\n"
+            "• 1:1 — View at 100% (one pixel = one screen pixel).\n"
+            "• + (Zoom In) — Scale up the image.\n\n"
+            "10. EACH COLUMN — STATS AND ENLARGE DIAGRAM\n"
+            "-----------------------------------------\n"
+            "• Stats (below histogram) — Computed over all channels combined (RGB flattened). "
+            "Size, pixel count; Min/Max, Mean, Median, Std, IQR, MAD (ADU); P2/P98 (2nd/98th percentile, "
+            "the range used for Auto-Stretch); Range (P2–P98) in ADU; Near-black / Near-white (percentage "
+            "of pixels at or below 1/255 or at or above 1−1/255 in normalized space). For large images, "
+            "stats show \"(subsampled)\" when computed on a subset of pixels. Hover the stats text for a tooltip.\n"
+            "• Enlarge Diagram — Opens a larger modal with the same histogram (or 3D surface) for that "
+            "column, with the same channel and Data-Mode settings. Useful for fine inspection.\n\n"
+            "11. CLICKING ON AN IMAGE\n"
+            "----------------------\n"
+            "Click anywhere on an image in any column. The script shows:\n"
+            "• In the stats area: Click (x=..., y=...): R=... G=... B=... I=... (ADU).\n"
+            "• In the histogram: A vertical line at the clicked pixel’s intensity and a label with "
+            "Value (ADU) and pixel count in that bin. This helps you see where a given pixel sits in "
+            "the distribution.\n\n"
+            "12. X-AXIS (ADU)\n"
+            "---------------\n"
+            "Histogram X-axis is always \"Pixel Value (ADU 0–max)\". The max is derived from your data "
+            "(e.g. 65535 for 16-bit). Values are in camera ADU, not 0–1, so you can compare with "
+            "other tools and with the stats (Min/Max, percentiles) which are also in ADU.\n\n"
+            "13. REQUIREMENTS\n"
+            "---------------\n"
+            "Siril 1.4+ with Python script support, sirilpy (bundled with Siril), and numpy, PyQt6, "
+            "Pillow, astropy (installed automatically when the script runs).\n\n"
+            "For more details and menu setup (e.g. show under \"Utility\"), see the repository README "
+            "at https://github.com/sramuschkat/Siril-Scripts"
+        )
+        te.setStyleSheet("font-size: 10pt; color: #e0e0e0; background: #2b2b2b;")
+        layout.addWidget(te)
+        btn = QPushButton("Close")
+        _nofocus(btn)
+        btn.clicked.connect(dlg.accept)
+        layout.addWidget(btn)
+        dlg.exec()
 
     def _build_histogram_group(self, parent_layout: QVBoxLayout) -> None:
         """Build the Histogram Channels group (channels, X-axis, ADU, axis limits, Fit button)."""
@@ -1155,7 +1305,7 @@ class HistogramViewerWindow(QMainWindow):
         r_layout = QHBoxLayout(right)
         r_layout.setContentsMargins(0, 0, 0, 0)
 
-        def make_column(title, zoom_in_cb, zoom_out_cb, fit_cb, zoom_11_cb, explain_cb, enlarge_diagram_cb):
+        def make_column(title, zoom_in_cb, zoom_out_cb, fit_cb, zoom_11_cb, enlarge_diagram_cb):
             col = QWidget()
             col_layout = QVBoxLayout(col)
             col_layout.setContentsMargins(5, 5, 5, 5)
@@ -1206,28 +1356,30 @@ class HistogramViewerWindow(QMainWindow):
             stacked_widget.addWidget(hist_widget)       # index 0 = Histogram
             stacked_widget.addWidget(surface_plot_widget)  # index 1 = 3D Surface Plot
             col_layout.addWidget(stacked_widget, 1)
-            # Stats section with Explain and Enlarge Diagram buttons
-            stats_section = QWidget()
-            stats_layout = QVBoxLayout(stats_section)
-            stats_layout.setContentsMargins(0, 0, 0, 0)
-            stats_row = QHBoxLayout()
-            stats_label = QLabel("")
-            stats_label.setStyleSheet("font-size: 11pt; color: #aaa; font-family: 'Courier New', Courier;")
-            stats_label.setWordWrap(True)
-            stats_label.setMinimumHeight(STATS_LABEL_MIN_HEIGHT)
-            stats_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
-            stats_row.addWidget(stats_label, 1)
-            btn_explain = QPushButton("Explain")
-            _nofocus(btn_explain)
-            btn_explain.setToolTip("Show how data was stretched from linear to this image")
-            btn_explain.clicked.connect(explain_cb)
-            stats_row.addWidget(btn_explain)
+            # Enlarge button directly under histogram/3D plot
             btn_enlarge = QPushButton("Enlarge Diagram")
             _nofocus(btn_enlarge)
             btn_enlarge.setToolTip("Open the current diagram (histogram or 3D plot) in a larger modal window.")
             btn_enlarge.clicked.connect(enlarge_diagram_cb)
-            stats_row.addWidget(btn_enlarge)
-            stats_layout.addLayout(stats_row)
+            col_layout.addWidget(btn_enlarge)
+            # Stats section (full width)
+            stats_section = QWidget()
+            stats_layout = QVBoxLayout(stats_section)
+            stats_layout.setContentsMargins(0, 0, 0, 0)
+            stats_label = QLabel("")
+            stats_label.setStyleSheet("font-size: 10pt; color: #bbb; font-family: 'Courier New', monospace;")
+            stats_label.setWordWrap(True)
+            stats_label.setMinimumHeight(STATS_LABEL_MIN_HEIGHT)
+            stats_label.setMinimumWidth(240)
+            stats_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+            stats_label.setToolTip(
+                "Stats are over all channels combined (RGB flattened). "
+                "P2/P98 = 2nd and 98th percentile (range used for Auto-Stretch). "
+                "Range (P2–P98) = spread in ADU. IQR = interquartile range (75th−25th %ile). "
+                "MAD = median absolute deviation. Near-black/Near-white = % of pixels ≤1/255 or ≥1−1/255 (normalized). "
+                "'(subsampled)' = computed on a subset of pixels for large images."
+            )
+            stats_layout.addWidget(stats_label)
             col_layout.addWidget(stats_section)
             col.setMinimumWidth(COL_MIN_WIDTH)
             col.setMinimumHeight(COL_MIN_HEIGHT)
@@ -1240,7 +1392,6 @@ class HistogramViewerWindow(QMainWindow):
             self.zoom_out_linear,
             self.fit_view_linear,
             self.zoom_11_linear,
-            self._show_linear_explain,
             self._show_enlarge_diagram_linear,
         )
         self.col_stretched, self.view_stretched, self.pix_item_stretched, self.hist_widget_stretched, self.surface_widget_stretched, self.stacked_widget_stretched, self.stats_label_stretched, _ = make_column(
@@ -1249,7 +1400,6 @@ class HistogramViewerWindow(QMainWindow):
             self.zoom_out_stretched,
             self.fit_view_stretched,
             self.zoom_11_stretched,
-            self._show_auto_stretched_explain,
             self._show_enlarge_diagram_stretched,
         )
 
@@ -1269,7 +1419,6 @@ class HistogramViewerWindow(QMainWindow):
                 lambda checked=False, idx=i: self._zoom_out_extra(idx),
                 lambda checked=False, idx=i: self._fit_view_extra(idx),
                 lambda checked=False, idx=i: self._zoom_11_extra(idx),
-                lambda checked=False, idx=i: self._show_stretched_fits_explain(idx),
                 lambda checked=False, idx=i: self._show_enlarge_diagram_extra(idx),
             )
             self.col_extra.append(col)
@@ -1306,7 +1455,7 @@ class HistogramViewerWindow(QMainWindow):
         layout = QHBoxLayout(main)
         layout.addWidget(self._build_left_panel())
         layout.addWidget(self._build_right_panel(), 1)
-        self.setWindowTitle("Siril Histogram Viewer")
+        self.setWindowTitle("Siril Multiple Histogram Viewer")
         self.setStyleSheet(DARK_STYLESHEET)
         self.resize(1200, 700)
 
@@ -1359,6 +1508,16 @@ class HistogramViewerWindow(QMainWindow):
     def _fit_view_extra(self, i: int) -> None:
         self._fit_view(self.view_extra[i], self.pix_item_extra[i])
 
+    def _fit_all_views(self) -> None:
+        """Fit every image view that has an image into its window (aspect ratio preserved)."""
+        if self.img_linear is not None:
+            self._fit_view(self.view_linear, self.pix_item_linear)
+        if self.img_stretched is not None:
+            self._fit_view(self.view_stretched, self.pix_item_stretched)
+        for i in range(self.NUM_EXTRA_STRETCHED):
+            if self.img_stretched_extra[i] is not None:
+                self._fit_view(self.view_extra[i], self.pix_item_extra[i])
+
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         """Handle mouse clicks on image views to show pixel value in histogram."""
         from PyQt6.QtCore import QEvent
@@ -1379,7 +1538,7 @@ class HistogramViewerWindow(QMainWindow):
             view, pix_item = self.view_stretched, self.pix_item_stretched
             img = self.img_stretched
             stats_label, hist_widget = self.stats_label_stretched, self.hist_widget_stretched
-        elif column_type in ("stretched_1", "stretched_2", "stretched_3"):
+        elif column_type in ("stretched_1", "stretched_2"):
             idx = int(column_type.split("_")[1]) - 1
             view, pix_item = self.view_extra[idx], self.pix_item_extra[idx]
             img = self.img_stretched_extra[idx]
@@ -1424,7 +1583,7 @@ class HistogramViewerWindow(QMainWindow):
             surface_widget = self.surface_widget_linear
         elif column_type == "stretched":
             surface_widget = self.surface_widget_stretched
-        elif column_type in ("stretched_1", "stretched_2", "stretched_3"):
+        elif column_type in ("stretched_1", "stretched_2"):
             idx = int(column_type.split("_")[1]) - 1
             surface_widget = self.surface_widget_extra[idx]
         else:
@@ -1466,9 +1625,8 @@ class HistogramViewerWindow(QMainWindow):
             self.img_stretched = autostretch_percentile(img)
             self._update_image_display()
             self._compute_histogram()
-            self.setWindowTitle("Siril Histogram Viewer - Loaded")
-            QTimer.singleShot(100, self.fit_view_linear)
-            QTimer.singleShot(100, self.fit_view_stretched)
+            self.setWindowTitle("Siril Multiple Histogram Viewer - Loaded")
+            QTimer.singleShot(100, self._fit_all_views)
         except Exception as e:
             QMessageBox.critical(
                 self,
@@ -1494,7 +1652,7 @@ class HistogramViewerWindow(QMainWindow):
             self._update_image_display()
             self._compute_histogram()
             self._update_stats()
-            QTimer.singleShot(100, lambda: self._fit_view_extra(slot))
+            QTimer.singleShot(100, self._fit_all_views)
         except Exception as e:
             QMessageBox.critical(
                 self,
@@ -1583,51 +1741,82 @@ class HistogramViewerWindow(QMainWindow):
     def _format_stats(self, arr: np.ndarray, adu_mode: bool = False, adu_max: int = 65535) -> str:
         """
         Compute and format image statistics for display under each histogram.
-
-        For large images a subsampled view is used internally so that percentile and
-        mean/std computations remain fast; image size and pixel count still reflect the
-        full-resolution array. When ``adu_mode`` is True values are scaled to ADU.
+        Stats are over all channels combined (RGB flattened). For large images a
+        subsampled view is used; size/pixel count reflect the full-resolution array.
+        When adu_mode is True values are scaled to ADU.
         """
         arr_s = _subsample_for_stats(arr)
+        is_subsampled = arr_s.size < arr.size
         flat = arr_s.ravel()
         h, w = arr.shape[0], arr.shape[1]
-        # Single-pass stats: percentile gets min, p2, p98, max; mean/std are separate
-        pct = np.percentile(flat, [0, 2, 50, 98, 100])
-        mn, p2, med, p98, mx = float(pct[0]), float(pct[1]), float(pct[2]), float(pct[3]), float(pct[4])
+        # Percentiles: 0, 2, 25, 50, 75, 98, 100 for min, P2, IQR, median, P98, max
+        pct = np.percentile(flat, [0, 2, 25, 50, 75, 98, 100])
+        mn = float(pct[0])
+        p2 = float(pct[1])
+        p25 = float(pct[2])
+        med = float(pct[3])
+        p75 = float(pct[4])
+        p98 = float(pct[5])
+        mx = float(pct[6])
         mean_val = float(np.mean(flat))
         std_val = float(np.std(flat))
-        # Percentage and count of pixels near black/white in normalized space
+        iqr = p75 - p25
+        mad = float(np.median(np.abs(flat - med)))
+        range_p2_p98 = p98 - p2
+        # Near-black / near-white: threshold 1/255 in normalized 0–1 space
         n = flat.size
         if n > 0:
-            eps = 1.0 / 255.0  # treat one 8-bit step as "near 0/1"
-            blacks_count = int(np.count_nonzero(flat <= eps))
-            whites_count = int(np.count_nonzero(flat >= 1.0 - eps))
-            blacks_pct = 100.0 * blacks_count / n
-            whites_pct = 100.0 * whites_count / n
+            eps = 1.0 / 255.0
+            near_black_count = int(np.count_nonzero(flat <= eps))
+            near_white_count = int(np.count_nonzero(flat >= 1.0 - eps))
+            near_black_pct = 100.0 * near_black_count / n
+            near_white_pct = 100.0 * near_white_count / n
         else:
-            blacks_count = whites_count = 0
-            blacks_pct = whites_pct = 0.0
+            near_black_count = near_white_count = 0
+            near_black_pct = near_white_pct = 0.0
+        # Compact, readable layout: one value per line where needed to avoid wrap; short labels
+        w_num = 8
+        sub_note = " (subsampled)" if is_subsampled else ""
         if adu_mode:
             scale = float(adu_max)
-            mn, mx = int(round(mn * scale)), int(round(mx * scale))
-            mean_val = int(round(mean_val * scale))
-            med = int(round(med * scale))
-            std_val = int(round(std_val * scale))
-            p2, p98 = int(round(p2 * scale)), int(round(p98 * scale))
+            mn_a = int(round(mn * scale))
+            mx_a = int(round(mx * scale))
+            mean_a = int(round(mean_val * scale))
+            med_a = int(round(med * scale))
+            std_a = int(round(std_val * scale))
+            p2_a = int(round(p2 * scale))
+            p98_a = int(round(p98 * scale))
+            iqr_a = int(round(iqr * scale))
+            mad_a = int(round(mad * scale))
+            range_a = int(round(range_p2_p98 * scale))
             lines = [
-                f"Size: {w}×{h}  Pixels: {w*h:,}",
-                f"Min: {mn}  Max: {mx}  (ADU)",
-                f"Mean: {mean_val}  Median: {med}",
-                f"Std: {std_val}  %2/98: {p2} / {p98}",
-                f"Blacks: {blacks_pct:.2f}% ({blacks_count:,})  Whites: {whites_pct:.2f}% ({whites_count:,})",
+                f"Size: {w}×{h}",
+                f"Pixels: {w*h:,}{sub_note}",
+                "",
+                f"Min:   {mn_a:>{w_num}d}   Max:   {mx_a:>{w_num}d}  (ADU)",
+                f"Mean:  {mean_a:>{w_num}d}   Median: {med_a:>{w_num}d}",
+                f"Std:   {std_a:>{w_num}d}   IQR:   {iqr_a:>{w_num}d}   MAD:  {mad_a:>{w_num}d}",
+                "",
+                f"P2/P98: {p2_a} / {p98_a}",
+                f"Range:  {range_a} ADU",
+                "",
+                f"Near-black: {near_black_pct:.2f}% ({near_black_count:,})",
+                f"Near-white: {near_white_pct:.2f}% ({near_white_count:,})",
             ]
         else:
             lines = [
-                f"Size: {w}×{h}  Pixels: {w*h:,}",
-                f"Min: {mn:.4f}  Max: {mx:.4f}",
-                f"Mean: {mean_val:.4f}  Median: {med:.4f}",
-                f"Std: {std_val:.4f}  %2/98: {p2:.3f} / {p98:.3f}",
-                f"Blacks: {blacks_pct:.2f}% ({blacks_count:,})  Whites: {whites_pct:.2f}% ({whites_count:,})",
+                f"Size: {w}×{h}",
+                f"Pixels: {w*h:,}{sub_note}",
+                "",
+                f"Min:   {mn:>{w_num}.4f}   Max:   {mx:>{w_num}.4f}",
+                f"Mean:  {mean_val:>{w_num}.4f}   Median: {med:>{w_num}.4f}",
+                f"Std:   {std_val:>{w_num}.4f}   IQR:   {iqr:>{w_num}.4f}   MAD:  {mad:>{w_num}.4f}",
+                "",
+                f"P2/P98: {p2:.3f} / {p98:.3f}",
+                f"Range:  {range_p2_p98:.4f}",
+                "",
+                f"Near-black: {near_black_pct:.2f}% ({near_black_count:,})",
+                f"Near-white: {near_white_pct:.2f}% ({near_white_count:,})",
             ]
         return "\n".join(lines)
 
@@ -1651,15 +1840,6 @@ class HistogramViewerWindow(QMainWindow):
                     self.stats_label_extra[i].setText("(stats unavailable)")
             else:
                 self.stats_label_extra[i].setText("")
-
-    def _show_linear_explain(self) -> None:
-        self._show_explain_dialog("linear")
-
-    def _show_auto_stretched_explain(self) -> None:
-        self._show_explain_dialog("stretched")
-
-    def _show_stretched_fits_explain(self, idx: int) -> None:
-        self._show_explain_dialog(f"stretched_{idx + 1}")
 
     def _show_enlarge_diagram_linear(self) -> None:
         """Open modal with current diagram (histogram or 3D) for the linear column, enlarged."""
@@ -1747,134 +1927,6 @@ class HistogramViewerWindow(QMainWindow):
             )
             dlg.setWindowState(Qt.WindowState.WindowMaximized)
             dlg.exec()
-
-    def _show_explain_dialog(self, column_type: str) -> None:
-        """Show a dialog explaining how data was stretched from linear to this image."""
-        if column_type == "linear":
-            text = self._get_linear_explain_text()
-        elif column_type == "stretched":
-            text = self._get_auto_stretched_explain_text()
-        elif column_type == "stretched_1":
-            text = self._get_veralux_explain_text()
-        elif column_type in ("stretched_2", "stretched_3"):
-            slot = 2 if column_type == "stretched_2" else 3
-            text = self._get_stretched_fits_explain_text(slot - 1)
-        else:
-            text = "No explanation available."
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Linear → This Image")
-        dlg.setMinimumSize(420, 320)
-        layout = QVBoxLayout(dlg)
-        te = QTextEdit()
-        te.setReadOnly(True)
-        te.setPlainText(text)
-        te.setStyleSheet("font-size: 10pt; color: #e0e0e0; background: #2b2b2b;")
-        layout.addWidget(te)
-        btn = QPushButton("Close")
-        _nofocus(btn)
-        btn.clicked.connect(dlg.accept)
-        layout.addWidget(btn)
-        dlg.exec()
-
-    def _get_linear_explain_text(self) -> str:
-        """Explanation for the Linear column."""
-        return (
-            "Linear — Raw sensor data, normalized to 0–1.\n\n"
-            "The camera captures photons linearly: twice the photons = twice the pixel value. "
-            "Raw astronomical images are very dark because the sky background is faint and only "
-            "a small fraction of pixels are bright (stars, nebula). Most values cluster near zero.\n\n"
-            "This histogram shows that distribution directly: a strong peak at the left (shadows) "
-            "and a long tail to the right. No stretch has been applied; the data is as the sensor "
-            "recorded it (after normalization to 0–1)."
-        )
-
-    def _get_auto_stretched_explain_text(self) -> str:
-        """
-        Explanation for the Auto-Stretched column, using Siril_Stretch_Comparison.html
-        and current image values.
-
-        Percentiles and means are computed on a subsampled view for very large images
-        to keep the UI responsive; values remain representative of the full frame.
-        """
-        if self.img_linear is None or self.img_stretched is None:
-            return "No image loaded."
-        arr_s = _subsample_for_stats(self.img_linear)
-        flat = arr_s.ravel()
-        p_low = float(np.percentile(flat, 2))
-        p_high = float(np.percentile(flat, 98))
-        mean_lin = float(np.mean(flat))
-        mean_str = float(np.mean(self.img_stretched.ravel()))
-        factor = p_high - p_low
-        stretch_ratio = 1.0 / factor if factor > 1e-9 else float('inf')
-        scale = self.adu_max
-        p_low_s = f"{int(round(p_low * scale))} ADU"
-        p_high_s = f"{int(round(p_high * scale))} ADU"
-        mean_lin_s = f"{int(round(mean_lin * scale))} ADU"
-        mean_str_s = f"{int(round(mean_str * scale))} ADU"
-        return (
-            "Auto-Stretched — Stretch explanation (from Siril stretch comparison)\n"
-            "══════════════════════════════════════════════════════════════════\n\n"
-            "What is stretching?\n"
-            "An astronomical camera captures photons linearly; most nebula detail lives in the "
-            "bottom 1–5% of that range, invisible on screen. Stretching is a nonlinear remapping "
-            "that boosts faint signals and compresses bright stars so everything becomes visible.\n\n"
-            "Siril built-in autostretch (GHT / MTF):\n"
-            "Siril's native autostretch uses a Midtone Transfer Function (MTF), the same rational "
-            "function as PixInsight's STF. Since Siril 1.2+ it is wrapped in the Generalised "
-            "Hyperbolic Stretch (GHT) framework; the default mode is still classic MTF.\n\n"
-            "  • Formula:  MTF(x, m) = (m − 1)·x / ((2m − 1)·x − m)\n"
-            "    where m = midtone balance (0 < m < 1), x = pixel value in [0,1] after black-point subtraction.\n\n"
-            "  • Pipeline: Compute median + MAD → Derive shadow clip → Solve for midtone m → "
-            "Apply MTF to all channels (linked).\n\n"
-            "  • Color: Channels are linked — one set of (shadows, midtones, highlights) for R,G,B. "
-            "Preserves color balance; no per-channel tuning. Fast and predictable; limited highlight "
-            "control (bright stars can clip); purely automatic.\n\n"
-            "This viewer’s Auto-Stretched column:\n"
-            "Here we use a simpler 2%–98% percentile stretch for a quick preview (not the full MTF). "
-            "The range between the 2nd and 98th percentiles is mapped to 0–1; values outside clip to black/white.\n\n"
-            f"Parameters for this image:\n"
-            f"  • Low cut (2nd %):  {p_low_s}\n"
-            f"  • High cut (98th %): {p_high_s}\n"
-            f"  • Formula: new = (old − {p_low_s}) ÷ ({p_high_s} − {p_low_s})\n"
-            f"  • Stretch factor: ×{stretch_ratio:.1f}\n"
-            f"  • Linear mean: {mean_lin_s}  →  Stretched mean: {mean_str_s}"
-        )
-
-    def _get_veralux_explain_text(self) -> str:
-        """Explanation for FITS 1 — VeraLux HyperMetric Stretch."""
-        return (
-            "FITS 1 — VeraLux HyperMetric Stretch (Riccardo Paterniti)\n"
-            "Linear → This histogram\n\n"
-            "Step 1 — Adaptive Anchor:\n"
-            "  Subtract an adaptive black point (morphological analysis) so the sky background "
-            "maps to ~0. More robust than median−σ for gradients and faint targets.\n\n"
-            "Step 2 — Luminance Extraction:\n"
-            "  Extract L from RGB using sensor-weighted coefficients (25+ camera profiles). "
-            "Store color ratios R/L, G/L, B/L to preserve hue.\n\n"
-            "Step 3 — arcsinh on L only:\n"
-            "  Apply inverse hyperbolic sine stretch to luminance only:\n"
-            "  IHS(x) = (arcsinh(D·x+b) − arcsinh(b)) / (arcsinh(D+b) − arcsinh(b))\n"
-            "  Shadows (small x) get a steep boost; bright values flatten, so faint nebula "
-            "expands while star cores avoid clipping. Unlike MTF, arcsinh compresses highlights gracefully.\n\n"
-            "Step 4 — Rebuild RGB:\n"
-            "  R_out = L_stretched · (R/L), G_out = L_stretched · (G/L), B_out = L_stretched · (B/L).\n"
-            "  Hue is preserved; only brightness changes.\n\n"
-            "Result: Values that peaked near zero in linear now span 0–1. The histogram shape "
-            "reflects this new distribution. Best for extreme dynamic range and true-color imaging."
-        )
-
-    def _get_stretched_fits_explain_text(self, slot: int) -> str:
-        """Explanation for FITS 2 or 3 — generic stretched file."""
-        name = self.stretched_filenames[slot] if slot < len(self.stretched_filenames) else None
-        name_s = name or f"Stretched {slot + 1}"
-        return (
-            f"FITS {slot + 1} ({name_s}) — Externally stretched\n\n"
-            "This file was stretched outside this viewer (e.g. in Siril, PixInsight, or another tool). "
-            "The histogram shows the distribution of pixel values in the already-processed image.\n\n"
-            "We do not know the exact stretch method used, but the result is normalized to 0–1. "
-            "Compare with Linear and Auto-Stretched to see how different algorithms redistribute "
-            "the original data."
-        )
 
     def _compute_histogram(self):
         vis = {'rgb': self.chk_rgb.isChecked(), 'r': self.chk_r.isChecked(), 'g': self.chk_g.isChecked(), 'b': self.chk_b.isChecked(), 'l': self.chk_l.isChecked()}
@@ -1978,9 +2030,8 @@ class HistogramViewerWindow(QMainWindow):
             self.img_stretched = autostretch_percentile(img)
             self._update_image_display()
             self._compute_histogram()
-            self.setWindowTitle("Siril Histogram Viewer - Loaded")
-            QTimer.singleShot(100, self.fit_view_linear)
-            QTimer.singleShot(100, self.fit_view_stretched)
+            self.setWindowTitle("Siril Multiple Histogram Viewer - Loaded")
+            QTimer.singleShot(100, self._fit_all_views)
         except NoImageError:
             QMessageBox.warning(self, "No Image", no_image_msg)
         except SirilConnectionError:
@@ -2014,10 +2065,10 @@ def main():
     app = QApplication(sys.argv)
     try:
         siril = s.SirilInterface()
-        win = HistogramViewerWindow(siril)
+        win = MultipleHistogramViewerWindow(siril)
         win.showMaximized()
         try:
-            siril.log(f"Histogram Viewer v{VERSION} loaded.")
+            siril.log(f"Multiple Histogram Viewer v{VERSION} loaded.")
         except Exception:
             pass
         return app.exec()
@@ -2031,7 +2082,7 @@ def main():
     except Exception as e:
         QMessageBox.critical(
             None,
-            "Histogram Viewer Error",
+            "Multiple Histogram Viewer Error",
             f"{e}\n\n{traceback.format_exc()}"
         )
         return 1

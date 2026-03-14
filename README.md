@@ -1,55 +1,68 @@
-# Siril Histogram Viewer
+# Svenesis Siril Scripts
 
-A Siril Python script that reads the current linear image from Siril, applies autostretch, and displays a combined RGB histogram with normal/log modes, axis scaling, and a "Fit Histogram" button.
+A collection of Python scripts for [Siril](https://www.siril.org/) (astronomical image processing). Each script can be run from Siril’s **Processing → Scripts** menu (or your configured Scripts menu).
 
-## Features
+## Scripts
 
-- **Read linear image**: Gets the current image loaded in Siril via `get_image_pixeldata(preview=False)`
-- **Autostretch**: Applies percentile-based autostretch (2%-98%) for display
-- **Combined RGB histogram**: Flattens all R, G, B channel pixels into one distribution
-- **Y-axis mode**: Toggle between Normal (linear count) and Logarithmic (log10(count+1))
-- **Axis scaling**: X Min, X Max, Y Min, Y Max spinboxes for manual view control
-- **Fit Histogram**: Auto-adjusts axes so the histogram data fits visually
+| Script | Description |
+|--------|-------------|
+| [Multiple Histogram Viewer](#multiple-histogram-viewer) | View linear and stretched images with RGB histograms, 3D surface plots, and detailed statistics. |
 
-## Requirements
+---
+
+## Multiple Histogram Viewer
+
+**File:** `MultipleHistogramViewer.py`
+
+Reads the current linear image from Siril (or a linear FITS file), applies a 2%–98% percentile autostretch for preview, and displays **Linear** and **Auto-Stretched** views side by side with combined RGB histograms or 3D surface plots. You can also load up to **2 additional stretched FITS** files for comparison.
+
+### Screenshots
+
+![Multiple Histogram Viewer — main window](screenshots/multiple-histogram-viewer-1.jpg)
+
+*Main window: Linear and Auto-Stretched columns with histogram view, controls, and statistics.*
+
+![Multiple Histogram Viewer — 3D and stats](screenshots/multiple-histogram-viewer-2.jpg)
+
+*3D surface plot option and statistical data (Size, Min/Max, Mean, Median, Std, IQR, MAD, P2/P98, Range, Near-black/Near-white).*
+
+### Features
+
+- **Image sources:** Current image from Siril, or load a linear FITS directly; up to 2 stretched FITS for comparison.
+- **Views:** Histogram (2D) or 3D surface plot (X/Y = pixel position, Z = channel value).
+- **Histogram:** Combined RGB and per-channel (R, G, B, L) with Normal or Logarithmic Y-axis; X-axis in ADU.
+- **Statistics:** Size, Pixels, Min/Max, Mean, Median, Std, IQR, MAD, P2/P98 (2nd/98th percentile), Range (P2–P98), Near-black/Near-white %. Tooltip explains each metric; “(subsampled)” when stats are from a subset of pixels.
+- **Enlarge Diagram:** Button under each histogram/3D plot opens a larger modal with the same diagram and a channel legend.
+- **Help:** Modal help with author info, usage, and control descriptions.
+- **Image zoom:** −, Fit, 1:1, + per column; after loading, all images are fitted to their windows.
+- **Click on image:** Shows pixel R, G, B, I (ADU) in the stats area and a vertical line in the histogram.
+
+### Requirements
 
 - Siril 1.4+ with Python script support
-- sirilpy module (bundled with Siril)
+- sirilpy (bundled with Siril)
 - numpy, PyQt6, Pillow, astropy (installed automatically via `s.ensure_installed`)
+- matplotlib (for 3D surface plot only)
 
-## Testing
+### Usage
 
-Run unit tests for image processing (requires numpy):
+1. Load an image in Siril (or use **Load linear FITS...** in the script).
+2. Run **Multiple Histogram Viewer** from Siril: **Processing → Scripts** (or your Scripts menu).
+3. Use the left panel for view type (Histogram / 3D), Data-Mode (Normal / Log), channels, and image/source options. Use **Enlarge Diagram** for a larger histogram or 3D view.
 
-```bash
-python -m unittest tests.test_image_processing -v
-# or: python -m pytest tests/ -v
-```
+### Script menu section (e.g. Utility)
 
-## Usage
-
-1. Load an image in Siril
-2. Run the script from Siril: **Processing → Scripts** (or your script menu)
-3. The script will load the image, apply autostretch, and display the image plus histogram
-
-## Script menu section (e.g. Utility)
-
-Siril uses the **parent folder name** of the script as the menu section. By default, if the script lives in a folder named `Siril-Histogram-Viewer`, it appears under **Siril-Histogram-Viewer** in the Scripts menu. To have it appear under **Utility** instead:
+Siril uses the **parent folder name** of the script as the menu section. To show the script under **Utility**:
 
 1. In Siril: **Preferences → Scripts** and note your **Script Storage Directories**.
 2. In one of those directories, create a folder named **Utility** (if it does not exist).
-3. Move `HistogramViewer.py` into that folder (e.g. `…/Utility/HistogramViewer.py`).
+3. Place `MultipleHistogramViewer.py` in that folder (e.g. `…/Utility/MultipleHistogramViewer.py`).
 4. In Siril, use **Preferences → Scripts → Refresh** (or the `reloadscripts` command).
 
-The script will then show under **Utility** in the Scripts menu.
+### Author and links
 
-## Controls
-
-- **Refresh from Siril**: Reload the current image
-- **Normal / Logarithmic**: Switch Y-axis scale
-- **X Min, X Max, Y Min, Y Max**: Manual axis limits (0-1 for X)
-- **Fit Histogram**: Auto-fit view to data extent
-- **-, Fit, 1:1, +**: Zoom controls for the image
+- **Author:** Sven Ramuschkat — [www.svenesis.org](https://www.svenesis.org)
+- **Repository:** [github.com/sramuschkat/Siril-Scripts](https://github.com/sramuschkat/Siril-Scripts)
 
 ## License
 
