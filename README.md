@@ -27,13 +27,11 @@ Reads the current linear image from Siril (or a linear FITS file), applies a 2%�
 
 ### Screenshots
 
-Place `multiple-histogram-viewer-1.jpg` and `multiple-histogram-viewer-2.jpg` in the `screenshots/` folder; the images will then show on GitHub and in local viewers.
-
-![Multiple Histogram Viewer — main window](https://github.com/sramuschkat/Siril-Scripts/raw/main/screenshots/multiple-histogram-viewer-1.jpg)
+![Multiple Histogram Viewer — main window](https://github.com/sramuschkat/Siril-Scripts/raw/main/screenshots/MultipleHistogramViewer-1.jpg)
 
 *Main window: Linear and Auto-Stretched columns with histogram view, controls, and statistics.*
 
-![Multiple Histogram Viewer — 3D and stats](https://github.com/sramuschkat/Siril-Scripts/raw/main/screenshots/multiple-histogram-viewer-2.jpg)
+![Multiple Histogram Viewer — 3D and stats](https://github.com/sramuschkat/Siril-Scripts/raw/main/screenshots/MultipleHistogramViewer-2.jpg)
 
 *3D surface plot option and statistical data (Size, Min/Max, Mean, Median, Std, IQR, MAD, P2/P98, Range, Near-black/Near-white).*
 
