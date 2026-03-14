@@ -2,6 +2,15 @@
 
 A collection of Python scripts for [Siril](https://www.siril.org/) (astronomical image processing). Each script can be run from Siril’s **Processing → Scripts** menu (or your configured Scripts menu).
 
+## Author and links
+
+- **Author:** Sven Ramuschkat — [www.svenesis.org](https://www.svenesis.org)
+- **Repository:** [github.com/sramuschkat/Siril-Scripts](https://github.com/sramuschkat/Siril-Scripts)
+
+## License
+
+GPL-3.0-or-later
+
 ## Scripts
 
 | Script | Description |
@@ -49,21 +58,3 @@ Reads the current linear image from Siril (or a linear FITS file), applies a 2%�
 1. Load an image in Siril (or use **Load linear FITS...** in the script).
 2. Run **Multiple Histogram Viewer** from Siril: **Processing → Scripts** (or your Scripts menu).
 3. Use the left panel for view type (Histogram / 3D), Data-Mode (Normal / Log), channels, and image/source options. Use **Enlarge Diagram** for a larger histogram or 3D view.
-
-### Script menu section (e.g. Utility)
-
-Siril uses the **parent folder name** of the script as the menu section. To show the script under **Utility**:
-
-1. In Siril: **Preferences → Scripts** and note your **Script Storage Directories**.
-2. In one of those directories, create a folder named **Utility** (if it does not exist).
-3. Place `MultipleHistogramViewer.py` in that folder (e.g. `…/Utility/MultipleHistogramViewer.py`).
-4. In Siril, use **Preferences → Scripts → Refresh** (or the `reloadscripts` command).
-
-### Author and links
-
-- **Author:** Sven Ramuschkat — [www.svenesis.org](https://www.svenesis.org)
-- **Repository:** [github.com/sramuschkat/Siril-Scripts](https://github.com/sramuschkat/Siril-Scripts)
-
-## License
-
-GPL-3.0-or-later
