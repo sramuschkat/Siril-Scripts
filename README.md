@@ -1,6 +1,6 @@
 # Svenesis Siril Scripts
 
-A collection of Python scripts for [Siril](https://www.siril.org/) (astronomical image processing). Each script can be run from Siril’s **Processing → Scripts** menu (or your configured Scripts menu).
+A collection of Python scripts for [Siril](https://www.siril.org/) (astronomical image processing).
 
 ## Author and links
 
@@ -27,11 +27,13 @@ Reads the current linear image from Siril (or a linear FITS file), applies a 2%�
 
 ### Screenshots
 
-![Multiple Histogram Viewer — main window](screenshots/multiple-histogram-viewer-1.jpg)
+Place `multiple-histogram-viewer-1.jpg` and `multiple-histogram-viewer-2.jpg` in the `screenshots/` folder; the images will then show on GitHub and in local viewers.
+
+![Multiple Histogram Viewer — main window](https://github.com/sramuschkat/Siril-Scripts/raw/main/screenshots/multiple-histogram-viewer-1.jpg)
 
 *Main window: Linear and Auto-Stretched columns with histogram view, controls, and statistics.*
 
-![Multiple Histogram Viewer — 3D and stats](screenshots/multiple-histogram-viewer-2.jpg)
+![Multiple Histogram Viewer — 3D and stats](https://github.com/sramuschkat/Siril-Scripts/raw/main/screenshots/multiple-histogram-viewer-2.jpg)
 
 *3D surface plot option and statistical data (Size, Min/Max, Mean, Median, Std, IQR, MAD, P2/P98, Range, Near-black/Near-white).*
 
