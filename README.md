@@ -1,2 +1,0 @@
-# SIril-Scripts
-SIril-Scripts
