@@ -21,9 +21,9 @@ GPL-3.0-or-later
 
 ## Multiple Histogram Viewer
 
-**File:** `MultipleHistogramViewer.py`
+**File:** `MultipleHistogramViewer.py` (v1.0.1)
 
-Reads the current linear image from Siril (or a linear FITS file), applies a 2%–98% percentile autostretch for preview, and displays **Linear** and **Auto-Stretched** views side by side with combined RGB histograms or 3D surface plots. You can also load up to **2 additional stretched FITS** files for comparison.
+Reads the current linear image from Siril (or a linear FITS file), applies a 2%–98% percentile autostretch for preview, and displays **Linear** and **Auto-Stretched** views side by side with combined RGB histograms or 3D surface plots. You can also load up to **2 additional stretched FITS** files for comparison. Compressed FITS (e.g. `.fz`, `.gz`) are supported.
 
 ### Screenshots
 
@@ -37,7 +37,7 @@ Reads the current linear image from Siril (or a linear FITS file), applies a 2%�
 
 ### Features
 
-- **Image sources:** Current image from Siril, or load a linear FITS directly; up to 2 stretched FITS for comparison.
+- **Image sources:** Current image from Siril, or load a linear FITS directly (including compressed `.fz`/`.gz`); up to 2 stretched FITS for comparison.
 - **Views:** Histogram (2D) or 3D surface plot (X/Y = pixel position, Z = channel value).
 - **Histogram:** Combined RGB and per-channel (R, G, B, L) with Normal or Logarithmic Y-axis; X-axis in ADU.
 - **Statistics:** Size, Pixels, Min/Max, Mean, Median, Std, IQR, MAD, P2/P98 (2nd/98th percentile), Range (P2–P98), Near-black/Near-white %. Tooltip explains each metric; “(subsampled)” when stats are from a subset of pixels.

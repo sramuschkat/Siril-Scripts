@@ -1,6 +1,6 @@
 """
 Siril Multiple Histogram Viewer
-Script Version: 1.0.0
+Script Version: 1.0.1
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -9,6 +9,7 @@ Contact and support: See repository README and Siril forum / scripts repository.
 This script reads the current linear image from Siril, applies autostretch, and displays
 a combined RGB histogram with normal/log modes, axis scaling, and image zoom (Fit).
 It supports loading linear FITS from Siril and up to 2 comparison stretched FITS files.
+Compressed FITS (e.g. .fz, .gz) are supported via astropy.
 
 Run from Siril via Processing → Scripts (or your configured Scripts menu). Siril uses
 the script's parent folder name as the menu section; to show under "Utility", place
@@ -20,6 +21,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.0.1 - Support compressed FITS (.fz, .gz) in file dialogs and loading.
 1.0.0 - Initial release
       - Read linear image from Siril, autostretch, display image and histogram
 """
@@ -61,7 +63,7 @@ try:
 except ImportError:
     _pil_Image = None
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 # Layout constants
 LEFT_PANEL_WIDTH = 320
@@ -306,6 +308,7 @@ def load_fits_pixeldata(path: str) -> np.ndarray:
     """
     Load FITS image from path.
 
+    Compressed FITS (e.g. .fz, .gz) are supported via astropy's built-in handling.
     Returns numpy array (H, W) or (H, W, C). Preserves dtype for linear FITS.
     Handles 2D and 3D HDUs; transposes (n,H,W) to (H,W,n) for n in {1,3}.
 
@@ -1550,7 +1553,7 @@ class MultipleHistogramViewerWindow(QMainWindow):
             self,
             "Load linear FITS",
             "",
-            "FITS files (*.fit *.fits *.fts);;All files (*)",
+            "FITS files (*.fit *.fits *.fts *.fz);;All files (*)",
         )
         if path:
             self.load_linear_fits(path)
@@ -1560,7 +1563,7 @@ class MultipleHistogramViewerWindow(QMainWindow):
             self,
             f"Load stretched FITS {slot + 1}",
             "",
-            "FITS files (*.fit *.fits *.fts);;All files (*)",
+            "FITS files (*.fit *.fits *.fts *.fz);;All files (*)",
         )
         if path:
             self.load_stretched_fits(slot, path)

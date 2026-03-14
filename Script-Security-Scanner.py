@@ -12,11 +12,6 @@ network exfiltration, code execution escalation, persistence mechanisms,
 obfuscation techniques, denial-of-service patterns, social engineering tricks,
 and supply-chain poisoning.
 
-Script directories are read automatically from Siril's OS-specific configuration:
-  • Linux  : ~/.config/siril/siril.cfg  (or GSettings org.free-astro.siril)
-  • macOS  : ~/Library/Preferences/org.free-astro.siril.plist
-  • Windows: %APPDATA%\\siril\\siril.cfg
-
 Run from Siril via Processing → Scripts (or your configured Scripts menu). Siril uses
 the script's parent folder name as the menu section; to show under "Utility", place
 Script-Security-Scanner.py inside a folder named Utility in one of Siril's Script Storage
@@ -27,10 +22,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
-1.1.0 - Read script paths from OS-specific Siril configuration files
-        (siril.cfg on Linux/Windows, org.free-astro.siril.plist on macOS,
-        GSettings on Linux as secondary source); UI now labels each directory
-        with its discovery source.
+1.1.0 - UI labels each directory with its discovery source
 1.0.0 - Initial release
       - AST + regex based scanning for 8 threat categories
       - Dark-themed PyQt6 UI matching Multiple Histogram Viewer style
@@ -38,13 +30,7 @@ CHANGELOG:
 """
 from __future__ import annotations
 
-import ast
-import configparser
-import os
-import platform
-import plistlib
 import re
-import subprocess
 import sys
 import traceback
 import textwrap
@@ -329,141 +315,16 @@ class Finding:
     description: str
 
 
-# Keys Siril uses in its cfg / plist for the scripts directory list.
-# The scanner tries all of them to stay compatible across Siril versions.
-_CFG_SCRIPT_KEYS = (
-    "ScriptPath", "script_path", "script-path",
-    "ScriptPaths", "script_paths", "scripts_path",
-)
-
-
-def _split_path_value(raw: str) -> list[Path]:
-    """Split a colon- or semicolon-delimited path string into Path objects."""
-    return [Path(p.strip()) for p in re.split(r"[:;]", raw) if p.strip()]
-
-
-def _read_cfg_script_paths(cfg_path: Path) -> list[tuple[Path, str]]:
-    """
-    Parse a siril.cfg (GLib GKeyFile / INI-style) file and return
-    ``(path, source_label)`` tuples for every script directory found.
-    """
-    results: list[tuple[Path, str]] = []
-    if not cfg_path.is_file():
-        return results
-    try:
-        parser = configparser.RawConfigParser()
-        parser.read(cfg_path, encoding="utf-8")
-        for section in parser.sections():
-            for key in _CFG_SCRIPT_KEYS:
-                try:
-                    value = parser.get(section, key)
-                    if value:
-                        label = f"siril.cfg [{section}] › {key}"
-                        for p in _split_path_value(value):
-                            results.append((p, label))
-                except configparser.NoOptionError:
-                    pass
-    except Exception:
-        pass
-    return results
-
-
-def _read_gsettings_script_paths() -> list[tuple[Path, str]]:
-    """
-    Query GSettings for ``org.free-astro.siril`` script-path entries.
-    Returns ``(path, source_label)`` tuples.
-    Only meaningful on Linux; silently returns [] on other platforms.
-    """
-    results: list[tuple[Path, str]] = []
-    try:
-        proc = subprocess.run(  # noqa: S603 – intentional GSettings query
-            ["gsettings", "get", "org.free-astro.siril", "script-path"],
-            capture_output=True, text=True, timeout=3,
-        )
-        if proc.returncode != 0 or not proc.stdout.strip():
-            return results
-        raw = proc.stdout.strip()
-        label = "GSettings org.free-astro.siril › script-path"
-        # GSettings may return a GVariant array  ['path1', 'path2']
-        # or a plain quoted string  '/some/path'
-        if raw.startswith("["):
-            try:
-                items = ast.literal_eval(raw)
-                if isinstance(items, (list, tuple)):
-                    for item in items:
-                        p = str(item).strip()
-                        if p:
-                            results.append((Path(p), label))
-            except Exception:
-                pass
-        else:
-            for p in _split_path_value(raw.strip("'\"")):
-                results.append((p, label))
-    except Exception:
-        pass
-    return results
-
-
-def _read_plist_script_paths(plist_path: Path) -> list[tuple[Path, str]]:
-    """
-    Parse macOS ``org.free-astro.siril.plist`` and return
-    ``(path, source_label)`` tuples.
-    """
-    results: list[tuple[Path, str]] = []
-    if not plist_path.is_file():
-        return results
-    try:
-        with plist_path.open("rb") as fh:
-            data = plistlib.load(fh)
-        label = f"plist {plist_path.name}"
-        for key in _CFG_SCRIPT_KEYS:
-            value = data.get(key)
-            if value is None:
-                continue
-            if isinstance(value, list):
-                for item in value:
-                    p = str(item).strip()
-                    if p:
-                        results.append((Path(p), label + f" › {key}"))
-            elif isinstance(value, str):
-                for p in _split_path_value(value):
-                    results.append((p, label + f" › {key}"))
-    except Exception:
-        pass
-    return results
-
-
 def _get_siril_script_dirs() -> list[tuple[Path, str]]:
     """
     Return ``(directory_path, source_label)`` tuples for all existing Siril
-    script directories, probing OS-specific configuration files first, then
-    falling back to well-known default locations.
-
-    Discovery order:
-      Linux   – siril.cfg → GSettings → fallback paths
-      macOS   – org.free-astro.siril.plist → fallback paths
-      Windows – siril.cfg (APPDATA) → fallback paths
+    script directories, probing the sirilpy interface first, then falling back
+    to well-known default locations.
     """
     home = Path.home()
-    system = platform.system()
     found: list[tuple[Path, str]] = []
 
-    # ── 1. OS-specific configuration files ───────────────────────────────────
-    if system == "Linux":
-        cfg = home / ".config" / "siril" / "siril.cfg"
-        found.extend(_read_cfg_script_paths(cfg))
-        found.extend(_read_gsettings_script_paths())
-
-    elif system == "Darwin":
-        plist = home / "Library" / "Preferences" / "org.free-astro.siril.plist"
-        found.extend(_read_plist_script_paths(plist))
-
-    elif system == "Windows":
-        appdata = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
-        cfg = appdata / "siril" / "siril.cfg"
-        found.extend(_read_cfg_script_paths(cfg))
-
-    # ── 2. sirilpy interface (if Siril exposes paths programmatically) ────────
+    # ── 1. sirilpy interface (if Siril exposes paths programmatically) ────────
     try:
         iface = s.SirilInterface()
         for attr in ("script_paths", "get_script_paths", "scriptPaths"):
@@ -476,7 +337,7 @@ def _get_siril_script_dirs() -> list[tuple[Path, str]]:
     except Exception:
         pass
 
-    # ── 3. Well-known fallback locations ─────────────────────────────────────
+    # ── 2. Well-known fallback locations ─────────────────────────────────────
     fallbacks: list[tuple[Path, str]] = [
         (home / ".siril" / "scripts",                           "fallback"),
         (home / "siril" / "scripts",                            "fallback"),
@@ -642,10 +503,22 @@ class SecurityScannerWindow(QMainWindow):
         self.lbl_dirs.setStyleSheet("font-size:8pt;color:#aaaaaa;")
         layout.addWidget(self.lbl_dirs)
 
+        btn_row = QHBoxLayout()
         btn_add = QPushButton("Add Directory…")
         _nofocus(btn_add)
         btn_add.clicked.connect(self._add_directory)
-        layout.addWidget(btn_add)
+        btn_row.addWidget(btn_add)
+
+        btn_paste = QPushButton("Paste Paths")
+        _nofocus(btn_paste)
+        btn_paste.setToolTip(
+            "Paste one or more script directory paths from the clipboard.\n"
+            "Separate multiple paths with newlines, commas, semicolons, or colons."
+        )
+        btn_paste.clicked.connect(self._paste_paths)
+        btn_row.addWidget(btn_paste)
+
+        layout.addLayout(btn_row)
 
         return g
 
@@ -705,17 +578,13 @@ class SecurityScannerWindow(QMainWindow):
         self.tree.setAlternatingRowColors(True)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.tree.setRootIsDecorated(True)
-        self.tree.setColumnCount(5)
-        self.tree.setHeaderLabels(["File / Line", "Severity", "Category", "Description", "Source Line"])
+        self.tree.setColumnCount(3)
+        self.tree.setHeaderLabels(["Script / Line", "Risk", "Issue"])
         hdr = self.tree.header()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
-        self.tree.setColumnWidth(0, 260)
-        self.tree.setColumnWidth(2, 190)
-        self.tree.setColumnWidth(4, 260)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.tree.setColumnWidth(0, 240)
         layout.addWidget(self.tree, stretch=1)
 
         # Detail panel
@@ -723,7 +592,7 @@ class SecurityScannerWindow(QMainWindow):
         self.detail.setReadOnly(True)
         self.detail.setMaximumHeight(120)
         self.detail.setStyleSheet(
-            "background:#1e1e1e;color:#e0e0e0;font-family:monospace;font-size:9pt;"
+            "background:#1e1e1e;color:#e0e0e0;font-family:Courier New,Courier,monospace;font-size:9pt;"
         )
         self.detail.setPlaceholderText("Click a finding to see details…")
         layout.addWidget(self.detail)
@@ -757,6 +626,65 @@ class SecurityScannerWindow(QMainWindow):
             if p not in existing_paths:
                 self._scan_dirs.append((p, "user-added"))
                 self._update_dirs_label()
+
+    @staticmethod
+    def _split_pasted_text(text: str) -> list[str]:
+        """
+        Split clipboard text into individual path strings.
+        Handles newlines, commas, semicolons, and Unix-style colon separators.
+        Colons that are part of a Windows drive letter (e.g. ``C:``) are preserved.
+        """
+        result: list[str] = []
+        for part in re.split(r"[\n,;]+", text):
+            part = part.strip().strip('"').strip("'")
+            if not part:
+                continue
+            # Split on colons that are NOT a Windows drive letter (``C:``).
+            # A drive-letter colon is always at index 1 preceded by a single letter.
+            buf = ""
+            for i, ch in enumerate(part):
+                if ch == ":" and not (i == 1 and part[0].isalpha()):
+                    if buf:
+                        result.append(buf.strip().strip('"').strip("'"))
+                    buf = ""
+                else:
+                    buf += ch
+            if buf.strip():
+                result.append(buf.strip().strip('"').strip("'"))
+        return result
+
+    def _paste_paths(self) -> None:
+        """Add directories from clipboard text (newline-, comma-, semicolon-, or colon-separated)."""
+        clipboard = QApplication.clipboard()
+        text = clipboard.text().strip()
+        if not text:
+            QMessageBox.information(self, "Clipboard Empty", "No text found in clipboard.")
+            return
+        existing_paths = {d for d, _ in self._scan_dirs}
+        added: list[str] = []
+        skipped: list[str] = []
+        for raw in self._split_pasted_text(text):
+            if not raw:
+                continue
+            p = Path(raw).expanduser()
+            if p in existing_paths:
+                continue
+            if p.is_dir():
+                self._scan_dirs.append((p, "pasted"))
+                existing_paths.add(p)
+                added.append(str(p))
+            else:
+                skipped.append(str(p))
+        self._update_dirs_label()
+        msg_parts: list[str] = []
+        if added:
+            msg_parts.append(f"Added {len(added)} director{'y' if len(added) == 1 else 'ies'}:\n" + "\n".join(added))
+        if skipped:
+            msg_parts.append(f"Skipped {len(skipped)} (not found / not a directory):\n" + "\n".join(skipped))
+        if not msg_parts:
+            QMessageBox.information(self, "No New Paths", "All pasted paths were already in the list.")
+        else:
+            QMessageBox.information(self, "Paste Paths Result", "\n\n".join(msg_parts))
 
     # ── Category helpers ───────────────────────────────────────────────────
 
@@ -809,24 +737,35 @@ class SecurityScannerWindow(QMainWindow):
         n_med  = sum(1 for f in findings if f.severity == "MEDIUM")
         n_low  = sum(1 for f in findings if f.severity == "LOW")
 
+        # Identify directories that were searched but contained no Python files
+        empty_dirs = [
+            str(p) for p, _ in self._scan_dirs
+            if not any(sp.is_relative_to(p) for sp in scripts)
+        ]
+        empty_note = (
+            f"   |   No .py files in: {', '.join(empty_dirs)}" if empty_dirs else ""
+        )
+
         if n_findings == 0:
-            self.lbl_status.setText("Scan complete — no issues found.")
-            self.lbl_summary.setText(
-                f"Scanned {n_files} script(s). All clean."
-            )
+            self.lbl_status.setText(f"Scan complete — {n_files} script(s) checked, no issues found.")
+            self.lbl_summary.setText(empty_note.lstrip("   |   ") if empty_note else "")
         else:
             self.lbl_status.setText(
-                f"Scan complete — {n_findings} finding(s) in {n_files} script(s)."
+                f"Scan complete — {n_files} script(s) checked, {n_findings} issue(s) found."
             )
-            self.lbl_summary.setText(
-                f"HIGH: {n_high}   MEDIUM: {n_med}   LOW: {n_low}"
-                f"   |   {n_files} script(s) scanned"
-            )
+            parts = []
+            if n_high:   parts.append(f"🔴 {n_high} HIGH")
+            if n_med:    parts.append(f"🟠 {n_med} MEDIUM")
+            if n_low:    parts.append(f"🔵 {n_low} LOW")
+            summary = "   ".join(parts)
+            if empty_note:
+                summary += empty_note
+            self.lbl_summary.setText(summary)
 
     def _populate_tree(self, findings: list[Finding]) -> None:
         self.tree.clear()
         if not findings:
-            placeholder = QTreeWidgetItem(self.tree, ["No issues detected.", "", "", "", ""])
+            placeholder = QTreeWidgetItem(self.tree, ["No issues detected.", "", ""])
             placeholder.setForeground(0, QColor("#88aa88"))
             return
 
@@ -836,28 +775,34 @@ class SecurityScannerWindow(QMainWindow):
             by_file.setdefault(f.file_path, []).append(f)
 
         for path, file_findings in sorted(by_file.items()):
+            # File-level row: filename bold, directory in col 2
             file_item = QTreeWidgetItem(self.tree)
-            file_item.setText(0, str(path))
-            file_item.setForeground(0, QColor("#88aaff"))
+            file_item.setText(0, path.name)
+            file_item.setToolTip(0, str(path))
             count = len(file_findings)
-            n_h = sum(1 for x in file_findings if x.severity == "HIGH")
-            file_item.setText(1, f"{count} finding(s)")
-            if n_h:
-                file_item.setForeground(1, QColor(SEVERITY_COLOR["HIGH"]))
-            else:
-                file_item.setForeground(1, QColor(SEVERITY_COLOR["MEDIUM"]))
+            worst = "HIGH" if any(x.severity == "HIGH" for x in file_findings) else \
+                    "MEDIUM" if any(x.severity == "MEDIUM" for x in file_findings) else "LOW"
+            file_item.setText(1, f"{count} issue(s)")
+            file_item.setText(2, str(path.parent))
+            file_item.setForeground(0, QColor("#88aaff"))
+            file_item.setForeground(1, QColor(SEVERITY_COLOR[worst]))
+            file_item.setForeground(2, QColor("#777777"))
+            font = file_item.font(0)
+            font.setBold(True)
+            file_item.setFont(0, font)
             file_item.setExpanded(True)
 
             for finding in sorted(file_findings, key=lambda x: x.line_no):
                 child = QTreeWidgetItem(file_item)
                 child.setText(0, f"  Line {finding.line_no}")
                 child.setText(1, finding.severity)
-                child.setText(2, CATEGORY_LABELS.get(finding.category, finding.category))
-                child.setText(3, finding.description)
-                child.setText(4, finding.line_text[:120])
+                # Issue column: category label + short description
+                issue = f"{CATEGORY_LABELS.get(finding.category, finding.category)}  —  {finding.description}"
+                child.setText(2, issue)
                 color = QColor(SEVERITY_COLOR.get(finding.severity, "#cccccc"))
-                for col in range(5):
-                    child.setForeground(col, color)
+                child.setForeground(0, color)
+                child.setForeground(1, color)
+                child.setForeground(2, QColor("#cccccc"))
                 child.setData(0, Qt.ItemDataRole.UserRole, finding)
 
     def _on_item_changed(self, current: QTreeWidgetItem | None, _prev) -> None:
@@ -870,12 +815,12 @@ class SecurityScannerWindow(QMainWindow):
             return
         sev_color = SEVERITY_COLOR.get(finding.severity, "#cccccc")
         self.detail.setHtml(
-            f"<span style='color:{sev_color};font-weight:bold;'>[{finding.severity}]</span> "
-            f"<span style='color:#88aaff;'>{CATEGORY_LABELS.get(finding.category, finding.category)}</span><br>"
-            f"<span style='color:#e0e0e0;'><b>File:</b> {finding.file_path}</span><br>"
-            f"<span style='color:#e0e0e0;'><b>Line {finding.line_no}:</b></span> "
-            f"<span style='color:#cccccc;font-family:monospace;'>{finding.line_text}</span><br>"
-            f"<span style='color:#aaaaaa;'><b>Rule:</b> {finding.description}</span>"
+            f"<b style='color:{sev_color};'>{finding.severity}</b>"
+            f"&nbsp;&nbsp;<span style='color:#88aaff;'>{CATEGORY_LABELS.get(finding.category, finding.category)}</span>"
+            f"&nbsp;&nbsp;<span style='color:#aaaaaa;font-size:8pt;'>{finding.file_path.name} · Line {finding.line_no}</span><br>"
+            f"<span style='color:#e0e0e0;font-size:9pt;'>{finding.description}</span><br>"
+            f"<span style='color:#888888;font-size:8pt;'>{finding.file_path.parent}</span><br>"
+            f"<span style='font-family:Courier New,Courier,monospace;color:#ffcc88;font-size:9pt;'>{finding.line_text}</span>"
         )
 
     # ── Export ────────────────────────────────────────────────────────────
@@ -951,14 +896,10 @@ class SecurityScannerWindow(QMainWindow):
             "  • Supply Chain               (installing packages at runtime)\n\n"
             "2. HOW TO USE\n"
             "-------------\n"
-            "The scanner automatically reads your Siril script directories from\n"
-            "the OS-specific Siril configuration file:\n"
-            "  Linux   : ~/.config/siril/siril.cfg  (or GSettings)\n"
-            "  macOS   : ~/Library/Preferences/org.free-astro.siril.plist\n"
-            "  Windows : %%APPDATA%%\\siril\\siril.cfg\n\n"
+            "The scanner probes the sirilpy interface for script directories and\n"
+            "falls back to well-known default locations automatically.\n"
             "Each discovered directory shows its source in brackets.\n"
-            "If no directories are found via config, well-known fallback paths\n"
-            "are tried automatically. Use 'Add Directory…' to add extras.\n"
+            "Use 'Add Directory…' to add extras.\n"
             "Select the categories you want to scan, then press 'Scan Now'.\n"
             "Results appear grouped by file. Click any finding for details.\n\n"
             "3. SEVERITY LEVELS\n"
