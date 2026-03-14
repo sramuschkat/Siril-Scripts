@@ -7,7 +7,7 @@ Author: Svenesis-Siril-Scripts project.
 Contact and support: See repository README and Siril forum / scripts repository.
 
 This script reads the current linear image from Siril, applies autostretch, and displays
-a combined RGB histogram with normal/log modes, axis scaling, and Fit Histogram.
+a combined RGB histogram with normal/log modes, axis scaling, and image zoom (Fit).
 It supports loading linear FITS from Siril and up to 2 comparison stretched FITS files.
 
 Run from Siril via Processing → Scripts (or your configured Scripts menu). Siril uses
@@ -17,19 +17,18 @@ Directories (Preferences → Scripts).
 
 (c) 2025
 SPDX-License-Identifier: GPL-3.0-or-later
-"""
-from __future__ import annotations
 
-"""
+
 CHANGELOG:
 1.0.0 - Initial release
       - Read linear image from Siril, autostretch, display image and histogram
 """
+from __future__ import annotations
 
-import os
 import sys
 import traceback
 import math
+from pathlib import Path
 import numpy as np
 
 import sirilpy as s
@@ -54,8 +53,13 @@ from PyQt6.QtWidgets import (
     QFileDialog, QSizePolicy, QDialog, QTextEdit,
     QStackedWidget,
 )
-from PyQt6.QtCore import Qt, QRectF, QTimer, QPointF, QEvent, QObject
-from PyQt6.QtGui import QImage, QPixmap, QColor, QPainter, QPen, QPainterPath, QFont, QMouseEvent
+from PyQt6.QtCore import Qt, QRectF, QTimer, QEvent, QObject
+from PyQt6.QtGui import QImage, QPixmap, QColor, QPainter, QPen, QPainterPath, QFont, QResizeEvent
+
+try:
+    from PIL import Image as _pil_Image
+except ImportError:
+    _pil_Image = None
 
 VERSION = "1.0.0"
 
@@ -81,12 +85,10 @@ DISPLAY_MAX_DIMENSION = 4096
 # STYLING
 # ------------------------------------------------------------------------------
 
-def _nofocus(w) -> None:
+def _nofocus(w: QWidget | None) -> None:
     """Disable focus on widget to avoid keyboard focus issues."""
-    try:
+    if w is not None:
         w.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-    except (AttributeError, TypeError):
-        pass
 
 
 def _adu_max_from_data(pixeldata: np.ndarray) -> int:
@@ -94,9 +96,7 @@ def _adu_max_from_data(pixeldata: np.ndarray) -> int:
     Derive ADU max from the actual max value in the linear image data.
     Used for normalization and ADU display.
     """
-    if pixeldata.dtype == np.uint8:
-        return max(1, int(np.max(pixeldata)))
-    if pixeldata.dtype == np.uint16:
+    if pixeldata.dtype in (np.uint8, np.uint16):
         return max(1, int(np.max(pixeldata)))
     if pixeldata.dtype == np.int16:
         return 65535  # int16 uses fixed scaling
@@ -117,12 +117,11 @@ def _prepare_display_image(img: np.ndarray, max_dim: int = DISPLAY_MAX_DIMENSION
         return np.ascontiguousarray(disp), h, w
     scale = max_dim / max(h, w)
     new_h, new_w = max(1, int(h * scale)), max(1, int(w * scale))
-    try:
-        from PIL import Image
-        pil_img = Image.fromarray(disp)
-        pil_img = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+    if _pil_Image is not None:
+        pil_img = _pil_Image.fromarray(disp)
+        pil_img = pil_img.resize((new_w, new_h), _pil_Image.Resampling.LANCZOS)
         disp = np.array(pil_img)
-    except ImportError:
+    else:
         step_h = max(1, (h - 1) // new_h + 1) if new_h < h else 1
         step_w = max(1, (w - 1) // new_w + 1) if new_w < w else 1
         disp = disp[::step_h, ::step_w, :]
@@ -169,17 +168,18 @@ def _subsample_for_stats(arr: np.ndarray, max_pixels: int = STATS_MAX_PIXELS) ->
 SURFACE_PLOT_MAX_SIDE = 100
 """Maximum side length for the 3D surface plot grid (keeps the dialog responsive)."""
 
+# Z-axis scale relative to X/Y for 3D surface plot aspect ratio
+Z_SCALE_FACTOR = 0.35
 
-def _image_to_intensity_2d(img: np.ndarray) -> np.ndarray:
-    """
-    Convert image to a 2D intensity array for 3D surface plot.
-    RGB images use Rec.709 luminance; grayscale is returned as-is.
-    """
-    if img.ndim == 2:
-        return img.astype(np.float32, copy=False)
-    if img.ndim == 3 and img.shape[2] >= 3:
-        return (LUMINANCE_R * img[:, :, 0] + LUMINANCE_G * img[:, :, 1] + LUMINANCE_B * img[:, :, 2]).astype(np.float32)
-    return img.reshape(img.shape[0], -1).astype(np.float32)
+
+def _log_tick_fmt(x: float, pos: int) -> str:
+    """Tick formatter for log-scaled 3D surface z-axis (10^x labels)."""
+    val = 10 ** x
+    if val >= 10000:
+        return f"{int(val):,}"
+    if val >= 1:
+        return str(int(round(val)))
+    return f"{val:.2g}"
 
 
 def _image_to_channel_2d(img: np.ndarray, channel: str) -> np.ndarray:
@@ -291,9 +291,11 @@ def autostretch_percentile(img: np.ndarray, low: float = 2, high: float = 98) ->
     Apply percentile-based autostretch.
 
     Maps [low, high] percentiles to [0, 1]. Pure numpy, no numba.
+    For large images, percentiles are computed on a subsampled view for speed.
     """
     img = img.astype(np.float32, copy=False)
-    p_low, p_high = np.percentile(img, [low, high])
+    sample = _subsample_for_stats(img)
+    p_low, p_high = np.percentile(sample, [low, high])
     if p_high <= p_low:
         return np.clip(img, 0.0, 1.0).astype(np.float32)
     stretched = (img - p_low) / (p_high - p_low)
@@ -321,8 +323,7 @@ def load_fits_pixeldata(path: str) -> np.ndarray:
                     # (n, H, W) -> (H, W, n) for n in {1,3}
                     if data.shape[0] in (1, 3):
                         return np.transpose(data, (1, 2, 0))
-                    if data.shape[2] in (1, 3):
-                        return data
+                    # already (H, W, n) with n in {1,3} or other
                     return data
     raise ValueError("No image HDU found in FITS file")
 
@@ -335,10 +336,7 @@ def normalize_stretched_fits(arr: np.ndarray) -> np.ndarray:
     uint8/uint16→divide by actual max; float→clip [0,1].
     """
     arr = np.asarray(arr)
-    if arr.dtype == np.uint8:
-        div = max(1.0, float(np.max(arr)))
-        img = arr.astype(np.float32, copy=False) / div
-    elif arr.dtype == np.uint16:
+    if arr.dtype in (np.uint8, np.uint16):
         div = max(1.0, float(np.max(arr)))
         img = arr.astype(np.float32, copy=False) / div
     else:
@@ -353,6 +351,14 @@ def normalize_stretched_fits(arr: np.ndarray) -> np.ndarray:
 
 class HistogramWidget(QWidget):
     """Custom widget for displaying combined RGB and per-channel histograms."""
+
+    # Layout margins for plot area (px)
+    MARGIN_LEFT = 70
+    MARGIN_BOTTOM = 72  # room for ticks, tick labels, and axis title
+    MARGIN_RIGHT = 55   # enough for rightmost x-axis tick label
+    MARGIN_TOP = 10
+
+    DRAW_ORDER = ('RGB', 'R', 'G', 'B', 'L')
 
     # Channel colors: RGB (white), R (red), G (green), B (blue)
     CHANNEL_COLORS = {
@@ -370,7 +376,6 @@ class HistogramWidget(QWidget):
         self.bin_edges = None
         self.visible = {'RGB': True, 'R': True, 'G': True, 'B': True, 'L': True}  # L on by default (matches UI checkbox)
         self.log_mode = False
-        self.x_axis_mode = 'adu'  # fixed to ADU mode
         self.adu_max = 65535
         self.x_min = 0.0
         self.x_max = 1.0
@@ -378,8 +383,6 @@ class HistogramWidget(QWidget):
         self.y_max = 1.0
         self._y_max_raw = 1.0  # max count for fit
         self._clicked_intensity = None  # intensity at last image click (for vertical line)
-        self._clicked_px = None  # pixel x at last click (for label)
-        self._clicked_py = None  # pixel y at last click (for label)
         self.show_legend = False  # set True in enlarge dialog to show channel legend
 
     def set_show_legend(self, show: bool) -> None:
@@ -387,22 +390,17 @@ class HistogramWidget(QWidget):
         self.show_legend = show
         self.update()
 
-    def set_clicked_value(
-        self, intensity: float | None, px: int | None = None, py: int | None = None
-    ) -> None:
-        """Set the intensity value to show as a vertical line (from image click). Optionally px, py for label. None to clear."""
+    def set_clicked_value(self, intensity: float | None) -> None:
+        """Set the intensity value to show as a vertical line (from image click). None to clear."""
         self._clicked_intensity = intensity
-        self._clicked_px = px
-        self._clicked_py = py
         self.update()
 
-    def set_x_axis_mode(self, mode, adu_max=65535):
-        """Set X-axis display to ADU (0-adu_max). Intensity mode is no longer supported."""
-        self.x_axis_mode = 'adu'
+    def set_x_axis_mode(self, adu_max: int = 65535) -> None:
+        """Set X-axis display to ADU (0-adu_max)."""
         self.adu_max = adu_max
         self.update()
 
-    def set_histograms(self, histograms_dict, bin_edges):
+    def set_histograms(self, histograms_dict: dict, bin_edges: np.ndarray) -> None:
         """Set histogram data. histograms_dict: {'RGB': array, 'R': array, 'G': array, 'B': array}."""
         self.histograms = {k: np.asarray(v, dtype=np.float64) for k, v in histograms_dict.items()}
         self.bin_edges = np.asarray(bin_edges, dtype=np.float64)
@@ -414,59 +412,18 @@ class HistogramWidget(QWidget):
         self.y_max = self._y_max_raw if not self.log_mode else math.log10(self._y_max_raw + 1)
         self.update()
 
-    def set_visibility(self, rgb=True, r=True, g=True, b=True, l=False):
+    def set_visibility(self, rgb: bool = True, r: bool = True, g: bool = True, b: bool = True, l: bool = False) -> None:
         """Toggle which channel curves are visible."""
         self.visible = {'RGB': rgb, 'R': r, 'G': g, 'B': b, 'L': l}
         self.update()
 
-    def set_log_mode(self, log_mode):
+    def set_log_mode(self, log_mode: bool) -> None:
         self.log_mode = log_mode
         if self.histograms:
             all_counts = np.concatenate([h for h in self.histograms.values() if h.size > 0])
             if all_counts.size > 0:
                 mx = float(np.max(all_counts))
                 self.y_max = math.log10(mx + 1) if log_mode else mx
-        self.update()
-
-    def set_axis_limits(self, x_min, x_max, y_min, y_max):
-        self.x_min = x_min
-        self.x_max = x_max
-        self.y_min = y_min
-        self.y_max = y_max
-        self.update()
-
-    def get_fit_extent(self):
-        """Return (x_min, x_max, y_min, y_max) for fit, or None if no data."""
-        channel_keys = ["RGB", "R", "G", "B", "L"]
-        visible_hists = [
-            self.histograms[k]
-            for k in channel_keys
-            if self.visible.get(k) and k in self.histograms and self.histograms[k].size > 0
-        ]
-        if not visible_hists:
-            return None
-        combined = np.maximum.reduce(visible_hists) if len(visible_hists) > 1 else visible_hists[0]
-        nonzero = np.nonzero(combined)[0]
-        if len(nonzero) == 0:
-            return None
-        i_min, i_max = int(nonzero[0]), int(nonzero[-1])
-        n = len(combined)
-        margin = 0.05 * (i_max - i_min + 1) if i_max > i_min else 1
-        i_min = max(0, int(i_min - margin))
-        i_max = min(n - 1, int(i_max + margin))
-        x_min = self.bin_edges[i_min]
-        x_max = self.bin_edges[min(i_max + 1, len(self.bin_edges) - 1)]
-        region = np.maximum.reduce([h[i_min:i_max + 1] for h in visible_hists]) if len(visible_hists) > 1 else visible_hists[0][i_min:i_max + 1]
-        mx = float(np.max(region))
-        y_max = math.log10(mx + 1) if self.log_mode else mx * 1.05
-        return (x_min, x_max, 0.0, y_max)
-
-    def fit_to_data(self):
-        """Auto-adjust axis limits so data fits visually."""
-        ext = self.get_fit_extent()
-        if ext is None:
-            return
-        self.x_min, self.x_max, self.y_min, self.y_max = ext
         self.update()
 
     def _draw_channel_curve(self, painter, ch, hist_counts, plot_x0, plot_y1, plot_w, plot_h, x_range, y_range):
@@ -517,14 +474,10 @@ class HistogramWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         w, h = self.width(), self.height()
 
-        margin_left = 70
-        margin_bottom = 72  # room for ticks, tick labels, and axis title
-        margin_right = 55   # enough for rightmost x-axis tick label (70px wide, centered)
-        margin_top = 10
-        plot_x0 = margin_left
-        plot_y0 = margin_top
-        plot_x1 = w - margin_right
-        plot_y1 = h - margin_bottom
+        plot_x0 = self.MARGIN_LEFT
+        plot_y0 = self.MARGIN_TOP
+        plot_x1 = w - self.MARGIN_RIGHT
+        plot_y1 = h - self.MARGIN_BOTTOM
         plot_w = plot_x1 - plot_x0
         plot_h = plot_y1 - plot_y0
 
@@ -535,7 +488,6 @@ class HistogramWidget(QWidget):
             painter.drawText(plot_x0, h // 2, "No histogram data")
             return
 
-        n_bins = len(self.bin_edges) - 1
         x_range = self.x_max - self.x_min
         if x_range <= 0:
             x_range = 1e-6
@@ -565,7 +517,7 @@ class HistogramWidget(QWidget):
             else:
                 label = f"{int(val)}" if val >= 100 else f"{val:.2f}"
             painter.setPen(QColor(180, 180, 180))
-            rect = QRectF(0, int(y_px) - 7, margin_left - 8, 14)
+            rect = QRectF(0, int(y_px) - 7, self.MARGIN_LEFT - 8, 14)
             painter.drawText(rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, label)
 
         # X-axis ticks and labels
@@ -608,8 +560,7 @@ class HistogramWidget(QWidget):
             painter.drawLine(plot_x0, v_y, plot_x1, v_y)
 
         # Draw channel curves (order: RGB fill first, then R, G, B lines, then RGB outline)
-        draw_order = ['RGB', 'R', 'G', 'B', 'L']
-        for ch in draw_order:
+        for ch in self.DRAW_ORDER:
             if not self.visible.get(ch, False) or ch not in self.histograms or self.histograms[ch].size == 0:
                 continue
             self._draw_channel_curve(
@@ -644,8 +595,7 @@ class HistogramWidget(QWidget):
             legend_y = plot_y0 + 8
             line_len = 24
             line_height = 18
-            draw_order = ['RGB', 'R', 'G', 'B', 'L']
-            for i, ch in enumerate(draw_order):
+            for i, ch in enumerate(self.DRAW_ORDER):
                 if not self.visible.get(ch, False) or ch not in self.histograms or self.histograms[ch].size == 0:
                     continue
                 color = self.CHANNEL_COLORS.get(ch, QColor(200, 200, 200))
@@ -682,7 +632,7 @@ class HistogramEnlargeDialog(QDialog):
         hist.set_histograms(histograms, bin_edges)
         hist.set_visibility(**visibility)
         hist.set_log_mode(log_mode)
-        hist.set_x_axis_mode("adu", adu_max)
+        hist.set_x_axis_mode(adu_max)
         hist.set_show_legend(True)
         layout.addWidget(hist, 1)
         btn = QPushButton("Close")
@@ -703,6 +653,27 @@ def _subsample_for_surface(img_2d: np.ndarray, max_side: int = SURFACE_PLOT_MAX_
     stride_h = max(1, (h - 1) // max_side + 1)
     stride_w = max(1, (w - 1) // max_side + 1)
     return img_2d[::stride_h, ::stride_w]
+
+
+_MPL_3D_CACHE: tuple | None | bool = False  # False = not yet attempted
+
+def _get_matplotlib_3d() -> tuple | None:
+    """
+    Lazily import matplotlib modules for 3D surface plot.
+    Returns (FigureCanvasQTAgg, Figure, cm) or None on ImportError.
+    Result is cached after the first call.
+    """
+    global _MPL_3D_CACHE
+    if _MPL_3D_CACHE is not False:
+        return _MPL_3D_CACHE
+    try:
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+        from matplotlib.figure import Figure
+        from matplotlib import cm
+        _MPL_3D_CACHE = (FigureCanvasQTAgg, Figure, cm)
+    except ImportError:
+        _MPL_3D_CACHE = None
+    return _MPL_3D_CACHE
 
 
 class SurfacePlotWidget(QWidget):
@@ -730,15 +701,11 @@ class SurfacePlotWidget(QWidget):
         self._click_marker = None
         self._click_text = None
         self._mpl_available = False
-        try:
-            from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
-            from matplotlib.figure import Figure
-            from matplotlib import cm
-            self._FigureCanvasQTAgg = FigureCanvasQTAgg
-            self._Figure = Figure
-            self._cm = cm
+        mpl = _get_matplotlib_3d()
+        if mpl is not None:
+            self._FigureCanvasQTAgg, self._Figure, self._cm = mpl
             self._mpl_available = True
-        except ImportError:
+        else:
             self._placeholder.setText("matplotlib required")
             self._FigureCanvasQTAgg = None
             self._Figure = None
@@ -798,12 +765,12 @@ class SurfacePlotWidget(QWidget):
         ax.set_xlabel("X (px)")
         ax.set_ylabel("Y (px)")
         ax.set_zlabel(z_label)
-        surf = ax.plot_surface(X, Y, z_plot, cmap=self._cm.viridis, edgecolor="none", antialiased=True, zorder=0)
+        ax.plot_surface(X, Y, z_plot, cmap=self._cm.viridis, edgecolor="none", antialiased=True, zorder=0)
         # Cuboid aspect: X/Y preserve image ratio; scale so X,Y,Z share a common "large" scale (good cube/quader)
         x_range = float(orig_w)
         y_range = float(orig_h)
         z_range = max(float(z_plot.max() - z_plot.min()), 1e-6)
-        z_scale = max(x_range, y_range) * 0.35 / max(z_range, 1e-6)  # Z visible vs X/Y
+        z_scale = max(x_range, y_range) * Z_SCALE_FACTOR / max(z_range, 1e-6)
         z_display = z_range * z_scale
         max_dim = max(x_range, y_range, z_display)
         sx = x_range / max_dim
@@ -815,14 +782,7 @@ class SurfacePlotWidget(QWidget):
             pass  # matplotlib < 3.3.5
         if log_mode:
             from matplotlib.ticker import FuncFormatter
-            def log_tick_fmt(x, pos):
-                val = 10 ** x
-                if val >= 10000:
-                    return f"{int(val):,}"
-                if val >= 1:
-                    return str(int(round(val)))
-                return f"{val:.2g}"
-            ax.zaxis.set_major_formatter(FuncFormatter(log_tick_fmt))
+            ax.zaxis.set_major_formatter(FuncFormatter(_log_tick_fmt))
         self._canvas = self._FigureCanvasQTAgg(fig)
         self._layout.insertWidget(0, self._canvas, 1)
         self._canvas.show()
@@ -900,11 +860,8 @@ class SurfacePlotDialog(QDialog):
         self.setWindowTitle(title)
         self.setMinimumSize(640, 520)
         layout = QVBoxLayout(self)
-        try:
-            from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
-            from matplotlib.figure import Figure
-            from matplotlib import cm
-        except ImportError:
+        mpl = _get_matplotlib_3d()
+        if mpl is None:
             lbl = QLabel("matplotlib is required for the 3D surface plot. Please install it.")
             lbl.setWordWrap(True)
             layout.addWidget(lbl)
@@ -913,6 +870,7 @@ class SurfacePlotDialog(QDialog):
             btn.clicked.connect(self.accept)
             layout.addWidget(btn)
             return
+        FigureCanvasQTAgg, Figure, cm = mpl
         img_2d = _image_to_channel_2d(img, channel)
         orig_h, orig_w = img_2d.shape[0], img_2d.shape[1]
         z_norm = _subsample_for_surface(img_2d.astype(np.float64))
@@ -945,12 +903,12 @@ class SurfacePlotDialog(QDialog):
         ax.set_xlabel("X (px)")
         ax.set_ylabel("Y (px)")
         ax.set_zlabel(z_label)
-        surf = ax.plot_surface(X, Y, z_plot, cmap=cm.viridis, edgecolor="none", antialiased=True)
+        ax.plot_surface(X, Y, z_plot, cmap=cm.viridis, edgecolor="none", antialiased=True)
         # Cuboid aspect: X/Y preserve image ratio; scale so X,Y,Z share a common "large" scale (good cube/quader)
         x_range = float(orig_w)
         y_range = float(orig_h)
         z_range = max(float(z_plot.max() - z_plot.min()), 1e-6)
-        z_scale = max(x_range, y_range) * 0.35 / max(z_range, 1e-6)  # Z visible vs X/Y
+        z_scale = max(x_range, y_range) * Z_SCALE_FACTOR / max(z_range, 1e-6)
         z_display = z_range * z_scale
         max_dim = max(x_range, y_range, z_display)
         sx = x_range / max_dim
@@ -962,14 +920,7 @@ class SurfacePlotDialog(QDialog):
             pass  # matplotlib < 3.3.5
         if log_mode:
             from matplotlib.ticker import FuncFormatter
-            def log_tick_fmt(x, pos):
-                val = 10 ** x
-                if val >= 10000:
-                    return f"{int(val):,}"
-                if val >= 1:
-                    return str(int(round(val)))
-                return f"{val:.2g}"
-            ax.zaxis.set_major_formatter(FuncFormatter(log_tick_fmt))
+            ax.zaxis.set_major_formatter(FuncFormatter(_log_tick_fmt))
         canvas = FigureCanvasQTAgg(fig)
         layout.addWidget(canvas)
         btn = QPushButton("Close")
@@ -992,26 +943,31 @@ class MultipleHistogramViewerWindow(QMainWindow):
 
     NUM_EXTRA_STRETCHED = 2
 
-    def _all_histogram_widgets(self) -> list[HistogramWidget]:
-        """Return list of all histogram widgets (linear, stretched, extra)."""
-        return [self.hist_widget_linear, self.hist_widget_stretched] + self.hist_widget_extra
-
     def __init__(self, siril=None):
         super().__init__()
         self.siril = siril or s.SirilInterface()
         self.img_linear = None
         self.img_stretched = None
         self.img_stretched_extra = [None] * self.NUM_EXTRA_STRETCHED  # slots for already-stretched FITS
-        self.stretched_filenames = [None, None, None]  # filename per slot for display
+        self.stretched_filenames = [None] * self.NUM_EXTRA_STRETCHED  # filename per slot for display
         self.adu_max = 65535
-        self.x_axis_mode = 'adu'
-        self._last_click_info = {}  # column_type -> {"x", "y", "r", "g", "b", "intensity"}
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.timeout.connect(self._on_resize_debounced)
         self.init_ui()
         try:
             self.load_image()
         except (NoImageError, OSError, ConnectionError, RuntimeError, SirilError, SirilConnectionError):
             self.img_linear = None
             self.img_stretched = None
+
+    def _all_histogram_widgets(self) -> list[HistogramWidget]:
+        """Return list of all histogram widgets (linear, stretched, extra)."""
+        return [self.hist_widget_linear, self.hist_widget_stretched] + self.hist_widget_extra
+
+    def _all_surface_widgets(self) -> list[SurfacePlotWidget]:
+        """Return list of all surface plot widgets (linear, stretched, extra)."""
+        return [self.surface_widget_linear, self.surface_widget_stretched] + self.surface_widget_extra
 
     def _build_left_panel(self) -> QWidget:
         """Build the left control panel with histogram, axis, and image controls."""
@@ -1151,7 +1107,7 @@ class MultipleHistogramViewerWindow(QMainWindow):
         dlg.exec()
 
     def _build_histogram_group(self, parent_layout: QVBoxLayout) -> None:
-        """Build the Histogram Channels group (channels, X-axis, ADU, axis limits, Fit button)."""
+        """Build the Histogram Channels group (channel checkboxes)."""
         g_hist = QGroupBox("Histogram Channels")
         gh_layout = QVBoxLayout(g_hist)
         chan_layout = QHBoxLayout()
@@ -1260,6 +1216,16 @@ class MultipleHistogramViewerWindow(QMainWindow):
             return "B"
         return "L"
 
+    def _get_channel_visibility(self) -> dict[str, bool]:
+        """Return visibility flags for RGB, R, G, B, L from the channel checkboxes."""
+        return {
+            "rgb": self.chk_rgb.isChecked(),
+            "r": self.chk_r.isChecked(),
+            "g": self.chk_g.isChecked(),
+            "b": self.chk_b.isChecked(),
+            "l": self.chk_l.isChecked(),
+        }
+
     def _build_image_group(self, parent_layout: QVBoxLayout) -> None:
         """Build the Image group (Refresh from Siril, Load linear FITS)."""
         g_img = QGroupBox("Image")
@@ -1277,7 +1243,7 @@ class MultipleHistogramViewerWindow(QMainWindow):
         parent_layout.addWidget(g_img)
 
     def _build_stretched_comparisons_group(self, parent_layout: QVBoxLayout) -> None:
-        """Build the Stretched comparisons group (Load/Clear for slots 1-3)."""
+        """Build the Stretched comparisons group (Load/Clear for slots 1-2)."""
         g_extra = QGroupBox("Stretched comparisons")
         ge_layout = QVBoxLayout(g_extra)
         self.btn_load_stretched = []
@@ -1300,7 +1266,7 @@ class MultipleHistogramViewerWindow(QMainWindow):
         parent_layout.addWidget(g_extra)
 
     def _build_right_panel(self) -> QWidget:
-        """Build the right panel with image columns (Linear, Auto-Stretched, Stretched 1-3)."""
+        """Build the right panel with image columns (Linear, Auto-Stretched, Stretched 1-2)."""
         right = QWidget()
         r_layout = QHBoxLayout(right)
         r_layout.setContentsMargins(0, 0, 0, 0)
@@ -1388,22 +1354,22 @@ class MultipleHistogramViewerWindow(QMainWindow):
 
         self.col_linear, self.view_linear, self.pix_item_linear, self.hist_widget_linear, self.surface_widget_linear, self.stacked_widget_linear, self.stats_label_linear, _ = make_column(
             "Linear",
-            self.zoom_in_linear,
-            self.zoom_out_linear,
-            self.fit_view_linear,
-            self.zoom_11_linear,
+            lambda: self._zoom(self.view_linear, 1.2),
+            lambda: self._zoom(self.view_linear, 1 / 1.2),
+            lambda: self._fit_view(self.view_linear, self.pix_item_linear),
+            lambda: self._reset_zoom(self.view_linear),
             self._show_enlarge_diagram_linear,
         )
         self.col_stretched, self.view_stretched, self.pix_item_stretched, self.hist_widget_stretched, self.surface_widget_stretched, self.stacked_widget_stretched, self.stats_label_stretched, _ = make_column(
             "Auto-Stretched",
-            self.zoom_in_stretched,
-            self.zoom_out_stretched,
-            self.fit_view_stretched,
-            self.zoom_11_stretched,
+            lambda: self._zoom(self.view_stretched, 1.2),
+            lambda: self._zoom(self.view_stretched, 1 / 1.2),
+            lambda: self._fit_view(self.view_stretched, self.pix_item_stretched),
+            lambda: self._reset_zoom(self.view_stretched),
             self._show_enlarge_diagram_stretched,
         )
 
-        # Extra columns: Stretched 1, 2, 3 (already-stretched FITS)
+        # Extra columns: Stretched 1, 2 (already-stretched FITS)
         self.col_extra = []
         self.view_extra = []
         self.pix_item_extra = []
@@ -1472,30 +1438,6 @@ class MultipleHistogramViewerWindow(QMainWindow):
         if pix_item.pixmap() and not pix_item.pixmap().isNull():
             view.fitInView(pix_item, Qt.AspectRatioMode.KeepAspectRatio)
 
-    def zoom_in_linear(self) -> None:
-        self._zoom(self.view_linear, 1.2)
-
-    def zoom_out_linear(self) -> None:
-        self._zoom(self.view_linear, 1 / 1.2)
-
-    def zoom_11_linear(self) -> None:
-        self._reset_zoom(self.view_linear)
-
-    def fit_view_linear(self) -> None:
-        self._fit_view(self.view_linear, self.pix_item_linear)
-
-    def zoom_in_stretched(self) -> None:
-        self._zoom(self.view_stretched, 1.2)
-
-    def zoom_out_stretched(self) -> None:
-        self._zoom(self.view_stretched, 1 / 1.2)
-
-    def zoom_11_stretched(self) -> None:
-        self._reset_zoom(self.view_stretched)
-
-    def fit_view_stretched(self) -> None:
-        self._fit_view(self.view_stretched, self.pix_item_stretched)
-
     def _zoom_in_extra(self, i: int) -> None:
         self._zoom(self.view_extra[i], 1.2)
 
@@ -1518,9 +1460,18 @@ class MultipleHistogramViewerWindow(QMainWindow):
             if self.img_stretched_extra[i] is not None:
                 self._fit_view(self.view_extra[i], self.pix_item_extra[i])
 
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        """Debounce resize: defer expensive refit until resizing stops."""
+        super().resizeEvent(event)
+        self._resize_timer.stop()
+        self._resize_timer.start(150)
+
+    def _on_resize_debounced(self) -> None:
+        """Called ~150ms after resize stops. Refit images so they fill the new view size."""
+        self._fit_all_views()
+
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         """Handle mouse clicks on image views to show pixel value in histogram."""
-        from PyQt6.QtCore import QEvent
         if event.type() == QEvent.Type.MouseButtonPress and obj in self._view_column_map:
             column_type, view = self._view_column_map[obj]
             self._on_image_clicked(column_type, view, event)
@@ -1574,7 +1525,7 @@ class MultipleHistogramViewerWindow(QMainWindow):
         if "\nClick (" in base:
             base = base.split("\nClick (")[0]
         stats_label.setText(base.rstrip() + click_line)
-        hist_widget.set_clicked_value(intensity, orig_col, orig_row)
+        hist_widget.set_clicked_value(intensity)
         for w in self._all_histogram_widgets():
             if w is not hist_widget:
                 w.set_clicked_value(None)
@@ -1588,14 +1539,13 @@ class MultipleHistogramViewerWindow(QMainWindow):
             surface_widget = self.surface_widget_extra[idx]
         else:
             surface_widget = None
-        all_surface = [self.surface_widget_linear, self.surface_widget_stretched] + self.surface_widget_extra
-        for sw in all_surface:
+        for sw in self._all_surface_widgets():
             if sw is surface_widget:
                 sw.set_clicked_pixel(orig_col, orig_row)
             else:
                 sw.set_clicked_pixel(None, None)
 
-    def _on_load_linear_fits_clicked(self):
+    def _on_load_linear_fits_clicked(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Load linear FITS",
@@ -1605,7 +1555,7 @@ class MultipleHistogramViewerWindow(QMainWindow):
         if path:
             self.load_linear_fits(path)
 
-    def _on_load_stretched_fits_clicked(self, slot):
+    def _on_load_stretched_fits_clicked(self, slot: int) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
             f"Load stretched FITS {slot + 1}",
@@ -1641,7 +1591,7 @@ class MultipleHistogramViewerWindow(QMainWindow):
             pixeldata = load_fits_pixeldata(path)
             img = normalize_stretched_fits(pixeldata)
             self.img_stretched_extra[slot] = img
-            filename = os.path.basename(path)
+            filename = Path(path).name
             self.stretched_filenames[slot] = filename
             btn_text = filename if len(filename) <= FILENAME_BUTTON_MAX_LEN else filename[: FILENAME_BUTTON_MAX_LEN - 3] + "..."
             self.btn_load_stretched[slot].setText(btn_text)
@@ -1704,15 +1654,8 @@ class MultipleHistogramViewerWindow(QMainWindow):
         for i in range(self.NUM_EXTRA_STRETCHED):
             self.stacked_widget_extra[i].setCurrentIndex(index)
 
-    def on_x_axis_mode_changed(self, adu_mode: bool | None = None) -> None:
-        """Legacy hook for X-axis mode changes. Histograms now always use ADU."""
-        self.x_axis_mode = "adu"
-        for w in self._all_histogram_widgets():
-            w.set_x_axis_mode(self.x_axis_mode, self.adu_max)
-        self._update_stats()
-
-    def on_channel_toggled(self):
-        vis = {"rgb": self.chk_rgb.isChecked(), "r": self.chk_r.isChecked(), "g": self.chk_g.isChecked(), "b": self.chk_b.isChecked(), "l": self.chk_l.isChecked()}
+    def on_channel_toggled(self) -> None:
+        vis = self._get_channel_visibility()
         for w in self._all_histogram_widgets():
             w.set_visibility(**vis)
 
@@ -1820,7 +1763,7 @@ class MultipleHistogramViewerWindow(QMainWindow):
             ]
         return "\n".join(lines)
 
-    def _update_stats(self):
+    def _update_stats(self) -> None:
         """Update statistical info under each histogram."""
         if self.img_linear is not None:
             self.stats_label_linear.setText(self._format_stats(self.img_linear, adu_mode=True, adu_max=self.adu_max))
@@ -1861,7 +1804,7 @@ class MultipleHistogramViewerWindow(QMainWindow):
                 QMessageBox.information(self, "Enlarge Diagram", "No image loaded.")
                 return
             histograms, edges = self._compute_histogram_from(self.img_linear.astype(np.float32))
-            vis = {"rgb": self.chk_rgb.isChecked(), "r": self.chk_r.isChecked(), "g": self.chk_g.isChecked(), "b": self.chk_b.isChecked(), "l": self.chk_l.isChecked()}
+            vis = self._get_channel_visibility()
             dlg = HistogramEnlargeDialog(
                 self, "Enlarge — Linear", histograms, edges, vis,
                 self.radio_log.isChecked(), self.adu_max,
@@ -1887,7 +1830,7 @@ class MultipleHistogramViewerWindow(QMainWindow):
                 QMessageBox.information(self, "Enlarge Diagram", "No image loaded.")
                 return
             histograms, edges = self._compute_histogram_from(self.img_stretched.astype(np.float32))
-            vis = {"rgb": self.chk_rgb.isChecked(), "r": self.chk_r.isChecked(), "g": self.chk_g.isChecked(), "b": self.chk_b.isChecked(), "l": self.chk_l.isChecked()}
+            vis = self._get_channel_visibility()
             dlg = HistogramEnlargeDialog(
                 self, "Enlarge — Auto-Stretched", histograms, edges, vis,
                 self.radio_log.isChecked(), self.adu_max,
@@ -1917,7 +1860,7 @@ class MultipleHistogramViewerWindow(QMainWindow):
             dlg.exec()
         else:
             histograms, edges = self._compute_histogram_from(img.astype(np.float32))
-            vis = {"rgb": self.chk_rgb.isChecked(), "r": self.chk_r.isChecked(), "g": self.chk_g.isChecked(), "b": self.chk_b.isChecked(), "l": self.chk_l.isChecked()}
+            vis = self._get_channel_visibility()
             title = f"Enlarge — Stretched {idx + 1}"
             if self.stretched_filenames[idx]:
                 title += f" — {self.stretched_filenames[idx]}"
@@ -1928,8 +1871,8 @@ class MultipleHistogramViewerWindow(QMainWindow):
             dlg.setWindowState(Qt.WindowState.WindowMaximized)
             dlg.exec()
 
-    def _compute_histogram(self):
-        vis = {'rgb': self.chk_rgb.isChecked(), 'r': self.chk_r.isChecked(), 'g': self.chk_g.isChecked(), 'b': self.chk_b.isChecked(), 'l': self.chk_l.isChecked()}
+    def _compute_histogram(self) -> None:
+        vis = self._get_channel_visibility()
         log_mode = self.radio_log.isChecked()
         if self.img_linear is not None and self.img_stretched is not None:
             arr_linear = self.img_linear.astype(np.float32)
@@ -1938,10 +1881,10 @@ class MultipleHistogramViewerWindow(QMainWindow):
             hist_stretched, _ = self._compute_histogram_from(arr_stretched)
             self.hist_widget_linear.set_histograms(hist_linear, edges)
             self.hist_widget_linear.set_visibility(**vis)
-            self.hist_widget_linear.set_x_axis_mode(self.x_axis_mode, self.adu_max)
+            self.hist_widget_linear.set_x_axis_mode(self.adu_max)
             self.hist_widget_stretched.set_histograms(hist_stretched, edges)
             self.hist_widget_stretched.set_visibility(**vis)
-            self.hist_widget_stretched.set_x_axis_mode(self.x_axis_mode, self.adu_max)
+            self.hist_widget_stretched.set_x_axis_mode(self.adu_max)
             self.hist_widget_linear.set_log_mode(log_mode)
             self.hist_widget_stretched.set_log_mode(log_mode)
         for i in range(self.NUM_EXTRA_STRETCHED):
@@ -1949,14 +1892,13 @@ class MultipleHistogramViewerWindow(QMainWindow):
             if arr is not None:
                 hist, edges = self._compute_histogram_from(arr.astype(np.float32))
                 self.hist_widget_extra[i].set_histograms(hist, edges)
-                self.hist_widget_extra[i].set_x_axis_mode(self.x_axis_mode, self.adu_max)
+                self.hist_widget_extra[i].set_x_axis_mode(self.adu_max)
             else:
                 empty_hist, empty_edges = _empty_histogram_data()
                 self.hist_widget_extra[i].set_histograms(empty_hist, empty_edges)
             self.hist_widget_extra[i].set_visibility(**vis)
             self.hist_widget_extra[i].set_log_mode(log_mode)
         # Keep inline 3D surface widgets in sync with current images (Z = selected channel, log/linear from Y-axis radios)
-        log_mode = self.radio_log.isChecked()
         ch = self._get_3d_channel()
         if self.img_linear is not None:
             self.surface_widget_linear.set_image(
@@ -1991,12 +1933,12 @@ class MultipleHistogramViewerWindow(QMainWindow):
                 lin = (lin - mn) / (mx - mn)
             lin = np.clip(lin, 0.0, 1.0)
             disp_linear, h_d, w_d = _prepare_display_image(lin)
-            qimg_linear = QImage(disp_linear.data, w_d, h_d, w_d * 3, QImage.Format.Format_RGB888)
+            qimg_linear = QImage(disp_linear.data, w_d, h_d, w_d * 3, QImage.Format.Format_RGB888).copy()
             self.pix_item_linear.setPixmap(QPixmap.fromImage(qimg_linear))
             self.view_linear.scene().setSceneRect(0, 0, w_d, h_d)
             # Stretched: as-is
             disp_stretched, h_d, w_d = _prepare_display_image(self.img_stretched)
-            qimg_stretched = QImage(disp_stretched.data, w_d, h_d, w_d * 3, QImage.Format.Format_RGB888)
+            qimg_stretched = QImage(disp_stretched.data, w_d, h_d, w_d * 3, QImage.Format.Format_RGB888).copy()
             self.pix_item_stretched.setPixmap(QPixmap.fromImage(qimg_stretched))
             self.view_stretched.scene().setSceneRect(0, 0, w_d, h_d)
         else:
@@ -2007,13 +1949,13 @@ class MultipleHistogramViewerWindow(QMainWindow):
             img = self.img_stretched_extra[i]
             if img is not None:
                 disp, h_d, w_d = _prepare_display_image(img)
-                qimg = QImage(disp.data, w_d, h_d, w_d * 3, QImage.Format.Format_RGB888)
+                qimg = QImage(disp.data, w_d, h_d, w_d * 3, QImage.Format.Format_RGB888).copy()
                 self.pix_item_extra[i].setPixmap(QPixmap.fromImage(qimg))
                 self.view_extra[i].scene().setSceneRect(0, 0, w_d, h_d)
             else:
                 self.pix_item_extra[i].setPixmap(QPixmap())
 
-    def load_image(self):
+    def load_image(self) -> None:
         no_image_msg = "No image is currently loaded in Siril. Please load a FITS image first."
         try:
             if not self.siril.connected:
@@ -2061,7 +2003,7 @@ class MultipleHistogramViewerWindow(QMainWindow):
 # ENTRY POINT
 # ------------------------------------------------------------------------------
 
-def main():
+def main() -> int:
     app = QApplication(sys.argv)
     try:
         siril = s.SirilInterface()
