@@ -1,6 +1,6 @@
 """
 Siril Script Security Scanner
-Script Version: 1.0.0
+Script Version: 1.1.0
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -12,6 +12,11 @@ network exfiltration, code execution escalation, persistence mechanisms,
 obfuscation techniques, denial-of-service patterns, social engineering tricks,
 and supply-chain poisoning.
 
+Script directories are read automatically from Siril's OS-specific configuration:
+  • Linux  : ~/.config/siril/siril.cfg  (or GSettings org.free-astro.siril)
+  • macOS  : ~/Library/Preferences/org.free-astro.siril.plist
+  • Windows: %APPDATA%\\siril\\siril.cfg
+
 Run from Siril via Processing → Scripts (or your configured Scripts menu). Siril uses
 the script's parent folder name as the menu section; to show under "Utility", place
 Script-Security-Scanner.py inside a folder named Utility in one of Siril's Script Storage
@@ -22,6 +27,10 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.1.0 - Read script paths from OS-specific Siril configuration files
+        (siril.cfg on Linux/Windows, org.free-astro.siril.plist on macOS,
+        GSettings on Linux as secondary source); UI now labels each directory
+        with its discovery source.
 1.0.0 - Initial release
       - AST + regex based scanning for 8 threat categories
       - Dark-themed PyQt6 UI matching Multiple Histogram Viewer style
@@ -30,7 +39,12 @@ CHANGELOG:
 from __future__ import annotations
 
 import ast
+import configparser
+import os
+import platform
+import plistlib
 import re
+import subprocess
 import sys
 import traceback
 import textwrap
@@ -51,7 +65,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 # Layout constants – match MultipleHistogramViewer
 LEFT_PANEL_WIDTH = 320
@@ -315,22 +329,141 @@ class Finding:
     description: str
 
 
-def _get_siril_script_dirs() -> list[Path]:
-    """Return candidate Siril script storage directories that actually exist."""
-    candidates: list[Path] = []
+# Keys Siril uses in its cfg / plist for the scripts directory list.
+# The scanner tries all of them to stay compatible across Siril versions.
+_CFG_SCRIPT_KEYS = (
+    "ScriptPath", "script_path", "script-path",
+    "ScriptPaths", "script_paths", "scripts_path",
+)
+
+
+def _split_path_value(raw: str) -> list[Path]:
+    """Split a colon- or semicolon-delimited path string into Path objects."""
+    return [Path(p.strip()) for p in re.split(r"[:;]", raw) if p.strip()]
+
+
+def _read_cfg_script_paths(cfg_path: Path) -> list[tuple[Path, str]]:
+    """
+    Parse a siril.cfg (GLib GKeyFile / INI-style) file and return
+    ``(path, source_label)`` tuples for every script directory found.
+    """
+    results: list[tuple[Path, str]] = []
+    if not cfg_path.is_file():
+        return results
+    try:
+        parser = configparser.RawConfigParser()
+        parser.read(cfg_path, encoding="utf-8")
+        for section in parser.sections():
+            for key in _CFG_SCRIPT_KEYS:
+                try:
+                    value = parser.get(section, key)
+                    if value:
+                        label = f"siril.cfg [{section}] › {key}"
+                        for p in _split_path_value(value):
+                            results.append((p, label))
+                except configparser.NoOptionError:
+                    pass
+    except Exception:
+        pass
+    return results
+
+
+def _read_gsettings_script_paths() -> list[tuple[Path, str]]:
+    """
+    Query GSettings for ``org.free-astro.siril`` script-path entries.
+    Returns ``(path, source_label)`` tuples.
+    Only meaningful on Linux; silently returns [] on other platforms.
+    """
+    results: list[tuple[Path, str]] = []
+    try:
+        proc = subprocess.run(  # noqa: S603 – intentional GSettings query
+            ["gsettings", "get", "org.free-astro.siril", "script-path"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if proc.returncode != 0 or not proc.stdout.strip():
+            return results
+        raw = proc.stdout.strip()
+        label = "GSettings org.free-astro.siril › script-path"
+        # GSettings may return a GVariant array  ['path1', 'path2']
+        # or a plain quoted string  '/some/path'
+        if raw.startswith("["):
+            try:
+                items = ast.literal_eval(raw)
+                if isinstance(items, (list, tuple)):
+                    for item in items:
+                        p = str(item).strip()
+                        if p:
+                            results.append((Path(p), label))
+            except Exception:
+                pass
+        else:
+            for p in _split_path_value(raw.strip("'\"")):
+                results.append((p, label))
+    except Exception:
+        pass
+    return results
+
+
+def _read_plist_script_paths(plist_path: Path) -> list[tuple[Path, str]]:
+    """
+    Parse macOS ``org.free-astro.siril.plist`` and return
+    ``(path, source_label)`` tuples.
+    """
+    results: list[tuple[Path, str]] = []
+    if not plist_path.is_file():
+        return results
+    try:
+        with plist_path.open("rb") as fh:
+            data = plistlib.load(fh)
+        label = f"plist {plist_path.name}"
+        for key in _CFG_SCRIPT_KEYS:
+            value = data.get(key)
+            if value is None:
+                continue
+            if isinstance(value, list):
+                for item in value:
+                    p = str(item).strip()
+                    if p:
+                        results.append((Path(p), label + f" › {key}"))
+            elif isinstance(value, str):
+                for p in _split_path_value(value):
+                    results.append((p, label + f" › {key}"))
+    except Exception:
+        pass
+    return results
+
+
+def _get_siril_script_dirs() -> list[tuple[Path, str]]:
+    """
+    Return ``(directory_path, source_label)`` tuples for all existing Siril
+    script directories, probing OS-specific configuration files first, then
+    falling back to well-known default locations.
+
+    Discovery order:
+      Linux   – siril.cfg → GSettings → fallback paths
+      macOS   – org.free-astro.siril.plist → fallback paths
+      Windows – siril.cfg (APPDATA) → fallback paths
+    """
     home = Path.home()
-    # Standard locations across platforms
-    candidates += [
-        home / ".siril" / "scripts",
-        home / "siril" / "scripts",
-        home / "Documents" / "siril" / "scripts",
-        Path("/usr/share/siril/scripts"),
-        Path("/usr/local/share/siril/scripts"),
-        home / "AppData" / "Roaming" / "siril" / "scripts",
-        home / "AppData" / "Local" / "siril" / "scripts",
-        home / "Library" / "Application Support" / "siril" / "scripts",
-    ]
-    # Try to get paths via sirilpy if available
+    system = platform.system()
+    found: list[tuple[Path, str]] = []
+
+    # ── 1. OS-specific configuration files ───────────────────────────────────
+    if system == "Linux":
+        cfg = home / ".config" / "siril" / "siril.cfg"
+        found.extend(_read_cfg_script_paths(cfg))
+        found.extend(_read_gsettings_script_paths())
+
+    elif system == "Darwin":
+        plist = home / "Library" / "Preferences" / "org.free-astro.siril.plist"
+        found.extend(_read_plist_script_paths(plist))
+
+    elif system == "Windows":
+        appdata = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
+        cfg = appdata / "siril" / "siril.cfg"
+        found.extend(_read_cfg_script_paths(cfg))
+
+    # ── 2. sirilpy interface (if Siril exposes paths programmatically) ────────
     try:
         iface = s.SirilInterface()
         for attr in ("script_paths", "get_script_paths", "scriptPaths"):
@@ -338,19 +471,43 @@ def _get_siril_script_dirs() -> list[Path]:
             if callable(fn):
                 result = fn()
                 if isinstance(result, list):
-                    candidates += [Path(p) for p in result]
+                    found.extend((Path(p), "sirilpy interface") for p in result)
                 break
     except Exception:
         pass
-    return [p for p in candidates if p.is_dir()]
+
+    # ── 3. Well-known fallback locations ─────────────────────────────────────
+    fallbacks: list[tuple[Path, str]] = [
+        (home / ".siril" / "scripts",                           "fallback"),
+        (home / "siril" / "scripts",                            "fallback"),
+        (home / "Documents" / "siril" / "scripts",              "fallback"),
+        (Path("/usr/share/siril/scripts"),                       "fallback"),
+        (Path("/usr/local/share/siril/scripts"),                 "fallback"),
+        (home / "AppData" / "Roaming" / "siril" / "scripts",    "fallback"),
+        (home / "AppData" / "Local"   / "siril" / "scripts",    "fallback"),
+        (home / "Library" / "Application Support" / "siril" / "scripts", "fallback"),
+    ]
+    found.extend(fallbacks)
+
+    # ── Deduplicate, keep only directories that actually exist ────────────────
+    seen: set[Path] = set()
+    result: list[tuple[Path, str]] = []
+    for p, label in found:
+        if p not in seen:
+            seen.add(p)
+            if p.is_dir():
+                result.append((p, label))
+    return result
 
 
-def _collect_python_scripts(dirs: list[Path]) -> list[Path]:
-    """Collect all .py files recursively from the given directories."""
+def _collect_python_scripts(dirs: list[tuple[Path, str]]) -> list[Path]:
+    """Collect all .py files recursively from the given (directory, label) pairs."""
     scripts: list[Path] = []
-    for d in dirs:
+    seen: set[Path] = set()
+    for d, _label in dirs:
         for p in sorted(d.rglob("*.py")):
-            if p not in scripts:
+            if p not in seen:
+                seen.add(p)
                 scripts.append(p)
     return scripts
 
@@ -385,7 +542,7 @@ class ScanWorker(QThread):
     progress = pyqtSignal(int, int, str)   # scanned, total, filename
     finished = pyqtSignal(list, list)       # findings, scanned_paths
 
-    def __init__(self, script_dirs: list[Path], active_categories: set[str]):
+    def __init__(self, script_dirs: list[tuple[Path, str]], active_categories: set[str]):
         super().__init__()
         self._dirs = script_dirs
         self._categories = active_categories
@@ -414,7 +571,7 @@ class SecurityScannerWindow(QMainWindow):
         self._worker: ScanWorker | None = None
         self._findings: list[Finding] = []
         self._scanned_paths: list[Path] = []
-        self._scan_dirs: list[Path] = []
+        self._scan_dirs: list[tuple[Path, str]] = []
         self._init_ui()
         QTimer.singleShot(100, self._refresh_dirs)
 
@@ -583,7 +740,11 @@ class SecurityScannerWindow(QMainWindow):
 
     def _update_dirs_label(self) -> None:
         if self._scan_dirs:
-            text = "\n".join(str(d) for d in self._scan_dirs)
+            lines: list[str] = []
+            for p, label in self._scan_dirs:
+                src = "" if label == "fallback" else f"  [{label}]"
+                lines.append(f"{p}{src}")
+            text = "\n".join(lines)
         else:
             text = "No Siril script directories found.\nUse 'Add Directory…' to add one."
         self.lbl_dirs.setText(text)
@@ -592,8 +753,9 @@ class SecurityScannerWindow(QMainWindow):
         chosen = QFileDialog.getExistingDirectory(self, "Select Script Directory")
         if chosen:
             p = Path(chosen)
-            if p not in self._scan_dirs:
-                self._scan_dirs.append(p)
+            existing_paths = {d for d, _ in self._scan_dirs}
+            if p not in existing_paths:
+                self._scan_dirs.append((p, "user-added"))
                 self._update_dirs_label()
 
     # ── Category helpers ───────────────────────────────────────────────────
@@ -789,8 +951,14 @@ class SecurityScannerWindow(QMainWindow):
             "  • Supply Chain               (installing packages at runtime)\n\n"
             "2. HOW TO USE\n"
             "-------------\n"
-            "The scanner automatically finds your Siril script directories.\n"
-            "If none are found, click 'Add Directory…' to add a folder manually.\n"
+            "The scanner automatically reads your Siril script directories from\n"
+            "the OS-specific Siril configuration file:\n"
+            "  Linux   : ~/.config/siril/siril.cfg  (or GSettings)\n"
+            "  macOS   : ~/Library/Preferences/org.free-astro.siril.plist\n"
+            "  Windows : %%APPDATA%%\\siril\\siril.cfg\n\n"
+            "Each discovered directory shows its source in brackets.\n"
+            "If no directories are found via config, well-known fallback paths\n"
+            "are tried automatically. Use 'Add Directory…' to add extras.\n"
             "Select the categories you want to scan, then press 'Scan Now'.\n"
             "Results appear grouped by file. Click any finding for details.\n\n"
             "3. SEVERITY LEVELS\n"
