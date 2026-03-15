@@ -1703,6 +1703,28 @@ and keep backups of your data.
 <p style='color:#aaaaaa;font-size:9.5pt;'>
 Stay safe — and clear skies. 🌠
 </p>
+
+<p style='color:#ffdd88;'>
+<b>⚠️ Important — Why you should always do an AI check:</b> This scanner performs
+<b>static analysis based on pattern matching</b> — it looks for known dangerous
+signatures in the source code. A clever attacker can evade these patterns.
+<b>ChatGPT and Claude understand code semantically</b>, like a human expert would,
+and can catch threats that pattern-based tools miss entirely. Paste the script
+into either AI with the prompt below — it takes 30 seconds and could save you
+from serious harm:
+</p>
+
+<p style='background:#2a2a2a;padding:10px;border-left:3px solid #4488cc;
+font-size:9.5pt;color:#cccccc;font-family:monospace;'>
+"You are an expert Python developer and cybersecurity specialist. Analyze the
+following Python script designed for the astrophotography program Siril. The
+script can access Siril data via its API but runs with full user-level OS
+permissions. Review the code for any malicious, harmful, or risky behavior —
+including but not limited to: file system access, network calls, data
+exfiltration, privilege escalation, obfuscated code, or destructive operations.
+Provide a security risk assessment and a clear recommendation on whether the
+script is safe to run."
+</p>
 """)
         text.setMinimumHeight(320)
         layout.addWidget(text)
@@ -1800,10 +1822,7 @@ Stay safe — and clear skies. 🌠
         _nofocus(btn_paste)
         btn_paste.setToolTip(
             "Paste one or more script directory paths from the clipboard.\n"
-            "Separate multiple paths with newlines, commas, semicolons, or colons.\n\n"
-            "Tip: the easiest way to get the right paths is to open Siril,\n"
-            "go to  Scripts ▸ Load Scripts…  and copy all the paths shown\n"
-            "there to the clipboard — then paste them here."
+            "Separate multiple paths with newlines, commas, semicolons, or colons."
         )
         btn_paste.clicked.connect(self._paste_paths)
         btn_row.addWidget(btn_paste)
@@ -2463,7 +2482,20 @@ Stay safe — and clear skies. 🌠
             "Siril 1.4+ with Python script support, sirilpy (bundled with Siril),\n"
             "and PyQt6 (installed automatically when the script runs).\n\n"
             "For more details and menu setup, see the repository README at\n"
-            "https://github.com/sramuschkat/Siril-Scripts"
+            "https://github.com/sramuschkat/Siril-Scripts\n\n"
+            "7. AI-ASSISTED ANALYSIS TIP\n"
+            "---------------------------\n"
+            "For an additional layer of review, you can also check downloaded scripts\n"
+            "by pasting their code into ChatGPT or Claude with the following prompt:\n\n"
+            "  \"You are an expert Python developer and cybersecurity specialist.\n"
+            "  Analyze the following Python script designed for the astrophotography\n"
+            "  program Siril. The script can access Siril data via its API but runs\n"
+            "  with full user-level OS permissions. Review the code for any malicious,\n"
+            "  harmful, or risky behavior — including but not limited to: file system\n"
+            "  access, network calls, data exfiltration, privilege escalation,\n"
+            "  obfuscated code, or destructive operations. Provide a security risk\n"
+            "  assessment and a clear recommendation on whether the script is safe\n"
+            "  to run.\""
         )
         te.setStyleSheet("font-size:10pt;color:#e0e0e0;background:#2b2b2b;")
         layout.addWidget(te)
