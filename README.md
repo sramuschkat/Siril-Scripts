@@ -28,11 +28,51 @@ GPL-3.0-or-later
 
 Reads the current image from Siril, divides it into a configurable grid of tiles, computes sigma-clipped median background levels per tile, and renders a color-coded heatmap. It helps you assess background gradients (e.g. from light pollution), decide whether background extraction is needed, and choose the right tool and parameters for the job.
 
+### Screenshots
+
+![Gradient Analyzer — main window](Screenshots/GradientAnalyzer-1.jpg)
+
+*Main window: heatmap with sample point guidance, 3D surface view, gradient strength gauge, and quadrant analysis. Nine visualization tabs with context-sensitive descriptions.*
+
 ### Features
+
+#### Beginner-friendly UI
+
+- **Tiered Analysis Results:** Summary & Actions tab with color-coded verdict, plain-English explanation, and prioritized action plan. Detailed Metrics tab for advanced users. Before/After delta tab when re-analyzing.
+- **Tiered Recommendations:** Quick Guide tab with styled, categorized suggestions (critical issues, tools, workflow). Full Details tab with raw diagnostic output.
+- **Organized Help dialog:** Six tabs — Getting Started, Tabs, Tools, Options, Warnings, Reference — instead of one long list.
+- **Single Analyze button (F5):** Always loads the current Siril image and runs the full analysis. No separate Refresh button needed.
+- **Compact Siril log:** Only essential information (strength, assessment, critical warnings) is logged to the Siril console. Full details are in the Analysis Results and Recommendations dialogs.
+- **Context-sensitive tab descriptions:** Colored tab names with plain-English descriptions above the visualization area, including "Use this to…" guidance.
+
+#### Analysis & diagnostics
 
 - **Configurable grid:** 4–64 rows/cols with iterative sigma-clipping (1.5–4.0σ) to exclude stars and bright objects.
 - **Gradient metrics:** Strength (%), direction (angle), uniformity, and confidence indicator (SNR-based).
 - **Visual strength gauge:** Color-coded severity bar (green → yellow → orange → red) with configurable threshold presets (Broadband, Narrowband, Fast optics).
+- **Quadrant analysis:** NW/NE/SW/SE median values with brightest/darkest highlighting.
+- **Gradient complexity:** Polynomial fits (degree 1/2/3) with R² comparison to determine optimal subsky degree.
+- **Vignetting detection:** Radial vs. linear model fitting and edge-to-center ratio; symmetry analysis for flat calibration quality.
+- **Extended object detection:** Flags tiles containing nebulae/galaxies that could bias the gradient fit.
+- **Mosaic panel boundary detection:** Identifies sharp linear discontinuities from stitched panels.
+- **Hotspot detection:** Outlier tiles (satellite trails, artifacts) flagged at > 3σ from neighbors.
+- **Residual pattern detection:** Moran's I spatial autocorrelation to check if polynomial degree is sufficient.
+- **Improvement prediction:** Estimates post-extraction gradient strength from model residuals.
+- **Light pollution color:** Characterizes LP type from per-channel gradient strengths (sodium, LED, mercury, broadband).
+- **Linear data detection:** Warns when the image appears stretched (non-linear).
+- **Star density warning:** Flags dense star fields that may bias background estimates.
+- **Dew/frost detection:** Cross-correlates radial FWHM increase with center brightness for corrector plate dew detection.
+- **Amplifier glow detection:** Detects exponential corner brightness profile characteristic of CCD/CMOS amp glow.
+- **Banding/sensor bias detection:** FFT-based detection of periodic row/column patterns from sensor readout artifacts.
+- **Normalization detection:** Warns when background-normalized data may underestimate true gradient.
+- **FITS calibration check:** Reads FLATCOR/CALSTAT/DARKCOR from FITS headers to verify flat/dark/bias calibration was applied.
+- **Geographic LP direction:** Converts gradient direction to real-world compass bearing via WCS rotation.
+- **Photometric sky brightness:** Approximate mag/arcsec² and Bortle class estimate from SPCC-calibrated images.
+- **Cos^4 vignetting correction:** Separates natural optical falloff from true gradients, especially for fast optics (f/2–f/4).
+- **FWHM/eccentricity map:** Star shape variation across the field with sensor tilt and field curvature detection.
+
+#### Visualizations (9 tabs)
+
 - **2D heatmap & 3D surface:** Color-coded tile map with optional gradient direction arrow overlay, plus interactive 3D surface view.
 - **Gradient profiles:** Horizontal and vertical cross-section plots showing where the gradient ramps across the image.
 - **Tile distribution histogram:** Background value distribution — tight peak = uniform, broad/bimodal = gradient.
@@ -40,62 +80,30 @@ Reads the current image from Siril, divides it into a configurable grid of tiles
 - **Background model preview:** Fitted polynomial surface (what subsky would subtract) and residuals.
 - **Gradient magnitude map:** Rate-of-change visualization highlighting the steepest gradient transitions.
 - **Subtraction preview:** Side-by-side before/after comparison of gradient removal at full pixel resolution.
-- **Vignetting detection:** Radial vs. linear model fitting and edge-to-center ratio; symmetry analysis for flat calibration quality.
-- **Gradient complexity:** Polynomial fits (degree 1/2/3) with R² comparison to determine optimal subsky degree.
-- **Tool recommendations:** Suggests subsky, AutoBGE, GraXpert, or VeraLux Nox based on gradient characteristics, with step-by-step workflow guidance.
-- **Quadrant analysis:** NW/NE/SW/SE median values with brightest/darkest highlighting.
-- **Sample point guidance:** Heatmap overlay (green = good, red = avoid) plus exportable setref/addref commands for Siril's console.
-- **Extended object detection:** Flags tiles containing nebulae/galaxies that could bias the gradient fit.
-- **Mosaic panel boundary detection:** Identifies sharp linear discontinuities from stitched panels.
-- **Hotspot detection:** Outlier tiles (satellite trails, artifacts) flagged at > 3σ from neighbors.
-- **Residual pattern detection:** Moran's I spatial autocorrelation to check if polynomial degree is sufficient.
-- **Improvement prediction:** Estimates post-extraction gradient strength from model residuals.
-- **Gradient history:** Tracks gradient evolution across sessions (JSON log, sparkline display, last 50 entries).
-- **Sub-frame batch ranking:** Analyze a directory of FITS files for gradient quality and rank best-to-worst (requires astropy).
-- **Adaptive sigma suggestion:** Recommends sigma adjustments based on star density rejection rates.
-- **Before/After comparison:** Delta display with green/red arrows showing extraction effectiveness.
-- **Linear data detection:** Warns when the image appears stretched (non-linear).
-- **Star density warning:** Flags dense star fields that may bias background estimates.
-- **Light pollution color:** Characterizes LP type from per-channel gradient strengths (sodium, LED, mercury, broadband).
+- **FWHM / Eccentricity map:** Star shape metrics across the field.
+- **Residual/exclusion mask:** Polynomial fit residuals alongside red-overlaid exclusion mask showing which tiles were excluded.
+
+#### Tool recommendations
+
+- **Actionable suggestions:** Suggests subsky, AutoBGE, GraXpert, or VeraLux Nox based on gradient characteristics, with step-by-step workflow guidance.
+- **Priority-based workflow:** Critical hardware/calibration issues are flagged before extraction recommendations.
+- **Sample point guidance:** Heatmap overlay (green = good sample regions, red = avoid) to guide manual sample placement.
+
+#### Export & persistence
+
+- **Report export:** Plain-text analysis report derived from the same content as the Analysis Results and Recommendations dialogs — single source of truth.
 - **PNG export:** Heatmap image with key metrics burned in (annotated export).
 - **JSON sidecar:** Persist analysis results for cross-session comparison.
-- **Clipboard export:** Copy results text or sample point commands to clipboard.
 - **Persistent settings:** Grid size, sigma, checkboxes, and preset saved between sessions via QSettings.
-- **Keyboard shortcuts:** F5 = Analyze, Ctrl+Shift+R = Refresh from Siril.
 - **Colorbar locking:** Consistent heatmap scale across re-analyses for meaningful visual comparison.
-- **Weighted background model:** Polynomial fit excludes flagged tiles (extended objects, hotspots, stacking edges) for unbiased results.
-- **Dither/rotation edge detection:** Identifies tapered dark borders from stacking and excludes them from gradient analysis.
-- **Banding/sensor bias detection:** FFT-based detection of periodic row/column patterns from sensor readout artifacts.
-- **Per-channel gradient direction:** Detects LP coming from different compass directions per RGB channel.
-- **Cos^4 vignetting correction:** Separates natural optical falloff from true gradients, especially for fast optics (f/2-f/4).
-- **Interactive sample points:** Left-click heatmap to place points, right-click to remove; green diamonds with numbered labels.
-- **One-click subsky execution:** "Apply subsky & Re-analyze" button executes the recommended command in Siril and auto-reloads.
-- **FWHM/eccentricity map:** Star shape variation across the field with sensor tilt and field curvature detection.
-- **Normalization detection:** Warns when background-normalized data may underestimate true gradient.
-- **FITS calibration check:** Reads FLATCOR/CALSTAT/DARKCOR from FITS headers to verify flat/dark/bias calibration was applied.
-- **Geographic LP direction:** Converts gradient direction to real-world compass bearing via WCS rotation — tells you which direction LP comes from.
-- **Photometric sky brightness:** Approximate mag/arcsec² and Bortle class estimate from SPCC-calibrated images.
-- **Sample point passthrough:** Feeds manual/auto sample points to Siril via setref/addref before subsky execution.
-- **Auto-iterate extraction:** Repeats subsky + re-analyze up to 3 passes until gradient drops below 2%.
-- **Temporal gradient analysis:** Correlates DATE-OBS timestamps with gradient to identify best/worst periods for sub-frame rejection.
-- **Residual/exclusion mask tab:** Shows polynomial fit residuals alongside red-overlaid exclusion mask showing which tiles were excluded.
-- **Dew/frost detection:** Cross-correlates radial FWHM increase with center brightness for corrector plate dew detection.
-- **Amplifier glow detection:** Detects exponential corner brightness profile characteristic of CCD/CMOS amp glow.
-- **Report export:** Comprehensive plain-text analysis report for documentation, forum posts, or record-keeping.
-- **Artifact-adjusted gradient note:** When artifacts (banding, amp glow, dew, missing flats) are detected, warns that the reported gradient % includes artifact contributions and the true sky gradient may be lower.
-- **Priority-based workflow:** Critical hardware/calibration issues are flagged before extraction recommendations; subsky is labeled "AFTER FIXING ISSUES" when critical problems exist.
-- **Dual-scale gradient-free analysis:** Tiles must pass both global median and local 3x3 neighborhood checks to be counted as gradient-free, preventing contradictory metrics.
-- **Robust prediction:** Uses original image median (not near-zero residual median) for improvement estimates; warns when predicted reduction is below 20%.
-- **Poor fit handling:** When all polynomial fits have R² < 0.5, recommends degree 1 (not highest R²) to avoid overfitting noise, and suggests AI-based tools.
-- **FWHM reliability guards:** Requires minimum 3 stars per tile with 3-sigma outlier rejection; flags very high eccentricity (>= 0.40) as potentially unreliable at coarse tile resolution.
-- **Built-in help:** Comprehensive 58-section help dialog covering every feature.
+- **Keyboard shortcut:** F5 = Analyze (loads current image from Siril and runs analysis).
 
 ### Requirements
 
 - Siril 1.4+ with Python script support
 - sirilpy (bundled with Siril)
 - numpy, PyQt6, matplotlib, scipy (installed automatically via `s.ensure_installed`)
-- Optional: astropy (for sub-frame batch ranking, temporal analysis, and FITS header reading)
+- Optional: astropy (for FITS header reading)
 
 ### Usage
 
@@ -103,7 +111,7 @@ Reads the current image from Siril, divides it into a configurable grid of tiles
 2. Run **Gradient Analyzer** from Siril: **Processing → Scripts** (or your Scripts menu).
 3. Adjust grid resolution and sigma in the left panel, select a threshold preset, then click **Analyze** (or press F5).
 4. Review the heatmap, profiles, and metrics across the 9 tabs. Check the recommendations for the suggested tool and parameters.
-5. Apply the recommended extraction in Siril, then click **Refresh from Siril** to re-analyze and compare before/after.
+5. Apply the recommended extraction in Siril, then click **Analyze** (F5) again to re-analyze and compare before/after.
 
 ---
 

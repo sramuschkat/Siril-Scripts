@@ -34,33 +34,25 @@ Features:
 - Vignetting symmetry analysis (flat calibration quality check)
 - Gradient-free region percentage (localized vs full-field gradient)
 - Extended object detection (nebula/galaxy bias warning)
-- Subsky sample point coordinate export (setref/addref commands)
 - Mosaic panel boundary detection
 - JSON sidecar file for temporal comparison across sessions
 - Hotspot/outlier tile detection (artifacts, satellite trails)
 - RMS improvement prediction (estimated post-extraction gradient)
 - Subtraction preview (side-by-side before/after gradient removal)
-- Gradient history log (tracks gradient evolution across sessions)
 - Residual pattern detection (Moran's I spatial autocorrelation)
 - Configurable threshold presets (Broadband, Narrowband, Fast optics)
 - Annotated PNG export (metrics burned into heatmap image)
-- Sub-frame batch ranking (FITS quality analysis via astropy)
 - Adaptive sigma suggestion (based on star density rejection rates)
 - Weighted background model (excludes flagged tiles from polynomial fit)
 - Dither/rotation edge detection (detects tapered stacking borders)
 - Banding/column bias detection (periodic sensor readout artifacts via FFT)
 - Per-channel gradient direction (LP direction analysis per RGB channel)
 - Cos^4 corner vignetting correction (natural falloff for fast optics)
-- Interactive sample point editing (click heatmap to place/remove points)
-- One-click subsky execution (Apply subsky & Re-analyze via Siril API)
 - FWHM/eccentricity map (star shape variation across the field)
 - Background normalization detection (warns about pre-normalized data)
 - FITS header calibration cross-check (FLATCOR/CALSTAT/DARKCOR keywords)
 - WCS-aware geographic LP direction (real-world compass bearing from WCS rotation)
 - Photometric sky brightness in mag/arcsec² (from SPCC calibration + plate scale)
-- Subsky sample point passthrough (feeds setref/addref points to subsky execution)
-- Auto-iterate extraction (repeat subsky until gradient < 2% or max passes)
-- Temporal sky gradient modeling (DATE-OBS correlation for sub-frame rejection)
 - Residual map with exclusion mask overlay (shows which tiles were excluded and why)
 - Dew/frost detection (cross-correlates FWHM radial increase with brightness pattern)
 - Amplifier glow detection (exponential corner profile vs LP differentiation)
@@ -88,16 +80,13 @@ CHANGELOG:
       - Poor fit handling: degree 1 fallback when all R² < 0.5, avoids overfitting noise
       - FWHM reliability: min 3 stars/tile, 3-sigma outlier rejection, eccentricity >= 0.40 caveat
       - Residuals / Mask tab added to help documentation
-      - Code cleanup: removed unused load_history(), dead code in analyze_single_fits()
+      - Code cleanup: removed load_history(), analyze_single_fits(), _on_batch_analyze(), _on_apply_subsky()
       - Narrowed 14 broad except Exception clauses to specific exception types
       - Refactored R/G/B channel computation to loop
 1.8.0 - Professional workflow integration and hardware diagnostics
       - FITS header calibration check: reads FLATCOR/CALSTAT/DARKCOR from FITS headers
       - WCS geographic LP direction: converts gradient direction to real-world compass bearing
       - Photometric sky brightness: mag/arcsec² with Bortle class estimate (requires SPCC)
-      - Sample point passthrough: feeds manual/auto points via setref/addref before subsky
-      - Auto-iterate extraction: repeats subsky+analyze until gradient < 2% or 3 passes
-      - Temporal gradient modeling: correlates DATE-OBS with gradient for sub rejection
       - Residual/exclusion mask tab: shows fit residuals + which tiles were excluded (red overlay)
       - Dew/frost detection: cross-correlates radial FWHM increase with brightness pattern
       - Amplifier glow detection: exponential corner profile analysis vs LP differentiation
@@ -108,24 +97,19 @@ CHANGELOG:
       - Banding detection: periodic row/column sensor bias via FFT analysis
       - Per-channel gradient direction: detects LP from different compass directions per RGB
       - Cos^4 vignetting correction: separates natural optical falloff from true gradients
-      - Interactive sample points: left-click heatmap to add, right-click to remove
-      - One-click subsky: execute recommended subsky command and auto re-analyze
       - FWHM/eccentricity map: star shape variation with tilt/curvature detection
       - Normalization detection: warns when background-normalized data may mislead analysis
       - Weight mask system: unified tile exclusion for all flagged anomalies
 1.6.0 - Workflow automation and quality-of-life features
       - Subtraction preview: side-by-side before/after gradient removal visualization
-      - Gradient history log: tracks gradient evolution across sessions (last 50 entries)
       - Residual pattern detection: Moran's I spatial autocorrelation on fit residuals
       - Configurable threshold presets: Broadband, Narrowband, Fast optics
       - Annotated PNG export: burns key metrics into saved heatmap image
-      - Sub-frame batch ranking: analyzes FITS files for gradient quality sorting
       - Adaptive sigma suggestion: recommends sigma based on star density rejection rates
 1.5.0 - Advanced diagnostics and workflow automation
       - Vignetting symmetry analysis: detects asymmetric flat residuals
       - Gradient-free region percentage: localized vs full-field gradient
       - Extended object detection: flags tiles with nebulae/galaxies
-      - Subsky sample point export: generates setref/addref commands
       - Mosaic panel boundary detection from gradient magnitude
       - JSON sidecar persistence for cross-session comparison
       - Hotspot detection: outlier tiles (artifacts, satellite trails)
@@ -190,9 +174,9 @@ from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QMessageBox, QGroupBox,
     QCheckBox, QSlider, QSpinBox, QDoubleSpinBox,
     QSizePolicy, QDialog, QTextEdit, QTabWidget, QScrollArea,
-    QProgressBar, QComboBox, QFileDialog,
+    QProgressBar, QComboBox,
 )
-from PyQt6.QtCore import Qt, QSettings, pyqtSignal
+from PyQt6.QtCore import Qt, QSettings
 from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QLinearGradient, QShortcut, QKeySequence
 
 VERSION = "1.8.1"
@@ -1109,7 +1093,6 @@ def generate_sample_points(
 
     Returns dict with:
       - points: list of (x_px, y_px) tuples in image pixel coordinates
-      - siril_commands: list of Siril console command strings
       - description: human-readable explanation
     """
     rows, cols = tile_medians.shape
@@ -1163,25 +1146,13 @@ def generate_sample_points(
         px_y = int((r + 0.5) * tile_h)
         points.append((px_x, px_y))
 
-    # Generate Siril commands
-    commands = []
-    if points:
-        # Note: Siril's setref uses 1-based pixel coordinates
-        for i, (px, py) in enumerate(points):
-            if i == 0:
-                commands.append(f"setref {px} {py}")
-            else:
-                commands.append(f"addref {px} {py}")
-
     desc = (
         f"Generated {len(points)} sample points in the darkest, most uniform regions. "
-        f"Avoids edge tiles and extended objects. Copy the commands to Siril's console "
-        f"for manual subsky sample placement."
+        f"Avoids edge tiles and extended objects."
     )
 
     return {
         "points": points,
-        "siril_commands": commands,
         "description": desc,
     }
 
@@ -1388,21 +1359,6 @@ def save_analysis_json(
 
     return filepath
 
-
-def load_previous_analysis(filepath: str) -> dict | None:
-    """
-    Load a previously saved analysis JSON file.
-    Returns the data dict or None if file doesn't exist or is invalid.
-    """
-    import json
-
-    if not os.path.isfile(filepath):
-        return None
-    try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return None
 
 
 def detect_hotspots(tile_medians: np.ndarray, sigma_threshold: float = 3.0) -> dict:
@@ -2355,101 +2311,6 @@ def suggest_sigma(star_density_info: dict, current_sigma: float) -> dict:
     }
 
 
-def save_history_entry(
-    history_path: str,
-    metrics: dict,
-    complexity_data: dict,
-    timestamp: str | None = None,
-) -> list:
-    """
-    Append a gradient analysis entry to the history log file.
-    Returns the updated history list.
-    """
-    import json
-
-    history = []
-    if os.path.isfile(history_path):
-        try:
-            with open(history_path, "r", encoding="utf-8") as f:
-                history = json.load(f)
-            if not isinstance(history, list):
-                history = []
-        except (json.JSONDecodeError, OSError):
-            history = []
-
-    entry = {
-        "timestamp": timestamp or datetime.datetime.now().isoformat(),
-        "strength_pct": metrics["strength_pct"],
-        "uniformity": metrics["uniformity"],
-        "bg_range": metrics["bg_range"],
-        "best_degree": complexity_data["best_degree"],
-    }
-    history.append(entry)
-
-    # Keep last 50 entries to avoid unbounded growth
-    if len(history) > 50:
-        history = history[-50:]
-
-    with open(history_path, "w", encoding="utf-8") as f:
-        json.dump(history, f, indent=2)
-
-    return history
-
-
-def analyze_single_fits(
-    filepath: str,
-    grid_rows: int = 12,
-    grid_cols: int = 12,
-    sigma: float = 2.5,
-) -> dict | None:
-    """
-    Analyze a single FITS file for gradient strength without Siril.
-    Used for batch sub-frame ranking.
-
-    Returns dict with filepath, strength_pct, uniformity, bg_range, or None on error.
-    """
-    try:
-        from astropy.io import fits as afits
-    except ImportError:
-        return None  # Cannot read FITS without astropy
-
-    try:
-        with afits.open(filepath, memmap=True) as hdul:
-            data = hdul[0].data
-            if data is None:
-                return None
-            data = data.astype(np.float32)
-
-            # Handle multi-channel: convert to luminance
-            if data.ndim == 3:
-                if data.shape[0] == 3:
-                    lum = (LUMINANCE_R * data[0] + LUMINANCE_G * data[1] + LUMINANCE_B * data[2])
-                else:
-                    lum = data[0]
-            elif data.ndim == 2:
-                lum = data
-            else:
-                return None
-
-            # Normalize to [0, 1] if needed
-            dmax = float(np.max(lum))
-            if dmax > 2.0:
-                lum = lum / max(dmax, 1.0)
-
-            medians = compute_tile_grid(lum, grid_rows, grid_cols, sigma)
-            metrics = compute_gradient_metrics(medians)
-
-            return {
-                "filepath": filepath,
-                "filename": os.path.basename(filepath),
-                "strength_pct": metrics["strength_pct"],
-                "uniformity": metrics["uniformity"],
-                "bg_range": metrics["bg_range"],
-                "angle_deg": metrics["angle_deg"],
-            }
-    except (OSError, ValueError):
-        return None
-
 
 def read_fits_calibration_headers(image_data: np.ndarray) -> dict:
     """
@@ -3015,319 +2876,6 @@ def detect_amp_glow(tile_medians: np.ndarray) -> dict:
     }
 
 
-def analyze_batch_temporal(
-    fits_dir: str,
-    grid_rows: int = 12,
-    grid_cols: int = 12,
-    sigma: float = 2.5,
-) -> dict:
-    """
-    Analyze a directory of FITS sub-frames for temporal gradient evolution.
-    Correlates gradient strength with DATE-OBS timestamps to identify
-    when gradients improve or worsen during a session.
-
-    Returns dict with:
-      - entries: list of {filename, date_obs, strength_pct, angle_deg}
-      - trend: "improving" / "worsening" / "stable" / "insufficient_data"
-      - best_period: time range with lowest gradients
-      - worst_period: time range with highest gradients
-      - recommendation: human-readable recommendation
-      - description: human-readable summary
-    """
-    try:
-        from astropy.io import fits as afits
-    except ImportError:
-        return {
-            "entries": [], "trend": "insufficient_data",
-            "best_period": None, "worst_period": None,
-            "recommendation": "Install astropy for temporal analysis.",
-            "description": "astropy required for FITS temporal analysis",
-        }
-
-    entries = []
-    for fname in sorted(os.listdir(fits_dir)):
-        if not fname.lower().endswith((".fit", ".fits", ".fts")):
-            continue
-        fpath = os.path.join(fits_dir, fname)
-        try:
-            with afits.open(fpath, memmap=True) as hdul:
-                header = hdul[0].header
-                date_obs = str(header.get("DATE-OBS", ""))
-                if not date_obs:
-                    continue
-
-                data = hdul[0].data
-                if data is None:
-                    continue
-                data = data.astype(np.float32)
-
-                if data.ndim == 3 and data.shape[0] == 3:
-                    lum = (LUMINANCE_R * data[0] + LUMINANCE_G * data[1] + LUMINANCE_B * data[2])
-                elif data.ndim == 3:
-                    lum = data[0]
-                elif data.ndim == 2:
-                    lum = data
-                else:
-                    continue
-
-                dmax = float(np.max(lum))
-                if dmax > 2.0:
-                    lum = lum / max(dmax, 1.0)
-
-                medians = compute_tile_grid(lum, grid_rows, grid_cols, sigma)
-                metrics = compute_gradient_metrics(medians)
-
-                entries.append({
-                    "filename": fname,
-                    "date_obs": date_obs,
-                    "strength_pct": metrics["strength_pct"],
-                    "angle_deg": metrics["angle_deg"],
-                })
-        except (OSError, ValueError):
-            continue
-
-    if len(entries) < 3:
-        return {
-            "entries": entries, "trend": "insufficient_data",
-            "best_period": None, "worst_period": None,
-            "recommendation": "Need at least 3 sub-frames with DATE-OBS for temporal analysis.",
-            "description": f"Only {len(entries)} frames with timestamps found",
-        }
-
-    # Sort by time
-    entries.sort(key=lambda e: e["date_obs"])
-    strengths = [e["strength_pct"] for e in entries]
-
-    # Simple trend: linear regression on strength over time
-    x = np.arange(len(strengths), dtype=np.float64)
-    y = np.array(strengths, dtype=np.float64)
-    # Linear fit: y = mx + b
-    n = len(x)
-    slope = (n * np.sum(x * y) - np.sum(x) * np.sum(y)) / max(n * np.sum(x**2) - np.sum(x)**2, 1e-15)
-
-    if slope < -0.1:
-        trend = "improving"
-    elif slope > 0.1:
-        trend = "worsening"
-    else:
-        trend = "stable"
-
-    # Find best and worst thirds
-    third = max(1, len(entries) // 3)
-    first_avg = float(np.mean(strengths[:third]))
-    last_avg = float(np.mean(strengths[-third:]))
-
-    best_idx = int(np.argmin(strengths))
-    worst_idx = int(np.argmax(strengths))
-
-    best_period = f"{entries[max(0, best_idx - 1)]['date_obs']} to {entries[min(len(entries) - 1, best_idx + 1)]['date_obs']}"
-    worst_period = f"{entries[max(0, worst_idx - 1)]['date_obs']} to {entries[min(len(entries) - 1, worst_idx + 1)]['date_obs']}"
-
-    # Recommendation
-    if trend == "improving":
-        rec = (
-            f"Gradient improves over the session (first third avg: {first_avg:.1f}%, "
-            f"last third avg: {last_avg:.1f}%). Consider excluding the earliest subs "
-            f"(before {entries[third]['date_obs']}) for cleaner stacking."
-        )
-    elif trend == "worsening":
-        rec = (
-            f"Gradient worsens over the session (first third avg: {first_avg:.1f}%, "
-            f"last third avg: {last_avg:.1f}%). Later subs have stronger LP — "
-            f"consider excluding subs after {entries[-third]['date_obs']}."
-        )
-    else:
-        rec = f"Gradient is relatively stable across the session (avg: {float(np.mean(strengths)):.1f}%)."
-
-    desc = (
-        f"Analyzed {len(entries)} frames. Trend: {trend} "
-        f"(slope: {slope:+.2f}%/frame). "
-        f"Range: {min(strengths):.1f}% to {max(strengths):.1f}%."
-    )
-
-    return {
-        "entries": entries,
-        "trend": trend,
-        "best_period": best_period,
-        "worst_period": worst_period,
-        "recommendation": rec,
-        "description": desc,
-    }
-
-
-def generate_analysis_report(
-    metrics: dict,
-    quadrant_data: dict,
-    vignetting_data: dict,
-    complexity_data: dict,
-    edge_center_data: dict,
-    confidence_data: dict,
-    suggestions: list[str],
-    linear_data_info: dict | None = None,
-    star_density_info: dict | None = None,
-    lp_color_info: dict | None = None,
-    symmetry_info: dict | None = None,
-    gradient_free_info: dict | None = None,
-    extended_obj_info: dict | None = None,
-    prediction_info: dict | None = None,
-    banding_info: dict | None = None,
-    cos4_info: dict | None = None,
-    stacking_edge_info: dict | None = None,
-    fwhm_data: dict | None = None,
-    channel_direction_info: dict | None = None,
-    normalization_info: dict | None = None,
-    fits_header_info: dict | None = None,
-    geo_direction_info: dict | None = None,
-    sky_brightness_info: dict | None = None,
-    dew_info: dict | None = None,
-    amp_glow_info: dict | None = None,
-    img_width: int = 0,
-    img_height: int = 0,
-    grid_rows: int = 16,
-    grid_cols: int = 16,
-    sigma: float = 2.5,
-) -> str:
-    """
-    Generate a comprehensive plain-text analysis report suitable for
-    export, forum posting, or documentation.
-
-    Returns a formatted multi-line string.
-    """
-    lines = []
-    sep = "=" * 72
-    subsep = "-" * 40
-
-    lines.append(sep)
-    lines.append(f"  GRADIENT ANALYZER REPORT  v{VERSION}")
-    lines.append(f"  {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    lines.append(sep)
-    lines.append("")
-
-    # Image info
-    lines.append("IMAGE INFORMATION")
-    lines.append(subsep)
-    lines.append(f"  Dimensions: {img_width} x {img_height} px")
-    lines.append(f"  Analysis grid: {grid_rows} x {grid_cols} tiles")
-    lines.append(f"  Sigma-clip: {sigma:.1f}")
-    if fits_header_info is not None:
-        if fits_header_info.get("exposure"):
-            lines.append(f"  Exposure: {fits_header_info['exposure']:.1f}s")
-        if fits_header_info.get("focal_length"):
-            lines.append(f"  Focal length: {fits_header_info['focal_length']:.0f}mm")
-        if fits_header_info.get("plate_scale"):
-            lines.append(f"  Plate scale: {fits_header_info['plate_scale']:.2f}\"/px")
-        lines.append(f"  Calibration: {fits_header_info['description']}")
-    lines.append("")
-
-    # Gradient metrics
-    direction = angle_to_direction(metrics["angle_deg"])
-    assessment, _ = get_gradient_assessment(metrics["strength_pct"])
-    lines.append("GRADIENT METRICS")
-    lines.append(subsep)
-    lines.append(f"  Strength: {metrics['strength_pct']:.1f}%  [{assessment}]")
-    lines.append(f"  Direction: {metrics['angle_deg']:.1f}\u00b0 ({direction})")
-    lines.append(f"  Background: min={metrics['bg_min']:.6f}  max={metrics['bg_max']:.6f}  "
-                 f"median={metrics['bg_median']:.6f}")
-    lines.append(f"  Uniformity (CV): {metrics['uniformity']:.2f}%")
-    lines.append(f"  Confidence: {confidence_data['label']} ({confidence_data['score']:.2f})")
-    lines.append(f"  Complexity: {complexity_data['description']}")
-    lines.append(f"    Degree 1 R\u00b2={complexity_data['r2_by_degree'][1]:.3f}  "
-                 f"Degree 2 R\u00b2={complexity_data['r2_by_degree'][2]:.3f}  "
-                 f"Degree 3 R\u00b2={complexity_data['r2_by_degree'][3]:.3f}")
-
-    if geo_direction_info and geo_direction_info.get("compass"):
-        lines.append(f"  Geographic LP direction: {geo_direction_info['description']}")
-    if sky_brightness_info and sky_brightness_info.get("has_photometry"):
-        lines.append(f"  Sky brightness: {sky_brightness_info['description']}")
-
-    # Artifact caveat in report
-    _report_has_artifacts = (
-        (banding_info and (banding_info.get("has_row_banding") or banding_info.get("has_col_banding")))
-        or (amp_glow_info and amp_glow_info.get("has_amp_glow"))
-        or (dew_info and dew_info.get("has_dew"))
-        or (fits_header_info and fits_header_info.get("flat_applied") is False)
-    )
-    if _report_has_artifacts and metrics["strength_pct"] >= 5.0:
-        lines.append("  NOTE: Gradient % includes artifact contributions (banding, amp glow,")
-        lines.append("        missing flats, etc.). True sky gradient may be significantly lower.")
-    lines.append("")
-
-    # Diagnostics
-    lines.append("DIAGNOSTICS")
-    lines.append(subsep)
-    lines.append(f"  Vignetting: {vignetting_data['diagnosis']}")
-    lines.append(f"  Edge/Center ratio: {edge_center_data['ratio']:.3f} — {edge_center_data['diagnosis']}")
-    if linear_data_info and not linear_data_info["is_linear"]:
-        lines.append(f"  \u26a0 LINEAR DATA: {linear_data_info['warning']}")
-    if symmetry_info:
-        lines.append(f"  Symmetry: {symmetry_info['diagnosis']}")
-    if gradient_free_info:
-        lines.append(f"  Gradient-free area: {gradient_free_info['description']}")
-    if star_density_info and star_density_info.get("warning"):
-        lines.append(f"  Star density: {star_density_info['warning']}")
-    if extended_obj_info and extended_obj_info.get("warning"):
-        lines.append(f"  Extended objects: {extended_obj_info['warning']}")
-    if lp_color_info:
-        lines.append(f"  LP type: {lp_color_info['description']}")
-    if channel_direction_info and channel_direction_info.get("has_directional_difference"):
-        lines.append(f"  Channel directions: {channel_direction_info['description']}")
-    if prediction_info:
-        lines.append(f"  Improvement prediction: {prediction_info['description']}")
-    lines.append("")
-
-    # v1.7/1.8 diagnostics
-    has_issues = False
-    issue_lines = []
-    if banding_info and (banding_info.get("has_row_banding") or banding_info.get("has_col_banding")):
-        issue_lines.append(f"  \u26a0 Banding: {banding_info['description']}")
-        has_issues = True
-    if stacking_edge_info and stacking_edge_info.get("has_stacking_edges"):
-        issue_lines.append(f"  \u26a0 Stacking edges: {stacking_edge_info['description']}")
-        has_issues = True
-    if cos4_info and cos4_info.get("corner_falloff_pct", 0) > 5:
-        issue_lines.append(f"  Cos\u2074 vignetting: {cos4_info['description']}")
-        has_issues = True
-    if normalization_info and normalization_info.get("is_normalized"):
-        issue_lines.append(f"  \u26a0 Normalization: {normalization_info['description']}")
-        has_issues = True
-    if dew_info and dew_info.get("has_dew"):
-        issue_lines.append(f"  \u26a0 DEW/FROST: {dew_info['description']}")
-        has_issues = True
-    if amp_glow_info and amp_glow_info.get("has_amp_glow"):
-        issue_lines.append(f"  \u26a0 AMP GLOW: {amp_glow_info['description']}")
-        has_issues = True
-    if fwhm_data and fwhm_data.get("median_fwhm") is not None:
-        issue_lines.append(f"  Star shape: {fwhm_data['description']}")
-
-    if issue_lines:
-        lines.append("ADDITIONAL DIAGNOSTICS")
-        lines.append(subsep)
-        lines.extend(issue_lines)
-        lines.append("")
-
-    # Quadrant summary
-    quads = quadrant_data["quadrants"]
-    lines.append("QUADRANT SUMMARY")
-    lines.append(subsep)
-    lines.append(f"  NW: {quads['NW']:.6f}  |  NE: {quads['NE']:.6f}")
-    lines.append(f"  SW: {quads['SW']:.6f}  |  SE: {quads['SE']:.6f}")
-    lines.append(f"  Brightest: {quadrant_data['brightest']}  Darkest: {quadrant_data['darkest']}")
-    lines.append("")
-
-    # Recommendations
-    lines.append("RECOMMENDATIONS")
-    lines.append(subsep)
-    for sug in suggestions:
-        for line in sug.split("\n"):
-            lines.append(f"  {line}")
-        lines.append("")
-
-    lines.append(sep)
-    lines.append(f"  Generated by GradientAnalyzer v{VERSION}")
-    lines.append(sep)
-
-    return "\n".join(lines)
-
 
 def suggest_tool_and_workflow(
     metrics: dict,
@@ -3546,7 +3094,7 @@ def suggest_tool_and_workflow(
         else:
             workflow_lines.append(f"  {step}. Apply subsky -degree={degree} -samples={samples}")
         step += 1
-        workflow_lines.append(f"  {step}. Re-run Gradient Analyzer ('Refresh from Siril')")
+        workflow_lines.append(f"  {step}. Re-run Gradient Analyzer ('Analyze' / F5)")
         step += 1
         workflow_lines.append(f"  {step}. If gradient still > 2%, try GraXpert or increase degree")
         step += 1
@@ -3685,90 +3233,12 @@ class _MplWidgetBase(QWidget):
 
 
 class HeatmapWidget(_MplWidgetBase):
-    """Widget displaying a 2D heatmap of tile medians with interactive sample points."""
-
-    # Signal emitted when manual sample points change: list of (px_x, px_y) tuples
-    sample_points_changed = pyqtSignal(list)
+    """Widget displaying a 2D heatmap of tile medians."""
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__("Click 'Analyze' to generate heatmap", parent)
-        self._manual_points: list[tuple[int, int]] = []
         self._img_width = 0
         self._img_height = 0
-        self._click_cid = None
-
-    def _on_click(self, event) -> None:
-        """Handle mouse clicks on the heatmap for interactive sample point editing."""
-        if event.inaxes is None or event.xdata is None or event.ydata is None:
-            return
-        px_x = int(round(event.xdata))
-        px_y = int(round(event.ydata))
-        if px_x < 0 or px_x >= self._img_width or px_y < 0 or px_y >= self._img_height:
-            return
-
-        # Right-click: remove nearest point (within 3% of image diagonal)
-        if event.button == 3:
-            diag = (self._img_width**2 + self._img_height**2) ** 0.5
-            remove_radius = diag * 0.03
-            best_idx = -1
-            best_dist = float("inf")
-            for i, (px, py) in enumerate(self._manual_points):
-                dist = ((px - px_x)**2 + (py - px_y)**2) ** 0.5
-                if dist < remove_radius and dist < best_dist:
-                    best_dist = dist
-                    best_idx = i
-            if best_idx >= 0:
-                self._manual_points.pop(best_idx)
-                self._redraw_manual_points()
-                self.sample_points_changed.emit(list(self._manual_points))
-            return
-
-        # Left-click: add point
-        self._manual_points.append((px_x, px_y))
-        self._redraw_manual_points()
-        self.sample_points_changed.emit(list(self._manual_points))
-
-    def _redraw_manual_points(self) -> None:
-        """Redraw manual sample point markers on the existing axes."""
-        if self._fig is None:
-            return
-        ax = self._fig.axes[0] if self._fig.axes else None
-        if ax is None:
-            return
-
-        # Remove existing manual point artists
-        to_remove = [a for a in ax.lines + ax.texts if getattr(a, "_manual_point", False)]
-        for a in to_remove:
-            a.remove()
-
-        # Draw new markers
-        for i, (px, py) in enumerate(self._manual_points):
-            marker, = ax.plot(px, py, "D", color="#00ff88", markersize=7, markeredgecolor="#ffffff",
-                              markeredgewidth=1.2, alpha=0.9)
-            marker._manual_point = True
-            txt = ax.text(px + self._img_width * 0.01, py, str(i + 1), fontsize=7,
-                          color="#00ff88", fontweight="bold",
-                          bbox=dict(boxstyle="round,pad=0.15", fc="#000000aa", ec="none"))
-            txt._manual_point = True
-
-        if self._canvas is not None:
-            self._canvas.draw_idle()
-
-    def get_manual_commands(self) -> list[str]:
-        """Get Siril setref/addref commands for manually placed sample points."""
-        commands = []
-        for i, (px, py) in enumerate(self._manual_points):
-            if i == 0:
-                commands.append(f"setref {px} {py}")
-            else:
-                commands.append(f"addref {px} {py}")
-        return commands
-
-    def clear_manual_points(self) -> None:
-        """Remove all manually placed sample points."""
-        self._manual_points.clear()
-        self._redraw_manual_points()
-        self.sample_points_changed.emit([])
 
     def render_heatmap(
         self,
@@ -3887,16 +3357,6 @@ class HeatmapWidget(_MplWidgetBase):
         self._img_width = img_width
         self._img_height = img_height
         self._replace_canvas(fig)
-
-        # Connect click handler for interactive sample point editing
-        if self._canvas is not None:
-            if self._click_cid is not None:
-                self._canvas.mpl_disconnect(self._click_cid)
-            self._click_cid = self._canvas.mpl_connect("button_press_event", self._on_click)
-
-        # Redraw any existing manual points
-        if self._manual_points:
-            self._redraw_manual_points()
 
 
 class SurfacePlotWidget(_MplWidgetBase):
@@ -4742,27 +4202,17 @@ class GradientAnalyzerWindow(QMainWindow):
         self._img_channels = 0
         self._ch_str = ""
         self._last_metrics = None
-        self._last_tile_medians = None
-        self._last_channel_metrics: dict | None = None
         # Before/After state
         self._previous_metrics = None
-        self._previous_tile_medians = None
         self._run_count = 0
         # Colorbar range locking for before/after comparison
         self._locked_vmin: float | None = None
         self._locked_vmax: float | None = None
-        self._last_sample_commands: list[str] = []
-        self._last_complexity: dict | None = None
-        self._last_report_data: dict | None = None
-        self._last_weight_mask: np.ndarray | None = None
         self._settings = QSettings(SETTINGS_ORG, SETTINGS_APP)
         self.init_ui()
         self._load_settings()
-        # Connect interactive sample point signal
-        self.heatmap_widget.sample_points_changed.connect(self._on_manual_points_changed)
         # Keyboard shortcuts
         QShortcut(QKeySequence("F5"), self, self._on_analyze)
-        QShortcut(QKeySequence("Ctrl+Shift+R"), self, self._on_refresh_and_analyze)
 
     # ------------------------------------------------------------------
     # LEFT PANEL
@@ -4960,15 +4410,11 @@ class GradientAnalyzerWindow(QMainWindow):
         btn_analyze = QPushButton("Analyze  (F5)")
         btn_analyze.setObjectName("AnalyzeButton")
         _nofocus(btn_analyze)
-        btn_analyze.setToolTip("Analyze background gradient of the current Siril image (F5)")
+        btn_analyze.setToolTip(
+            "Load the current image from Siril and analyze its background gradient (F5)"
+        )
         btn_analyze.clicked.connect(self._on_analyze)
         g_layout.addWidget(btn_analyze)
-
-        btn_refresh = QPushButton("Refresh from Siril  (Ctrl+Shift+R)")
-        _nofocus(btn_refresh)
-        btn_refresh.setToolTip("Reload the current image from Siril and re-analyze")
-        btn_refresh.clicked.connect(self._on_refresh_and_analyze)
-        g_layout.addWidget(btn_refresh)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
@@ -4981,39 +4427,6 @@ class GradientAnalyzerWindow(QMainWindow):
         )
         g_layout.addWidget(self.progress_bar)
 
-        btn_batch = QPushButton("Analyze Sub-frames...")
-        _nofocus(btn_batch)
-        btn_batch.setToolTip(
-            "Select a directory of FITS files and rank them by gradient severity.\n"
-            "Requires astropy. Useful for identifying worst subs before stacking."
-        )
-        btn_batch.clicked.connect(self._on_batch_analyze)
-        g_layout.addWidget(btn_batch)
-
-        btn_apply_subsky = QPushButton("Apply subsky && Re-analyze")
-        _nofocus(btn_apply_subsky)
-        btn_apply_subsky.setToolTip(
-            "Execute the recommended subsky command in Siril, then\n"
-            "automatically reload and re-analyze the result."
-        )
-        btn_apply_subsky.clicked.connect(self._on_apply_subsky)
-        g_layout.addWidget(btn_apply_subsky)
-
-        btn_auto_iterate = QPushButton("Auto-iterate until <2%")
-        _nofocus(btn_auto_iterate)
-        btn_auto_iterate.setToolTip(
-            "Repeatedly apply subsky and re-analyze (up to 3 passes)\n"
-            "until gradient drops below 2%. Uses the recommended degree\n"
-            "from the complexity analysis for each pass."
-        )
-        btn_auto_iterate.clicked.connect(self._on_auto_iterate)
-        g_layout.addWidget(btn_auto_iterate)
-
-        # History sparkline label
-        self.lbl_history = QLabel("")
-        self.lbl_history.setStyleSheet("color: #888; font-size: 8pt;")
-        self.lbl_history.setWordWrap(True)
-        g_layout.addWidget(self.lbl_history)
 
         parent_layout.addWidget(group)
 
@@ -5027,7 +4440,7 @@ class GradientAnalyzerWindow(QMainWindow):
         r_layout.setContentsMargins(5, 5, 5, 5)
 
         # Image info bar
-        self.lbl_image_info = QLabel("No image loaded — click 'Analyze' or 'Refresh from Siril'")
+        self.lbl_image_info = QLabel("No image loaded — click 'Analyze' (F5)")
         self.lbl_image_info.setStyleSheet("font-size: 10pt; color: #999;")
         r_layout.addWidget(self.lbl_image_info)
 
@@ -5100,85 +4513,105 @@ class GradientAnalyzerWindow(QMainWindow):
         tab_residual_layout.addWidget(self.residual_mask_widget)
         self.tabs.addTab(tab_residual, "Residuals / Mask")
 
+        # Tab info section — describes what the current tab shows
+        _TAB_HL = "#88aaff"  # matches QTabBar::tab:selected color
+        self._tab_descriptions = [
+            # 0: Heatmap / 3D
+            f"<b style='color:{_TAB_HL}'>Heatmap / 3D</b> — Color-coded 2D map of tile background levels. "
+            "Bright tiles = higher background (gradient or LP), dark tiles = lower background. "
+            "Optional green/red overlay marks good and bad sample point regions. "
+            "The 3D surface view shows the same data as an interactive elevation map."
+            "<br><i>Use this to see at a glance where the gradient is and how severe it is.</i>",
+            # 1: Profiles
+            f"<b style='color:{_TAB_HL}'>Profiles</b> — Horizontal and vertical cross-section plots through the "
+            "tile grid center. Shows exactly where the gradient ramps across the image. "
+            "A flat profile means uniform background; a slope means a gradient in that direction."
+            "<br><i>Use this to identify whether the gradient runs left–right, top–bottom, or diagonally.</i>",
+            # 2: Tile Distribution
+            f"<b style='color:{_TAB_HL}'>Tile Distribution</b> — Histogram of all tile median values. "
+            "A tight, narrow peak means the background is uniform. A broad or bimodal "
+            "distribution indicates a gradient or multiple brightness zones."
+            "<br><i>Use this to judge how much of the field is affected and whether "
+            "there are distinct brightness populations (e.g. LP from one side).</i>",
+            # 3: RGB Channels
+            f"<b style='color:{_TAB_HL}'>RGB Channels</b> — Separate heatmaps for the Red, Green, and Blue channels "
+            "(requires 'Analyze channels separately'). Different gradient strengths per channel "
+            "reveal the color of light pollution: red-dominant = sodium vapor, blue-dominant = LED, "
+            "balanced = broadband sky glow."
+            "<br><i>Use this to decide whether per-channel extraction or a narrowband approach is needed.</i>",
+            # 4: Background Model
+            f"<b style='color:{_TAB_HL}'>Background Model</b> — Left: the polynomial surface that subsky would subtract "
+            "(the fitted gradient model). Right: residuals after subtracting the model. "
+            "Small, random residuals = good fit. Structured residuals = the polynomial degree "
+            "is too low or the gradient is non-polynomial."
+            "<br><i>Use this to verify whether the recommended polynomial degree captures the gradient shape.</i>",
+            # 5: Gradient Magnitude
+            f"<b style='color:{_TAB_HL}'>Gradient Magnitude</b> — Rate-of-change map showing where the background "
+            "changes most steeply. Hot spots mark steep transitions that need the most "
+            "attention during extraction. Uniform low values = flat background."
+            "<br><i>Use this to locate the steepest gradient boundaries and check for "
+            "mosaic panel edges or stacking artifacts.</i>",
+            # 6: Subtraction Preview
+            f"<b style='color:{_TAB_HL}'>Subtraction Preview</b> — Side-by-side comparison: original luminance (left) "
+            "vs. result after subtracting the fitted background model (right). Both views are "
+            "auto-stretched for visibility."
+            "<br><i>Use this to preview what gradient removal would look like before "
+            "actually applying it in Siril.</i>",
+            # 7: FWHM / Eccentricity
+            f"<b style='color:{_TAB_HL}'>FWHM / Eccentricity</b> — Star shape variation across the field. "
+            "FWHM (left) measures star size — increasing FWHM toward edges suggests tilt or "
+            "field curvature. Eccentricity (right) measures elongation (0 = round, 1 = line). "
+            "Requires minimum 3 stars per tile."
+            "<br><i>Use this to detect optical issues (sensor tilt, spacing, collimation) that "
+            "cause gradients which software extraction cannot fix.</i>",
+            # 8: Residuals / Mask
+            f"<b style='color:{_TAB_HL}'>Residuals / Mask</b> — Left: polynomial fit residuals as a blue–red "
+            "diverging map (blue = model too high, red = model too low). Right: the heatmap "
+            "with the exclusion mask overlaid — red tiles were excluded from the polynomial fit "
+            "(extended objects, hotspots, stacking edges, star-dense regions)."
+            "<br><i>Use this to verify which tiles were excluded and whether the remaining "
+            "residuals are random (good) or show systematic patterns (needs a higher degree).</i>",
+        ]
+        self.lbl_tab_info = QLabel(self._tab_descriptions[0])
+        self.lbl_tab_info.setWordWrap(True)
+        self.lbl_tab_info.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_tab_info.setStyleSheet(
+            "font-size: 13pt; color: #b0b0b0; background: #252525;"
+            " border: 1px solid #3a3a3a; border-radius: 4px;"
+            " padding: 10px; margin: 2px 0px;"
+        )
+        self.lbl_tab_info.setMinimumHeight(80)
+        self.lbl_tab_info.setMaximumHeight(145)
+        r_layout.addWidget(self.lbl_tab_info)
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+
         r_layout.addWidget(self.tabs, 3)
 
-        # Results section (below tabs) — scrollable
-        results_group = QGroupBox("Analysis Results")
-        results_group_layout = QVBoxLayout(results_group)
-        results_group_layout.setContentsMargins(2, 2, 2, 2)
+        # Stored HTML content for modal dialogs
+        self._results_html: str = ""
+        self._results_summary_html: str = ""
+        self._results_detailed_html: str = ""
+        self._results_delta_html: str = ""
+        self._suggestions_html: str = ""
+        self._suggestions_summary_html: str = ""
+        self._suggestions_detailed_html: str = ""
 
-        results_scroll = QScrollArea()
-        results_scroll.setWidgetResizable(True)
-        results_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        results_scroll.setMinimumHeight(100)
-        results_scroll.setMaximumHeight(220)
-
-        self.lbl_results = QLabel("")
-        self.lbl_results.setStyleSheet(
-            "font-size: 10pt; color: #e0e0e0; font-family: 'Courier New', monospace; padding: 5px;"
-        )
-        self.lbl_results.setWordWrap(True)
-        self.lbl_results.setTextFormat(Qt.TextFormat.RichText)
-        self.lbl_results.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        results_scroll.setWidget(self.lbl_results)
-        results_group_layout.addWidget(results_scroll)
-
-        r_layout.addWidget(results_group)
-
-        # Suggestions section — scrollable
-        suggestions_group = QGroupBox("Recommendations")
-        suggestions_group_layout = QVBoxLayout(suggestions_group)
-        suggestions_group_layout.setContentsMargins(2, 2, 2, 2)
-
-        suggestions_scroll = QScrollArea()
-        suggestions_scroll.setWidgetResizable(True)
-        suggestions_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        suggestions_scroll.setMinimumHeight(100)
-        suggestions_scroll.setMaximumHeight(250)
-
-        self.lbl_suggestions = QLabel("")
-        self.lbl_suggestions.setStyleSheet(
-            "font-size: 10pt; color: #ccddff; font-family: 'Courier New', monospace; padding: 5px;"
-        )
-        self.lbl_suggestions.setWordWrap(True)
-        self.lbl_suggestions.setTextFormat(Qt.TextFormat.RichText)
-        self.lbl_suggestions.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        suggestions_scroll.setWidget(self.lbl_suggestions)
-        suggestions_group_layout.addWidget(suggestions_scroll)
-        r_layout.addWidget(suggestions_group)
-
-        # Button row
+        # Button row: Show Results / Recommendations / Export Report
         btn_row = QHBoxLayout()
 
-        btn_copy = QPushButton("Copy Results")
-        _nofocus(btn_copy)
-        btn_copy.setToolTip("Copy analysis results and recommendations as plain text")
-        btn_copy.clicked.connect(self._copy_results_to_clipboard)
-        btn_row.addWidget(btn_copy)
+        self.btn_show_results = QPushButton("Analysis Results")
+        _nofocus(self.btn_show_results)
+        self.btn_show_results.setToolTip("Show detailed analysis results in a separate window")
+        self.btn_show_results.setEnabled(False)
+        self.btn_show_results.clicked.connect(self._show_results_dialog)
+        btn_row.addWidget(self.btn_show_results)
 
-        btn_copy_samples = QPushButton("Copy Sample Points")
-        _nofocus(btn_copy_samples)
-        btn_copy_samples.setToolTip(
-            "Copy generated subsky sample point commands (setref/addref) to clipboard"
-        )
-        btn_copy_samples.clicked.connect(self._copy_sample_points_to_clipboard)
-        btn_row.addWidget(btn_copy_samples)
-
-        btn_clear_points = QPushButton("Clear Points")
-        _nofocus(btn_clear_points)
-        btn_clear_points.setToolTip("Remove all manually placed sample points from the heatmap")
-        btn_clear_points.clicked.connect(self._clear_manual_points)
-        btn_row.addWidget(btn_clear_points)
-
-        # Manual sample point count label
-        self.lbl_manual_points = QLabel("")
-        self.lbl_manual_points.setStyleSheet("color: #00ff88; font-size: 8pt;")
-        btn_row.addWidget(self.lbl_manual_points)
-
-        r_layout.addLayout(btn_row)
-
-        # Second button row: Export Report + Temporal Analysis
-        btn_row2 = QHBoxLayout()
+        self.btn_show_recommendations = QPushButton("Recommendations")
+        _nofocus(self.btn_show_recommendations)
+        self.btn_show_recommendations.setToolTip("Show tool recommendations and workflow guidance")
+        self.btn_show_recommendations.setEnabled(False)
+        self.btn_show_recommendations.clicked.connect(self._show_recommendations_dialog)
+        btn_row.addWidget(self.btn_show_recommendations)
 
         btn_export_report = QPushButton("Export Report")
         _nofocus(btn_export_report)
@@ -5187,19 +4620,9 @@ class GradientAnalyzerWindow(QMainWindow):
             "Suitable for forum posting, documentation, or record-keeping."
         )
         btn_export_report.clicked.connect(self._on_export_report)
-        btn_row2.addWidget(btn_export_report)
+        btn_row.addWidget(btn_export_report)
 
-        btn_temporal = QPushButton("Temporal Analysis...")
-        _nofocus(btn_temporal)
-        btn_temporal.setToolTip(
-            "Analyze a directory of FITS sub-frames for gradient evolution over time.\n"
-            "Correlates gradient strength with DATE-OBS timestamps.\n"
-            "Requires astropy."
-        )
-        btn_temporal.clicked.connect(self._on_temporal_analysis)
-        btn_row2.addWidget(btn_temporal)
-
-        r_layout.addLayout(btn_row2)
+        r_layout.addLayout(btn_row)
 
         return right
 
@@ -5277,7 +4700,6 @@ class GradientAnalyzerWindow(QMainWindow):
                 f"Image: {self._img_width} x {self._img_height} px, {self._ch_str}"
             )
             self.lbl_image_info.setStyleSheet("font-size: 10pt; color: #88aaff;")
-            self._log(f"Image loaded: {self._img_width} x {self._img_height} px, {self._ch_str}")
             return True
 
         except NoImageError:
@@ -5301,14 +4723,6 @@ class GradientAnalyzerWindow(QMainWindow):
             )
         return False
 
-    def _on_refresh_and_analyze(self) -> None:
-        if self._load_from_siril():
-            # Reset colorbar lock for new image data
-            self._locked_vmin = None
-            self._locked_vmax = None
-            self._run_count = 0
-            self._on_analyze()
-
     # ------------------------------------------------------------------
     # ANALYSIS
     # ------------------------------------------------------------------
@@ -5320,9 +4734,12 @@ class GradientAnalyzerWindow(QMainWindow):
         QApplication.processEvents()
 
     def _on_analyze(self) -> None:
-        if self._image_data is None:
-            if not self._load_from_siril():
-                return
+        if not self._load_from_siril():
+            return
+        # Reset colorbar lock for new image data
+        self._locked_vmin = None
+        self._locked_vmax = None
+        self._run_count = 0
 
         grid_rows = self.spin_rows.value()
         grid_cols = self.spin_cols.value()
@@ -5341,30 +4758,27 @@ class GradientAnalyzerWindow(QMainWindow):
         self.progress_bar.setVisible(True)
         self._update_progress(0, "Starting analysis...")
 
-        self._log(f"Analysis started — Grid: {grid_cols}x{grid_rows}, Sigma-Clip: {sigma}")
-        self._log(f"Image: {self._img_width} x {self._img_height} px, {self._ch_str}")
+        self._log(f"Analyzing {self._img_width}x{self._img_height} px, grid {grid_cols}x{grid_rows}")
 
         tile_h = self._img_height // grid_rows
         tile_w = self._img_width // grid_cols
-        self._log(f"Tile size: {tile_w} x {tile_h} px")
 
         # Adaptive grid resolution warning
         if tile_w < MIN_TILE_PX or tile_h < MIN_TILE_PX:
-            self._log(f"WARNING: Tile size {tile_w}x{tile_h} px is very small — "
-                       f"sigma-clipping may be unreliable. Consider reducing grid resolution.")
+            suggested_cols = max(4, self._img_width // MIN_TILE_PX)
+            suggested_rows = max(4, self._img_height // MIN_TILE_PX)
             QMessageBox.warning(
-                self, "Small Tile Warning",
-                f"Tile size is only {tile_w} x {tile_h} pixels.\n\n"
-                f"With fewer than {MIN_TILE_PX} pixels per dimension, sigma-clipping "
-                f"becomes unreliable and results may be noisy.\n\n"
-                f"Consider reducing the grid to {max(4, self._img_width // MIN_TILE_PX)}x"
-                f"{max(4, self._img_height // MIN_TILE_PX)} or fewer."
+                self, "Grid too fine",
+                f"Your grid is set too high for this image size.\n\n"
+                f"Each tile is only {tile_w} x {tile_h} pixels — that's too small "
+                f"for reliable measurements. The results will be noisy and inaccurate.\n\n"
+                f"Lower the grid to {suggested_cols} x {suggested_rows} or less,\n"
+                f"then press Analyze again."
             )
 
         # Store previous results for before/after comparison
         if self._last_metrics is not None:
             self._previous_metrics = self._last_metrics
-            self._previous_tile_medians = self._last_tile_medians
 
         self._update_progress(10, "Computing luminance...")
 
@@ -5429,8 +4843,6 @@ class GradientAnalyzerWindow(QMainWindow):
             tile_medians, self._img_width, self._img_height,
             extended_object_tiles=extended_obj_info["flagged_tiles"],
         )
-        self._last_sample_commands = sample_data["siril_commands"]
-
         # v1.6 analysis
         residual_pattern_info = detect_residual_pattern(tile_medians, bg_model)
         sigma_suggestion = suggest_sigma(star_density_info, sigma)
@@ -5464,19 +4876,7 @@ class GradientAnalyzerWindow(QMainWindow):
         self._update_progress(42, "Computing metrics...")
 
         self._last_metrics = metrics
-        self._last_tile_medians = tile_medians
-        self._last_complexity = complexity_data
-        self._last_weight_mask = weight_mask
         self._run_count += 1
-
-        # Linear data warning
-        if not linear_data_info["is_linear"]:
-            self._log(f"WARNING: Data appears stretched/non-linear (median={linear_data_info['median_level']:.3f}). "
-                       "Results are most accurate on linear data before stretching.")
-
-        # Star density warning
-        if star_density_info["warning"]:
-            self._log(f"WARNING: {star_density_info['warning']}")
 
         # Lock colorbar range on first run; reuse for subsequent runs
         if self._run_count == 1:
@@ -5536,8 +4936,6 @@ class GradientAnalyzerWindow(QMainWindow):
             )
         else:
             self.channel_widget.clear()
-        self._last_channel_metrics = channel_metrics
-
         # LP color characterization (requires per-channel data)
         lp_color_info = None
         if channel_metrics is not None:
@@ -5653,28 +5051,6 @@ class GradientAnalyzerWindow(QMainWindow):
         )
         self._display_suggestions(suggestions)
 
-        # Store report data for export
-        self._last_report_data = dict(
-            metrics=metrics, quadrant_data=quadrant_data,
-            vignetting_data=vignetting_data, complexity_data=complexity_data,
-            edge_center_data=edge_center_data, confidence_data=confidence_data,
-            suggestions=suggestions,
-            linear_data_info=linear_data_info, star_density_info=star_density_info,
-            lp_color_info=lp_color_info, symmetry_info=symmetry_info,
-            gradient_free_info=gradient_free_info, extended_obj_info=extended_obj_info,
-            prediction_info=prediction_info,
-            banding_info=banding_info, cos4_info=cos4_info,
-            stacking_edge_info=stacking_edge_info, fwhm_data=fwhm_data,
-            channel_direction_info=channel_direction_info,
-            normalization_info=normalization_info,
-            fits_header_info=fits_header_info,
-            geo_direction_info=geo_direction_info,
-            sky_brightness_info=sky_brightness_info,
-            dew_info=dew_info, amp_glow_info=amp_glow_info,
-            img_width=self._img_width, img_height=self._img_height,
-            grid_rows=grid_rows, grid_cols=grid_cols, sigma=sigma,
-        )
-
         # Show linear data warning dialog (first time only per session)
         if not linear_data_info["is_linear"] and self._run_count == 1:
             QMessageBox.information(
@@ -5718,20 +5094,6 @@ class GradientAnalyzerWindow(QMainWindow):
         if save_png:
             self._save_heatmap_png(metrics=metrics, thresholds=active_thresholds)
 
-        # Save gradient history log
-        try:
-            cwd = os.getcwd()
-            history_path = os.path.join(cwd, "gradient_history.json")
-            history = save_history_entry(history_path, metrics, complexity_data)
-            # Display history sparkline
-            if len(history) > 1:
-                vals = [f"{e['strength_pct']:.1f}%" for e in history[-8:]]
-                arrow = " \u2192 "
-                self.lbl_history.setText(f"History: {arrow.join(vals)}")
-            else:
-                self.lbl_history.setText("")
-        except (OSError, ValueError, KeyError):
-            pass
 
         # Save analysis JSON + compare with previous
         save_json = self.chk_save_json.isChecked()
@@ -5780,62 +5142,395 @@ class GradientAnalyzerWindow(QMainWindow):
     ) -> None:
         assessment, color = get_gradient_assessment(metrics["strength_pct"], thresholds)
         direction = angle_to_direction(metrics["angle_deg"])
-        quads = quadrant_data["quadrants"]
 
-        lines = [
-            f"<b>Gradient Strength:   {metrics['strength_pct']:.1f} %</b>"
-            f"  &nbsp; <span style='color:{confidence_data['color']}'>"
-            f"Confidence: {confidence_data['label']} ({confidence_data['score']:.0%})</span>",
-            f"<span style='color:{color}'>{assessment}</span>",
-            f"Direction:           {metrics['angle_deg']:.0f}\u00b0 ({direction})",
-            "",
-            f"Background Min:      {metrics['bg_min']:.6f}     Max: {metrics['bg_max']:.6f}",
-            f"Background Range:    {metrics['bg_range']:.6f}     Median: {metrics['bg_median']:.6f}",
-            f"Uniformity (CV):     {metrics['uniformity']:.1f} %",
-            "",
-            f"<b>Complexity:</b> {complexity_data['description']}",
-            f"  Polynomial fit: deg1 R\u00b2={complexity_data['r2_by_degree'][1]:.3f}  "
-            f"deg2 R\u00b2={complexity_data['r2_by_degree'][2]:.3f}  "
-            f"deg3 R\u00b2={complexity_data['r2_by_degree'][3]:.3f}  "
-            f"\u2192 <b>recommended degree: {complexity_data['best_degree']}</b>",
-            "",
-            f"<b>Pattern:</b> {vignetting_data['diagnosis']}",
-            f"  Radial R\u00b2={vignetting_data['radial_r2']:.3f}  |  "
-            f"Linear R\u00b2={vignetting_data['linear_r2']:.3f}  |  "
-            f"Edge/Center ratio: {edge_center_data['ratio']:.3f}",
-            f"  {edge_center_data['diagnosis']}",
-            "",
-            f"<b>Quadrants:</b>  NW={quads['NW']:.6f}  NE={quads['NE']:.6f}  "
-            f"SW={quads['SW']:.6f}  SE={quads['SE']:.6f}",
-            f"  Brightest: <span style='color:#ff8888'>{quadrant_data['brightest']}</span>"
-            f"  |  Darkest: <span style='color:#88ff88'>{quadrant_data['darkest']}</span>"
-            f"  |  Spread: {quadrant_data['spread']:.6f}",
-        ]
-
-        # Artifact caveat — when critical issues are present, the reported
-        # gradient % includes their contribution and is not purely sky gradient.
+        # Detect artifact contributions
         _has_artifacts = (
             (banding_info and (banding_info.get("has_row_banding") or banding_info.get("has_col_banding")))
             or (amp_glow_info and amp_glow_info.get("has_amp_glow"))
             or (dew_info and dew_info.get("has_dew"))
             or (fits_header_info and fits_header_info.get("flat_applied") is False)
         )
-        if _has_artifacts and metrics["strength_pct"] >= 5.0:
+
+        # Build three separate HTML sections
+        self._results_summary_html = self._build_summary_html(
+            metrics, confidence_data, assessment, color, direction,
+            gradient_free_info, _has_artifacts, complexity_data,
+            prediction_info, linear_data_info,
+            fits_header_info, dew_info, amp_glow_info, banding_info,
+            stacking_edge_info, hotspot_info, normalization_info,
+            residual_pattern_info, fwhm_data,
+        )
+        self._results_detailed_html = self._build_detailed_html(
+            metrics, quadrant_data, vignetting_data, complexity_data,
+            edge_center_data, confidence_data, direction, color, assessment,
+            linear_data_info, star_density_info, lp_color_info,
+            symmetry_info, gradient_free_info, extended_obj_info,
+            hotspot_info, panel_info, prediction_info, sample_data,
+            residual_pattern_info, banding_info, cos4_info,
+            stacking_edge_info, fwhm_data, channel_direction_info,
+            normalization_info, fits_header_info, geo_direction_info,
+            sky_brightness_info, dew_info, amp_glow_info, _has_artifacts,
+        )
+        self._results_delta_html = self._build_delta_html(metrics)
+
+        # Flat combined HTML for export compatibility
+        self._results_html = self._results_summary_html
+        self._results_html += "<br><hr><br>" + self._results_detailed_html
+        if self._results_delta_html:
+            self._results_html += "<br><hr><br>" + self._results_delta_html
+
+        self.btn_show_results.setEnabled(True)
+
+    # ------------------------------------------------------------------
+    # RESULTS: Section 1 — Summary & Action Plan (beginner-friendly)
+    # ------------------------------------------------------------------
+
+    def _build_summary_html(
+        self, metrics: dict, confidence_data: dict,
+        assessment: str, color: str, direction: str,
+        gradient_free_info: dict | None,
+        has_artifacts: bool,
+        complexity_data: dict,
+        prediction_info: dict | None,
+        linear_data_info: dict | None,
+        fits_header_info: dict | None,
+        dew_info: dict | None,
+        amp_glow_info: dict | None,
+        banding_info: dict | None,
+        stacking_edge_info: dict | None,
+        hotspot_info: dict | None,
+        normalization_info: dict | None,
+        residual_pattern_info: dict | None,
+        fwhm_data: dict | None,
+    ) -> str:
+        pct = metrics["strength_pct"]
+        lines: list[str] = []
+
+        # --- Verdict block ---
+        verdict_map = {
+            "#55aa55": ("\u2705", "ALL CLEAR"),
+            "#aaaa55": ("\u26a0\ufe0f", "MILD GRADIENT"),
+            "#dd8833": ("\u26a0\ufe0f", "NEEDS ATTENTION"),
+            "#dd4444": ("\ud83d\udea8", "SIGNIFICANT GRADIENT"),
+        }
+        icon, verdict = verdict_map.get(color, ("\u2753", "UNKNOWN"))
+        lines.append(
+            f"<div style='background:{color}; color:#000; padding:10px;"
+            f" border-radius:6px; font-size:15pt; font-weight:bold;'>"
+            f" {icon} {verdict} — {pct:.1f}%</div>"
+        )
+        lines.append("")
+
+        # --- Plain-English explanation ---
+        if pct < 2.0:
+            lines.append(
+                "Your image background is very uniform. "
+                "No gradient removal is needed — proceed with your normal workflow."
+            )
+        elif pct < 5.0:
+            lines.append(
+                f"A <b>slight gradient</b> is present, running toward the <b>{direction}</b>. "
+                "A gentle background extraction would improve your result."
+            )
+        elif pct < 15.0:
+            lines.append(
+                f"A <b>noticeable gradient</b> is present, running toward the <b>{direction}</b>. "
+                "Background extraction is recommended before stretching."
+            )
+        else:
+            lines.append(
+                f"A <b>strong gradient</b> is present, running toward the <b>{direction}</b>. "
+                "This should be corrected before any further processing."
+            )
+
+        # Artifact caveat
+        if has_artifacts and pct >= 5.0:
+            artifact_names = []
+            if banding_info and (banding_info.get("has_row_banding") or banding_info.get("has_col_banding")):
+                artifact_names.append("sensor banding")
+            if amp_glow_info and amp_glow_info.get("has_amp_glow"):
+                artifact_names.append("amplifier glow")
+            if dew_info and dew_info.get("has_dew"):
+                artifact_names.append("dew/frost")
+            if fits_header_info and fits_header_info.get("flat_applied") is False:
+                artifact_names.append("missing flat calibration")
+            names_str = ", ".join(artifact_names)
+            lines.append(
+                f"<br><span style='color:#ffaa33'><i>Note: Part of this gradient is caused by "
+                f"<b>{names_str}</b> — not just sky glow. "
+                f"The true sky gradient may be lower than {pct:.0f}%.</i></span>"
+            )
+
+        # Coverage
+        if gradient_free_info is not None:
+            gf = gradient_free_info["uniform_pct"]
+            if gf >= 80:
+                lines.append(f"<br>Only a small part of your image is affected ({gradient_free_info['gradient_pct']:.0f}%).")
+            elif gf >= 50:
+                lines.append(f"<br>About half your image is affected ({gradient_free_info['gradient_pct']:.0f}%).")
+            else:
+                lines.append(f"<br>Most of your image is affected ({gradient_free_info['gradient_pct']:.0f}%). Full-field extraction recommended.")
+
+        # Confidence
+        lines.append(
+            f"<br><span style='color:{confidence_data['color']}'>"
+            f"Analysis confidence: {confidence_data['label']} ({confidence_data['score']:.0%})</span>"
+        )
+
+        # --- Action Plan ---
+        if pct >= 2.0 or has_artifacts:
+            lines.append("<br><br>")
+            lines.append(
+                "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+                " border:1px solid #3a5a7a;'>"
+                "<b style='color:#88aaff; font-size:14pt;'>"
+                "\ud83d\udee0\ufe0f WHAT TO DO</b><br><br>"
+            )
+            step = 0
+
+            # Priority 1: Non-linear data
+            if linear_data_info is not None and not linear_data_info["is_linear"]:
+                step += 1
+                lines.append(
+                    f"<b style='color:#ffaa33'>Step {step}:</b> "
+                    "<b>Work on linear data.</b> Your image appears already stretched. "
+                    "Gradient removal works best on linear (unstretched) data. "
+                    "Go back to your linear stack before applying corrections.<br><br>"
+                )
+
+            # Priority 2: Missing flats
+            if fits_header_info and fits_header_info.get("flat_applied") is False:
+                step += 1
+                lines.append(
+                    f"<b style='color:#dd6644'>Step {step}:</b> "
+                    "<b>Apply flat frames.</b> Your image was not flat-calibrated. "
+                    "Without flats, vignetting (dark corners) cannot be fixed — "
+                    "no software extraction can replace proper flat calibration.<br><br>"
+                )
+
+            # Priority 3: Dew/frost
+            if dew_info and dew_info.get("has_dew"):
+                step += 1
+                lines.append(
+                    f"<b style='color:#ff6644'>Step {step}:</b> "
+                    "<b>Check for dew/frost.</b> Your image shows signs of moisture "
+                    "on the optics (bright center + blurry edges). If confirmed, "
+                    "discard affected frames and check your dew heater.<br><br>"
+                )
+
+            # Priority 4: Amp glow
+            if amp_glow_info and amp_glow_info.get("has_amp_glow"):
+                step += 1
+                corner = amp_glow_info.get("affected_corner", "a corner")
+                lines.append(
+                    f"<b style='color:#dd6644'>Step {step}:</b> "
+                    f"<b>Fix amplifier glow.</b> Amp glow detected in the <b>{corner}</b> "
+                    "corner. This is a sensor artifact that needs better dark frame "
+                    "subtraction (matching temperature and exposure). "
+                    "Software extraction can partially mask it but won't fix the root cause.<br><br>"
+                )
+
+            # Priority 5: Sensor banding
+            if banding_info and (banding_info.get("has_row_banding") or banding_info.get("has_col_banding")):
+                step += 1
+                lines.append(
+                    f"<b style='color:#dd6644'>Step {step}:</b> "
+                    "<b>Address sensor banding.</b> Periodic row/column patterns were "
+                    "detected. This is a sensor readout artifact — apply proper "
+                    "bias and dark subtraction. Background extraction (subsky) "
+                    "cannot remove banding patterns.<br><br>"
+                )
+
+            # Priority 6: Stacking edges
+            if stacking_edge_info and stacking_edge_info.get("has_stacking_edges"):
+                step += 1
+                lines.append(
+                    f"<b style='color:#ffaa33'>Step {step}:</b> "
+                    "<b>Crop stacking edges.</b> Dark borders from dithering/rotation "
+                    "were detected. Crop them before gradient removal to prevent "
+                    "false readings.<br><br>"
+                )
+
+            # Priority 7: Normalization warning
+            if normalization_info and normalization_info.get("is_normalized"):
+                step += 1
+                lines.append(
+                    f"<b style='color:#ffaa33'>Step {step}:</b> "
+                    "<b>Re-analyze before normalization.</b> Your image appears "
+                    "background-normalized, which masks gradients. For accurate "
+                    "results, analyze the pre-normalized stack.<br><br>"
+                )
+
+            # Priority 8: Gradient removal
+            if pct >= 2.0:
+                step += 1
+                deg = complexity_data["best_degree"]
+                best_r2 = max(complexity_data["r2_by_degree"].values())
+                use_graxpert = best_r2 < 0.5
+
+                if use_graxpert:
+                    lines.append(
+                        f"<b style='color:#88aaff'>Step {step}:</b> "
+                        "<b>Remove the gradient with GraXpert.</b> "
+                        "The gradient pattern is too complex for a simple polynomial. "
+                        "GraXpert's AI-based extraction handles irregular gradients, "
+                        "nebulosity, and non-polynomial patterns much better.<br>"
+                    )
+                    lines.append(
+                        "<span style='color:#aaaaaa'>  Alternative: In Siril, try "
+                        f"<span style='color:#aaffaa; background:#1a3a1a; padding:2px 4px;'>"
+                        f"subsky deg {deg}</span> — but expect limited improvement.</span><br>"
+                    )
+                else:
+                    lines.append(
+                        f"<b style='color:#88aaff'>Step {step}:</b> "
+                        f"<b>Remove the gradient</b> using Siril's background extraction:<br>"
+                        f"<span style='color:#aaffaa; background:#1a3a1a; padding:2px 6px;"
+                        f" font-family:monospace;'>subsky deg {deg}</span><br>"
+                    )
+
+                # Predicted outcome
+                if prediction_info is not None:
+                    pred = prediction_info["predicted_strength_pct"]
+                    reduction = prediction_info["predicted_reduction_pct"]
+                    if reduction < 20:
+                        lines.append(
+                            f"<span style='color:#ffaa33'>Expected result: ~{pred:.1f}% "
+                            f"(only {reduction:.0f}% reduction — limited effectiveness). "
+                            "Consider GraXpert instead.</span><br>"
+                        )
+                    else:
+                        pred_color = "#55aa55" if pred < 5.0 else "#aaaa55"
+                        lines.append(
+                            f"<span style='color:{pred_color}'>Expected result: "
+                            f"~{pred:.1f}% ({reduction:.0f}% reduction)</span><br>"
+                        )
+
+                # Residual warning
+                if residual_pattern_info and residual_pattern_info.get("has_structure"):
+                    lines.append(
+                        "<span style='color:#dd6644'><i>Residuals show structured "
+                        "patterns — a higher polynomial degree or GraXpert may give "
+                        "a cleaner result.</i></span><br>"
+                    )
+                lines.append("<br>")
+
+            # Priority 9: Optical issues
+            if fwhm_data and fwhm_data.get("has_tilt"):
+                step += 1
+                lines.append(
+                    f"<b style='color:#dd6644'>Step {step}:</b> "
+                    "<b>Check your optical train.</b> Star shapes vary significantly "
+                    "across the field, suggesting sensor tilt, spacing issues, or "
+                    "collimation problems. Software extraction cannot fix optical "
+                    "issues — consider mechanical adjustments.<br><br>"
+                )
+
+            # Priority 10: Hotspots
+            if hotspot_info and hotspot_info.get("count", 0) > 0:
+                step += 1
+                lines.append(
+                    f"<b style='color:#ffaa33'>Step {step}:</b> "
+                    f"<b>Check {hotspot_info['count']} hotspot(s).</b> Some tiles "
+                    "deviate significantly from their neighbors (possible artifacts, "
+                    "satellite trails, sensor defects). Inspect and mask if needed.<br><br>"
+                )
+
+            # Final re-analyze step
+            if step > 0:
+                step += 1
+                lines.append(
+                    f"<b style='color:#55aa55'>Step {step}:</b> "
+                    "<b>Re-analyze.</b> After applying corrections, press <b>Analyze (F5)</b> "
+                    "again to verify the improvement.<br>"
+                )
+
+            lines.append("</div>")
+
+        return "<br>".join(lines)
+
+    # ------------------------------------------------------------------
+    # RESULTS: Section 2 — Detailed Metrics (advanced)
+    # ------------------------------------------------------------------
+
+    def _build_detailed_html(
+        self, metrics: dict, quadrant_data: dict, vignetting_data: dict,
+        complexity_data: dict, edge_center_data: dict, confidence_data: dict,
+        direction: str, color: str, assessment: str,
+        linear_data_info: dict | None, star_density_info: dict | None,
+        lp_color_info: dict | None, symmetry_info: dict | None,
+        gradient_free_info: dict | None, extended_obj_info: dict | None,
+        hotspot_info: dict | None, panel_info: dict | None,
+        prediction_info: dict | None, sample_data: dict | None,
+        residual_pattern_info: dict | None,
+        banding_info: dict | None, cos4_info: dict | None,
+        stacking_edge_info: dict | None, fwhm_data: dict | None,
+        channel_direction_info: dict | None, normalization_info: dict | None,
+        fits_header_info: dict | None, geo_direction_info: dict | None,
+        sky_brightness_info: dict | None, dew_info: dict | None,
+        amp_glow_info: dict | None, has_artifacts: bool,
+    ) -> str:
+        quads = quadrant_data["quadrants"]
+        lines: list[str] = []
+
+        lines.append(
+            "<b style='color:#88aaff; font-size:13pt;'>"
+            "\ud83d\udcca DETAILED METRICS</b><br>"
+        )
+
+        lines.append(
+            f"<b>Gradient Strength:   {metrics['strength_pct']:.1f} %</b>"
+            f"  &nbsp; <span style='color:{confidence_data['color']}'>"
+            f"Confidence: {confidence_data['label']} ({confidence_data['score']:.0%})</span>"
+        )
+        lines.append(f"<span style='color:{color}'>{assessment}</span>")
+        lines.append(f"Direction:           {metrics['angle_deg']:.0f}\u00b0 ({direction})")
+        lines.append("")
+        lines.append(f"Background Min:      {metrics['bg_min']:.6f}     Max: {metrics['bg_max']:.6f}")
+        lines.append(f"Background Range:    {metrics['bg_range']:.6f}     Median: {metrics['bg_median']:.6f}")
+        lines.append(f"Uniformity (CV):     {metrics['uniformity']:.1f} %")
+        lines.append("")
+        lines.append(f"<b>Complexity:</b> {complexity_data['description']}")
+        lines.append(
+            f"  Polynomial fit: deg1 R\u00b2={complexity_data['r2_by_degree'][1]:.3f}  "
+            f"deg2 R\u00b2={complexity_data['r2_by_degree'][2]:.3f}  "
+            f"deg3 R\u00b2={complexity_data['r2_by_degree'][3]:.3f}  "
+            f"\u2192 <b>recommended degree: {complexity_data['best_degree']}</b>"
+        )
+        lines.append("")
+        lines.append(f"<b>Pattern:</b> {vignetting_data['diagnosis']}")
+        lines.append(
+            f"  Radial R\u00b2={vignetting_data['radial_r2']:.3f}  |  "
+            f"Linear R\u00b2={vignetting_data['linear_r2']:.3f}  |  "
+            f"Edge/Center ratio: {edge_center_data['ratio']:.3f}"
+        )
+        lines.append(f"  {edge_center_data['diagnosis']}")
+        lines.append("")
+        lines.append(
+            f"<b>Quadrants:</b>  NW={quads['NW']:.6f}  NE={quads['NE']:.6f}  "
+            f"SW={quads['SW']:.6f}  SE={quads['SE']:.6f}"
+        )
+        lines.append(
+            f"  Brightest: <span style='color:#ff8888'>{quadrant_data['brightest']}</span>"
+            f"  |  Darkest: <span style='color:#88ff88'>{quadrant_data['darkest']}</span>"
+            f"  |  Spread: {quadrant_data['spread']:.6f}"
+        )
+
+        if has_artifacts and metrics["strength_pct"] >= 5.0:
             lines.append(
                 "<span style='color:#ffaa33'><i>Note: the gradient % above includes "
                 "contributions from detected artifacts (banding, amp glow, missing flats, etc.). "
                 "The true sky gradient may be significantly lower.</i></span>"
             )
 
-        # Linear data warning
         if linear_data_info is not None and not linear_data_info["is_linear"]:
             lines.append("")
             lines.append(
-                f"<span style='color:#ffaa33'>\u26a0 <b>Non-linear data</b> (median={linear_data_info['median_level']:.3f})"
+                f"<span style='color:#ffaa33'>\u26a0 <b>Non-linear data</b> "
+                f"(median={linear_data_info['median_level']:.3f})"
                 f" — {linear_data_info['warning']}</span>"
             )
 
-        # Star density warning
         if star_density_info is not None and star_density_info["warning"]:
             lines.append(
                 f"<span style='color:#ffaa33'>\u26a0 <b>Dense star field</b>"
@@ -5843,7 +5538,6 @@ class GradientAnalyzerWindow(QMainWindow):
                 f" {star_density_info['max_rejection']:.0f}% rejection rate</span>"
             )
 
-        # LP color characterization
         if lp_color_info is not None:
             lines.append("")
             lines.append(
@@ -5854,7 +5548,6 @@ class GradientAnalyzerWindow(QMainWindow):
             )
             lines.append(f"  {lp_color_info['description']}")
 
-        # Gradient-free percentage
         if gradient_free_info is not None:
             lines.append("")
             lines.append(
@@ -5863,7 +5556,6 @@ class GradientAnalyzerWindow(QMainWindow):
             )
             lines.append(f"  {gradient_free_info['description']}")
 
-        # Vignetting symmetry
         if symmetry_info is not None and symmetry_info["max_asymmetry_pct"] > 1.0:
             asym_color = "#ffaa33" if symmetry_info["is_asymmetric"] else "#88aaff"
             lines.append("")
@@ -5872,7 +5564,6 @@ class GradientAnalyzerWindow(QMainWindow):
                 f"{symmetry_info['diagnosis']}</span>"
             )
 
-        # Prediction
         if prediction_info is not None and metrics["strength_pct"] >= 2.0:
             pred_color = "#55aa55" if prediction_info["predicted_strength_pct"] < 2.0 else "#aaaa55"
             lines.append("")
@@ -5883,7 +5574,6 @@ class GradientAnalyzerWindow(QMainWindow):
                 f"({prediction_info['predicted_reduction_pct']:.0f}% reduction)</span>"
             )
 
-        # Residual pattern
         if residual_pattern_info is not None and metrics["strength_pct"] >= 2.0:
             rp_color = "#dd6644" if residual_pattern_info["has_structure"] else "#55aa55"
             lines.append(
@@ -5891,56 +5581,47 @@ class GradientAnalyzerWindow(QMainWindow):
                 f"{residual_pattern_info['description']}</span>"
             )
 
-        # Hotspots
         if hotspot_info is not None and hotspot_info["count"] > 0:
             lines.append(
                 f"<span style='color:#ffaa33'>\u26a0 <b>{hotspot_info['count']} hotspot(s)</b>"
                 f" — {hotspot_info['warning']}</span>"
             )
 
-        # Extended objects
         if extended_obj_info is not None and extended_obj_info["flagged_count"] > 0:
             lines.append(
                 f"<span style='color:#ffaa33'>\u26a0 <b>Extended objects:</b> "
                 f"{extended_obj_info['warning']}</span>"
             )
 
-        # Panel boundaries
         if panel_info is not None and panel_info["is_mosaic"]:
             lines.append(
-                f"<span style='color:#88aaff'>\u26a0 <b>Mosaic:</b> {panel_info['description']}</span>"
+                f"<span style='color:#88aaff'>\u26a0 <b>Mosaic:</b> "
+                f"{panel_info['description']}</span>"
             )
 
-        # Sample points summary
         if sample_data is not None and sample_data["points"]:
             lines.append("")
             lines.append(
-                f"<b>Sample Points:</b> {len(sample_data['points'])} points generated"
-                f" — click 'Copy Sample Points' for Siril commands"
+                f"<b>Sample Points:</b> {len(sample_data['points'])} suggested regions"
+                f" (shown as green/red overlay on heatmap)"
             )
 
-        # v1.7: Stacking edge artifacts
         if stacking_edge_info is not None and stacking_edge_info["has_stacking_edges"]:
             lines.append(
                 f"<span style='color:#ffaa33'>\u26a0 <b>Stacking edges:</b> "
                 f"{stacking_edge_info['description']}</span>"
             )
 
-        # v1.7: Banding / sensor bias
         if banding_info is not None and (banding_info["has_row_banding"] or banding_info["has_col_banding"]):
             lines.append(
                 f"<span style='color:#dd6644'>\u26a0 <b>Sensor banding:</b> "
                 f"{banding_info['description']}</span>"
             )
 
-        # v1.7: Cos^4 vignetting profile
         if cos4_info is not None and cos4_info["corner_falloff_pct"] > 5.0:
             lines.append("")
-            lines.append(
-                f"<b>Cos\u2074 Vignetting:</b> {cos4_info['description']}"
-            )
+            lines.append(f"<b>Cos\u2074 Vignetting:</b> {cos4_info['description']}")
 
-        # v1.7: Per-channel direction
         if channel_direction_info is not None and channel_direction_info["has_directional_difference"]:
             lines.append("")
             lines.append(
@@ -5948,7 +5629,6 @@ class GradientAnalyzerWindow(QMainWindow):
                 f"{channel_direction_info['description']}</span>"
             )
 
-        # v1.7: FWHM / eccentricity summary
         if fwhm_data is not None and fwhm_data.get("median_fwhm") is not None:
             fwhm_color = "#dd6644" if fwhm_data.get("has_tilt", False) else "#88aaff"
             lines.append("")
@@ -5957,7 +5637,6 @@ class GradientAnalyzerWindow(QMainWindow):
                 f"{fwhm_data['description']}</span>"
             )
 
-        # v1.7: Normalization detection
         if normalization_info is not None and normalization_info["is_normalized"]:
             lines.append("")
             lines.append(
@@ -5965,7 +5644,6 @@ class GradientAnalyzerWindow(QMainWindow):
                 f"{normalization_info['description']}</span>"
             )
 
-        # v1.8: FITS calibration status
         if fits_header_info is not None and fits_header_info.get("flat_applied") is not None:
             cal_color = "#55aa55" if fits_header_info["flat_applied"] else "#dd6644"
             lines.append("")
@@ -5979,7 +5657,6 @@ class GradientAnalyzerWindow(QMainWindow):
                     "vignetting cannot be corrected without flats!</span>"
                 )
 
-        # v1.8: Geographic LP direction
         if geo_direction_info is not None and geo_direction_info.get("compass"):
             lines.append("")
             lines.append(
@@ -5987,7 +5664,6 @@ class GradientAnalyzerWindow(QMainWindow):
                 f"{geo_direction_info['description']}</span>"
             )
 
-        # v1.8: Sky brightness
         if sky_brightness_info is not None and sky_brightness_info.get("has_photometry"):
             lines.append("")
             bortle = sky_brightness_info.get("bortle_estimate")
@@ -5996,7 +5672,6 @@ class GradientAnalyzerWindow(QMainWindow):
                 f"<b>Sky Brightness:</b> {sky_brightness_info['description']}{bortle_str}"
             )
 
-        # v1.8: Dew/frost
         if dew_info is not None and dew_info.get("has_dew"):
             lines.append("")
             lines.append(
@@ -6004,7 +5679,6 @@ class GradientAnalyzerWindow(QMainWindow):
                 f"{dew_info['description']}</span>"
             )
 
-        # v1.8: Amp glow
         if amp_glow_info is not None and amp_glow_info.get("has_amp_glow"):
             lines.append("")
             lines.append(
@@ -6012,47 +5686,225 @@ class GradientAnalyzerWindow(QMainWindow):
                 f"{amp_glow_info['description']}</span>"
             )
 
-        # Before/After delta
-        if self._previous_metrics is not None and self._run_count > 1:
-            prev = self._previous_metrics
-            delta_strength = metrics["strength_pct"] - prev["strength_pct"]
-            delta_range = metrics["bg_range"] - prev["bg_range"]
-            delta_uniformity = metrics["uniformity"] - prev["uniformity"]
+        return "<br>".join(lines)
 
-            delta_color = "#55aa55" if delta_strength < 0 else "#dd4444"
-            arrow = "\u2193" if delta_strength < 0 else "\u2191"
+    # ------------------------------------------------------------------
+    # RESULTS: Section 3 — Before / After delta
+    # ------------------------------------------------------------------
 
-            lines.append("")
-            lines.append(f"<b style='color:#88aaff'>\u0394 vs. Previous Run (run #{self._run_count}):</b>")
+    def _build_delta_html(self, metrics: dict) -> str:
+        if self._previous_metrics is None or self._run_count <= 1:
+            return ""
+
+        prev = self._previous_metrics
+        delta_strength = metrics["strength_pct"] - prev["strength_pct"]
+        delta_range = metrics["bg_range"] - prev["bg_range"]
+        delta_uniformity = metrics["uniformity"] - prev["uniformity"]
+
+        delta_color = "#55aa55" if delta_strength < 0 else "#dd4444"
+        arrow = "\u2193" if delta_strength < 0 else "\u2191"
+
+        lines: list[str] = []
+        lines.append(
+            f"<b style='color:#88aaff; font-size:13pt;'>"
+            f"\u0394 BEFORE / AFTER (run #{self._run_count})</b><br>"
+        )
+        lines.append(
+            f"<span style='color:{delta_color}; font-size:14pt;'>"
+            f"<b>Gradient: {delta_strength:+.1f}% {arrow}</b></span>"
+        )
+        lines.append(
+            f"Range: {delta_range:+.6f}  |  Uniformity: {delta_uniformity:+.1f}%"
+        )
+        if delta_strength < -1.0:
             lines.append(
-                f"  <span style='color:{delta_color}'>Strength: {delta_strength:+.1f}% {arrow}</span>"
-                f"  |  Range: {delta_range:+.6f}"
-                f"  |  Uniformity: {delta_uniformity:+.1f}%"
+                "<br><span style='color:#55aa55; font-size:13pt;'>"
+                "\u2705 Improvement detected after extraction!</span>"
             )
-            if delta_strength < -1.0:
-                lines.append("  <span style='color:#55aa55'>Improvement detected after extraction!</span>")
-            elif delta_strength > 1.0:
-                lines.append("  <span style='color:#dd4444'>Gradient increased — check processing.</span>")
+        elif delta_strength > 1.0:
+            lines.append(
+                "<br><span style='color:#dd4444; font-size:13pt;'>"
+                "\u26a0 Gradient increased — check your processing steps.</span>"
+            )
+        else:
+            lines.append(
+                "<br><span style='color:#aaaa55;'>Minimal change detected.</span>"
+            )
 
-        self.lbl_results.setText("<br>".join(lines))
+        return "<br>".join(lines)
 
     def _display_suggestions(self, suggestions: list[str]) -> None:
-        html_parts = []
+        # --- Build beginner-friendly quick guide ---
+        quick_lines: list[str] = []
+        quick_lines.append(
+            "<b style='color:#88aaff; font-size:15pt;'>"
+            "\ud83d\udca1 QUICK GUIDE</b><br>"
+        )
+
+        # Categorize suggestions into urgency groups
+        critical: list[str] = []
+        tools: list[str] = []
+        workflow_text = ""
+
+        for sug in suggestions:
+            lower = sug.lower()
+            if "\u26a0 critical" in lower or "\u26a0 warning" in lower or "\u26a0 low confidence" in lower:
+                critical.append(sug)
+            elif "workflow" in lower:
+                workflow_text = sug
+            elif "result" in lower and "uniform" in lower:
+                # "No extraction needed" — special case
+                quick_lines.append(
+                    "<div style='background:#2a4a2a; padding:10px; border-radius:6px;"
+                    " border:1px solid #408040;'>"
+                    "<b style='color:#55aa55; font-size:14pt;'>"
+                    "\u2705 Your image looks good!</b><br><br>"
+                    "The background is very uniform — no gradient removal is needed. "
+                    "Proceed with your normal processing workflow."
+                    "</div>"
+                )
+                self._suggestions_summary_html = "<br>".join(quick_lines)
+                self._suggestions_detailed_html = self._format_raw_suggestions(suggestions)
+                self._suggestions_html = (
+                    self._suggestions_summary_html
+                    + "<br><hr><br>"
+                    + self._suggestions_detailed_html
+                )
+                self.btn_show_recommendations.setEnabled(True)
+                return
+            else:
+                tools.append(sug)
+
+        # Critical issues first
+        if critical:
+            quick_lines.append(
+                "<div style='background:#3a1a1a; padding:10px; border-radius:6px;"
+                " border:1px solid #7a3a3a;'>"
+                "<b style='color:#ff6644; font-size:13pt;'>"
+                "\u26a0 FIX THESE FIRST</b><br><br>"
+            )
+            for c in critical:
+                first_line = c.split("\n")[0].replace("\u26a0 ", "")
+                # Extract the explanation lines
+                detail_lines = [
+                    ln.strip() for ln in c.split("\n")[1:] if ln.strip()
+                ]
+                detail_str = " ".join(detail_lines) if detail_lines else ""
+                quick_lines.append(
+                    f"\u2022 <b>{first_line}</b>"
+                )
+                if detail_str:
+                    quick_lines.append(
+                        f"<span style='color:#ccaaaa;'>&nbsp;&nbsp;{detail_str}</span><br>"
+                    )
+            quick_lines.append("</div><br>")
+
+        # Tool recommendations — simplified
+        if tools:
+            quick_lines.append(
+                "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+                " border:1px solid #3a5a7a;'>"
+                "<b style='color:#88aaff; font-size:13pt;'>"
+                "\ud83d\udee0\ufe0f RECOMMENDED TOOLS</b><br><br>"
+            )
+
+            for t in tools:
+                first_line = t.split("\n")[0]
+                # Extract tool name and key info
+                detail_lines = [
+                    ln.strip() for ln in t.split("\n")[1:] if ln.strip()
+                ]
+
+                # Check for Siril commands in the details
+                siril_cmd = ""
+                description_parts = []
+                for dl in detail_lines:
+                    if dl.startswith("Siril:") or dl.startswith("subsky") or dl.startswith("autobackground") or dl.startswith("calibrate"):
+                        siril_cmd = dl
+                    elif not dl.startswith("Fit quality:") and not dl.startswith("Complexity"):
+                        description_parts.append(dl)
+
+                # Determine icon based on content
+                lower_fl = first_line.lower()
+                if "graxpert" in lower_fl:
+                    icon = "\ud83e\udde0"
+                elif "veralux" in lower_fl:
+                    icon = "\ud83c\udf08"
+                elif "autobge" in lower_fl or "autobackground" in lower_fl:
+                    icon = "\u26a1"
+                elif "subsky" in lower_fl:
+                    icon = "\ud83d\udcca"
+                elif "flat" in lower_fl or "vignetting" in lower_fl:
+                    icon = "\ud83d\uddbc\ufe0f"
+                else:
+                    icon = "\u2022"
+
+                # Clean up the header
+                clean_header = re.sub(
+                    r"^(OPTION [A-Z]?\s*—\s*|AFTER FIXING ISSUES\s*—\s*|STEP \d+\s*—\s*|ALTERNATIVE\s*—\s*)",
+                    "", first_line
+                ).strip()
+
+                quick_lines.append(f"{icon} <b>{clean_header}</b>")
+                if siril_cmd:
+                    quick_lines.append(
+                        f"&nbsp;&nbsp;<span style='color:#aaffaa; background:#1a3a1a;"
+                        f" padding:2px 6px; font-family:monospace;'>{siril_cmd}</span>"
+                    )
+                if description_parts:
+                    desc = " ".join(description_parts[:2])  # Keep it brief
+                    quick_lines.append(
+                        f"<span style='color:#aabbcc;'>&nbsp;&nbsp;{desc}</span>"
+                    )
+                quick_lines.append("<br>")
+
+            quick_lines.append("</div><br>")
+
+        # Workflow — simplified as numbered steps
+        if workflow_text:
+            wf_lines = workflow_text.split("\n")
+            steps = [ln.strip() for ln in wf_lines[1:] if ln.strip()]
+            if steps:
+                quick_lines.append(
+                    "<div style='background:#2a2a1a; padding:10px; border-radius:6px;"
+                    " border:1px solid #5a5a3a;'>"
+                    "<b style='color:#ffcc66; font-size:13pt;'>"
+                    "\ud83d\udcdd WORKFLOW ORDER</b><br><br>"
+                )
+                for s in steps:
+                    # Already numbered like "1. Do this"
+                    quick_lines.append(f"<b>{s}</b><br>")
+                quick_lines.append("</div>")
+
+        self._suggestions_summary_html = "<br>".join(quick_lines)
+        self._suggestions_detailed_html = self._format_raw_suggestions(suggestions)
+        self._suggestions_html = (
+            self._suggestions_summary_html
+            + "<br><hr><br>"
+            + self._suggestions_detailed_html
+        )
+        self.btn_show_recommendations.setEnabled(True)
+
+    @staticmethod
+    def _format_raw_suggestions(suggestions: list[str]) -> str:
+        """Format raw suggestion strings into detailed HTML (advanced view)."""
+        html_parts: list[str] = []
+        html_parts.append(
+            "<b style='color:#88aaff; font-size:13pt;'>"
+            "\ud83d\udd27 DETAILED RECOMMENDATIONS</b><br>"
+        )
         for i, sug in enumerate(suggestions, 1):
             formatted = sug.replace("\n", "<br>")
-            # Highlight Siril command lines (indented lines starting with "Siril:" or common commands)
             formatted = re.sub(
                 r"(  Siril:.*?)(<br>|$)",
                 r"<span style='color:#aaffaa; background:#1a3a1a; padding:2px 4px;'>\1</span>\2",
                 formatted,
             )
-            # Highlight other indented command-like lines
             formatted = re.sub(
                 r"(  (?:calibrate|subsky|autobackgroundextraction).*?)(<br>|$)",
                 r"<span style='color:#aaffaa; background:#1a3a1a; padding:2px 4px;'>\1</span>\2",
                 formatted,
             )
-            # Highlight step headers
             formatted = re.sub(
                 r"(STEP \d+|OPTION [A-Z]?|RESULT|WORKFLOW|ALTERNATIVE|\u26a0 LOW CONFIDENCE)",
                 r"<b style='color:#ffcc66'>\1</b>",
@@ -6060,193 +5912,188 @@ class GradientAnalyzerWindow(QMainWindow):
             )
             html_parts.append(f"<b>{i}.</b> {formatted}")
 
-        self.lbl_suggestions.setText("<br><br>".join(html_parts))
+        return "<br><br>".join(html_parts)
 
-    def _copy_results_to_clipboard(self) -> None:
-        """Copy analysis results + recommendations as plain text to clipboard."""
-        results_text = self.lbl_results.text()
-        suggestions_text = self.lbl_suggestions.text()
-        if not results_text and not suggestions_text:
+    def _on_tab_changed(self, index: int) -> None:
+        """Update the tab info label when the user switches tabs."""
+        if 0 <= index < len(self._tab_descriptions):
+            self.lbl_tab_info.setText(self._tab_descriptions[index])
+
+    def _show_results_dialog(self) -> None:
+        """Show analysis results in a tabbed modal dialog."""
+        if not self._results_html:
             return
-        # Strip HTML tags for plain text
-        tag_re = re.compile(r"<[^>]+>")
-        plain_results = tag_re.sub("", results_text).replace("&nbsp;", " ")
-        plain_suggestions = tag_re.sub("", suggestions_text)
-        # Replace <br> with newlines (before stripping tags)
-        plain_results = self.lbl_results.text().replace("<br>", "\n").replace("<br/>", "\n")
-        plain_results = tag_re.sub("", plain_results).replace("&nbsp;", " ")
-        plain_suggestions = self.lbl_suggestions.text().replace("<br>", "\n").replace("<br/>", "\n")
-        plain_suggestions = tag_re.sub("", plain_suggestions).replace("&nbsp;", " ")
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Analysis Results")
+        dlg.setMinimumSize(850, 650)
+        layout = QVBoxLayout(dlg)
 
-        text = f"=== Gradient Analyzer Results ===\n{plain_results}\n\n=== Recommendations ===\n{plain_suggestions}"
-        clipboard = QApplication.clipboard()
-        if clipboard is not None:
-            clipboard.setText(text)
-            self._log("Results copied to clipboard")
-
-    def _copy_sample_points_to_clipboard(self) -> None:
-        """Copy sample point commands to clipboard (manual points take priority)."""
-        manual_cmds = self.heatmap_widget.get_manual_commands()
-        commands = manual_cmds if manual_cmds else self._last_sample_commands
-        if not commands:
-            QMessageBox.information(
-                self, "No Sample Points",
-                "No sample points available yet.\n"
-                "Either run an analysis (auto-generates points) or\n"
-                "left-click on the heatmap to place points manually.\n"
-                "Right-click to remove a point.",
-            )
-            return
-        text = "\n".join(commands)
-        clipboard = QApplication.clipboard()
-        if clipboard is not None:
-            clipboard.setText(text)
-            source = "manual" if manual_cmds else "auto-generated"
-            self._log(f"Copied {len(commands)} {source} sample point commands to clipboard")
-
-    def _clear_manual_points(self) -> None:
-        """Clear all manually placed sample points."""
-        self.heatmap_widget.clear_manual_points()
-        self.lbl_manual_points.setText("")
-
-    def _on_manual_points_changed(self, points: list) -> None:
-        """Handle changes to manually placed sample points."""
-        if points:
-            self.lbl_manual_points.setText(f"{len(points)} manual point(s)")
-        else:
-            self.lbl_manual_points.setText("")
-
-    def _on_apply_subsky(self) -> None:
-        """Execute subsky with sample points if available, then reload and re-analyze."""
-        if self._last_complexity is None:
-            QMessageBox.information(
-                self, "No Analysis",
-                "Run an analysis first so the script knows which degree to use.",
-            )
-            return
-
-        degree = self._last_complexity["best_degree"]
-        samples = {1: 15, 2: 25, 3: 40}.get(degree, 25)
-
-        # Check for manual or auto-generated sample points
-        manual_cmds = self.heatmap_widget.get_manual_commands()
-        auto_cmds = self._last_sample_commands
-        has_points = bool(manual_cmds or auto_cmds)
-        point_cmds = manual_cmds if manual_cmds else auto_cmds
-
-        if has_points:
-            msg = (
-                f"This will set {len(point_cmds)} sample points, then execute:\n\n"
-                + "\n".join(point_cmds[:5])
-                + (f"\n  ... and {len(point_cmds) - 5} more" if len(point_cmds) > 5 else "")
-                + f"\n\nsubsky -degree={degree}\n\n"
-                "The current image will be modified. Continue?"
-            )
-        else:
-            msg = (
-                f"This will execute in Siril:\n\n"
-                f"  subsky -degree={degree} -samples={samples}\n\n"
-                "The current image will be modified. Continue?"
-            )
-
-        reply = QMessageBox.question(
-            self, "Apply subsky", msg,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+        base_style = (
+            "font-size: 13pt; color: #e0e0e0; background: #1e1e1e;"
+            " font-family: 'Helvetica Neue', Helvetica, Arial; padding: 12px;"
         )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-
-        try:
-            if has_points:
-                # Execute sample point commands first
-                for cmd in point_cmds:
-                    self._log(f"Executing: {cmd}")
-                    self.siril.cmd(cmd)
-                self._log(f"Executing: subsky -degree={degree}")
-                self.siril.cmd(f"subsky -degree={degree}")
-            else:
-                self._log(f"Executing: subsky -degree={degree} -samples={samples}")
-                self.siril.cmd(f"subsky -degree={degree} -samples={samples}")
-            self._log("subsky completed — reloading and re-analyzing...")
-            self._on_refresh_and_analyze()
-        except (SirilError, OSError, RuntimeError) as e:
-            QMessageBox.critical(
-                self, "subsky Failed",
-                f"Failed to execute subsky:\n{e}\n\n"
-                "You can run the command manually in Siril's console.",
-            )
-            self._log(f"subsky error: {e}")
-
-    def _on_auto_iterate(self, max_passes: int = 3, target_pct: float = 2.0) -> None:
-        """Repeatedly apply subsky and re-analyze until gradient < target or max passes reached."""
-        if self._last_complexity is None:
-            QMessageBox.information(
-                self, "No Analysis",
-                "Run an analysis first before auto-iterating.",
-            )
-            return
-
-        reply = QMessageBox.question(
-            self, "Auto-iterate subsky",
-            f"This will apply subsky up to {max_passes} times, re-analyzing after each pass, "
-            f"until gradient drops below {target_pct:.1f}%.\n\n"
-            "Each pass modifies the image. You may want to save a backup first.\n\n"
-            "Continue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+        mono_style = (
+            "font-size: 12pt; color: #e0e0e0; background: #1e1e1e;"
+            " font-family: 'Courier New', monospace; padding: 10px;"
         )
-        if reply != QMessageBox.StandardButton.Yes:
+
+        tabs = QTabWidget()
+
+        # Tab 1: Summary & Action Plan
+        te_summary = QTextEdit()
+        te_summary.setReadOnly(True)
+        te_summary.setStyleSheet(base_style)
+        te_summary.setHtml(self._results_summary_html)
+        tabs.addTab(te_summary, "\ud83d\udcca Summary && Actions")
+
+        # Tab 2: Detailed Metrics
+        te_detail = QTextEdit()
+        te_detail.setReadOnly(True)
+        te_detail.setStyleSheet(mono_style)
+        te_detail.setHtml(self._results_detailed_html)
+        tabs.addTab(te_detail, "\ud83d\udd27 Detailed Metrics")
+
+        # Tab 3: Before/After (only if available)
+        if self._results_delta_html:
+            te_delta = QTextEdit()
+            te_delta.setReadOnly(True)
+            te_delta.setStyleSheet(base_style)
+            te_delta.setHtml(self._results_delta_html)
+            tabs.addTab(te_delta, "\u0394 Before / After")
+
+        layout.addWidget(tabs)
+        btn = QPushButton("Close")
+        _nofocus(btn)
+        btn.clicked.connect(dlg.accept)
+        layout.addWidget(btn)
+        dlg.exec()
+
+    def _show_recommendations_dialog(self) -> None:
+        """Show recommendations in a tabbed modal dialog."""
+        if not self._suggestions_html:
             return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Recommendations")
+        dlg.setMinimumSize(850, 650)
+        layout = QVBoxLayout(dlg)
 
-        for pass_num in range(1, max_passes + 1):
-            degree = self._last_complexity["best_degree"]
-            samples = {1: 15, 2: 25, 3: 40}.get(degree, 25)
-
-            self._log(f"Auto-iterate pass {pass_num}/{max_passes}: "
-                      f"subsky -degree={degree} -samples={samples}")
-            try:
-                self.siril.cmd(f"subsky -degree={degree} -samples={samples}")
-            except (SirilError, OSError, RuntimeError) as e:
-                self._log(f"subsky failed on pass {pass_num}: {e}")
-                QMessageBox.warning(
-                    self, "Auto-iterate stopped",
-                    f"subsky failed on pass {pass_num}:\n{e}",
-                )
-                break
-
-            # Re-analyze
-            self._on_refresh_and_analyze()
-
-            # Check if target reached
-            if self._last_metrics and self._last_metrics["strength_pct"] < target_pct:
-                self._log(f"Target reached after {pass_num} pass(es): "
-                          f"{self._last_metrics['strength_pct']:.1f}% < {target_pct:.1f}%")
-                QMessageBox.information(
-                    self, "Auto-iterate complete",
-                    f"Gradient reduced to {self._last_metrics['strength_pct']:.1f}% "
-                    f"after {pass_num} pass(es).",
-                )
-                return
-
-        final_pct = self._last_metrics["strength_pct"] if self._last_metrics else 0
-        self._log(f"Auto-iterate complete: {max_passes} passes, final gradient: {final_pct:.1f}%")
-        QMessageBox.information(
-            self, "Auto-iterate complete",
-            f"Completed {max_passes} passes. Final gradient: {final_pct:.1f}%.\n"
-            f"{'Target not reached — consider GraXpert for remaining gradient.' if final_pct >= target_pct else ''}",
+        base_style = (
+            "font-size: 13pt; color: #e0e0e0; background: #1e1e1e;"
+            " font-family: 'Helvetica Neue', Helvetica, Arial; padding: 12px;"
         )
+        mono_style = (
+            "font-size: 12pt; color: #ccddff; background: #1e1e1e;"
+            " font-family: 'Courier New', monospace; padding: 10px;"
+        )
+
+        tabs = QTabWidget()
+
+        # Tab 1: Quick Guide
+        te_quick = QTextEdit()
+        te_quick.setReadOnly(True)
+        te_quick.setStyleSheet(base_style)
+        te_quick.setHtml(self._suggestions_summary_html)
+        tabs.addTab(te_quick, "\ud83d\udca1 Quick Guide")
+
+        # Tab 2: Detailed Recommendations
+        te_detail = QTextEdit()
+        te_detail.setReadOnly(True)
+        te_detail.setStyleSheet(mono_style)
+        te_detail.setHtml(self._suggestions_detailed_html)
+        tabs.addTab(te_detail, "\ud83d\udd27 Full Details")
+
+        layout.addWidget(tabs)
+        btn = QPushButton("Close")
+        _nofocus(btn)
+        btn.clicked.connect(dlg.accept)
+        layout.addWidget(btn)
+        dlg.exec()
+
+    @staticmethod
+    def _html_to_plaintext(html: str) -> str:
+        """Convert simple HTML to readable plain text for export."""
+        import re as _re
+        text = html
+        # Block-level breaks
+        text = _re.sub(r"<br\s*/?>", "\n", text, flags=_re.IGNORECASE)
+        text = _re.sub(r"</?div[^>]*>", "\n", text, flags=_re.IGNORECASE)
+        text = _re.sub(r"</?p[^>]*>", "\n", text, flags=_re.IGNORECASE)
+        # Strip all remaining tags
+        text = _re.sub(r"<[^>]+>", "", text)
+        # Decode common HTML entities
+        text = text.replace("&nbsp;", " ").replace("&amp;", "&")
+        text = text.replace("&lt;", "<").replace("&gt;", ">")
+        text = text.replace("&#39;", "'").replace("&quot;", '"')
+        # Collapse excessive blank lines
+        text = _re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
 
     def _on_export_report(self) -> None:
-        """Export comprehensive analysis report to a text file."""
-        if self._last_report_data is None:
+        """Export analysis report from Results + Recommendations to a text file."""
+        if not self._results_html and not self._suggestions_html:
             QMessageBox.information(
                 self, "No Analysis",
                 "Run an analysis first to generate a report.",
             )
             return
 
-        report_text = generate_analysis_report(**self._last_report_data)
+        sep = "=" * 72
+        parts: list[str] = []
+        parts.append(sep)
+        parts.append(f"  GRADIENT ANALYZER REPORT  v{VERSION}")
+        parts.append(f"  {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        parts.append(sep)
+        parts.append("")
+
+        # Image info header
+        if self._img_width and self._img_height:
+            parts.append(f"  Image: {self._img_width} x {self._img_height} px, {self._ch_str}")
+            parts.append(f"  Grid: {self.spin_rows.value()} x {self.spin_cols.value()} tiles")
+            parts.append(f"  Sigma-clip: {self.spin_sigma.value():.1f}")
+            parts.append(f"  Preset: {self.combo_preset.currentText()}")
+            parts.append("")
+
+        # Summary & Action Plan
+        if self._results_summary_html:
+            parts.append("SUMMARY & ACTION PLAN")
+            parts.append("-" * 40)
+            parts.append(self._html_to_plaintext(self._results_summary_html))
+            parts.append("")
+
+        # Detailed Metrics
+        if self._results_detailed_html:
+            parts.append("DETAILED METRICS")
+            parts.append("-" * 40)
+            parts.append(self._html_to_plaintext(self._results_detailed_html))
+            parts.append("")
+
+        # Before/After
+        if self._results_delta_html:
+            parts.append("BEFORE / AFTER")
+            parts.append("-" * 40)
+            parts.append(self._html_to_plaintext(self._results_delta_html))
+            parts.append("")
+
+        # Recommendations
+        if self._suggestions_summary_html:
+            parts.append("RECOMMENDATIONS — QUICK GUIDE")
+            parts.append("-" * 40)
+            parts.append(self._html_to_plaintext(self._suggestions_summary_html))
+            parts.append("")
+
+        if self._suggestions_detailed_html:
+            parts.append("RECOMMENDATIONS — FULL DETAILS")
+            parts.append("-" * 40)
+            parts.append(self._html_to_plaintext(self._suggestions_detailed_html))
+            parts.append("")
+
+        parts.append(sep)
+        parts.append(f"  Generated by GradientAnalyzer v{VERSION}")
+        parts.append(sep)
+
+        report_text = "\n".join(parts)
+        # Sanitize: remove surrogate characters that can't be encoded to UTF-8
+        report_text = report_text.encode("utf-8", errors="replace").decode("utf-8")
 
         # Save to file
         cwd = os.getcwd()
@@ -6256,7 +6103,7 @@ class GradientAnalyzerWindow(QMainWindow):
         try:
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(report_text)
-            self._log(f"Report saved to {filepath}")
+            pass  # User sees the success dialog
 
             # Also copy to clipboard
             clipboard = QApplication.clipboard()
@@ -6272,65 +6119,6 @@ class GradientAnalyzerWindow(QMainWindow):
                 self, "Export Failed",
                 f"Failed to save report:\n{e}",
             )
-
-    def _on_temporal_analysis(self) -> None:
-        """Run temporal gradient analysis on a directory of FITS sub-frames."""
-        fits_dir = QFileDialog.getExistingDirectory(
-            self, "Select directory with FITS sub-frames",
-            os.getcwd(),
-        )
-        if not fits_dir:
-            return
-
-        self._log(f"Running temporal analysis on {fits_dir}...")
-        grid_rows = self.spin_rows.value()
-        grid_cols = self.spin_cols.value()
-        sigma = self.spin_sigma.value()
-
-        result = analyze_batch_temporal(fits_dir, grid_rows, grid_cols, sigma)
-
-        if result["trend"] == "insufficient_data":
-            QMessageBox.information(
-                self, "Temporal Analysis",
-                f"Insufficient data: {result['description']}\n\n"
-                f"{result['recommendation']}",
-            )
-            return
-
-        # Build results dialog
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Temporal Gradient Analysis")
-        dlg.setMinimumSize(600, 400)
-        dlg_layout = QVBoxLayout(dlg)
-
-        text = QTextEdit()
-        text.setReadOnly(True)
-        text.setStyleSheet("background-color: #1e1e1e; color: #e0e0e0; font-family: monospace;")
-
-        lines = [
-            f"<b>Temporal Gradient Analysis</b>",
-            f"<br>Directory: {fits_dir}",
-            f"<br>Frames analyzed: {len(result['entries'])}",
-            f"<br>Trend: <b>{result['trend']}</b>",
-            f"<br>{result['description']}",
-            f"<br><br><b>Recommendation:</b> {result['recommendation']}",
-            f"<br><br><b>Frame details:</b>",
-        ]
-        for e in result["entries"]:
-            color = "#55aa55" if e["strength_pct"] < 2 else "#aaaa55" if e["strength_pct"] < 5 else "#dd4444"
-            lines.append(
-                f"<br><span style='color:{color}'>"
-                f"{e['filename']:40s}  {e['date_obs']:25s}  {e['strength_pct']:5.1f}%  "
-                f"{angle_to_direction(e['angle_deg'])}</span>"
-            )
-
-        text.setHtml("".join(lines))
-        dlg_layout.addWidget(text)
-
-        btn_close = QPushButton("Close")
-        btn_close.clicked.connect(dlg.accept)
-        dlg_layout.addWidget(btn_close)
-        dlg.exec()
 
     def _log(self, msg: str) -> None:
         try:
@@ -6366,80 +6154,34 @@ class GradientAnalyzerWindow(QMainWindow):
     ) -> None:
         assessment, _ = get_gradient_assessment(metrics["strength_pct"])
         direction = angle_to_direction(metrics["angle_deg"])
-        quads = quadrant_data["quadrants"]
         sep = "\u2500" * 40
         self._log(sep)
-        self._log(f"Gradient Strength:   {metrics['strength_pct']:.1f} %  "
-                   f"(Confidence: {confidence_data['label']})")
-        self._log(f"Assessment:          {assessment}")
-        self._log(f"Gradient Direction:  {metrics['angle_deg']:.0f}\u00b0 ({direction})")
-        self._log(f"Background Min:      {metrics['bg_min']:.6f}")
-        self._log(f"Background Max:      {metrics['bg_max']:.6f}")
-        self._log(f"Background Range:    {metrics['bg_range']:.6f}")
-        self._log(f"Uniformity (CV):     {metrics['uniformity']:.1f} %")
-        self._log(f"Complexity:          {complexity_data['description']}")
-        self._log(f"  Recommended degree: {complexity_data['best_degree']}")
-        self._log(f"Pattern:             {vignetting_data['diagnosis']}")
-        self._log(f"Edge/Center ratio:   {edge_center_data['ratio']:.3f} — {edge_center_data['diagnosis']}")
-        self._log(f"Quadrants: NW={quads['NW']:.6f} NE={quads['NE']:.6f} "
-                   f"SW={quads['SW']:.6f} SE={quads['SE']:.6f}")
+        self._log(f"Strength: {metrics['strength_pct']:.1f}%  ({assessment})  "
+                   f"Direction: {metrics['angle_deg']:.0f}\u00b0 ({direction})")
+        self._log(f"Pattern: {vignetting_data['diagnosis']}  "
+                   f"Complexity: degree {complexity_data['best_degree']}")
 
+        # Only log critical warnings (⚠ items)
         if linear_data_info is not None and not linear_data_info["is_linear"]:
-            self._log(f"\u26a0 Non-linear data (median={linear_data_info['median_level']:.3f}) — "
-                       f"{linear_data_info['warning']}")
-        if star_density_info is not None and star_density_info["warning"]:
-            self._log(f"\u26a0 {star_density_info['warning']}")
-        if lp_color_info is not None:
-            self._log(f"LP Color: {lp_color_info['lp_type']} — {lp_color_info['description']}")
-        if gradient_free_info is not None:
-            self._log(f"Coverage: {gradient_free_info['uniform_pct']:.0f}% gradient-free — "
-                       f"{gradient_free_info['description']}")
-        if symmetry_info is not None and symmetry_info["is_asymmetric"]:
-            self._log(f"Symmetry: {symmetry_info['diagnosis']}")
-        if prediction_info is not None and metrics["strength_pct"] >= 2.0:
-            self._log(f"Prediction: ~{prediction_info['predicted_strength_pct']:.1f}% after subsky "
-                       f"({prediction_info['predicted_reduction_pct']:.0f}% reduction)")
-        if hotspot_info is not None and hotspot_info["count"] > 0:
-            self._log(f"\u26a0 {hotspot_info['warning']}")
-        if extended_obj_info is not None and extended_obj_info["flagged_count"] > 0:
-            self._log(f"\u26a0 {extended_obj_info['warning']}")
-        if panel_info is not None and panel_info["is_mosaic"]:
-            self._log(f"\u26a0 {panel_info['description']}")
-        if residual_pattern_info is not None and residual_pattern_info["has_structure"]:
-            self._log(f"Residuals: {residual_pattern_info['description']}")
-        if banding_info is not None and (banding_info.get("has_row_banding") or banding_info.get("has_col_banding")):
-            self._log(f"\u26a0 Banding: {banding_info['description']}")
-        if stacking_edge_info is not None and stacking_edge_info.get("has_stacking_edges"):
-            self._log(f"\u26a0 Stacking edges: {stacking_edge_info['description']}")
-        if cos4_info is not None and cos4_info.get("corner_falloff_pct", 0) > 5.0:
-            self._log(f"Cos\u2074: {cos4_info['description']}")
-        if fwhm_data is not None and fwhm_data.get("median_fwhm") is not None:
-            self._log(f"Star shape: {fwhm_data['description']}")
-        if channel_direction_info is not None and channel_direction_info.get("has_directional_difference"):
-            self._log(f"Channel directions: {channel_direction_info['description']}")
-        if normalization_info is not None and normalization_info.get("is_normalized"):
-            self._log(f"\u26a0 Normalization: {normalization_info['description']}")
-        if fits_header_info is not None and fits_header_info.get("flat_applied") is not None:
-            self._log(f"Calibration: {fits_header_info['description']}")
-        if geo_direction_info is not None and geo_direction_info.get("compass"):
-            self._log(f"LP direction: {geo_direction_info['description']}")
-        if sky_brightness_info is not None and sky_brightness_info.get("has_photometry"):
-            self._log(f"Sky brightness: {sky_brightness_info['description']}")
+            self._log(f"\u26a0 Non-linear data — stretch after gradient removal")
         if dew_info is not None and dew_info.get("has_dew"):
-            self._log(f"\u26a0 DEW/FROST: {dew_info['description']}")
+            self._log(f"\u26a0 DEW/FROST detected")
         if amp_glow_info is not None and amp_glow_info.get("has_amp_glow"):
-            self._log(f"\u26a0 Amp glow: {amp_glow_info['description']}")
+            self._log(f"\u26a0 Amp glow detected")
+        if banding_info is not None and (banding_info.get("has_row_banding") or banding_info.get("has_col_banding")):
+            self._log(f"\u26a0 Banding detected")
+        if stacking_edge_info is not None and stacking_edge_info.get("has_stacking_edges"):
+            self._log(f"\u26a0 Stacking edges detected")
+        if normalization_info is not None and normalization_info.get("is_normalized"):
+            self._log(f"\u26a0 Normalization artifact detected")
 
+        # Delta vs previous run
         if self._previous_metrics is not None and self._run_count > 1:
             delta = metrics["strength_pct"] - self._previous_metrics["strength_pct"]
             arrow = "\u2193" if delta < 0 else "\u2191"
-            self._log(f"Delta vs previous:   {delta:+.1f}% {arrow}")
+            self._log(f"Delta: {delta:+.1f}% {arrow}")
 
-        for sug in suggestions:
-            for line in sug.split("\n"):
-                stripped = line.strip()
-                if stripped:
-                    self._log(stripped)
+        self._log("See Analysis Results / Recommendations for details.")
         self._log(sep)
 
     def _save_heatmap_png(self, metrics: dict | None = None, thresholds: list | None = None) -> None:
@@ -6459,108 +6201,6 @@ class GradientAnalyzerWindow(QMainWindow):
                     self._log("Failed to save heatmap PNG")
         except (OSError, ValueError, RuntimeError) as e:
             self._log(f"Error saving heatmap: {e}")
-
-    def _on_batch_analyze(self) -> None:
-        """Analyze a directory of FITS sub-frames and rank by gradient severity."""
-        directory = QFileDialog.getExistingDirectory(
-            self, "Select Sub-frames Directory", os.getcwd(),
-        )
-        if not directory:
-            return
-
-        # Find FITS files
-        fits_exts = (".fit", ".fits", ".fts", ".FIT", ".FITS", ".FTS")
-        files = [
-            os.path.join(directory, f)
-            for f in sorted(os.listdir(directory))
-            if any(f.endswith(ext) for ext in fits_exts)
-        ]
-        if not files:
-            QMessageBox.information(
-                self, "No FITS Files",
-                f"No FITS files found in:\n{directory}",
-            )
-            return
-
-        self.progress_bar.setVisible(True)
-        self._update_progress(0, f"Analyzing {len(files)} sub-frames...")
-
-        grid_rows = min(12, self.spin_rows.value())
-        grid_cols = min(12, self.spin_cols.value())
-        sigma = self.spin_sigma.value()
-
-        results = []
-        for i, fpath in enumerate(files):
-            self._update_progress(
-                int((i / len(files)) * 90),
-                f"Sub-frame {i + 1}/{len(files)}...",
-            )
-            result = analyze_single_fits(fpath, grid_rows, grid_cols, sigma)
-            if result is not None:
-                results.append(result)
-
-        self._update_progress(95, "Ranking...")
-
-        if not results:
-            QMessageBox.warning(
-                self, "Analysis Failed",
-                "Could not analyze any FITS files.\n"
-                "Ensure astropy is installed: pip install astropy",
-            )
-            self.progress_bar.setVisible(False)
-            return
-
-        # Sort by gradient strength (worst first)
-        results.sort(key=lambda r: r["strength_pct"], reverse=True)
-
-        # Show results in a dialog
-        dlg = QDialog(self)
-        dlg.setWindowTitle(f"Sub-frame Gradient Ranking — {len(results)} files")
-        dlg.setMinimumSize(700, 500)
-        layout = QVBoxLayout(dlg)
-
-        te = QTextEdit()
-        te.setReadOnly(True)
-        te.setStyleSheet("font-size: 10pt; color: #e0e0e0; background: #2b2b2b; font-family: 'Courier New', monospace;")
-
-        lines = [
-            f"{'Rank':<5} {'Gradient':>9} {'Uniformity':>11} {'Direction':>10}  {'Filename'}",
-            "\u2500" * 70,
-        ]
-        for i, r in enumerate(results, 1):
-            direction = angle_to_direction(r["angle_deg"])
-            lines.append(
-                f"{i:<5} {r['strength_pct']:>8.1f}% {r['uniformity']:>10.1f}% "
-                f"{r['angle_deg']:>6.0f}\u00b0 {direction:<3}  {r['filename']}"
-            )
-
-        # Summary
-        strengths = [r["strength_pct"] for r in results]
-        lines.append("")
-        lines.append(f"Mean gradient: {np.mean(strengths):.1f}%  |  "
-                     f"Worst: {max(strengths):.1f}%  |  Best: {min(strengths):.1f}%")
-        if len(results) > 3:
-            # Flag worst 20%
-            n_worst = max(1, len(results) // 5)
-            lines.append(f"\nWorst {n_worst} sub-frame(s) — consider excluding:")
-            for r in results[:n_worst]:
-                lines.append(f"  {r['filename']} ({r['strength_pct']:.1f}%)")
-
-        te.setPlainText("\n".join(lines))
-        layout.addWidget(te)
-
-        btn_close = QPushButton("Close")
-        _nofocus(btn_close)
-        btn_close.clicked.connect(dlg.accept)
-        layout.addWidget(btn_close)
-
-        self._update_progress(100, "Done")
-        self.progress_bar.setVisible(False)
-
-        self._log(f"Batch analysis: {len(results)} sub-frames, "
-                   f"worst={max(strengths):.1f}%, best={min(strengths):.1f}%")
-
-        dlg.exec()
 
     def _save_annotated_heatmap(
         self, path: str, metrics: dict, thresholds: list | None = None,
@@ -6604,16 +6244,6 @@ class GradientAnalyzerWindow(QMainWindow):
         try:
             cwd = os.getcwd()
             filepath = os.path.join(cwd, "gradient_analysis.json")
-            # Load previous for comparison logging
-            previous = load_previous_analysis(filepath)
-            if previous is not None:
-                prev_str = previous.get("gradient", {}).get("strength_pct")
-                if prev_str is not None:
-                    delta = metrics["strength_pct"] - prev_str
-                    arrow = "\u2193" if delta < 0 else "\u2191"
-                    self._log(f"JSON comparison: previous strength={prev_str:.1f}%, "
-                               f"current={metrics['strength_pct']:.1f}%, "
-                               f"delta={delta:+.1f}% {arrow}")
             save_analysis_json(
                 filepath, metrics, complexity_data, vignetting_data,
                 edge_center_data, confidence_data, linear_data_info,
@@ -6621,7 +6251,6 @@ class GradientAnalyzerWindow(QMainWindow):
                 self._img_width, self._img_height, grid_rows, grid_cols, sigma,
                 **kwargs,
             )
-            self._log(f"Analysis saved: {filepath}")
         except (OSError, ValueError, TypeError) as e:
             self._log(f"Error saving JSON: {e}")
 
@@ -6632,407 +6261,373 @@ class GradientAnalyzerWindow(QMainWindow):
     def _show_help_dialog(self) -> None:
         dlg = QDialog(self)
         dlg.setWindowTitle("Gradient Analyzer \u2014 Help")
-        dlg.setMinimumSize(660, 620)
+        dlg.setMinimumSize(850, 650)
         layout = QVBoxLayout(dlg)
-        te = QTextEdit()
-        te.setReadOnly(True)
-        te.setPlainText(
-            "Gradient Analyzer \u2014 Help\n"
-            "========================\n\n"
-            "This script was developed by Sven Ramuschkat.\n"
+
+        base_style = (
+            "font-size: 13pt; color: #e0e0e0; background: #1e1e1e;"
+            " font-family: 'Helvetica Neue', Helvetica, Arial; padding: 12px;"
+        )
+        mono_style = (
+            "font-size: 10pt; color: #e0e0e0; background: #1e1e1e;"
+            " font-family: 'Courier New', monospace; padding: 10px;"
+        )
+
+        tabs = QTabWidget()
+
+        # ---- Tab 1: Getting Started ----
+        te_start = QTextEdit()
+        te_start.setReadOnly(True)
+        te_start.setStyleSheet(base_style)
+        te_start.setHtml(
+            "<b style='color:#88aaff; font-size:16pt;'>"
+            "\ud83d\ude80 Getting Started</b><br><br>"
+
+            "<b style='color:#ffcc66;'>What does this tool do?</b><br>"
+            "The Gradient Analyzer examines your stacked image for uneven background "
+            "brightness (gradients) caused by light pollution, vignetting, or sensor "
+            "artifacts. It tells you <b>what's wrong</b>, <b>how bad it is</b>, and "
+            "<b>exactly what to do about it</b>.<br><br>"
+
+            "<b style='color:#ffcc66;'>Quick Start \u2014 3 Steps</b><br>"
+            "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+            " border:1px solid #3a5a7a;'>"
+            "<b>1.</b> Load your stacked image in Siril (linear data works best).<br>"
+            "<b>2.</b> Click <b style='color:#55aa55;'>Analyze (F5)</b>.<br>"
+            "<b>3.</b> Read the <b>Analysis Results</b> \u2014 the <i>Summary & Actions</i> "
+            "tab tells you exactly what to do.</div><br>"
+
+            "<b style='color:#ffcc66;'>Understanding the Color Bar</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "<span style='color:#55aa55;'>\u2588\u2588</span> <b>Green (0\u20132%)</b> "
+            "\u2014 Background is uniform. No action needed.<br>"
+            "<span style='color:#aaaa55;'>\u2588\u2588</span> <b>Yellow (2\u20135%)</b> "
+            "\u2014 Slight gradient. A gentle correction helps.<br>"
+            "<span style='color:#dd8833;'>\u2588\u2588</span> <b>Orange (5\u201315%)</b> "
+            "\u2014 Noticeable gradient. Correction recommended.<br>"
+            "<span style='color:#dd4444;'>\u2588\u2588</span> <b>Red (15%+)</b> "
+            "\u2014 Strong gradient. Must be corrected.</div><br>"
+
+            "<b style='color:#ffcc66;'>The Preset Dropdown</b><br>"
+            "Choose the preset that matches your imaging setup:<br>"
+            "\u2022 <b>Broadband (default)</b> \u2014 Standard thresholds for most setups.<br>"
+            "\u2022 <b>Narrowband (strict)</b> \u2014 Tighter thresholds because narrowband "
+            "signals are faint and gradients are more harmful.<br>"
+            "\u2022 <b>Fast optics (tolerant)</b> \u2014 Relaxed thresholds for fast telescopes "
+            "(f/2\u2013f/4) that naturally have more vignetting.<br><br>"
+
+            "<b style='color:#ffcc66;'>Keyboard Shortcut</b><br>"
+            "\u2022 <b>F5</b> \u2014 Load current Siril image and run analysis<br><br>"
+
+            "<b style='color:#ffcc66;'>Settings</b><br>"
+            "All settings (grid size, sigma, checkboxes, preset) are automatically "
+            "saved between sessions."
+        )
+        tabs.addTab(te_start, "\ud83d\ude80 Getting Started")
+
+        # ---- Tab 2: Tabs & Diagrams ----
+        te_tabs = QTextEdit()
+        te_tabs.setReadOnly(True)
+        te_tabs.setStyleSheet(base_style)
+        te_tabs.setHtml(
+            "<b style='color:#88aaff; font-size:16pt;'>"
+            "\ud83d\udcca Tabs & Diagrams</b><br><br>"
+
+            "<b style='color:#ffcc66;'>Heatmap / 3D</b><br>"
+            "Color-coded map of your background brightness. Bright = gradient/LP, "
+            "dark = clean. Green circles show good sample regions, red X marks areas "
+            "to avoid. The 3D view shows the same data as a surface.<br><br>"
+
+            "<b style='color:#ffcc66;'>Profiles</b><br>"
+            "Cross-sections through the center \u2014 horizontal and vertical. "
+            "A flat line means uniform background. A slope means gradient in that direction.<br><br>"
+
+            "<b style='color:#ffcc66;'>Tile Distribution</b><br>"
+            "Histogram of all tile values. A tight peak = uniform. "
+            "A broad or double-peaked distribution = gradient or multiple brightness zones.<br><br>"
+
+            "<b style='color:#ffcc66;'>RGB Channels</b><br>"
+            "Separate heatmaps per color channel (requires <i>Analyze channels separately</i>). "
+            "Different gradient strengths per channel reveal the color of your light pollution:<br>"
+            "\u2022 Red-dominant = sodium vapor (orange street lights)<br>"
+            "\u2022 Blue-dominant = LED street lights<br>"
+            "\u2022 Balanced = broadband sky glow<br><br>"
+
+            "<b style='color:#ffcc66;'>Background Model</b><br>"
+            "Left: the mathematical surface the tool would subtract (the gradient model). "
+            "Right: what's left after subtraction (residuals). Small, random residuals = "
+            "good fit. Patterns in residuals = need a different approach.<br><br>"
+
+            "<b style='color:#ffcc66;'>Gradient Magnitude</b><br>"
+            "Shows <i>where</i> the gradient changes most steeply. Hot spots are the areas "
+            "that need the most correction. Uniform low values = flat background.<br><br>"
+
+            "<b style='color:#ffcc66;'>Subtraction Preview</b><br>"
+            "Side-by-side: your image (left) vs. the result after removing the gradient (right). "
+            "Both auto-stretched for visibility. Preview before you commit to extraction.<br><br>"
+
+            "<b style='color:#ffcc66;'>FWHM / Eccentricity</b><br>"
+            "Star shape variation across the field. If stars get bigger or more elongated "
+            "toward the edges, you may have sensor tilt or optical spacing issues. "
+            "Software extraction can't fix optical problems.<br><br>"
+
+            "<b style='color:#ffcc66;'>Residuals / Mask</b><br>"
+            "Left: blue-red map of fit residuals (blue = model too high, red = too low). "
+            "Right: which tiles were excluded from the fit (red overlay). "
+            "Excluded tiles contain objects, artifacts, or stacking edges."
+        )
+        tabs.addTab(te_tabs, "\ud83d\udcca Tabs")
+
+        # ---- Tab 3: Tools & Workflow ----
+        te_tools = QTextEdit()
+        te_tools.setReadOnly(True)
+        te_tools.setStyleSheet(base_style)
+        te_tools.setHtml(
+            "<b style='color:#88aaff; font-size:16pt;'>"
+            "\ud83d\udee0\ufe0f Tools & Workflow</b><br><br>"
+
+            "<b style='color:#ffcc66;'>Which tool should I use?</b><br>"
+            "The analyzer recommends the best tool automatically, but here's "
+            "a quick overview:<br><br>"
+
+            "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+            " border:1px solid #3a5a7a;'>"
+            "<b style='color:#88aaff;'>\u26a1 AutoBGE</b> (Siril built-in)<br>"
+            "Fully automatic. Best for mild-to-moderate gradients.<br>"
+            "Command: <span style='color:#aaffaa; background:#1a3a1a;"
+            " padding:2px 4px; font-family:monospace;'>autobackgroundextraction</span>"
+            "</div><br>"
+
+            "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+            " border:1px solid #3a5a7a;'>"
+            "<b style='color:#88aaff;'>\ud83d\udcca subsky</b> (Siril built-in)<br>"
+            "Polynomial background subtraction. Works for all gradient strengths "
+            "when the pattern is smooth and predictable.<br>"
+            "Command: <span style='color:#aaffaa; background:#1a3a1a;"
+            " padding:2px 4px; font-family:monospace;'>subsky -degree=N -samples=M</span><br>"
+            "The analyzer tells you which degree and sample count to use."
+            "</div><br>"
+
+            "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+            " border:1px solid #3a5a7a;'>"
+            "<b style='color:#88aaff;'>\ud83e\udde0 GraXpert</b> (external, AI-based)<br>"
+            "Uses AI to separate background from signal. Best for complex, "
+            "multi-directional gradients that polynomial fitting can't handle.<br>"
+            "Download: <span style='color:#88aaff;'>https://www.graxpert.com</span>"
+            "</div><br>"
+
+            "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+            " border:1px solid #3a5a7a;'>"
+            "<b style='color:#88aaff;'>\ud83c\udf08 VeraLux Nox</b> (Siril script)<br>"
+            "Specialized for color-dependent light pollution where R/G/B channels "
+            "show different gradient strengths. Works on linear data.<br>"
+            "Install via Siril's script repository."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Recommended Workflow</b><br>"
+            "<div style='background:#2a2a1a; padding:10px; border-radius:6px;"
+            " border:1px solid #5a5a3a;'>"
+            "<b>1.</b> Fix calibration issues first (missing flats, amp glow, "
+            "banding, dew) \u2014 extraction can't fix these.<br>"
+            "<b>2.</b> Apply flat field correction if vignetting is detected.<br>"
+            "<b>3.</b> Run gradient extraction (tool depends on complexity).<br>"
+            "<b>4.</b> Press <b>Analyze (F5)</b> again to check improvement.<br>"
+            "<b>5.</b> If gradient is still > 2%, try a more powerful tool.<br>"
+            "<b>6.</b> Once gradient < 2%, proceed with stretching.</div>"
+        )
+        tabs.addTab(te_tools, "\ud83d\udee0\ufe0f Tools")
+
+        # ---- Tab 4: Options Explained ----
+        te_options = QTextEdit()
+        te_options.setReadOnly(True)
+        te_options.setStyleSheet(base_style)
+        te_options.setHtml(
+            "<b style='color:#88aaff; font-size:16pt;'>"
+            "\u2699\ufe0f Options & Settings</b><br><br>"
+
+            "<b style='color:#ffcc66;'>Grid Settings</b><br>"
+            "\u2022 <b>Columns / Rows</b> (4\u201364): How many tiles to divide the image into. "
+            "Default 16\u00d716. More tiles = finer detail but slower.<br>"
+            "\u2022 <b>Sigma-Clip</b> (1.5\u20134.0): Controls star exclusion. Lower = more "
+            "aggressive star removal. Default 2.8 works for most images.<br><br>"
+
+            "<b style='color:#ffcc66;'>Checkboxes</b><br>"
+            "\u2022 <b>Smoothing</b> \u2014 Makes the heatmap smoother (interpolation). "
+            "On by default, recommended.<br>"
+            "\u2022 <b>3D view</b> \u2014 Shows an interactive 3D elevation surface on the "
+            "Heatmap tab. Turn off if you don't need it.<br>"
+            "\u2022 <b>Analyze channels separately</b> \u2014 Computes separate R/G/B "
+            "gradient maps. Enable this to detect colored light pollution.<br>"
+            "\u2022 <b>Show sample point guidance</b> \u2014 Overlays green circles "
+            "(good sample regions) and red X marks (avoid) on the heatmap.<br>"
+            "\u2022 <b>Show image under heatmap</b> \u2014 Displays your actual image "
+            "underneath the heatmap overlay so you can see which parts of the image "
+            "correspond to the gradient.<br>"
+            "\u2022 <b>Save heatmap as PNG</b> \u2014 Exports the heatmap with metrics "
+            "burned into the image. Good for documentation.<br>"
+            "\u2022 <b>Save analysis JSON</b> \u2014 Saves results to a file. Next time "
+            "you analyze, it automatically compares with previous results.<br><br>"
+
+            "<b style='color:#ffcc66;'>Buttons</b><br>"
+            "\u2022 <b>Analysis Results</b> \u2014 Opens a dialog with the summary, "
+            "action plan, and detailed metrics.<br>"
+            "\u2022 <b>Recommendations</b> \u2014 Opens tool-specific advice with Siril "
+            "commands you can use directly.<br>"
+            "\u2022 <b>Export Report</b> \u2014 Saves a complete text report to a file "
+            "and copies it to clipboard (for forums, documentation)."
+        )
+        tabs.addTab(te_options, "\u2699\ufe0f Options")
+
+        # ---- Tab 5: Warnings Explained ----
+        te_warnings = QTextEdit()
+        te_warnings.setReadOnly(True)
+        te_warnings.setStyleSheet(base_style)
+        te_warnings.setHtml(
+            "<b style='color:#88aaff; font-size:16pt;'>"
+            "\u26a0\ufe0f Warnings & Detections</b><br><br>"
+
+            "The analyzer automatically detects issues beyond simple gradients. "
+            "Here's what each warning means and what to do:<br><br>"
+
+            "<b style='color:#ff6644;'>Dew / Frost Detected</b><br>"
+            "Moisture on your optics causes a bright center and blurry edges. "
+            "<b>Fix:</b> Discard affected frames. Check your dew heater.<br><br>"
+
+            "<b style='color:#dd6644;'>Amplifier Glow</b><br>"
+            "Sensor artifact causing a bright glow in one corner. "
+            "<b>Fix:</b> Better dark frame subtraction (matching temperature and exposure). "
+            "Software extraction only partially masks it.<br><br>"
+
+            "<b style='color:#dd6644;'>Sensor Banding</b><br>"
+            "Periodic row/column patterns from sensor readout. "
+            "<b>Fix:</b> Apply proper bias and dark calibration. "
+            "Background extraction (subsky) cannot remove banding.<br><br>"
+
+            "<b style='color:#dd6644;'>Missing Flat Calibration</b><br>"
+            "Your image wasn't flat-calibrated. Vignetting (dark corners) "
+            "can't be fixed without flats. "
+            "<b>Fix:</b> Apply master flat before gradient extraction.<br><br>"
+
+            "<b style='color:#ffaa33;'>Non-linear Data</b><br>"
+            "Your image appears to be already stretched. Gradient analysis works best "
+            "on linear (unstretched) data. "
+            "<b>Fix:</b> Analyze your linear stack before stretching.<br><br>"
+
+            "<b style='color:#ffaa33;'>Normalization Detected</b><br>"
+            "The background was equalized during stacking, which masks gradients. "
+            "<b>Fix:</b> Re-stack without background normalization and re-analyze.<br><br>"
+
+            "<b style='color:#ffaa33;'>Dense Star Field</b><br>"
+            "Many tiles have high star rejection rates, which can bias background "
+            "estimates. <b>Fix:</b> Try increasing sigma or reducing grid resolution.<br><br>"
+
+            "<b style='color:#ffaa33;'>Stacking Edges</b><br>"
+            "Dark borders from dithering or rotation. "
+            "<b>Fix:</b> Crop them before gradient removal.<br><br>"
+
+            "<b style='color:#ffaa33;'>Hotspots</b><br>"
+            "Tiles that deviate significantly from neighbors (satellite trails, "
+            "airplane lights, sensor defects). "
+            "<b>Fix:</b> Inspect and mask or clone out if needed.<br><br>"
+
+            "<b style='color:#ffaa33;'>Asymmetry</b><br>"
+            "Opposite sides of the image have very different brightness. "
+            "May indicate incomplete flat correction, tilted sensor, or "
+            "misaligned optical train.<br><br>"
+
+            "<b style='color:#88aaff;'>Extended Objects</b><br>"
+            "Nebulae or galaxies detected in some tiles. These are automatically "
+            "excluded from the gradient fit so they don't bias the result."
+        )
+        tabs.addTab(te_warnings, "\u26a0\ufe0f Warnings")
+
+        # ---- Tab 6: Full Technical Reference ----
+        te_ref = QTextEdit()
+        te_ref.setReadOnly(True)
+        te_ref.setStyleSheet(mono_style)
+        te_ref.setPlainText(
+            "Gradient Analyzer \u2014 Technical Reference\n"
+            "==========================================\n\n"
+            "Developed by Sven Ramuschkat\n"
             "Web: www.svenesis.org\n"
             "GitHub: https://github.com/sramuschkat/Siril-Scripts\n\n"
-            "1. OVERVIEW\n"
-            "-----------\n"
-            "The Gradient Analyzer reads the current image from Siril, divides it into a\n"
-            "configurable grid of tiles, and computes sigma-clipped median background levels\n"
-            "per tile. It helps you decide whether, how, and with which tool to apply\n"
-            "background extraction.\n\n"
-            "2. TABS\n"
-            "-------\n"
-            "  - Heatmap / 3D: Color-coded 2D heatmap with optional sample point guidance\n"
-            "    overlay (green circles = good sample regions, red X = avoid) and 3D surface.\n"
-            "  - Profiles: Horizontal and vertical cross-section profiles showing\n"
-            "    where exactly the gradient ramps across the image.\n"
-            "  - Tile Distribution: Histogram of tile median values. A tight peak\n"
-            "    means uniform background; a broad/bimodal distribution = gradient.\n"
-            "  - RGB Channels: Per-channel heatmaps (enable 'Analyze channels separately').\n"
-            "    Useful for detecting chromaticity in light pollution.\n"
-            "  - Background Model: Shows the fitted polynomial surface (what subsky\n"
-            "    would subtract) and residuals after subtraction.\n"
-            "  - Gradient Magnitude: Rate-of-change map highlighting where the\n"
-            "    gradient changes most steeply across the image.\n"
-            "  - Subtraction Preview: Side-by-side before/after gradient removal.\n"
-            "  - FWHM / Eccentricity: Star shape map showing optical quality\n"
-            "    variation across the field (tilt, curvature detection).\n"
-            "  - Residuals / Mask: Polynomial fit residuals (blue-red diverging) and\n"
-            "    the exclusion mask overlay (red tiles = excluded from fit).\n\n"
-            "3. GRADIENT STRENGTH GAUGE\n"
-            "--------------------------\n"
-            "Color-coded bar in the left panel:\n"
-            "  Green  (0-2%) : Very uniform \u2014 no extraction needed\n"
-            "  Yellow (2-5%) : Slight gradient \u2014 gentle extraction recommended\n"
-            "  Orange (5-15%): Significant gradient \u2014 extraction strongly recommended\n"
-            "  Red    (15%+) : Strong gradient \u2014 aggressive extraction required\n\n"
-            "4. CONFIDENCE INDICATOR\n"
-            "-----------------------\n"
-            "Shows how reliable the measurement is. Based on the ratio of gradient\n"
-            "range to per-tile noise (SNR). If confidence is Low, the gradient may\n"
-            "be indistinguishable from noise \u2014 try increasing grid size or sigma.\n\n"
-            "5. GRADIENT COMPLEXITY\n"
-            "----------------------\n"
-            "Fits polynomial surfaces of degree 1, 2, and 3, comparing R-squared values.\n"
-            "Determines whether the gradient is:\n"
-            "  - Linear (degree 1): Simple tilt, subsky degree=1 or AutoBGE sufficient\n"
-            "  - Quadratic (degree 2): Curved, subsky degree=2 recommended\n"
-            "  - Cubic/complex (degree 3): Non-linear, consider GraXpert\n"
-            "The recommended polynomial degree maps directly to subsky parameters.\n\n"
-            "6. VIGNETTING vs. GRADIENT DETECTION\n"
-            "-------------------------------------\n"
-            "Two methods work together:\n"
-            "  a) Radial vs. linear model fitting (R-squared comparison)\n"
-            "  b) Edge-to-center brightness ratio\n"
-            "     - Ratio < 1.0: Edges darker than center = vignetting\n"
-            "     - Ratio > 1.0: Edges brighter = light pollution from edges\n"
-            "Combined, these reliably distinguish flat calibration issues from LP.\n\n"
-            "7. QUADRANT ANALYSIS\n"
-            "--------------------\n"
-            "Shows median background per quadrant (NW, NE, SW, SE):\n"
-            "  - Red border = brightest quadrant (avoid for sample points)\n"
-            "  - Green border = darkest quadrant (good for sample points)\n"
-            "  - Spread value shows the total quadrant variation\n\n"
-            "8. SAMPLE POINT GUIDANCE\n"
-            "------------------------\n"
-            "When enabled, the heatmap shows:\n"
-            "  - Green circles: Tiles in the darkest 40% = good sample point locations\n"
-            "  - Red X marks: Tiles in the brightest 15% = avoid these areas\n"
-            "Use this to guide manual sample placement in background extraction.\n\n"
-            "9. TOOL RECOMMENDATIONS\n"
-            "-----------------------\n"
-            "The script recommends the best tool based on your gradient:\n\n"
-            "  AutoBGE (Siril built-in):\n"
-            "    Automatic background extraction. Fast, no external tools.\n"
-            "    Best for: moderate gradients (< 8%), simple patterns (degree 1-2).\n"
-            "    Command: autobackgroundextraction\n\n"
-            "  subsky (Siril built-in):\n"
-            "    Polynomial background subtraction with configurable degree.\n"
-            "    Best for: all gradient strengths with predictable polynomial patterns.\n"
-            "    Command: subsky -degree=N -samples=M\n"
-            "    The degree and sample count are suggested based on complexity analysis.\n\n"
-            "  GraXpert (external, AI-based):\n"
-            "    Uses AI to separate background from signal.\n"
-            "    Best for: complex, non-linear, multi-directional gradients that\n"
-            "    polynomial fitting cannot fully model (degree 3 still insufficient).\n"
-            "    Download: https://www.graxpert.com\n\n"
-            "  VeraLux Nox (Siril script):\n"
-            "    Specialized light pollution removal script.\n"
-            "    Best for: color-dependent LP gradients where R/G/B channels show\n"
-            "    different gradient strengths (e.g. LED street lights affecting\n"
-            "    blue channel more). Works on linear data.\n"
-            "    Install via Siril's script repository.\n\n"
-            "10. WORKFLOW GUIDANCE\n"
-            "---------------------\n"
-            "The Recommendations section uses priority-based ordering:\n"
-            "  Priority 0: Critical hardware/calibration issues that must be fixed first\n"
-            "    (banding, amp glow, dew/frost, missing flats). These cannot be solved\n"
-            "    by background extraction.\n"
-            "  Priority 1: Gradient extraction workflow:\n"
-            "    1. Fix vignetting with flats (if detected)\n"
-            "    2. Apply gradient extraction (tool depends on complexity)\n"
-            "    3. Re-analyze with 'Refresh from Siril'\n"
-            "    4. If gradient still > 2%, try a more powerful tool\n"
-            "    5. Once uniform, proceed with stretching\n"
-            "When critical issues are detected, extraction is labeled\n"
-            "'AFTER FIXING ISSUES' to prevent wasted effort.\n"
-            "When all polynomial fits are poor (R² < 0.5), the script recommends\n"
-            "degree 1 to avoid overfitting and suggests AI-based tools instead.\n\n"
-            "11. BEFORE/AFTER COMPARISON\n"
-            "---------------------------\n"
-            "Each re-analysis shows delta values vs. the previous run:\n"
-            "  - Green arrow down = gradient reduced (extraction worked)\n"
-            "  - Red arrow up = gradient increased (check processing)\n"
-            "This iterative workflow lets you tune extraction step by step.\n\n"
-            "12. GRID SETTINGS\n"
-            "-----------------\n"
-            "  - Columns / Rows: 4-64 tiles per axis. Default 16x16.\n"
-            "  - Sigma-Clip: 1.5-4.0. Iterative clipping to exclude stars.\n"
-            "  - A warning appears if tiles are smaller than 50 px per dimension,\n"
-            "    as sigma-clipping becomes unreliable with too few pixels.\n\n"
-            "13. KEYBOARD SHORTCUTS\n"
-            "----------------------\n"
-            "  - F5: Run analysis\n"
-            "  - Ctrl+Shift+R: Refresh from Siril and re-analyze\n\n"
-            "14. PERSISTENT SETTINGS\n"
-            "-----------------------\n"
-            "Grid size, sigma, and all checkbox options are saved\n"
-            "between sessions and restored on next launch.\n\n"
-            "15. COPY TO CLIPBOARD\n"
-            "---------------------\n"
-            "Click 'Copy Results to Clipboard' to copy analysis results and\n"
-            "recommendations as plain text (useful for forum posts or notes).\n\n"
-            "16. COLORBAR LOCKING\n"
-            "--------------------\n"
-            "On the first analysis, the heatmap colorbar range is locked.\n"
-            "Subsequent runs use the same scale, making before/after comparison\n"
-            "visually meaningful. Reload from Siril to reset.\n\n"
-            "17. LINEAR DATA DETECTION\n"
-            "-------------------------\n"
-            "The analyzer checks if the image appears to be stretched (non-linear).\n"
-            "If median background > 0.25, a warning is shown because gradient analysis\n"
-            "is most accurate on linear data before any stretching is applied.\n\n"
-            "18. GRADIENT DIRECTION ARROW\n"
-            "----------------------------\n"
-            "When gradient strength >= 2%, a cyan arrow is overlaid on the heatmap\n"
-            "pointing from the darkest tile to the brightest tile, showing the\n"
-            "dominant gradient direction.\n\n"
-            "19. BACKGROUND MODEL PREVIEW\n"
-            "----------------------------\n"
-            "Shows the polynomial surface that subsky would subtract (left) and\n"
-            "the residuals after subtraction (right). Small residuals = good fit.\n\n"
-            "20. GRADIENT MAGNITUDE MAP\n"
-            "--------------------------\n"
-            "Shows how rapidly the background changes at each position. Hot spots\n"
-            "indicate steep transitions — these need the most attention during\n"
-            "background extraction.\n\n"
-            "21. STAR DENSITY WARNING\n"
-            "------------------------\n"
-            "If many tiles have high sigma-clipping rejection rates (> 40%),\n"
-            "the image contains dense star fields. This can bias background\n"
-            "estimates — consider increasing sigma or reducing grid resolution.\n\n"
-            "22. LIGHT POLLUTION COLOR\n"
-            "-------------------------\n"
-            "When RGB analysis is enabled, compares gradient strength per channel:\n"
-            "  - Red-dominant: Sodium vapor (HPS) street lighting\n"
-            "  - Blue-dominant: LED or mercury vapor lighting\n"
-            "  - Green-dominant: Mercury vapor lighting\n"
-            "  - Balanced: Broadband light pollution (sky glow)\n"
-            "This helps choose the right LP filter or removal technique.\n\n"
-            "23. VIGNETTING SYMMETRY\n"
-            "-----------------------\n"
-            "Compares opposite edge strips (NW vs SE, NE vs SW, Top vs Bottom,\n"
-            "Left vs Right). Asymmetry > 2% indicates incomplete flat correction,\n"
-            "tilted sensor, or optical axis misalignment.\n\n"
-            "24. GRADIENT-FREE COVERAGE\n"
-            "--------------------------\n"
-            "Shows what percentage of tiles are in uniform regions vs. gradient-\n"
-            "affected regions. Uses dual-scale analysis: a tile must pass both a\n"
-            "global check (close to overall median) and a local check (close to\n"
-            "3x3 neighborhood median). This prevents contradictions where a smooth\n"
-            "large-scale gradient is missed by local-only comparison.\n\n"
-            "25. EXTENDED OBJECT DETECTION\n"
-            "-----------------------------\n"
-            "Flags tiles that contain nebulae or galaxies (bright background +\n"
-            "low star rejection). These can bias the gradient fit.\n\n"
-            "26. SAMPLE POINT EXPORT\n"
-            "------------------------\n"
-            "Generates subsky sample point coordinates in the darkest, most uniform\n"
-            "regions. Click 'Copy Sample Points' to get setref/addref commands\n"
-            "for Siril's console.\n\n"
-            "27. MOSAIC PANEL DETECTION\n"
-            "--------------------------\n"
-            "Detects sharp linear discontinuities in the gradient magnitude map\n"
-            "that may indicate mosaic panel boundaries.\n\n"
-            "28. JSON SIDECAR PERSISTENCE\n"
-            "----------------------------\n"
-            "Enable 'Save analysis JSON' to persist results to gradient_analysis.json.\n"
-            "On re-analysis, automatically compares with the previous saved results.\n\n"
-            "29. HOTSPOT DETECTION\n"
-            "---------------------\n"
-            "Detects outlier tiles that deviate > 3 sigma from their neighbors.\n"
-            "Often indicates satellite trails, airplane lights, or sensor artifacts.\n\n"
-            "30. IMPROVEMENT PREDICTION\n"
-            "--------------------------\n"
-            "Estimates gradient strength after polynomial subtraction using the\n"
-            "background model residuals. Uses the original image median as\n"
-            "reference (not the near-zero residual median) to avoid inflated\n"
-            "predictions. When the predicted reduction is less than 20%, the\n"
-            "script warns that extraction will be essentially ineffective.\n\n"
-            "31. SUBTRACTION PREVIEW\n"
-            "-----------------------\n"
-            "The 'Subtraction Preview' tab shows a side-by-side comparison of the\n"
-            "original luminance and the result after subtracting the fitted background\n"
-            "model. Both images are auto-stretched for visibility. This lets you\n"
-            "preview what gradient removal would look like before applying it.\n\n"
-            "32. GRADIENT HISTORY\n"
-            "--------------------\n"
-            "Tracks gradient strength across analysis sessions in a JSON log file\n"
-            "(gradient_history.json alongside your image). The left panel shows a\n"
-            "sparkline of recent values so you can see if your processing is reducing\n"
-            "the gradient over time. Up to 50 entries are retained.\n\n"
-            "33. RESIDUAL PATTERN DETECTION\n"
-            "------------------------------\n"
-            "After polynomial subtraction, checks whether the residuals contain\n"
-            "structured patterns using Moran's I spatial autocorrelation. Values\n"
-            "near +1 indicate the polynomial degree is too low and systematic\n"
-            "gradients remain. Values near 0 indicate good random residuals.\n\n"
-            "34. CONFIGURABLE THRESHOLD PRESETS\n"
-            "----------------------------------\n"
-            "The threshold preset dropdown changes the gradient severity thresholds:\n"
-            "  - Broadband (default): 2% / 5% / 15%\n"
-            "  - Narrowband (strict): 1% / 3% / 8%\n"
-            "  - Fast optics (tolerant): 4% / 8% / 20%\n"
-            "Narrowband data requires stricter thresholds because narrowband filters\n"
-            "amplify gradients. Fast optics (< f/4) inherently have more vignetting.\n\n"
-            "35. ANNOTATED PNG EXPORT\n"
-            "------------------------\n"
-            "When 'Save heatmap PNG' is enabled, the exported image includes key\n"
-            "metrics (gradient strength, direction, uniformity, assessment) burned\n"
-            "directly into the image for easy reference without the GUI.\n\n"
-            "36. SUB-FRAME BATCH RANKING\n"
-            "--------------------------\n"
-            "Click 'Analyze Sub-frames...' to select a directory of FITS files.\n"
-            "Each file is analyzed for gradient strength and uniformity. Results\n"
-            "are ranked from best to worst, helping you identify and reject frames\n"
-            "with the worst gradients before stacking. Requires astropy.\n\n"
-            "37. ADAPTIVE SIGMA SUGGESTION\n"
-            "-----------------------------\n"
-            "Based on star density (sigma-clip rejection rates), suggests whether\n"
-            "to increase or decrease the sigma parameter. Dense star fields need\n"
-            "lower sigma for better star exclusion; sparse fields can use higher\n"
-            "sigma for more stable statistics.\n\n"
-            "38. WEIGHTED BACKGROUND MODEL\n"
-            "-----------------------------\n"
-            "The polynomial background fit now excludes tiles flagged as extended\n"
-            "objects, hotspots, stacking edge artifacts, or extremely star-dense\n"
-            "regions. This produces a more accurate background model that isn't\n"
-            "biased by nebulae, satellite trails, or dithering borders.\n\n"
-            "39. STACKING EDGE DETECTION\n"
-            "---------------------------\n"
-            "Detects tapered dark borders that appear in stacked images from\n"
-            "dithering or rotation. Edge tiles significantly darker than the\n"
-            "interior are flagged and excluded from the gradient fit. This\n"
-            "prevents false high-gradient readings from incomplete borders.\n\n"
-            "40. BANDING / SENSOR BIAS DETECTION\n"
-            "-----------------------------------\n"
-            "Uses FFT analysis on polynomial residuals to detect periodic row\n"
-            "or column patterns from sensor readout artifacts. Unlike gradients,\n"
-            "banding requires bias/dark correction, not background extraction.\n"
-            "The script warns when banding is detected so you don't waste time\n"
-            "trying to extract a pattern that subsky can't fix.\n\n"
-            "41. PER-CHANNEL GRADIENT DIRECTION\n"
-            "----------------------------------\n"
-            "When RGB analysis is enabled, compares gradient direction per channel.\n"
-            "If channels point in different directions (> 30 degrees apart), this\n"
-            "indicates multiple LP sources from different compass directions.\n"
-            "Per-channel extraction or VeraLux Nox is recommended in this case.\n\n"
-            "42. COS^4 VIGNETTING CORRECTION\n"
-            "-------------------------------\n"
-            "Estimates the natural cos^4 optical vignetting expected for the\n"
-            "focal ratio and compares it against the actual falloff. This helps\n"
-            "distinguish expected optical vignetting (fix with flats) from true\n"
-            "gradients (fix with extraction). Particularly useful for fast optics\n"
-            "(f/2 to f/4) where natural falloff is significant.\n\n"
-            "43. INTERACTIVE SAMPLE POINTS\n"
-            "----------------------------\n"
-            "Left-click on the heatmap to manually place sample points.\n"
-            "Right-click near an existing point to remove it. Manual points\n"
-            "are shown as green diamonds with numbered labels. Click\n"
-            "'Copy Sample Points' to get setref/addref commands — manual\n"
-            "points take priority over auto-generated ones. Click 'Clear Points'\n"
-            "to remove all manual placements.\n\n"
-            "44. ONE-CLICK SUBSKY EXECUTION\n"
-            "------------------------------\n"
-            "Click 'Apply subsky & Re-analyze' to execute the recommended subsky\n"
-            "command directly in Siril via the API. The script uses the degree and\n"
-            "sample count determined by the complexity analysis. After execution,\n"
-            "it automatically reloads the modified image and re-analyzes, showing\n"
-            "the before/after delta. Saves manual copy-paste of commands.\n\n"
-            "45. FWHM / ECCENTRICITY MAP\n"
-            "---------------------------\n"
-            "The 'FWHM / Eccentricity' tab shows how star shape varies across the\n"
-            "field. FWHM (full width at half maximum) measures star size; eccentricity\n"
-            "measures elongation (0 = round, 1 = line). Requires minimum 3 stars per\n"
-            "tile with 3-sigma outlier rejection for reliability. Very high eccentricity\n"
-            "(>= 0.40) at coarse tile resolution may reflect noise or nebulosity, not\n"
-            "true star elongation — a caveat is shown in such cases. If star shape\n"
-            "correlates with the gradient pattern, the issue may be optical (tilt,\n"
-            "spacing, collimation) rather than light pollution.\n\n"
-            "46. NORMALIZATION DETECTION\n"
-            "--------------------------\n"
-            "Detects whether the image has been background-normalized during stacking.\n"
-            "Normalized images have artificially uniform backgrounds that can mask\n"
-            "residual gradients. The script checks for suspiciously identical per-channel\n"
-            "backgrounds, very low background CV, and common normalization target values.\n"
-            "If detected, a warning advises analyzing before normalization.\n\n"
-            "47. FITS CALIBRATION CHECK\n"
-            "-------------------------\n"
-            "Reads FITS header keywords (FLATCOR, DARKCOR, BIASCOR, CALSTAT) to\n"
-            "determine whether flat, dark, and bias frames were applied during\n"
-            "calibration. Warns explicitly if flats are missing, since vignetting\n"
-            "cannot be corrected without them.\n\n"
-            "48. GEOGRAPHIC LP DIRECTION\n"
-            "---------------------------\n"
-            "If the image is plate-solved (WCS headers present), converts the\n"
-            "gradient direction from image pixel coordinates to real-world geographic\n"
-            "compass bearing. Tells you 'LP comes from the South' rather than just\n"
-            "'gradient points at 135 degrees'. Per-channel bearings are included\n"
-            "if RGB analysis is enabled.\n\n"
-            "49. PHOTOMETRIC SKY BRIGHTNESS\n"
-            "------------------------------\n"
-            "For SPCC-calibrated images with known plate scale and exposure time,\n"
-            "converts background levels to approximate mag/arcsec\u00b2 and estimates\n"
-            "the Bortle class. Useful for documenting site quality and comparing\n"
-            "sessions. Requires plate-solved + SPCC-calibrated data.\n\n"
-            "50. SAMPLE POINT PASSTHROUGH\n"
-            "----------------------------\n"
-            "When clicking 'Apply subsky & Re-analyze', the script now feeds any\n"
-            "manually placed or auto-generated sample points to Siril via setref/\n"
-            "addref commands before executing subsky. This gives you full control\n"
-            "over where subsky samples the background, rather than relying on its\n"
-            "automatic placement.\n\n"
-            "51. AUTO-ITERATE EXTRACTION\n"
-            "---------------------------\n"
-            "Click 'Auto-iterate until <2%%' to automatically run subsky, re-analyze,\n"
-            "and repeat up to 3 times until gradient drops below 2%%. Each pass uses\n"
-            "the complexity analysis to choose the optimal degree. If 3 passes aren't\n"
-            "enough, GraXpert is recommended for the residual.\n\n"
-            "52. TEMPORAL GRADIENT ANALYSIS\n"
-            "-----------------------------\n"
-            "Click 'Temporal Analysis...' to analyze a directory of FITS sub-frames\n"
-            "over time. Reads DATE-OBS timestamps and measures gradient per frame.\n"
-            "Shows trend (improving/worsening/stable), identifies the best and worst\n"
-            "periods, and recommends which subs to exclude based on gradient evolution.\n\n"
-            "53. RESIDUAL MAP WITH EXCLUSION MASK\n"
-            "------------------------------------\n"
-            "The 'Residuals / Mask' tab shows two views:\n"
-            "  Left: Polynomial fit residuals (blue-red diverging map)\n"
-            "  Right: The heatmap overlaid with the exclusion mask (red = excluded tiles)\n"
-            "This lets you verify which tiles were excluded from the fit and whether\n"
-            "the remaining residuals are random (good) or structured (needs attention).\n\n"
-            "54. DEW / FROST DETECTION\n"
-            "------------------------\n"
-            "Cross-correlates the FWHM map with the brightness pattern. Dew on the\n"
-            "corrector plate causes: (1) radial FWHM increase from center to edges,\n"
-            "(2) a bright center from light scattering. When both patterns appear\n"
-            "together, a dew/frost warning is raised. Check your dew heater!\n\n"
-            "55. AMPLIFIER GLOW DETECTION\n"
-            "---------------------------\n"
-            "Detects the characteristic exponential brightness profile of CCD/CMOS\n"
-            "amplifier glow, which is always anchored to one specific corner with\n"
-            "rapid falloff. Distinguished from LP (linear, edge-wide) and vignetting\n"
-            "(symmetric). The proper fix is better dark calibration, not background\n"
-            "extraction.\n\n"
-            "56. REPORT EXPORT\n"
-            "-----------------\n"
-            "Click 'Export Report' to save a comprehensive plain-text analysis report\n"
-            "containing all metrics, diagnostics, and recommendations. The report is\n"
-            "saved as a .txt file and also copied to clipboard. Suitable for forum\n"
-            "posting, documentation, or sharing your processing workflow.\n\n"
-            "57. ARTIFACT-ADJUSTED GRADIENT NOTE\n"
-            "-----------------------------------\n"
-            "When critical artifacts are detected (banding, amp glow, dew/frost,\n"
-            "missing flats), the reported gradient percentage includes their\n"
-            "contribution. An italic note appears below the strength line warning\n"
-            "that the true sky gradient may be significantly lower. This prevents\n"
-            "users from over-extracting when the root cause is calibration, not LP.\n\n"
-            "58. REQUIREMENTS\n"
-            "----------------\n"
-            "Siril 1.4+ with Python script support, sirilpy (bundled), numpy, PyQt6,\n"
-            "matplotlib, scipy (installed automatically). Optional: astropy (for\n"
-            "sub-frame batch ranking and FITS header reading).\n"
+            "GRADIENT STRENGTH\n"
+            "  Coefficient of variation (CV) of sigma-clipped tile medians.\n"
+            "  Higher = more uneven background.\n\n"
+            "CONFIDENCE\n"
+            "  Signal-to-noise ratio of the gradient range vs. per-tile noise.\n"
+            "  Low confidence = gradient may be indistinguishable from noise.\n\n"
+            "COMPLEXITY / POLYNOMIAL FIT\n"
+            "  Fits polynomial surfaces (degree 1, 2, 3) and compares R\u00b2 values.\n"
+            "  R\u00b2 close to 1.0 = gradient is well-described by that polynomial.\n"
+            "  R\u00b2 < 0.5 = poor fit, consider AI-based tools (GraXpert).\n"
+            "  Best degree with R\u00b2 improvement > 0.02 is recommended.\n\n"
+            "VIGNETTING vs. LP DETECTION\n"
+            "  Radial model R\u00b2 vs. linear model R\u00b2.\n"
+            "  Radial dominates = vignetting (fix with flats).\n"
+            "  Linear dominates = directional gradient (fix with extraction).\n"
+            "  Edge/center ratio < 1.0 = vignetting; > 1.0 = LP from edges.\n\n"
+            "QUADRANT ANALYSIS\n"
+            "  Median background per quadrant (NW, NE, SW, SE).\n"
+            "  Spread = max - min quadrant value.\n\n"
+            "GRADIENT-FREE COVERAGE\n"
+            "  Dual-scale analysis: tiles must pass global check (within 1x CV of\n"
+            "  overall median) AND local check (within 0.5x CV of 3x3 neighborhood).\n\n"
+            "RESIDUAL PATTERN DETECTION\n"
+            "  Moran's I spatial autocorrelation on polynomial residuals.\n"
+            "  I near +1 = structured patterns remain (degree too low).\n"
+            "  I near 0 = random residuals (good fit).\n\n"
+            "IMPROVEMENT PREDICTION\n"
+            "  Estimated post-extraction strength from model residuals.\n"
+            "  Uses original image median as reference, not residual median.\n"
+            "  Warns when predicted reduction < 20% (ineffective extraction).\n\n"
+            "SAMPLE POINT GUIDANCE\n"
+            "  Green circles: tiles in darkest 40th percentile.\n"
+            "  Red X marks: tiles in brightest 85th percentile.\n\n"
+            "COLORBAR LOCKING\n"
+            "  First analysis locks the heatmap color scale.\n"
+            "  Subsequent runs use same scale for visual comparison.\n\n"
+            "WEIGHTED BACKGROUND MODEL\n"
+            "  Polynomial fit excludes tiles flagged as: extended objects,\n"
+            "  hotspots, stacking edges, extremely star-dense regions.\n\n"
+            "HOTSPOT DETECTION\n"
+            "  Tiles deviating > 3 sigma from 3x3 neighborhood median.\n\n"
+            "COS^4 VIGNETTING\n"
+            "  Models natural cos^4 falloff for the focal ratio.\n"
+            "  Compares modeled vs. actual to separate optical vignetting\n"
+            "  from true gradients. Important for fast optics (f/2-f/4).\n\n"
+            "BANDING DETECTION\n"
+            "  FFT analysis on polynomial residuals.\n"
+            "  Detects periodic row/column sensor readout artifacts.\n\n"
+            "FWHM / ECCENTRICITY\n"
+            "  Per-tile star shape analysis with 3-sigma outlier rejection.\n"
+            "  Minimum 3 stars per tile required.\n"
+            "  Eccentricity >= 0.40 at coarse resolution may be noise artifact.\n\n"
+            "NORMALIZATION DETECTION\n"
+            "  Checks: nearly identical per-channel backgrounds,\n"
+            "  very low CV, median near common normalization targets.\n\n"
+            "FITS CALIBRATION CHECK\n"
+            "  Reads FLATCOR, DARKCOR, BIASCOR, CALSTAT keywords.\n\n"
+            "GEOGRAPHIC LP DIRECTION\n"
+            "  Converts pixel gradient direction to geographic compass bearing\n"
+            "  using WCS plate-solve headers.\n\n"
+            "PHOTOMETRIC SKY BRIGHTNESS\n"
+            "  Converts background to mag/arcsec^2 and Bortle class.\n"
+            "  Requires SPCC-calibrated, plate-solved data.\n\n"
+            "DEW / FROST DETECTION\n"
+            "  Cross-correlates FWHM map with brightness pattern.\n"
+            "  Bright center + radial FWHM increase = dew/frost.\n\n"
+            "AMPLIFIER GLOW DETECTION\n"
+            "  Exponential brightness profile anchored to one corner.\n"
+            "  Distinguished from LP (linear) and vignetting (symmetric).\n\n"
+            "REQUIREMENTS\n"
+            "  Siril 1.4+ with Python script support\n"
+            "  sirilpy (bundled), numpy, PyQt6, matplotlib, scipy\n"
+            "  Optional: astropy (FITS header reading)\n"
         )
-        te.setStyleSheet("font-size: 10pt; color: #e0e0e0; background: #2b2b2b;")
-        layout.addWidget(te)
+        tabs.addTab(te_ref, "\ud83d\udcd6 Reference")
+
+        layout.addWidget(tabs)
         btn = QPushButton("Close")
         _nofocus(btn)
         btn.clicked.connect(dlg.accept)
