@@ -30,7 +30,7 @@ Reads the current image from Siril, divides it into a configurable grid of tiles
 
 ### Screenshots
 
-![Gradient Analyzer — main window](Screenshots/GradientAnalyzer-1.jpg)
+![Gradient Analyzer — main window](https://github.com/sramuschkat/Siril-Scripts/raw/main/screenshots/GradientAnalyzer-1.jpg)
 
 *Main window: heatmap with sample point guidance, 3D surface view, gradient strength gauge, and quadrant analysis. Nine visualization tabs with context-sensitive descriptions.*
 
