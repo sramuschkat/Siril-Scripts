@@ -15,8 +15,146 @@ GPL-3.0-or-later
 
 | Script | Description |
 |--------|-------------|
+| [Gradient Analyzer](#gradient-analyzer) | Analyze background gradients with heatmaps, diagnostics, and tool recommendations. |
+| [Image Advisor](#image-advisor) | Analyze a stacked linear image and get a prioritized processing workflow with concrete Siril commands. |
 | [Multiple Histogram Viewer](#multiple-histogram-viewer) | View linear and stretched images with RGB histograms, 3D surface plots, and detailed statistics. |
 | [Script Security Scanner](#script-security-scanner) | Scan Siril Python scripts for malicious patterns across 10 threat categories. |
+
+---
+
+## Gradient Analyzer
+
+**File:** `GradientAnalyzer.py` (v1.8.1)
+
+Reads the current image from Siril, divides it into a configurable grid of tiles, computes sigma-clipped median background levels per tile, and renders a color-coded heatmap. It helps you assess background gradients (e.g. from light pollution), decide whether background extraction is needed, and choose the right tool and parameters for the job.
+
+### Features
+
+- **Configurable grid:** 4–64 rows/cols with iterative sigma-clipping (1.5–4.0σ) to exclude stars and bright objects.
+- **Gradient metrics:** Strength (%), direction (angle), uniformity, and confidence indicator (SNR-based).
+- **Visual strength gauge:** Color-coded severity bar (green → yellow → orange → red) with configurable threshold presets (Broadband, Narrowband, Fast optics).
+- **2D heatmap & 3D surface:** Color-coded tile map with optional gradient direction arrow overlay, plus interactive 3D surface view.
+- **Gradient profiles:** Horizontal and vertical cross-section plots showing where the gradient ramps across the image.
+- **Tile distribution histogram:** Background value distribution — tight peak = uniform, broad/bimodal = gradient.
+- **Per-channel (RGB) analysis:** Separate heatmaps per channel for detecting chromaticity in light pollution.
+- **Background model preview:** Fitted polynomial surface (what subsky would subtract) and residuals.
+- **Gradient magnitude map:** Rate-of-change visualization highlighting the steepest gradient transitions.
+- **Subtraction preview:** Side-by-side before/after comparison of gradient removal at full pixel resolution.
+- **Vignetting detection:** Radial vs. linear model fitting and edge-to-center ratio; symmetry analysis for flat calibration quality.
+- **Gradient complexity:** Polynomial fits (degree 1/2/3) with R² comparison to determine optimal subsky degree.
+- **Tool recommendations:** Suggests subsky, AutoBGE, GraXpert, or VeraLux Nox based on gradient characteristics, with step-by-step workflow guidance.
+- **Quadrant analysis:** NW/NE/SW/SE median values with brightest/darkest highlighting.
+- **Sample point guidance:** Heatmap overlay (green = good, red = avoid) plus exportable setref/addref commands for Siril's console.
+- **Extended object detection:** Flags tiles containing nebulae/galaxies that could bias the gradient fit.
+- **Mosaic panel boundary detection:** Identifies sharp linear discontinuities from stitched panels.
+- **Hotspot detection:** Outlier tiles (satellite trails, artifacts) flagged at > 3σ from neighbors.
+- **Residual pattern detection:** Moran's I spatial autocorrelation to check if polynomial degree is sufficient.
+- **Improvement prediction:** Estimates post-extraction gradient strength from model residuals.
+- **Gradient history:** Tracks gradient evolution across sessions (JSON log, sparkline display, last 50 entries).
+- **Sub-frame batch ranking:** Analyze a directory of FITS files for gradient quality and rank best-to-worst (requires astropy).
+- **Adaptive sigma suggestion:** Recommends sigma adjustments based on star density rejection rates.
+- **Before/After comparison:** Delta display with green/red arrows showing extraction effectiveness.
+- **Linear data detection:** Warns when the image appears stretched (non-linear).
+- **Star density warning:** Flags dense star fields that may bias background estimates.
+- **Light pollution color:** Characterizes LP type from per-channel gradient strengths (sodium, LED, mercury, broadband).
+- **PNG export:** Heatmap image with key metrics burned in (annotated export).
+- **JSON sidecar:** Persist analysis results for cross-session comparison.
+- **Clipboard export:** Copy results text or sample point commands to clipboard.
+- **Persistent settings:** Grid size, sigma, checkboxes, and preset saved between sessions via QSettings.
+- **Keyboard shortcuts:** F5 = Analyze, Ctrl+Shift+R = Refresh from Siril.
+- **Colorbar locking:** Consistent heatmap scale across re-analyses for meaningful visual comparison.
+- **Weighted background model:** Polynomial fit excludes flagged tiles (extended objects, hotspots, stacking edges) for unbiased results.
+- **Dither/rotation edge detection:** Identifies tapered dark borders from stacking and excludes them from gradient analysis.
+- **Banding/sensor bias detection:** FFT-based detection of periodic row/column patterns from sensor readout artifacts.
+- **Per-channel gradient direction:** Detects LP coming from different compass directions per RGB channel.
+- **Cos^4 vignetting correction:** Separates natural optical falloff from true gradients, especially for fast optics (f/2-f/4).
+- **Interactive sample points:** Left-click heatmap to place points, right-click to remove; green diamonds with numbered labels.
+- **One-click subsky execution:** "Apply subsky & Re-analyze" button executes the recommended command in Siril and auto-reloads.
+- **FWHM/eccentricity map:** Star shape variation across the field with sensor tilt and field curvature detection.
+- **Normalization detection:** Warns when background-normalized data may underestimate true gradient.
+- **FITS calibration check:** Reads FLATCOR/CALSTAT/DARKCOR from FITS headers to verify flat/dark/bias calibration was applied.
+- **Geographic LP direction:** Converts gradient direction to real-world compass bearing via WCS rotation — tells you which direction LP comes from.
+- **Photometric sky brightness:** Approximate mag/arcsec² and Bortle class estimate from SPCC-calibrated images.
+- **Sample point passthrough:** Feeds manual/auto sample points to Siril via setref/addref before subsky execution.
+- **Auto-iterate extraction:** Repeats subsky + re-analyze up to 3 passes until gradient drops below 2%.
+- **Temporal gradient analysis:** Correlates DATE-OBS timestamps with gradient to identify best/worst periods for sub-frame rejection.
+- **Residual/exclusion mask tab:** Shows polynomial fit residuals alongside red-overlaid exclusion mask showing which tiles were excluded.
+- **Dew/frost detection:** Cross-correlates radial FWHM increase with center brightness for corrector plate dew detection.
+- **Amplifier glow detection:** Detects exponential corner brightness profile characteristic of CCD/CMOS amp glow.
+- **Report export:** Comprehensive plain-text analysis report for documentation, forum posts, or record-keeping.
+- **Artifact-adjusted gradient note:** When artifacts (banding, amp glow, dew, missing flats) are detected, warns that the reported gradient % includes artifact contributions and the true sky gradient may be lower.
+- **Priority-based workflow:** Critical hardware/calibration issues are flagged before extraction recommendations; subsky is labeled "AFTER FIXING ISSUES" when critical problems exist.
+- **Dual-scale gradient-free analysis:** Tiles must pass both global median and local 3x3 neighborhood checks to be counted as gradient-free, preventing contradictory metrics.
+- **Robust prediction:** Uses original image median (not near-zero residual median) for improvement estimates; warns when predicted reduction is below 20%.
+- **Poor fit handling:** When all polynomial fits have R² < 0.5, recommends degree 1 (not highest R²) to avoid overfitting noise, and suggests AI-based tools.
+- **FWHM reliability guards:** Requires minimum 3 stars per tile with 3-sigma outlier rejection; flags very high eccentricity (>= 0.40) as potentially unreliable at coarse tile resolution.
+- **Built-in help:** Comprehensive 58-section help dialog covering every feature.
+
+### Requirements
+
+- Siril 1.4+ with Python script support
+- sirilpy (bundled with Siril)
+- numpy, PyQt6, matplotlib, scipy (installed automatically via `s.ensure_installed`)
+- Optional: astropy (for sub-frame batch ranking, temporal analysis, and FITS header reading)
+
+### Usage
+
+1. Load an image in Siril (linear data recommended for best accuracy).
+2. Run **Gradient Analyzer** from Siril: **Processing → Scripts** (or your Scripts menu).
+3. Adjust grid resolution and sigma in the left panel, select a threshold preset, then click **Analyze** (or press F5).
+4. Review the heatmap, profiles, and metrics across the 9 tabs. Check the recommendations for the suggested tool and parameters.
+5. Apply the recommended extraction in Siril, then click **Refresh from Siril** to re-analyze and compare before/after.
+
+---
+
+## Image Advisor
+
+**File:** `ImageAdvisor.py` (v1.3.0)
+
+Analyses a stacked, linear FITS image loaded in Siril and generates a prioritised list of processing recommendations — including concrete Siril commands, suggested parameters, and reasoning. The script does **not** modify the image; it only diagnoses and advises. Think of it as a second opinion from an experienced astrophotographer before you start processing.
+
+### Features
+
+- **Full linear-stage workflow:** Recommendations follow the correct processing order — Crop → Background Extraction → Platesolving → SPCC → SCNR → Denoise → Deconvolution → Starless — with post-processing roadmap (stretch, fine-tune, star recomposition, export).
+- **Linear state detection:** Warns if the image is already stretched (scans FITS HISTORY for GHT, autostretch, MTF, asinh, etc. using word-boundary matching to avoid false positives).
+- **Calibration detection:** Checks HISTORY for dark/flat/bias calibration; shows "Unknown" when no history is present (e.g. stacked in another app) instead of false negatives.
+- **Background gradient analysis:** 8×8 sigma-clipped tile grid with gradient spread percentage, colour-coded heatmap, and pattern classification:
+  - **Vignetting** — corners dark, centre bright (needs flats, not subsky)
+  - **Linear gradient** — one side bright (light pollution, subsky appropriate)
+  - **Amp glow** — single corner bright (may need masking)
+  - Pattern classification is suppressed when gradient is below the action threshold to avoid noise-fitting.
+- **Calibration-aware gradient advice:** When flats are missing, gradient recommendations note that the gradient may be vignetting that subsky cannot fully correct.
+- **Nebulosity-aware subsky:** Adds `-samples=15/25` to `subsky` commands when nebulosity is present, preventing polynomial overcorrection on nebula regions.
+- **Noise & SNR estimation:** MAD-based noise on the darkest 25% of pixels; integration-time-aware advice (short integration → "add more subs" vs long integration → "faint target, denoise essential").
+- **Smart denoise ordering:** Denoise is promoted to an actionable step before deconvolution even at high SNR, because Richardson-Lucy amplifies noise.
+- **Narrowband-adjusted nebulosity:** Lower detection threshold (3σ) for narrowband/dual-narrowband images to catch diffuse low-contrast emission.
+- **Image type classification:** Detects OSC Broadband, Mono, Narrowband, Luminance, and Dual-Narrowband OSC (L-eNhance, L-Extreme, NBZ, etc.) — adjusts SPCC and colour balance advice accordingly.
+- **Star quality diagnostics:** FWHM (pixels and arcsec when plate-solved), elongation, centre-vs-edge spatial analysis, saturated star count, field curvature/coma detection. Soft stars and elongation are elevated as acquisition warnings near the top of the report.
+- **Deconvolution guidance:** Richardson-Lucy recommendation with `makepsf manual -gaussian` + `rl -loadpsf=psf.fits` commands when SNR allows; suggests GUI deconvolution tool for interactive control.
+- **Starless recommendation:** Only when nebulosity warrants it; `starnet -stretch` for linear images, bare `starnet` for already-stretched; autostretch preview tip included.
+- **Dynamic range:** Usable DR in stops (peak / noise floor), informs stretch aggressiveness advice with background pedestal warnings for high-background images.
+- **Clipping detection:** Black and white clipping percentages with cause suggestions. Extreme black clipping (>50%) with no detected signal triggers a critical warning and suppresses the workflow. Normal linear data (background near zero with real content) is correctly identified.
+- **Crop detection:** Scans edges for stacking borders and generates `boxselect`/`crop` commands. Warns when scan limits are hit and borders may extend further.
+- **Per-channel noise table:** R/G/B noise levels with noisiest channel highlighted. Notes when channels are unusually well-balanced (may already be colour-calibrated).
+- **Image sanity checks:** Flags common phone/screen resolutions (1080×1920, etc.) as unusual for astro cameras. Suppresses processing workflow when the image fails basic sanity checks.
+- **Verified Siril commands:** All command syntax verified against Siril 1.4.x binary (`subsky`, `denoise -mod=`, `makepsf manual -gaussian`, `rl -loadpsf= -iters=`, `starnet -stretch`, `platesolve`, `spcc`).
+- **Script export (.ssf):** Generates an executable Siril script with save checkpoints after key stages (`requires 1.4.1`).
+- **Report export (.txt):** Full plain-text report for archiving or sharing.
+- **PyQt6 dark-themed GUI:** Left panel with controls and image info, right panel with scrollable HTML report including heatmap, per-channel table, findings, and workflow.
+
+### Requirements
+
+- Siril 1.4.1+ with Python script support
+- sirilpy (bundled with Siril)
+- numpy, PyQt6 (installed automatically via `s.ensure_installed`)
+
+### Usage
+
+1. Load a stacked, linear FITS image in Siril.
+2. Run **Image Advisor** from Siril: **Processing → Scripts** (or your Scripts menu).
+3. The analysis runs automatically on launch. Review findings, statistics, heatmap, and the recommended workflow in the report panel.
+4. Use **Re-Analyse** after making changes in Siril to get updated recommendations.
+5. Use **Export Script (.ssf)** to save the workflow as a runnable Siril script, or **Export Report (.txt)** to save the full analysis.
 
 ---
 
