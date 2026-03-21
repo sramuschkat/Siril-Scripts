@@ -1159,6 +1159,9 @@ class ScatterPlotWidget(_MplWidgetBase):
         self._scatter_coords: list[tuple[float, float]] = []
         self._x_range: tuple[float, float] = (0.0, 1.0)
         self._y_range: tuple[float, float] = (0.0, 1.0)
+        self._current_marker = None  # matplotlib artist for current frame star
+        self._ax = None  # axes reference for lightweight updates
+        self._frame_to_coord: dict[int, tuple[float, float]] = {}  # frame_idx → (x, y)
 
     def render(self, frame_stats: FrameStatistics, marker: FrameMarker,
                x_metric: str = "fwhm", y_metric: str = "roundness",
@@ -1206,9 +1209,22 @@ class ScatterPlotWidget(_MplWidgetBase):
         if excl_x:
             ax.scatter(excl_x, excl_y, color="#dd4444", s=30, alpha=0.5, marker="x",
                        label="Excluded", zorder=2)
+        # Build frame→coordinate map for lightweight current-marker updates
+        self._frame_to_coord = {}
+        for row in rows:
+            xv = row.get(x_metric, 0)
+            yv = row.get(y_metric, 0)
+            if xv > 0 and yv > 0:
+                self._frame_to_coord[row["frame_idx"]] = (xv, yv)
+
+        # Plot current frame marker
+        self._current_marker = None
         if cur_x is not None:
-            ax.scatter([cur_x], [cur_y], color="#ffffff", s=100, marker="*",
-                       edgecolors="#88aaff", linewidths=1.5, label="Current", zorder=5)
+            self._current_marker = ax.scatter(
+                [cur_x], [cur_y], color="#ff4444", s=100, marker="*",
+                edgecolors="#ff6666", linewidths=1.5, label="Current", zorder=5)
+
+        self._ax = ax
 
         labels = {"fwhm": "FWHM", "roundness": "Roundness", "background": "Background",
                   "stars": "Stars", "weight": "Weight", "median": "Median", "sigma": "Sigma"}
@@ -1228,6 +1244,23 @@ class ScatterPlotWidget(_MplWidgetBase):
         # Connect click event
         if self._canvas is not None:
             self._canvas.mpl_connect("button_press_event", self._on_click)
+
+    def update_current_marker(self, frame_index: int) -> None:
+        """Lightweight update: move the current-frame star marker without full re-render."""
+        if self._ax is None or self._canvas is None:
+            return
+        coord = self._frame_to_coord.get(frame_index)
+        if self._current_marker is not None:
+            self._current_marker.remove()
+            self._current_marker = None
+        if coord is not None:
+            self._current_marker = self._ax.scatter(
+                [coord[0]], [coord[1]], color="#ff4444", s=100, marker="*",
+                edgecolors="#ff6666", linewidths=1.5, zorder=5)
+        try:
+            self._canvas.draw_idle()
+        except Exception:
+            pass
 
     def _on_click(self, event) -> None:
         """Find nearest scatter point using axis-normalized distance."""
@@ -1692,9 +1725,10 @@ class ThumbnailFilmstrip(QWidget):
     """
     frame_selected = pyqtSignal(int)
 
-    def __init__(self, total_frames: int, parent=None):
+    def __init__(self, total_frames: int, marker: FrameMarker = None, parent=None):
         super().__init__(parent)
         self.total_frames = total_frames
+        self._marker = marker
         self.setFixedHeight(THUMBNAIL_HEIGHT + 20)
 
         layout = QVBoxLayout(self)
@@ -1741,8 +1775,11 @@ class ThumbnailFilmstrip(QWidget):
 
     def highlight_current(self, index: int) -> None:
         if self._current >= 0 and self._current < len(self._labels):
-            # Restore previous frame to included style (will be corrected by update_border if needed)
-            self._labels[self._current].setStyleSheet(_THUMB_STYLE_INCLUDED)
+            # Restore previous frame border based on include/exclude status
+            if self._marker is not None and not self._marker.is_included(self._current):
+                self._labels[self._current].setStyleSheet(_THUMB_STYLE_EXCLUDED)
+            else:
+                self._labels[self._current].setStyleSheet(_THUMB_STYLE_INCLUDED)
         self._current = index
         if 0 <= index < len(self._labels):
             self._labels[index].setStyleSheet(_THUMB_STYLE_CURRENT)
@@ -1809,7 +1846,7 @@ class HistogramWidget(_MplWidgetBase):
             fig.tight_layout(pad=0.3)
             self._replace_canvas(fig)
         except (SirilError, OSError, ValueError, TypeError, RuntimeError) as exc:
-            log.debug("Failed to render histogram for frame %d: %s", frame_index, exc)
+            log.warning("Failed to render histogram for frame %d: %s", frame_index, exc)
 
 
 # ------------------------------------------------------------------------------
@@ -2779,7 +2816,7 @@ class BlinkComparatorWindow(QMainWindow):
         r_layout.addWidget(self.right_tabs, 1)
 
         # Filmstrip (always visible below tabs)
-        self.filmstrip = ThumbnailFilmstrip(self.total_frames)
+        self.filmstrip = ThumbnailFilmstrip(self.total_frames, marker=self.marker)
         self.filmstrip.frame_selected.connect(self._on_filmstrip_frame_selected)
         self.filmstrip.scroll.horizontalScrollBar().valueChanged.connect(
             lambda: QTimer.singleShot(100, self._load_visible_thumbnails)
@@ -2972,6 +3009,7 @@ class BlinkComparatorWindow(QMainWindow):
             self.filmstrip.highlight_current(index)
             self.stats_table.highlight_current(index)
             self.stats_graph.update_current_line(index)
+            self.scatter_plot.update_current_marker(index)
             if self.cache is not None:
                 self.histogram_widget.render_histogram(self.cache, index, linked)
 
