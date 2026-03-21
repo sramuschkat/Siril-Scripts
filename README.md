@@ -141,6 +141,12 @@ Coordinate transforms use `siril.radec2pix()` for maximum compatibility.
 
 Animates the currently loaded sequence as a blink animation for rapid visual inspection and data-driven frame selection. Comparable to PixInsight's Blink + SubframeSelector — identify satellite trails, clouds, tracking errors, focus drift, and bad frames, then reject them with a single click. All changes are collected locally and only applied to Siril when you confirm.
 
+### Screenshots
+
+![Blink Comparator — main window](https://github.com/sramuschkat/Siril-Scripts/raw/main/screenshots/Blink_Comparator-1.jpg)
+
+*Main window: viewer with frame info overlay, sortable statistics table, statistics graph with running average, scatter plot, thumbnail filmstrip, batch selection, and approval expressions.*
+
 ### Features
 
 #### Animated playback
