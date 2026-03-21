@@ -27,6 +27,12 @@ GPL-3.0-or-later
 
 **File:** `Svenesis-AnnotateImage.py` (v1.0.0)
 
+### Screenshots
+
+![Annotate Image — main window](https://github.com/sramuschkat/Siril-Scripts/raw/main/screenshots/Annotate_Image-1.jpg)
+
+*Main window: catalog annotations with object type filtering, coordinate grid, compass rose, info box, and color-coded legend. Preview tab shows the annotated result.*
+
 Renders catalog annotations (deep-sky objects, named stars, coordinate grid, compass, info box) onto a plate-solved image and exports it as a shareable PNG, TIFF, or JPEG. Inspired by PixInsight's AnnotateImage script. Unlike Siril's built-in overlay annotations, this script burns the annotations into an exportable image — ready to post on social media, forums, or include in observation reports.
 
 ### Features
