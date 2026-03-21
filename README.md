@@ -137,7 +137,7 @@ Coordinate transforms use `siril.radec2pix()` for maximum compatibility.
 
 ## Svenesis Blink Comparator
 
-**File:** `Svenesis-BlinkComparator.py` (v1.2.1)
+**File:** `Svenesis-BlinkComparator.py` (v1.2.3)
 
 Animates the currently loaded sequence as a blink animation for rapid visual inspection and data-driven frame selection. Comparable to PixInsight's Blink + SubframeSelector — identify satellite trails, clouds, tracking errors, focus drift, and bad frames, then reject them with a single click. All changes are collected locally and only applied to Siril when you confirm.
 

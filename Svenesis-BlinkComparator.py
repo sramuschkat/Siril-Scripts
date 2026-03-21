@@ -48,6 +48,34 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.2.3 - Architecture-level performance pass
+      - Optimized: single canvas.update() per frame (was up to 3 queued repaints)
+        via defer_update parameter on set_image/set_side_by_side/set_overlay_text
+      - Optimized: ThreadPoolExecutor(max_workers=1) replaces per-frame thread spawning
+        for preloading — eliminates thread creation overhead and OS scheduling pressure
+      - Optimized: pre-computed overlay stats strings at load time (_precompute_overlay_stats)
+        — playback builds overlay from cached strings instead of formatting per frame
+      - Optimized: frame_data_to_qimage uses np.stack for RGBX assembly (single memcpy
+        vs 4 separate slice assignments)
+      - Optimized: FrameStatistics.load_all uses getattr(obj, attr, default) instead of
+        hasattr+getattr (2 lookups → 1 per attribute × 7 attrs × N frames)
+      - Optimized: load_reference_frame reuses shared load_frame_data() helper
+      - Optimized: _build_overlay_text uses pre-computed stats + simple string concat
+1.2.2 - Performance optimizations (playback & memory)
+      - Optimized: mtf() — cache np.abs(denom) result (was computed twice per call)
+      - Optimized: autostretch() — in-place subtract+scale+clip chain; subsample median/MAD
+      - Optimized: frame_data_to_qimage() — single flip on assembled RGBX (was 3 separate flipud)
+      - Optimized: load_frame_data() — dtype check instead of full-array max() scan
+      - Optimized: difference mode — in-place subtract/abs/scale/clip (was 3 temp arrays)
+      - Optimized: FrameMarker.get_excluded_indices() — cached set with lazy invalidation
+      - Optimized: playback hot path — skip RichText info bar, stats table highlight,
+        matplotlib graph, and histogram during play; refresh all on pause
+      - Optimized: ImageCanvas.paintEvent() — pre-allocated QColor class attributes
+      - Optimized: ThumbnailFilmstrip — cached stylesheet strings (avoid CSS reparse)
+      - Optimized: _replace_canvas() — fig.clear()+del instead of importing pyplot
+      - Optimized: HistogramWidget — uses shared load_frame_data() helper; ravel not flatten
+      - Fixed: SortOrder enum serialization in _save_settings() (TypeError on close)
+      - Fixed: _on_stretch_mode_changed() guard for early signal during __init__
 1.2.1 - Code quality, performance, and robustness fixes
       - Fixed: matplotlib figure memory leak (plt.close() on figure replacement)
       - Fixed: Qt signal emission from background thread removed (PreloadWorker)
@@ -106,6 +134,7 @@ import logging
 import traceback
 import threading
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 
 log = logging.getLogger("BlinkComparator")
 
@@ -142,7 +171,7 @@ from PyQt6.QtGui import (
     QKeySequence, QDesktopServices, QWheelEvent, QMouseEvent,
 )
 
-VERSION = "1.2.1"
+VERSION = "1.2.3"
 
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "BlinkComparator"
@@ -232,19 +261,24 @@ QProgressBar::chunk{background:#285299;border-radius:2px}
 # ------------------------------------------------------------------------------
 
 def mtf(midtone: float, x: np.ndarray | float) -> np.ndarray | float:
-    """Midtone Transfer Function."""
+    """Midtone Transfer Function.
+
+    Vectorized implementation avoids intermediate boolean index arrays.
+    For scalar inputs, uses a fast early-return path.
+    """
     if isinstance(x, np.ndarray):
-        result = np.zeros_like(x, dtype=np.float32)
-        mask = (x > 0) & (x < 1)
-        denom = (2 * midtone - 1) * x[mask] - midtone
-        safe = np.abs(denom) > 1e-10
-        full_mask = np.zeros_like(x, dtype=bool)
-        full_mask_indices = np.where(mask)[0]
-        full_mask[full_mask_indices[safe]] = True
-        denom_safe = (2 * midtone - 1) * x[full_mask] - midtone
-        result[full_mask] = (midtone - 1) * x[full_mask] / denom_safe
-        result[x >= 1] = 1.0
-        return np.clip(result, 0, 1)
+        # Compute denom for entire array; handle division-by-zero via np.where
+        denom = (2.0 * midtone - 1.0) * x - midtone
+        abs_denom = np.abs(denom)
+        denom_ok = abs_denom > 1e-10
+        safe_denom = np.where(denom_ok, denom, 1.0)  # avoid div/0
+        result = np.where(
+            (x > 0) & (x < 1) & denom_ok,
+            (midtone - 1.0) * x / safe_denom,
+            0.0,
+        )
+        result = np.where(x >= 1.0, 1.0, result)
+        return np.clip(result, 0.0, 1.0, out=result)
     else:
         if x <= 0:
             return 0.0
@@ -271,8 +305,13 @@ def autostretch(
         median = global_median
         mad = global_mad
     else:
-        median = float(np.median(data))
-        mad = float(np.median(np.abs(data - median))) * 1.4826
+        # Subsample for faster median/MAD on large arrays (>500k pixels)
+        flat = data.ravel()
+        if flat.size > 500000:
+            step = flat.size // 500000
+            flat = flat[::step]
+        median = float(np.median(flat))
+        mad = float(np.median(np.abs(flat - median))) * 1.4826
 
     shadow = max(0.0, median + shadows_clip * mad)
     highlight = 1.0
@@ -286,9 +325,13 @@ def autostretch(
     else:
         midtone = 0.5
 
-    stretched = np.clip((data - shadow) / rng, 0, 1).astype(np.float32)
+    # Single allocation: subtract + scale + clip in one chain, reusing the buffer
+    stretched = np.subtract(data, shadow, dtype=np.float32)
+    stretched *= (1.0 / rng)
+    np.clip(stretched, 0, 1, out=stretched)
     stretched = mtf(midtone, stretched)
-    return (stretched * 255).astype(np.uint8)
+    stretched *= 255.0
+    return stretched.astype(np.uint8)
 
 
 # ------------------------------------------------------------------------------
@@ -319,21 +362,19 @@ def frame_data_to_qimage(
         g = autostretch(frame_data[1], global_median=global_median, global_mad=global_mad)
         b = autostretch(frame_data[2], global_median=global_median, global_mad=global_mad)
         h, w = r.shape
-        r, g, b = np.flipud(r), np.flipud(g), np.flipud(b)
-        rgbx = np.empty((h, w, 4), dtype=np.uint8)
-        rgbx[:, :, 0] = r
-        rgbx[:, :, 1] = g
-        rgbx[:, :, 2] = b
-        rgbx[:, :, 3] = 255
+        # Stack RGB + alpha in one call, flip, ensure C-contiguous for QImage
+        alpha = np.full((h, w), 255, dtype=np.uint8)
+        rgbx = np.stack((r, g, b, alpha), axis=-1)
+        rgbx = np.ascontiguousarray(rgbx[::-1])
         return QImage(rgbx.data, w, h, w * 4, QImage.Format.Format_RGBX8888).copy()
     elif frame_data.ndim == 3 and frame_data.shape[0] == 1:
         mono = autostretch(frame_data[0], global_median=global_median, global_mad=global_mad)
-        mono = np.flipud(mono)
+        mono = np.ascontiguousarray(mono[::-1])
         h, w = mono.shape
         return QImage(mono.data, w, h, w, QImage.Format.Format_Grayscale8).copy()
     elif frame_data.ndim == 2:
         mono = autostretch(frame_data, global_median=global_median, global_mad=global_mad)
-        mono = np.flipud(mono)
+        mono = np.ascontiguousarray(mono[::-1])
         h, w = mono.shape
         return QImage(mono.data, w, h, w, QImage.Format.Format_Grayscale8).copy()
     return None
@@ -345,9 +386,15 @@ def load_frame_data(siril_iface, index: int) -> np.ndarray | None:
         frame = siril_iface.get_seq_frame(index, with_pixels=True)
         if frame is None or frame.data is None:
             return None
-        data = frame.data.astype(np.float32)
-        if data.max() > 1.5:
-            data = data / 65535.0
+        data = frame.data
+        # Fast path: check dtype before scanning with max()
+        if np.issubdtype(data.dtype, np.integer):
+            # uint16 or similar integer data — always needs normalization
+            return data.astype(np.float32) * (1.0 / 65535.0)
+        data = data.astype(np.float32) if data.dtype != np.float32 else data
+        # Float data: sample a few pixels to detect [0, 65535] vs [0, 1] range
+        if data.flat[0] > 1.5 or (data.size > 100 and data.flat[data.size // 2] > 1.5):
+            data = data * (1.0 / 65535.0)
         return data
     except (SirilError, OSError, ValueError, TypeError, RuntimeError) as exc:
         log.debug("Failed to load frame %d data: %s", index, exc)
@@ -407,10 +454,11 @@ class _MplWidgetBase(QWidget):
             self._canvas.deleteLater()
             self._canvas = None
         # Close previous figure to prevent matplotlib memory leak
+        # Use fig.clear() + del instead of plt.close() to avoid importing pyplot
         if self._fig is not None:
             try:
-                import matplotlib.pyplot as plt
-                plt.close(self._fig)
+                self._fig.clear()
+                del self._fig
             except Exception:
                 pass
         self._placeholder.setVisible(False)
@@ -461,32 +509,40 @@ class FrameStatistics:
             try:
                 reg = self.siril.get_seq_regdata(i, 0)
                 if reg is not None:
-                    if hasattr(reg, 'fwhm') and reg.fwhm > 0:
-                        row["fwhm"] = float(reg.fwhm)
-                    if hasattr(reg, 'roundness') and reg.roundness > 0:
-                        row["roundness"] = float(reg.roundness)
-                    if hasattr(reg, 'background_lvl') and reg.background_lvl > 0:
-                        row["background"] = float(reg.background_lvl)
-                    if hasattr(reg, 'number_of_stars') and reg.number_of_stars > 0:
-                        row["stars"] = int(reg.number_of_stars)
+                    # getattr with 0 default avoids hasattr + attribute access (2→1 lookup)
+                    v = getattr(reg, 'fwhm', 0)
+                    if v > 0:
+                        row["fwhm"] = float(v)
+                    v = getattr(reg, 'roundness', 0)
+                    if v > 0:
+                        row["roundness"] = float(v)
+                    v = getattr(reg, 'background_lvl', 0)
+                    if v > 0:
+                        row["background"] = float(v)
+                    v = getattr(reg, 'number_of_stars', 0)
+                    if v > 0:
+                        row["stars"] = int(v)
             except (SirilError, OSError, AttributeError, TypeError, ValueError) as exc:
                 log.debug("Frame %d: regdata unavailable: %s", i, exc)
 
             try:
                 stats = self.siril.get_seq_stats(i, 0)
                 if stats is not None:
-                    if hasattr(stats, 'median'):
-                        row["median"] = float(stats.median)
-                    if hasattr(stats, 'sigma') and stats.sigma > 0:
-                        row["sigma"] = float(stats.sigma)
+                    v = getattr(stats, 'median', 0)
+                    if v:
+                        row["median"] = float(v)
+                    v = getattr(stats, 'sigma', 0)
+                    if v > 0:
+                        row["sigma"] = float(v)
             except (SirilError, OSError, AttributeError, TypeError, ValueError) as exc:
                 log.debug("Frame %d: stats unavailable: %s", i, exc)
 
             try:
                 imgdata = self.siril.get_seq_imgdata(i)
                 if imgdata is not None:
-                    if hasattr(imgdata, 'date_obs') and imgdata.date_obs:
-                        row["date_obs"] = str(imgdata.date_obs)
+                    v = getattr(imgdata, 'date_obs', None)
+                    if v:
+                        row["date_obs"] = str(v)
             except (SirilError, OSError, AttributeError, TypeError, ValueError) as exc:
                 log.debug("Frame %d: imgdata unavailable: %s", i, exc)
 
@@ -640,15 +696,7 @@ class FrameCache:
         ref_idx = self.seq.reference_image
         if ref_idx < 0 or ref_idx >= self.seq.number:
             ref_idx = 0
-        try:
-            frame = self.siril.get_seq_frame(ref_idx, with_pixels=True)
-            if frame is not None and frame.data is not None:
-                data = frame.data.astype(np.float32)
-                if data.max() > 1.5:
-                    data = data / 65535.0
-                self.reference_data = data
-        except Exception:
-            self.reference_data = None
+        self.reference_data = load_frame_data(self.siril, ref_idx)
 
     def get_frame(self, index: int, difference: bool = False, linked: bool = True) -> QImage | None:
         """Get frame from cache or load from Siril. Thread-safe with double-check."""
@@ -678,7 +726,11 @@ class FrameCache:
 
         if difference and self.reference_data is not None:
             if frame_data.shape == self.reference_data.shape:
-                frame_data = np.clip(np.abs(frame_data - self.reference_data) * 5.0, 0, 1)
+                # In-place: subtract, abs, scale, clip — avoids 3 intermediate arrays
+                frame_data = np.subtract(frame_data, self.reference_data)
+                np.abs(frame_data, out=frame_data)
+                frame_data *= 5.0
+                np.clip(frame_data, 0, 1, out=frame_data)
 
         g_med = self.global_median if linked else None
         g_mad = self.global_mad if linked else None
@@ -709,24 +761,8 @@ class FrameCache:
             self.get_frame(i, difference, linked)
 
 
-class PreloadWorker(threading.Thread):
-    """Background daemon thread that preloads frames ahead of playback.
-
-    Does not emit Qt signals — signal emission from non-main threads is unsafe.
-    The preload result is visible through the cache's thread-safe get_frame().
-    """
-
-    def __init__(self, cache: FrameCache, start: int, count: int,
-                 difference: bool = False, linked: bool = True):
-        super().__init__(daemon=True)
-        self.cache = cache
-        self.start_idx = start
-        self.count = count
-        self.difference = difference
-        self.linked = linked
-
-    def run(self) -> None:
-        self.cache.preload_range(self.start_idx, self.count, self.difference, self.linked)
+# Shared thread pool for preloading (1 worker — avoids flooding Siril's socket)
+_preload_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="preload")
 
 
 # ------------------------------------------------------------------------------
@@ -797,6 +833,7 @@ class FrameMarker:
         self.seq = seq
         self.total = seq.number
         self.original: dict[int, bool] = {}
+        self._excluded_cache: set[int] | None = None  # Lazy-invalidated excluded set
         for i in range(self.total):
             try:
                 imgdata = None
@@ -824,6 +861,7 @@ class FrameMarker:
             self.changes.pop(index, None)
         else:
             self.changes[index] = True
+        self._excluded_cache = None  # Invalidate
 
     def mark_exclude(self, index: int) -> None:
         if not self.original.get(index, True) and index not in self.changes:
@@ -832,6 +870,7 @@ class FrameMarker:
             self.changes.pop(index, None)
         else:
             self.changes[index] = False
+        self._excluded_cache = None  # Invalidate
 
     def get_pending_count(self) -> int:
         return len(self.changes)
@@ -843,11 +882,14 @@ class FrameMarker:
         return sum(1 for v in self.changes.values() if v)
 
     def get_excluded_indices(self) -> set[int]:
-        """Get all currently excluded frame indices (original + pending)."""
+        """Get all currently excluded frame indices (original + pending). Cached until next mark."""
+        if self._excluded_cache is not None:
+            return self._excluded_cache
         excluded = set()
         for i in range(self.total):
             if not self.is_included(i):
                 excluded.add(i)
+        self._excluded_cache = excluded
         return excluded
 
     def apply_to_siril(self, siril_iface) -> str:
@@ -864,6 +906,7 @@ class FrameMarker:
         for idx, val in self.changes.items():
             self.original[idx] = val
         self.changes.clear()
+        self._excluded_cache = None  # Invalidate
         return msg
 
 
@@ -1608,6 +1651,11 @@ class ColorCodedSlider(QSlider):
 # THUMBNAIL FILMSTRIP
 # ------------------------------------------------------------------------------
 
+_THUMB_STYLE_INCLUDED = "background-color:#1a1a1a;border:2px solid #55aa55;"
+_THUMB_STYLE_EXCLUDED = "background-color:#1a1a1a;border:2px solid #dd4444;"
+_THUMB_STYLE_CURRENT = "background-color:#1a1a1a;border:2px solid #88aaff;"
+
+
 class ThumbnailFilmstrip(QWidget):
     """Horizontal scrollable strip of frame thumbnails with color-coded borders.
 
@@ -1666,28 +1714,22 @@ class ThumbnailFilmstrip(QWidget):
 
     def highlight_current(self, index: int) -> None:
         if self._current >= 0 and self._current < len(self._labels):
-            old_incl = "#55aa55"  # will be corrected by update_border
-            self._labels[self._current].setStyleSheet(
-                f"background-color:#1a1a1a;border:2px solid {old_incl};"
-            )
+            # Restore previous frame to included style (will be corrected by update_border if needed)
+            self._labels[self._current].setStyleSheet(_THUMB_STYLE_INCLUDED)
         self._current = index
         if 0 <= index < len(self._labels):
-            self._labels[index].setStyleSheet(
-                "background-color:#1a1a1a;border:2px solid #88aaff;"
-            )
+            self._labels[index].setStyleSheet(_THUMB_STYLE_CURRENT)
             self.scroll.ensureWidgetVisible(self._labels[index], 50, 0)
 
     def update_border(self, index: int, included: bool) -> None:
         if 0 <= index < len(self._labels):
             if index == self._current:
-                color = "#88aaff"
+                style = _THUMB_STYLE_CURRENT
             elif included:
-                color = "#55aa55"
+                style = _THUMB_STYLE_INCLUDED
             else:
-                color = "#dd4444"
-            self._labels[index].setStyleSheet(
-                f"background-color:#1a1a1a;border:2px solid {color};"
-            )
+                style = _THUMB_STYLE_EXCLUDED
+            self._labels[index].setStyleSheet(style)
 
     def get_visible_range(self) -> tuple[int, int]:
         """Return (start, end) indices of visible thumbnails."""
@@ -1714,19 +1756,17 @@ class HistogramWidget(_MplWidgetBase):
 
     def render_histogram(self, cache: FrameCache, frame_index: int,
                          linked: bool = True) -> None:
+        """Render histogram for a frame. Loads data via shared load_frame_data() helper."""
         if not self._mpl_available:
             return
         try:
-            frame = cache.siril.get_seq_frame(frame_index, with_pixels=True)
-            if frame is None or frame.data is None:
+            data = load_frame_data(cache.siril, frame_index)
+            if data is None:
                 return
-            data = frame.data.astype(np.float32)
-            if data.max() > 1.5:
-                data = data / 65535.0
             # Use channel 0 (or mono)
             ch = data[0] if data.ndim == 3 else data
-            ch_flat = ch.flatten()
-            # Subsample for speed
+            # Subsample: take every Nth pixel for speed
+            ch_flat = ch.ravel()
             if ch_flat.size > HISTOGRAM_SUBSAMPLE:
                 ch_flat = ch_flat[::ch_flat.size // HISTOGRAM_SUBSAMPLE]
 
@@ -1752,6 +1792,14 @@ class HistogramWidget(_MplWidgetBase):
 class ImageCanvas(QWidget):
     """Widget that displays a QImage with zoom, pan, ROI, side-by-side, and crossfade."""
     roi_selected = pyqtSignal(QRect)
+
+    # Pre-allocated colors to avoid per-frame QColor construction from strings
+    _CLR_BG = QColor(26, 26, 26)
+    _CLR_GRAY = QColor(100, 100, 100)
+    _CLR_ACCENT = QColor(136, 170, 255)       # #88aaff
+    _CLR_ROI_FILL = QColor(136, 170, 255, 30)
+    _CLR_OVERLAY_BG = QColor(0, 0, 0, 180)
+    _CLR_OVERLAY_FG = QColor(224, 224, 224)    # #e0e0e0
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1789,25 +1837,28 @@ class ImageCanvas(QWidget):
 
         self.setStyleSheet("background-color: #1a1a1a;")
 
-    def set_image(self, qimg: QImage | None) -> None:
+    def set_image(self, qimg: QImage | None, defer_update: bool = False) -> None:
         if qimg is None:
             self._pixmap = None
         else:
             self._pixmap = QPixmap.fromImage(qimg)
         self._crossfade_alpha = 1.0
         self._crossfade_pixmap = None
-        self.update()
+        if not defer_update:
+            self.update()
 
-    def set_side_by_side_image(self, qimg: QImage | None) -> None:
+    def set_side_by_side_image(self, qimg: QImage | None, defer_update: bool = False) -> None:
         if qimg is None:
             self._pixmap_right = None
         else:
             self._pixmap_right = QPixmap.fromImage(qimg)
-        self.update()
+        if not defer_update:
+            self.update()
 
-    def set_side_by_side(self, enabled: bool) -> None:
+    def set_side_by_side(self, enabled: bool, defer_update: bool = False) -> None:
         self._side_by_side = enabled
-        self.update()
+        if not defer_update:
+            self.update()
 
     def start_crossfade(self, from_pixmap: QPixmap) -> None:
         self._crossfade_pixmap = from_pixmap
@@ -1817,9 +1868,10 @@ class ImageCanvas(QWidget):
         self._crossfade_alpha = alpha
         self.update()
 
-    def set_overlay_text(self, text: str) -> None:
+    def set_overlay_text(self, text: str, defer_update: bool = False) -> None:
         self._overlay_text = text
-        self.update()
+        if not defer_update:
+            self.update()
 
     def set_show_overlay(self, show: bool) -> None:
         self._show_overlay = show
@@ -1856,10 +1908,10 @@ class ImageCanvas(QWidget):
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        painter.fillRect(self.rect(), QColor(26, 26, 26))
+        painter.fillRect(self.rect(), self._CLR_BG)
 
         if self._pixmap is None:
-            painter.setPen(QColor(100, 100, 100))
+            painter.setPen(self._CLR_GRAY)
             painter.setFont(QFont("Helvetica", 14))
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No frame loaded")
             painter.end()
@@ -1867,15 +1919,11 @@ class ImageCanvas(QWidget):
 
         if self._side_by_side and self._pixmap_right is not None:
             half_w = self.width() / 2
-            # Left: current frame
             self._draw_pixmap(painter, self._pixmap, 0, half_w)
-            # Divider
-            painter.setPen(QPen(QColor("#88aaff"), 2))
+            painter.setPen(QPen(self._CLR_ACCENT, 2))
             painter.drawLine(int(half_w), 0, int(half_w), self.height())
-            # Right: reference frame
             self._draw_pixmap(painter, self._pixmap_right, half_w, half_w)
-            # Labels
-            painter.setPen(QColor("#88aaff"))
+            painter.setPen(self._CLR_ACCENT)
             painter.setFont(QFont("Helvetica", 9))
             painter.drawText(10, 20, "Current")
             painter.drawText(int(half_w) + 10, 20, "Reference")
@@ -1892,8 +1940,8 @@ class ImageCanvas(QWidget):
 
         # ROI overlay
         if self._roi_rect is not None and not self._roi_rect.isNull():
-            painter.setPen(QPen(QColor("#88aaff"), 2, Qt.PenStyle.DashLine))
-            painter.setBrush(QColor(136, 170, 255, 30))
+            painter.setPen(QPen(self._CLR_ACCENT, 2, Qt.PenStyle.DashLine))
+            painter.setBrush(self._CLR_ROI_FILL)
             painter.drawRect(self._roi_rect)
 
         # Frame info overlay
@@ -1907,9 +1955,9 @@ class ImageCanvas(QWidget):
             box_w = max(fm.horizontalAdvance(ln) for ln in lines) + 16
             box_h = line_h * len(lines) + 12
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(0, 0, 0, 180))
+            painter.setBrush(self._CLR_OVERLAY_BG)
             painter.drawRoundedRect(8, 8, box_w, box_h, 4, 4)
-            painter.setPen(QColor("#e0e0e0"))
+            painter.setPen(self._CLR_OVERLAY_FG)
             for i, ln in enumerate(lines):
                 painter.drawText(16, 20 + i * line_h, ln)
             painter.setOpacity(1.0)
@@ -2073,6 +2121,7 @@ class BlinkComparatorWindow(QMainWindow):
 
         self._refresh_statistics_graph()
         self._refresh_scatter_plot()
+        self._precompute_overlay_stats()
 
         # Initialize thumbnail cache
         self.thumb_cache = ThumbnailCache(
@@ -2610,6 +2659,13 @@ class BlinkComparatorWindow(QMainWindow):
         self.playing = False
         self.btn_play.setText("\u25B6  Play")
         self._timer.stop()
+        # Refresh all UI elements that were skipped during playback
+        self._update_frame_info(self.current_frame)
+        self.stats_table.highlight_current(self.current_frame)
+        self.stats_graph.update_current_line(self.current_frame)
+        linked = self.chk_linked_stretch.isChecked()
+        if self.cache is not None:
+            self.histogram_widget.render_histogram(self.cache, self.current_frame, linked)
 
     def _advance_frame(self) -> None:
         if not self.playing:
@@ -2703,38 +2759,45 @@ class BlinkComparatorWindow(QMainWindow):
         linked = self.chk_linked_stretch.isChecked()
 
         if self.cache is not None:
+            # Defer all canvas .update() calls — we'll do a single repaint at the end
             if self.chk_crossfade.isChecked() and self.canvas._pixmap is not None and old_frame != index:
                 old_pixmap = self.canvas._pixmap
                 qimg = self.cache.get_frame(index, difference=diff_mode, linked=linked)
                 if qimg is not None:
                     self.canvas.start_crossfade(old_pixmap)
-                    self.canvas.set_image(qimg)
+                    self.canvas.set_image(qimg, defer_update=True)
                     self._cf_steps = 0
                     self._cf_timer.start(50)
             else:
                 qimg = self.cache.get_frame(index, difference=diff_mode, linked=linked)
-                self.canvas.set_image(qimg)
+                self.canvas.set_image(qimg, defer_update=True)
 
             # Side-by-side: load reference frame
             if sbs_mode:
-                self.canvas.set_side_by_side(True)
+                self.canvas.set_side_by_side(True, defer_update=True)
                 ref_idx = self.seq.reference_image
                 if ref_idx < 0 or ref_idx >= self.total_frames:
                     ref_idx = 0
                 ref_img = self.cache.get_frame(ref_idx, difference=False, linked=linked)
-                self.canvas.set_side_by_side_image(ref_img)
+                self.canvas.set_side_by_side_image(ref_img, defer_update=True)
             else:
-                self.canvas.set_side_by_side(False)
+                self.canvas.set_side_by_side(False, defer_update=True)
 
-        self._update_frame_info(index)
-        self._update_canvas_overlay(index)
-        self.filmstrip.highlight_current(index)
-        self.stats_table.highlight_current(index)
-        self.stats_graph.update_current_line(index)
-
-        # Update histogram (only when not playing for performance)
-        if not self.playing and self.cache is not None:
-            self.histogram_widget.render_histogram(self.cache, index, linked)
+        # During playback, skip expensive UI updates that aren't visible at speed
+        if self.playing:
+            # Lightweight: only update canvas overlay (burned into image) and filmstrip
+            self.canvas.set_overlay_text(self._build_overlay_text(index), defer_update=True)
+            self.canvas.update()  # Single repaint for all deferred changes
+            self.filmstrip.highlight_current(index)
+        else:
+            self._update_frame_info(index)
+            self.canvas.set_overlay_text(self._build_overlay_text(index), defer_update=True)
+            self.canvas.update()  # Single repaint
+            self.filmstrip.highlight_current(index)
+            self.stats_table.highlight_current(index)
+            self.stats_graph.update_current_line(index)
+            if self.cache is not None:
+                self.histogram_widget.render_histogram(self.cache, index, linked)
 
         zoom_pct = int(self.canvas._zoom * 100)
         self.lbl_zoom.setText(f"Zoom: {zoom_pct}%")
@@ -2800,8 +2863,9 @@ class BlinkComparatorWindow(QMainWindow):
             self.radio_diff.setChecked(True)
 
     def _on_stretch_mode_changed(self) -> None:
-        if self.cache is not None:
-            self.cache.invalidate()
+        if not hasattr(self, 'cache') or self.cache is None:
+            return
+        self.cache.invalidate()
         self._show_frame(self.current_frame)
 
     # ------------------------------------------------------------------
@@ -3021,23 +3085,37 @@ class BlinkComparatorWindow(QMainWindow):
     # CANVAS OVERLAY
     # ------------------------------------------------------------------
 
-    def _update_canvas_overlay(self, index: int) -> None:
+    def _precompute_overlay_stats(self) -> None:
+        """Pre-format the stats portion of overlay text for all frames (once)."""
+        self._overlay_stats_cache: list[str] = [""] * self.total_frames
+        if self.frame_stats is None:
+            return
+        for i in range(self.total_frames):
+            row = self.frame_stats.get(i)
+            if not row:
+                continue
+            parts = []
+            if row["fwhm"] > 0:
+                parts.append(f"FWHM:{row['fwhm']:.2f}\"")
+            if row["roundness"] > 0:
+                parts.append(f"Rnd:{row['roundness']:.2f}")
+            if row.get("weight", 0) > 0:
+                parts.append(f"Wt:{row['weight']:.3f}")
+            if parts:
+                self._overlay_stats_cache[i] = "  ".join(parts)
+
+    def _build_overlay_text(self, index: int) -> str:
+        """Build overlay text using pre-computed stats (fast path for playback)."""
         incl = self.marker.is_included(index)
         status = "INCLUDED" if incl else "EXCLUDED"
-        lines = [f"Frame {index + 1}/{self.total_frames}  [{status}]"]
-        if self.frame_stats is not None:
-            row = self.frame_stats.get(index)
-            if row:
-                parts = []
-                if row["fwhm"] > 0:
-                    parts.append(f"FWHM:{row['fwhm']:.2f}\"")
-                if row["roundness"] > 0:
-                    parts.append(f"Rnd:{row['roundness']:.2f}")
-                if row.get("weight", 0) > 0:
-                    parts.append(f"Wt:{row['weight']:.3f}")
-                if parts:
-                    lines.append("  ".join(parts))
-        self.canvas.set_overlay_text("\n".join(lines))
+        header = f"Frame {index + 1}/{self.total_frames}  [{status}]"
+        stats_line = self._overlay_stats_cache[index] if hasattr(self, '_overlay_stats_cache') and index < len(self._overlay_stats_cache) else ""
+        if stats_line:
+            return header + "\n" + stats_line
+        return header
+
+    def _update_canvas_overlay(self, index: int) -> None:
+        self.canvas.set_overlay_text(self._build_overlay_text(index))
 
     # ------------------------------------------------------------------
     # SCATTER PLOT
@@ -3224,8 +3302,8 @@ class BlinkComparatorWindow(QMainWindow):
             return
         diff_mode = self.radio_diff.isChecked()
         linked = self.chk_linked_stretch.isChecked()
-        worker = PreloadWorker(self.cache, start, count, diff_mode, linked)
-        worker.start()
+        # Submit to shared pool — avoids spawning a new thread per frame advance
+        _preload_pool.submit(self.cache.preload_range, start, count, diff_mode, linked)
 
     # ------------------------------------------------------------------
     # SETTINGS
@@ -3258,7 +3336,7 @@ class BlinkComparatorWindow(QMainWindow):
         # Save table sort
         header = self.stats_table.table.horizontalHeader()
         st.setValue("table_sort_col", header.sortIndicatorSection())
-        st.setValue("table_sort_order", int(header.sortIndicatorOrder()))
+        st.setValue("table_sort_order", int(header.sortIndicatorOrder().value))
 
     def closeEvent(self, event) -> None:
         self._pause()
