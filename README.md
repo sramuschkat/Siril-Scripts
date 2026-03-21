@@ -15,15 +15,15 @@ GPL-3.0-or-later
 
 | Script | Description |
 |--------|-------------|
-| [Annotate Image](#annotate-image) | Annotate plate-solved images with catalog objects, coordinate grids, and export as PNG/TIFF/JPEG. |
-| [Gradient Analyzer](#gradient-analyzer) | Analyze background gradients with heatmaps, diagnostics, and tool recommendations. |
-| [Image Advisor](#image-advisor) | Analyze a stacked linear image and get a prioritized processing workflow with concrete Siril commands. |
-| [Multiple Histogram Viewer](#multiple-histogram-viewer) | View linear and stretched images with RGB histograms, 3D surface plots, and detailed statistics. |
-| [Script Security Scanner](#script-security-scanner) | Scan Siril Python scripts for malicious patterns across 10 threat categories. |
+| [Svenesis Annotate Image](#svenesis-annotate-image) | Annotate plate-solved images with catalog objects, coordinate grids, and export as PNG/TIFF/JPEG. |
+| [Svenesis Gradient Analyzer](#svenesis-gradient-analyzer) | Analyze background gradients with heatmaps, diagnostics, and tool recommendations. |
+| [Svenesis Image Advisor](#svenesis-image-advisor) | Analyze a stacked linear image and get a prioritized processing workflow with concrete Siril commands. |
+| [Svenesis Multiple Histogram Viewer](#svenesis-multiple-histogram-viewer) | View linear and stretched images with RGB histograms, 3D surface plots, and detailed statistics. |
+| [Svenesis Script Security Scanner](#svenesis-script-security-scanner) | Scan Siril Python scripts for malicious patterns across 10 threat categories. |
 
 ---
 
-## Annotate Image
+## Svenesis Annotate Image
 
 **File:** `Svenesis-AnnotateImage.py` (v1.0.0)
 
@@ -120,7 +120,7 @@ Coordinate transforms use `siril.radec2pix()` for maximum compatibility.
 ### Usage
 
 1. Load an image in Siril and **plate-solve** it (Tools → Astrometry → Image Plate Solver).
-2. Run **Annotate Image** from Siril: **Processing → Scripts** (or your Scripts menu).
+2. Run **Svenesis Annotate Image** from Siril: **Processing → Scripts** (or your Scripts menu).
 3. Select which **object types** to annotate using the color-coded checkboxes.
 4. Adjust font size, marker size, magnitude limit, and extras (grid, info box, compass, legend, leader lines).
 5. Click **Annotate Image** (or press F5).
@@ -128,7 +128,7 @@ Coordinate transforms use `siril.radec2pix()` for maximum compatibility.
 
 ---
 
-## Gradient Analyzer
+## Svenesis Gradient Analyzer
 
 **File:** `Svenesis-GradientAnalyzer.py` (v1.8.4)
 
@@ -219,14 +219,14 @@ Reads the current image from Siril, divides it into a configurable grid of tiles
 ### Usage
 
 1. Load an image in Siril (linear data recommended for best accuracy).
-2. Run **Gradient Analyzer** from Siril: **Processing → Scripts** (or your Scripts menu).
+2. Run **Svenesis Gradient Analyzer** from Siril: **Processing → Scripts** (or your Scripts menu).
 3. Adjust grid resolution and sigma in the left panel, select a threshold preset, then click **Analyze** (or press F5).
 4. Review the heatmap, profiles, and metrics across the 9 tabs. Check the recommendations for the suggested tool and parameters.
 5. Apply the recommended extraction in Siril, then click **Analyze** (F5) again to re-analyze and compare before/after.
 
 ---
 
-## Image Advisor
+## Svenesis Image Advisor
 
 **File:** `Svenesis-ImageAdvisor.py` (v1.3.0)
 
@@ -270,14 +270,14 @@ Analyses a stacked, linear FITS image loaded in Siril and generates a prioritise
 ### Usage
 
 1. Load a stacked, linear FITS image in Siril.
-2. Run **Image Advisor** from Siril: **Processing → Scripts** (or your Scripts menu).
+2. Run **Svenesis Image Advisor** from Siril: **Processing → Scripts** (or your Scripts menu).
 3. The analysis runs automatically on launch. Review findings, statistics, heatmap, and the recommended workflow in the report panel.
 4. Use **Re-Analyse** after making changes in Siril to get updated recommendations.
 5. Use **Export Script (.ssf)** to save the workflow as a runnable Siril script, or **Export Report (.txt)** to save the full analysis.
 
 ---
 
-## Multiple Histogram Viewer
+## Svenesis Multiple Histogram Viewer
 
 **File:** `Svenesis-MultipleHistogramViewer.py` (v1.0.1)
 
@@ -314,12 +314,12 @@ Reads the current linear image from Siril (or a linear FITS file), applies a 2%�
 ### Usage
 
 1. Load an image in Siril (or use **Load linear FITS...** in the script).
-2. Run **Multiple Histogram Viewer** from Siril: **Processing → Scripts** (or your Scripts menu).
+2. Run **Svenesis Multiple Histogram Viewer** from Siril: **Processing → Scripts** (or your Scripts menu).
 3. Use the left panel for view type (Histogram / 3D), Data-Mode (Normal / Log), channels, and image/source options. Use **Enlarge Diagram** for a larger histogram or 3D view.
 
 ---
 
-## Script Security Scanner
+## Svenesis Script Security Scanner
 
 **File:** `Svenesis-Script-Security-Scanner.py` (v2.0.0)
 
@@ -368,7 +368,7 @@ This scanner performs **static analysis based on pattern matching** — it looks
 
 ### Usage
 
-1. Run **Script Security Scanner** from Siril: **Processing → Scripts** (or your Scripts menu).
+1. Run **Svenesis Script Security Scanner** from Siril: **Processing → Scripts** (or your Scripts menu).
 2. The scanner auto-discovers your Siril script directories. Use **Add Directory…** or **Paste Paths** to add more.
 3. Select the threat categories you want to scan, then press **Scan Now**.
 4. Review findings grouped by file. Click a finding for details; double-click to open the file.
