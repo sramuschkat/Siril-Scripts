@@ -91,7 +91,8 @@ from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QMessageBox, QGroupBox,
     QDialog, QTextEdit, QFileDialog, QProgressBar,
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QUrl
+from PyQt6.QtGui import QDesktopServices
 
 VERSION = "1.3.0"
 
@@ -128,6 +129,8 @@ QLabel{color:#cccccc}
 
 QPushButton{background-color:#444444;color:#dddddd;border:1px solid #666666;border-radius:4px;padding:6px;font-weight:bold}
 QPushButton:hover{background-color:#555555;border-color:#777777}
+QPushButton#CoffeeButton{background-color:#FFDD00;color:#000000;border:1px solid #ccb100;font-weight:bold}
+QPushButton#CoffeeButton:hover{background-color:#ffe740;border-color:#ddcc00}
 QPushButton#CloseButton{background-color:#5a2a2a;border:1px solid #804040}
 QPushButton#CloseButton:hover{background-color:#7a3a3a}
 QPushButton#RunButton{background-color:#2a4a2a;border:1px solid #408040}
@@ -2360,8 +2363,15 @@ class ImageAdvisorWindow(QMainWindow):
 
         layout.addWidget(grp_actions)
 
-        # Help & Close
+        # Buy me a Coffee / Help / Close
         layout.addStretch()
+
+        btn_coffee = QPushButton("\u2615  Buy me a Coffee")
+        _nofocus(btn_coffee)
+        btn_coffee.setObjectName("CoffeeButton")
+        btn_coffee.setToolTip("Support the development of this tool")
+        btn_coffee.clicked.connect(self._show_coffee_dialog)
+        layout.addWidget(btn_coffee)
 
         btn_help = QPushButton("Help")
         _nofocus(btn_help)
@@ -2528,6 +2538,96 @@ class ImageAdvisorWindow(QMainWindow):
                 QMessageBox.information(self, "Saved", f"Script saved to:\n{path}")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save script:\n{e}")
+
+    def _show_coffee_dialog(self) -> None:
+        BMC_URL = "https://buymeacoffee.com/sramuschkat"
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("\u2615 Support Image Advisor")
+        dlg.setMinimumSize(520, 480)
+        dlg.setStyleSheet(
+            "QDialog{background-color:#1e1e1e;color:#e0e0e0}"
+            "QLabel{color:#e0e0e0}"
+            "QPushButton{font-weight:bold;padding:8px;border-radius:6px}"
+        )
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(12)
+
+        # Combined header + message (single box)
+        header_msg = QLabel(
+            "<div style='text-align:center; font-size:12pt; line-height:1.6;'>"
+            "<span style='font-size:48pt;'>\u2615</span><br>"
+            "<span style='font-size:18pt; font-weight:bold; color:#FFDD00;'>"
+            "Buy me a Coffee</span><br><br>"
+            "<b style='color:#e0e0e0;'>Enjoying the Image Advisor?</b><br><br>"
+            "This tool is free and open source. It's built with love for the "
+            "astrophotography community by <b style='color:#88aaff;'>Sven Ramuschkat</b> "
+            "(<span style='color:#88aaff;'>svenesis.org</span>).<br><br>"
+            "If this tool has saved you time, helped you understand your images, "
+            "or simply made your processing workflow better \u2014 consider buying "
+            "me a coffee to keep development going!<br><br>"
+            "<span style='color:#FFDD00;'>\u2615 Every coffee fuels a new feature, "
+            "bug fix, or clear-sky night of testing.</span><br><br>"
+            "<span style='color:#aaaaaa;'>Your support helps maintain:</span><br>"
+            "\u2022 Gradient Analyzer \u2022 Image Advisor<br>"
+            "\u2022 Multiple Histogram Viewer \u2022 Script Security Scanner<br>"
+            "</div>"
+        )
+        header_msg.setWordWrap(True)
+        header_msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        header_msg.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(header_msg)
+
+        layout.addSpacing(8)
+
+        # Open link button (BMC branded)
+        btn_open = QPushButton("\u2615  Buy me a Coffee  \u2615")
+        btn_open.setStyleSheet(
+            "QPushButton{"
+            "  background-color:#FFDD00; color:#000000;"
+            "  font-size:14pt; font-weight:bold;"
+            "  padding:12px 24px; border-radius:8px;"
+            "  border:2px solid #ccb100;"
+            "}"
+            "QPushButton:hover{"
+            "  background-color:#ffe740; border-color:#ddcc00;"
+            "}"
+        )
+        btn_open.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_open.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(BMC_URL)))
+        layout.addWidget(btn_open)
+
+        layout.addSpacing(4)
+
+        # Close button
+        btn_close = QPushButton("Close")
+        btn_close.setStyleSheet(
+            "QPushButton{background-color:#444;color:#ddd;border:1px solid #666;padding:6px}"
+            "QPushButton:hover{background-color:#555}"
+        )
+        _nofocus(btn_close)
+        btn_close.clicked.connect(dlg.accept)
+        layout.addWidget(btn_close)
+
+        # Combined footer: URL + thank-you (single block)
+        footer = QLabel(
+            f"<div style='text-align:center; line-height:1.8;'>"
+            f"<a style='color:#88aaff; font-size:12pt;' href='{BMC_URL}'>{BMC_URL}</a><br>"
+            f"<span style='font-size:13pt; color:#999;'>"
+            f"Thank you for supporting open-source astrophotography tools!<br>"
+            f"Clear skies \u2728</span>"
+            f"</div>"
+        )
+        footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        footer.setTextFormat(Qt.TextFormat.RichText)
+        footer.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
+        footer.setOpenExternalLinks(True)
+        layout.addWidget(footer)
+
+        dlg.exec()
 
     def _show_help_dialog(self) -> None:
         """Show a modal Help dialog with usage information."""
