@@ -490,10 +490,20 @@ class FrameStatistics:
         self.seq = seq
         self.total = seq.number
         self.data: list[dict] = []
+        # Siril stores regdata on ch1 (green) for RGB, ch0 for mono.
+        # We search all channels up to nb_layers to find the one with data.
+        self._nb_layers = getattr(seq, 'nb_layers', 1)
 
     def load_all(self, progress_callback=None) -> None:
-        """Load registration data, stats, and imgdata for all frames."""
+        """Load registration data, stats, and imgdata for all frames.
+
+        When regdata is unavailable (sequence registered without star detection),
+        falls back to stats.median for background and stats.bgnoise for noise.
+        Sets self.has_regdata flag so the UI can offer to run seqfindstar.
+        """
         self.data = []
+        self.has_regdata = False  # Track whether any frame has registration data
+
         for i in range(self.total):
             row = {
                 "frame_idx": i,
@@ -503,16 +513,27 @@ class FrameStatistics:
                 "stars": 0,
                 "median": 0.0,
                 "sigma": 0.0,
+                "bgnoise": 0.0,
                 "date_obs": "",
             }
 
             try:
-                reg = self.siril.get_seq_regdata(i, 0)
+                # Siril stores regdata on the green channel (1) for RGB images.
+                # Try all channels and use the first one with valid FWHM data.
+                reg = None
+                for ch in range(self._nb_layers):
+                    try:
+                        reg = self.siril.get_seq_regdata(i, ch)
+                        if reg is not None and getattr(reg, 'fwhm', 0) > 0:
+                            break
+                        reg = None
+                    except Exception:
+                        reg = None
                 if reg is not None:
-                    # getattr with 0 default avoids hasattr + attribute access (2→1 lookup)
                     v = getattr(reg, 'fwhm', 0)
                     if v > 0:
                         row["fwhm"] = float(v)
+                        self.has_regdata = True
                     v = getattr(reg, 'roundness', 0)
                     if v > 0:
                         row["roundness"] = float(v)
@@ -534,6 +555,12 @@ class FrameStatistics:
                     v = getattr(stats, 'sigma', 0)
                     if v > 0:
                         row["sigma"] = float(v)
+                    v = getattr(stats, 'bgnoise', 0)
+                    if v > 0:
+                        row["bgnoise"] = float(v)
+                    # Fallback: use stats.median as background when regdata is missing
+                    if row["background"] == 0.0 and row["median"] > 0:
+                        row["background"] = row["median"]
             except (SirilError, OSError, AttributeError, TypeError, ValueError) as exc:
                 log.debug("Frame %d: stats unavailable: %s", i, exc)
 
@@ -2106,6 +2133,18 @@ class BlinkComparatorWindow(QMainWindow):
 
         self.frame_stats.load_all(progress_callback=stats_progress)
 
+        # Check if registration data (FWHM/stars) is available
+        if not self.frame_stats.has_regdata:
+            try:
+                self.siril.log(
+                    "[BlinkComparator] No star detection data found. "
+                    "Background column uses median from stats. "
+                    "FWHM/Stars/Roundness require running star detection."
+                )
+            except (SirilError, OSError, RuntimeError):
+                pass
+            self._show_no_regdata_banner()
+
         # Populate table and graph
         self.progress_bar.setFormat("Building statistics table...")
         self.progress_bar.setValue(75)
@@ -2160,6 +2199,143 @@ class BlinkComparatorWindow(QMainWindow):
             self.siril.log(f"[BlinkComparator] {nb_incl} included, {nb_excl} excluded")
         except (SirilError, OSError, RuntimeError):
             pass
+
+    # ------------------------------------------------------------------
+    # MISSING REGDATA HANDLING
+    # ------------------------------------------------------------------
+
+    def _show_no_regdata_banner(self) -> None:
+        """Show a banner in the right panel offering to run star detection."""
+        self._regdata_banner = QWidget()
+        banner_layout = QHBoxLayout(self._regdata_banner)
+        banner_layout.setContentsMargins(8, 4, 8, 4)
+
+        lbl = QLabel(
+            "\u26A0 No star detection data found. "
+            "FWHM, Roundness, and Stars columns are empty. "
+            "Background uses median from statistics."
+        )
+        lbl.setStyleSheet("color: #ffaa33; font-size: 9pt;")
+        lbl.setWordWrap(True)
+        banner_layout.addWidget(lbl, 1)
+
+        btn = QPushButton("Run Star Detection")
+        btn.setObjectName("ApplyButton")
+        btn.setToolTip(
+            "Runs Siril's 'register -2pass' to detect stars in all frames.\n"
+            "This computes FWHM, roundness, and star count for each frame.\n"
+            "May take a few minutes for large sequences."
+        )
+        _nofocus(btn)
+        btn.clicked.connect(self._run_star_detection)
+        banner_layout.addWidget(btn)
+
+        # Insert banner at top of right panel (above tabs)
+        right_layout = self.right_tabs.parent().layout()
+        if right_layout is not None:
+            right_layout.insertWidget(0, self._regdata_banner)
+
+    def _run_star_detection(self) -> None:
+        """Run register -2pass via Siril to compute FWHM/roundness/stars, then reload stats."""
+        reply = QMessageBox.question(
+            self, "Run Star Detection",
+            "This will run Siril's 'register -2pass' to detect stars in all frames.\n"
+            "This computes FWHM, roundness, background, and star count\n"
+            "without creating new output files.\n\n"
+            "It may take a few minutes for large sequences.\n\n"
+            "Proceed?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setFormat("Running star detection (register -2pass)...")
+        self.progress_bar.setValue(0)
+        QApplication.processEvents()
+
+        try:
+            self.siril.log("[BlinkComparator] Running register -2pass for star detection...")
+            # -2pass computes transforms (FWHM, roundness, stars) without generating output images
+            self.siril.cmd("register", self.seq.seqname, "-2pass")
+            self.siril.log("[BlinkComparator] Registration complete. Reloading statistics...")
+        except Exception as e:
+            QMessageBox.warning(self, "Star Detection Failed",
+                                f"register -2pass failed:\n{e}\n\n"
+                                f"Try running 'register {self.seq.seqname} -2pass' manually in the Siril console.")
+            self.progress_bar.setVisible(False)
+            return
+
+        # Force Siril to reload the .seq file from disk (register -2pass writes
+        # regdata to the .seq file but doesn't update the in-memory sequence)
+        seqname = self.seq.seqname
+        try:
+            self.siril.log(f"[BlinkComparator] Reloading sequence '{seqname}' from disk...")
+            self.siril.cmd("seqfind", seqname)
+        except Exception as ex:
+            self.siril.log(f"[BlinkComparator] WARNING: seqfind failed: {ex}")
+
+        # Now get the refreshed sequence object
+        try:
+            self.seq = self.siril.get_seq()
+            self.siril.log(f"[BlinkComparator] Sequence reloaded: {self.seq.seqname}, "
+                           f"{self.seq.number} frames, layers={self.seq.nb_layers}")
+        except Exception as ex:
+            self.siril.log(f"[BlinkComparator] WARNING: get_seq() failed after register: {ex}")
+
+        # Diagnostic: check regdata on all channels for frame 0
+        n_layers = getattr(self.seq, 'nb_layers', 1)
+        for ch in range(n_layers):
+            try:
+                reg = self.siril.get_seq_regdata(0, ch)
+                if reg is not None:
+                    attrs = {a: getattr(reg, a, None) for a in
+                             ['fwhm', 'weighted_fwhm', 'roundness', 'quality',
+                              'background_lvl', 'number_of_stars']}
+                    self.siril.log(f"[BlinkComparator] Frame 0 regdata ch{ch}: {attrs}")
+                else:
+                    self.siril.log(f"[BlinkComparator] Frame 0 regdata ch{ch}: None")
+            except Exception as ex:
+                self.siril.log(f"[BlinkComparator] Frame 0 regdata ch{ch} error: {ex}")
+
+        # Reload all statistics
+        self.frame_stats = FrameStatistics(self.siril, self.seq)
+
+        def reload_progress(i, total):
+            pct = int(80 * i / max(1, total))
+            self.progress_bar.setValue(pct)
+            self.progress_bar.setFormat(f"Reloading stats... frame {i + 1}/{total}")
+            QApplication.processEvents()
+
+        self.frame_stats.load_all(progress_callback=reload_progress)
+
+        # Refresh all UI
+        self.stats_table.populate(self.frame_stats, self.marker)
+        self.batch_widget.set_statistics(self.frame_stats, self.marker)
+        self.approval_widget.set_statistics(self.frame_stats)
+        self._refresh_statistics_graph()
+        self._refresh_scatter_plot()
+        self._precompute_overlay_stats()
+        self._update_frame_info(self.current_frame)
+        self._update_canvas_overlay(self.current_frame)
+
+        # Remove banner if regdata is now available
+        if self.frame_stats.has_regdata and hasattr(self, '_regdata_banner'):
+            self._regdata_banner.setVisible(False)
+
+        self.progress_bar.setValue(100)
+        self.progress_bar.setFormat("Star detection complete!")
+        QTimer.singleShot(1500, lambda: self.progress_bar.setVisible(False))
+
+        if self.frame_stats.has_regdata:
+            QMessageBox.information(self, "Star Detection Complete",
+                                    "FWHM, Roundness, and Stars data is now available.\n"
+                                    "The statistics table has been refreshed.")
+        else:
+            QMessageBox.warning(self, "No Data",
+                                "Star detection ran but no FWHM data was found.\n"
+                                f"Try running 'register {self.seq.seqname} -2pass' manually\n"
+                                "in the Siril console and restart the script.")
 
     # ------------------------------------------------------------------
     # UI CONSTRUCTION
