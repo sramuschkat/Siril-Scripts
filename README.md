@@ -16,6 +16,7 @@ GPL-3.0-or-later
 | Script | Description |
 |--------|-------------|
 | [Svenesis Annotate Image](#svenesis-annotate-image) | Annotate plate-solved images with catalog objects, coordinate grids, and export as PNG/TIFF/JPEG. |
+| [Svenesis Blink Comparator](#svenesis-blink-comparator) | Animate sequences for rapid visual inspection and data-driven frame selection with statistics, scatter plots, and batch reject. |
 | [Svenesis Gradient Analyzer](#svenesis-gradient-analyzer) | Analyze background gradients with heatmaps, diagnostics, and tool recommendations. |
 | [Svenesis Image Advisor](#svenesis-image-advisor) | Analyze a stacked linear image and get a prioritized processing workflow with concrete Siril commands. |
 | [Svenesis Multiple Histogram Viewer](#svenesis-multiple-histogram-viewer) | View linear and stretched images with RGB histograms, 3D surface plots, and detailed statistics. |
@@ -131,6 +132,136 @@ Coordinate transforms use `siril.radec2pix()` for maximum compatibility.
 4. Adjust font size, marker size, magnitude limit, and extras (grid, info box, compass, legend, leader lines).
 5. Click **Annotate Image** (or press F5).
 6. Review the result in the Preview tab. Use **Open Annotated Image** to view it full-size.
+
+---
+
+## Svenesis Blink Comparator
+
+**File:** `Svenesis-BlinkComparator.py` (v1.2.1)
+
+Animates the currently loaded sequence as a blink animation for rapid visual inspection and data-driven frame selection. Comparable to PixInsight's Blink + SubframeSelector — identify satellite trails, clouds, tracking errors, focus drift, and bad frames, then reject them with a single click. All changes are collected locally and only applied to Siril when you confirm.
+
+### Features
+
+#### Animated playback
+
+- **Configurable speed** (1–30 FPS) with loop option and Play/Pause (Space key)
+- **Frame navigation:** First, Previous, Next, Last buttons + draggable color-coded slider
+- **Crossfade transition** option for smooth blending between frames
+- **Color-coded slider:** Red tick marks at excluded frame positions for instant overview
+
+#### Four display modes
+
+- **Normal:** Standard autostretch view for visual inspection.
+- **Difference:** Absolute difference vs. reference frame — satellites, clouds, and tracking errors become immediately visible as bright spots.
+- **Only included:** Skips excluded frames during playback — verify after marking.
+- **Side by Side:** Current frame on left, reference on right, synchronized zoom/pan.
+
+#### Statistics table (sortable)
+
+- All frames listed with **Weight, FWHM, Roundness, Background, Stars, Median, Sigma, Date, Status**
+- Click any **column header to sort** — sort by FWHM to instantly find the worst frames
+- Click a **row to jump** to that frame in the viewer
+- **Multi-select** (Ctrl+click, Shift+click) → right-click → "Reject selected"
+
+#### Composite quality weight
+
+- Each frame gets a normalized quality score (0–1) based on FWHM (lower=better), roundness (higher=better), background (lower=better), and star count (more=better)
+- Sort by Weight to see best and worst frames at a glance
+
+#### Statistics graph
+
+- **FWHM, Background, Roundness** plotted as line charts across all frames
+- **Running average** (7-frame moving average) for trend detection
+- Excluded frames shown as **red dots**, current frame as **white dashed line**
+- Instantly reveals focus drift, clouds rolling in, or tracking degradation over time
+
+#### Scatter plot
+
+- **2D scatter** of any two metrics (FWHM vs Roundness, FWHM vs Background, etc.)
+- Outlier frames immediately visible as dots far from the cluster
+- **Click a dot** to jump to that frame
+- Axis-normalized click detection (both axes contribute equally to nearest-point selection)
+
+#### Frame selection
+
+- **Manual marking:** G = include, B = exclude (with auto-advance to next frame)
+- **Batch reject by threshold:** Reject all frames where FWHM > 4.5 (or any metric/operator/value combination) with live preview count
+- **Reject worst N%:** Reject the worst 10% by FWHM, Background, or Roundness
+- **Approval expressions:** Multi-criteria AND filter (e.g., FWHM < 4.5 AND Roundness > 0.7 AND Stars > 50) — rejects frames that fail any condition
+- **Multi-select in table:** Ctrl+click or Shift+click rows, right-click → "Reject selected"
+- **Undo (Ctrl+Z):** Single undo for individual marks, grouped undo for batch operations (one Ctrl+Z undoes entire batch)
+- **Pending changes** shown in the left panel — only applied to Siril when you click "Apply Changes"
+
+#### Thumbnail filmstrip
+
+- Horizontal scrollable strip with **color-coded borders:** green = included, red = excluded, blue = current
+- Click any thumbnail to jump to that frame
+- **Lazy loading:** Thumbnails loaded on demand as you scroll
+- **Adjustable size:** Slider in Display Options
+
+#### Zoom, pan & ROI
+
+- **Scroll wheel** zoom (0.1x–20x), **right-click drag** pan
+- **1:1 pixel zoom** button for precise star shape inspection
+- **ROI blink:** Draw a rectangle on the canvas, blink only that region — perfect for checking star shapes in corners
+
+#### Frame info overlay
+
+- Frame number, FWHM, roundness, and quality weight **burned into the image corner** during playback
+- Toggleable in Display Options
+
+#### Export
+
+- **Rejected frame list** (.txt) with sequence metadata
+- **Statistics CSV** (full table with all metrics + inclusion status)
+- **Animated GIF** of the blink animation (included frames, scaled to 480px)
+- **Copy to clipboard** (Ctrl+C) for quick forum posts
+
+#### Other features
+
+- **Linked vs. independent stretch:** Toggle between consistent brightness (linked) and per-frame detail (independent)
+- **A/B frame toggle (T key):** Pin a frame, press T to toggle between pinned and current
+- **Per-frame histogram** widget in the left panel
+- **Session summary on close:** Frames viewed, excluded count, mean/best/worst FWHM
+- **Persistent settings:** FPS, loop, auto-advance, crossfade, linked stretch, overlay, thumbnail size, table sort column
+- **Dark-themed PyQt6 GUI** matching Gradient Analyzer style
+- **Buy me a Coffee** support dialog
+
+#### Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| `Space` | Play / Pause |
+| `←` / `→` | Previous / Next frame |
+| `Home` / `End` | First / Last frame |
+| `G` | Mark frame as good (include) |
+| `B` | Mark frame as bad (exclude) |
+| `D` | Toggle difference mode |
+| `Z` | Reset zoom |
+| `T` | Pin / toggle A/B frame comparison |
+| `Ctrl+Z` | Undo last marking (single or batch) |
+| `Ctrl+C` | Copy current frame to clipboard |
+| `1`–`9` | Set playback speed (FPS) |
+| `+` / `-` | Speed up / slow down |
+| `Esc` | Close |
+
+### Requirements
+
+- Siril 1.4+ with Python script support
+- sirilpy (bundled with Siril)
+- numpy, PyQt6, matplotlib (installed automatically via `s.ensure_installed`)
+- Optional: Pillow (for GIF export)
+
+### Usage
+
+1. Load a **registered sequence** in Siril (the sequence must be loaded, not just a single image).
+2. Run **Svenesis Blink Comparator** from Siril: **Processing → Scripts** (or your Scripts menu).
+3. The script loads all frame statistics automatically. Use the **Statistics Table** tab to sort by FWHM and identify bad frames.
+4. Mark bad frames with **B** (auto-advances), or use **Batch Selection** / **Approval Expression** for bulk rejection.
+5. Review in the **Statistics Graph** and **Scatter Plot** tabs to verify your selection.
+6. Click **Apply Changes to Siril** to send frame inclusion/exclusion to Siril.
+7. Use **Export** buttons to save rejected frame list, statistics CSV, or animated GIF.
 
 ---
 
