@@ -1,6 +1,6 @@
 """
 Siril Gradient Analyzer
-Script Version: 1.8.1
+Script Version: 1.8.4
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -72,6 +72,55 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.8.4 - Beginner-friendly UX overhaul
+      - Getting Started: added "What is a gradient?" section with visual explanation and common causes
+      - Action plan: calibration steps now explain what flats/darks/bias ARE, not just commands
+      - Action plan: amp glow and banding steps explain the hardware cause and fix in plain language
+      - Action plan: linear data warning explains what "stretching" means and where to find the original
+      - Action plan: subsky commands include Console path (Windows → Console) for users who don't know it
+      - Tools help tab: complete rewrite with What/Best for/How to install/How to use/Pros/Cons for each tool
+      - Preset dropdown: explains WHY narrowband needs stricter thresholds and why fast optics vignette
+      - Tab descriptions: Background Model, FWHM, Residuals rewritten in plain language with "what to look for"
+      - Checkbox tooltips: rewritten to explain WHY you'd enable/disable each option, not just what it does
+      - Gauge widget: tooltip explains the color zones and what each means
+      - Quadrant widget: tooltip explains that brightest quadrant indicates LP direction
+      - Warnings help tab: every warning now explains the cause, why it matters, and how to fix it
+      - Technical Reference: added Beginner Glossary with 25+ terms (gradient, LP, flat/dark/bias,
+        linear/stretched, polynomial, R², P95-P5, FWHM, eccentricity, SNR, Moran's I, tool names)
+      - Detailed results: R² and polynomial degree include inline explanations
+      - Options help tab: grid size and sigma-clip explain when and why to change them
+1.8.3 - Metric consistency, threshold recalibration, and false-positive fixes
+      - Fixed: f-string bug in linear data narrowband warning (missing f-prefix)
+      - Fixed: predict_improvement now uses P95-P5 on residuals (matches main strength metric)
+      - Fixed: confidence SNR uses P95-P5 range (was raw max-min, inconsistent with strength)
+      - Fixed: cos4_correction residual_pct uses P95-P5 (consistency)
+      - Recalibrated: all thresholds scaled for P95-P5 metric (broadband: 1.5/4/12%, was 2/5/15%)
+      - Recalibrated: gauge zones, help text, workflow text, all hardcoded thresholds updated
+      - Fixed: subsky command syntax to positional format (subsky degree samples)
+      - Fixed: LP color channel ratio raised from 1.3x to 1.5x (reduces OSC false positives)
+      - Fixed: normalization detection requires 2+ evidence pieces (was 1, caused false positives)
+      - Fixed: removed 0.0 from normalization targets (near-zero is normal for linear data)
+      - Fixed: detect_stacking_edges uses sigma-clipped tile_medians (was raw luminance)
+      - Fixed: gradient-free local threshold adjusted from 0.5x to 0.7x (less aggressive on smooth gradients)
+      - Fixed: WCS parity rotation uses atan2(cd21, cd11) for det<0 (correct axis flip formula)
+      - Improved: FWHM progress feedback during long computation
+      - Improved: JSON tile_medians rounded to 8 decimals for compact file size
+1.8.2 - Measurement accuracy, robustness, and accessibility fixes
+      - Gradient strength now uses robust P95-P5 percentile range instead of max-min (resists outlier tiles)
+      - Sigma-clipping uses sample std (ddof=1) for better accuracy with small tiles
+      - Linear data detection uses mean/median ratio (skewness) to avoid false positives on narrowband
+      - Direction text changed to "Brightest side faces: NE" for clarity
+      - Sky brightness / Bortle estimates marked as rough approximations with caveats
+      - FWHM filter rejects sub-1.5px detections (hot pixels, noise)
+      - Hotspot detection uses explicit coordinate matching instead of fragile index arithmetic
+      - Gradient-free local check uses tighter threshold (0.5x global) for better discontinuity detection
+      - Colorblind-friendly colormap option (cividis) added
+      - RGB channel checkbox auto-disabled for mono images
+      - WCS rotation from CD matrix accounts for parity flips
+      - Tile medians array included in JSON sidecar for cross-session comparison
+      - subsky command recommendation notes Siril 1.2+ requirement
+      - Fixed help text: sigma default corrected from 2.8 to 2.5
+      - Documented sirilpy FITS data orientation assumption (row 0 = bottom)
 1.8.1 - Analysis accuracy and code quality refinements
       - Artifact-adjusted gradient note: warns when reported % includes banding/amp glow/dew/missing flats
       - Priority-based workflow: critical issues flagged before extraction; subsky labeled "AFTER FIXING ISSUES"
@@ -176,10 +225,10 @@ from PyQt6.QtWidgets import (
     QSizePolicy, QDialog, QTextEdit, QTabWidget, QScrollArea,
     QProgressBar, QComboBox,
 )
-from PyQt6.QtCore import Qt, QSettings
-from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QLinearGradient, QShortcut, QKeySequence
+from PyQt6.QtCore import Qt, QSettings, QUrl
+from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QLinearGradient, QShortcut, QKeySequence, QDesktopServices
 
-VERSION = "1.8.1"
+VERSION = "1.8.4"
 
 # Settings keys
 SETTINGS_ORG = "Svenesis"
@@ -197,18 +246,21 @@ LUMINANCE_G = 0.7152
 LUMINANCE_B = 0.0722
 
 # Gradient strength thresholds for assessment (default: Broadband)
+# Calibrated for the P95-P5 percentile range metric (v1.8.2+).
+# P95-P5 is typically ~70% of max-min for smooth gradients.
 GRADIENT_THRESHOLDS = [
-    (2.0, "Very uniform — no extraction needed", "#55aa55"),
-    (5.0, "Slight gradient — gentle extraction recommended", "#aaaa55"),
-    (15.0, "Significant gradient — extraction strongly recommended", "#dd8833"),
+    (1.5, "Very uniform — no extraction needed", "#55aa55"),
+    (4.0, "Slight gradient — gentle extraction recommended", "#aaaa55"),
+    (12.0, "Significant gradient — extraction strongly recommended", "#dd8833"),
     (float("inf"), "Strong gradient — aggressive extraction required", "#dd4444"),
 ]
 
 # Threshold presets: (uniform_cutoff, slight_cutoff, significant_cutoff)
+# Calibrated for P95-P5 percentile range metric.
 THRESHOLD_PRESETS = {
-    "Broadband (default)": (2.0, 5.0, 15.0),
-    "Narrowband (strict)": (1.0, 3.0, 8.0),
-    "Fast optics (tolerant)": (4.0, 8.0, 20.0),
+    "Broadband (default)": (1.5, 4.0, 12.0),
+    "Narrowband (strict)": (0.8, 2.5, 6.0),
+    "Fast optics (tolerant)": (3.0, 6.0, 16.0),
 }
 
 
@@ -244,6 +296,8 @@ QSpinBox:focus,QDoubleSpinBox:focus{border-color:#88aaff}
 
 QPushButton{background-color:#444444;color:#dddddd;border:1px solid #666666;border-radius:4px;padding:6px;font-weight:bold}
 QPushButton:hover{background-color:#555555;border-color:#777777}
+QPushButton#CoffeeButton{background-color:#FFDD00;color:#000000;border:1px solid #ccb100;font-weight:bold}
+QPushButton#CoffeeButton:hover{background-color:#ffe740;border-color:#ddcc00}
 QPushButton#CloseButton{background-color:#5a2a2a;border:1px solid #804040}
 QPushButton#CloseButton:hover{background-color:#7a3a3a}
 QPushButton#AnalyzeButton{background-color:#2a4a2a;border:1px solid #408040;padding:10px;font-size:12pt}
@@ -289,20 +343,20 @@ def analyse_tile(tile_data: np.ndarray, sigma: float = 2.5, iterations: int = 3)
 
     original_size = data.size
     for _ in range(iterations):
-        if data.size == 0:
+        if data.size < 2:
             break
         med = np.median(data)
-        std = np.std(data)
+        std = np.std(data, ddof=1)
         if std < 1e-15:
             break
         mask = np.abs(data - med) < sigma * std
         clipped = data[mask]
-        if clipped.size == 0:
+        if clipped.size < 2:
             break
         data = clipped
 
     med = float(np.median(data))
-    std = float(np.std(data))
+    std = float(np.std(data, ddof=1) if data.size > 1 else 0.0)
     rejection_pct = (1.0 - data.size / original_size) * 100.0 if original_size > 0 else 0.0
     return {"median": med, "std": std, "rejection_pct": rejection_pct}
 
@@ -357,7 +411,10 @@ def compute_gradient_metrics(tile_medians: np.ndarray) -> dict:
     bg_median = float(np.median(tile_medians))
 
     if bg_median > 1e-15:
-        strength_pct = (bg_max - bg_min) / bg_median * 100.0
+        # Use robust IQR-based strength (P95-P5) to resist outlier tiles
+        p5 = float(np.percentile(tile_medians, 5))
+        p95 = float(np.percentile(tile_medians, 95))
+        strength_pct = (p95 - p5) / bg_median * 100.0
         uniformity = float(np.std(tile_medians)) / bg_median * 100.0
     else:
         strength_pct = 0.0
@@ -391,7 +448,9 @@ def compute_quadrant_summary(tile_medians: np.ndarray) -> dict:
     rows, cols = tile_medians.shape
     mid_r = rows // 2
     mid_c = cols // 2
-    # Image origin is lower-left, so row 0 = bottom
+    # sirilpy delivers data in FITS convention: row 0 = bottom of image.
+    # All imshow calls use origin="lower" to match this convention.
+    # Therefore: low row indices = South, high row indices = North.
     sw = float(np.median(tile_medians[:mid_r, :mid_c]))
     se = float(np.median(tile_medians[:mid_r, mid_c:]))
     nw = float(np.median(tile_medians[mid_r:, :mid_c]))
@@ -649,7 +708,8 @@ def compute_confidence(tile_medians: np.ndarray, tile_stds: np.ndarray) -> dict:
       - color: hex color for display
       - reason: explanation
     """
-    grad_range = float(np.max(tile_medians) - np.min(tile_medians))
+    # Use P95-P5 range to match the main strength metric (robust to outliers)
+    grad_range = float(np.percentile(tile_medians, 95) - np.percentile(tile_medians, 5))
     mean_noise = float(np.mean(tile_stds))
 
     if grad_range < 1e-15:
@@ -677,25 +737,49 @@ def check_linear_data(tile_medians: np.ndarray) -> dict:
     """
     Check whether the image data appears to be linear (unstretched).
     Background extraction should be performed on linear data.
+    Uses multiple heuristics: median level, mean/median ratio (skewness proxy),
+    and value distribution shape to avoid false positives from narrowband
+    or bright extended objects.
     Returns dict with is_linear, median_level, and warning message.
     """
     med = float(np.median(tile_medians))
-    if med > 0.4:
+    mean = float(np.mean(tile_medians))
+
+    # Mean/median ratio: linear astro data is heavily right-skewed (mean >> median)
+    # because stars create a long tail. Stretched data is more symmetric (ratio ~ 1).
+    mean_med_ratio = mean / med if med > 1e-15 else 1.0
+
+    # Linear data typically has mean/median > 1.1 due to star tails.
+    # Stretched data has mean/median close to 1.0 (symmetric after stretch).
+    is_symmetric = mean_med_ratio < 1.05
+
+    if med > 0.4 and is_symmetric:
         return {
             "is_linear": False, "median_level": med,
             "warning": (
-                f"Median background level is {med:.3f} — this image appears to be "
-                "already stretched (non-linear). Background extraction on stretched data "
-                "produces poor results. Apply gradient removal BEFORE stretching."
+                f"Median background level is {med:.3f} (mean/median ratio: {mean_med_ratio:.2f}) "
+                "— this image appears to be already stretched (non-linear). "
+                "Background extraction on stretched data produces poor results. "
+                "Apply gradient removal BEFORE stretching."
             ),
         }
-    elif med > 0.25:
+    elif med > 0.25 and is_symmetric:
         return {
             "is_linear": False, "median_level": med,
             "warning": (
-                f"Median background level is {med:.3f} — this image may be partially "
-                "stretched. For best results, apply background extraction on linear data "
-                "before any histogram stretch."
+                f"Median background level is {med:.3f} (mean/median ratio: {mean_med_ratio:.2f}) "
+                "— this image may be partially stretched. For best results, apply "
+                "background extraction on linear data before any histogram stretch."
+            ),
+        }
+    elif med > 0.4 and not is_symmetric:
+        # High median but skewed — could be narrowband or bright nebula
+        return {
+            "is_linear": True, "median_level": med,
+            "warning": (
+                f"Note: Median background is high ({med:.3f}) but the value distribution "
+                f"is right-skewed (mean/median: {mean_med_ratio:.2f}), suggesting linear data "
+                "with bright nebulosity or narrowband signal rather than a stretched image."
             ),
         }
     return {"is_linear": True, "median_level": med, "warning": ""}
@@ -829,14 +913,14 @@ def characterize_lp_color(channel_metrics: dict) -> dict:
             "Light pollution appears broadband (natural skyglow or white LED). "
             "Standard polynomial extraction should work well."
         )
-    elif dominant == "R" and r_str > g_str * 1.3:
+    elif dominant == "R" and r_str > g_str * 1.5:
         lp_type = "Sodium vapor (HPS)"
         desc = (
             f"Red channel dominates (R={r_str:.1f}%, G={g_str:.1f}%, B={b_str:.1f}%). "
             "Pattern matches high-pressure sodium (HPS) street lighting. "
             "VeraLux Nox is well-suited for this type of chromatic LP."
         )
-    elif dominant == "B" and b_str > g_str * 1.3:
+    elif dominant == "B" and b_str > g_str * 1.5:
         lp_type = "LED / mercury vapor"
         desc = (
             f"Blue channel dominates (R={r_str:.1f}%, G={g_str:.1f}%, B={b_str:.1f}%). "
@@ -985,10 +1069,12 @@ def compute_gradient_free_pct(
             global_ok = abs(tile_medians[r, c] - global_median) < abs_threshold
 
             # Local check: tile vs 3x3 neighborhood median (catches discontinuities)
+            # Use tighter threshold (0.7x global) to detect local jumps without
+            # being too aggressive on smooth gradients at coarse grid resolution
             r0, r1 = max(0, r - 1), min(rows, r + 2)
             c0, c1 = max(0, c - 1), min(cols, c + 2)
             local_med = np.median(tile_medians[r0:r1, c0:c1])
-            local_ok = abs(tile_medians[r, c] - local_med) < abs_threshold
+            local_ok = abs(tile_medians[r, c] - local_med) < abs_threshold * 0.7
 
             if global_ok and local_ok:
                 uniform_count += 1
@@ -1263,6 +1349,7 @@ def save_analysis_json(
     panel_info: dict | None = None,
     hotspot_info: dict | None = None,
     prediction_info: dict | None = None,
+    tile_medians: np.ndarray | None = None,
 ) -> str:
     """
     Save analysis results to a JSON sidecar file for later comparison.
@@ -1354,6 +1441,10 @@ def save_analysis_json(
             "predicted_reduction_pct": prediction_info["predicted_reduction_pct"],
         }
 
+    if tile_medians is not None:
+        # Store as compact single-line rows to keep file size reasonable
+        data["tile_medians"] = [[round(v, 8) for v in row] for row in tile_medians.tolist()]
+
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
@@ -1377,14 +1468,15 @@ def detect_hotspots(tile_medians: np.ndarray, sigma_threshold: float = 3.0) -> d
 
     for r in range(rows):
         for c in range(cols):
-            # Collect neighbors (excluding self)
+            # Collect neighbors (excluding self) using coordinate matching
             r0, r1 = max(0, r - 1), min(rows, r + 2)
             c0, c1 = max(0, c - 1), min(cols, c + 2)
-            neighborhood = tile_medians[r0:r1, c0:c1].flatten().tolist()
-            # Remove self
-            self_idx = (r - r0) * (c1 - c0) + (c - c0)
-            if 0 <= self_idx < len(neighborhood):
-                neighborhood.pop(self_idx)
+            neighborhood = []
+            for nr in range(r0, r1):
+                for nc in range(c0, c1):
+                    if nr == r and nc == c:
+                        continue  # skip self
+                    neighborhood.append(tile_medians[nr, nc])
             if len(neighborhood) < 3:
                 continue
 
@@ -1431,9 +1523,10 @@ def predict_improvement(
       - description: human-readable prediction
     """
     residuals = tile_medians - bg_model
-    res_min = float(np.min(residuals))
-    res_max = float(np.max(residuals))
-    res_range = res_max - res_min
+    # Use P95-P5 on residuals to match the main strength metric
+    res_p5 = float(np.percentile(residuals, 5))
+    res_p95 = float(np.percentile(residuals, 95))
+    res_range = res_p95 - res_p5
     residual_std = float(np.std(residuals))
 
     # Always use the ORIGINAL median as the normalization reference.
@@ -1453,7 +1546,7 @@ def predict_improvement(
 
     reduction = max(0.0, min(100.0, reduction))
 
-    if predicted_strength < 2.0:
+    if predicted_strength < 1.5:
         desc = (
             f"Predicted strength after subtraction: {predicted_strength:.1f}% "
             f"(from {original_strength:.1f}%, ~{reduction:.0f}% reduction). "
@@ -1492,15 +1585,16 @@ def predict_improvement(
 
 
 def detect_stacking_edges(
-    luminance: np.ndarray,
-    grid_rows: int,
-    grid_cols: int,
+    tile_medians: np.ndarray,
     drop_threshold: float = 0.3,
 ) -> dict:
     """
     Detect tapered/dark edges from dithering or rotation during stacking.
     Stacked images often have borders where pixel coverage drops, creating
     anomalously dark strips that mimic strong gradients.
+
+    Uses the sigma-clipped tile medians (same as all other analysis) to avoid
+    inconsistencies with raw luminance on star-dense fields.
 
     Checks the outermost ring of tiles for values far below the interior.
 
@@ -1510,30 +1604,22 @@ def detect_stacking_edges(
       - has_stacking_edges: True if edges detected
       - description: human-readable assessment
     """
-    h, w = luminance.shape
-    tile_h = h // grid_rows
-    tile_w = w // grid_cols
+    grid_rows, grid_cols = tile_medians.shape
 
-    # Quick per-tile median for edge vs interior comparison
+    # Compare edge tiles vs interior tiles
     edge_vals = []
     interior_vals = []
     edge_coords = []
 
     for r in range(grid_rows):
         for c in range(grid_cols):
-            y0 = r * tile_h
-            y1 = (r + 1) * tile_h if r < grid_rows - 1 else h
-            x0 = c * tile_w
-            x1 = (c + 1) * tile_w if c < grid_cols - 1 else w
-            tile = luminance[y0:y1, x0:x1]
-            med = float(np.median(tile))
-
+            val = float(tile_medians[r, c])
             is_edge = (r == 0 or r == grid_rows - 1 or c == 0 or c == grid_cols - 1)
             if is_edge:
-                edge_vals.append(med)
+                edge_vals.append(val)
                 edge_coords.append((r, c))
             else:
-                interior_vals.append(med)
+                interior_vals.append(val)
 
     if not interior_vals or not edge_vals:
         return {
@@ -1831,11 +1917,11 @@ def compute_cos4_correction(
     # Correct tile medians by dividing out cos^4
     corrected = tile_medians / np.maximum(cos4_model, 0.01)
 
-    # Compute residual gradient after cos^4 removal
-    corr_min = float(np.min(corrected))
-    corr_max = float(np.max(corrected))
+    # Compute residual gradient after cos^4 removal (P95-P5 for consistency)
+    corr_p5 = float(np.percentile(corrected, 5))
+    corr_p95 = float(np.percentile(corrected, 95))
     corr_med = float(np.median(corrected))
-    residual_pct = (corr_max - corr_min) / max(corr_med, 1e-15) * 100.0
+    residual_pct = (corr_p95 - corr_p5) / max(corr_med, 1e-15) * 100.0
 
     corner_falloff_pct = (1.0 - actual_falloff) * 100.0
 
@@ -1945,6 +2031,9 @@ def estimate_tile_fwhm(
         fwhm_y = float(v_above[-1] - v_above[0]) if len(v_above) >= 2 else 2.0
 
         fwhm = (fwhm_x + fwhm_y) / 2.0
+        # Filter out sub-pixel "stars" which are likely hot pixels or noise
+        if fwhm < 1.5:
+            continue
         fwhms.append(fwhm)
 
         # Eccentricity: 0 = circular, approaching 1 = elongated
@@ -2152,8 +2241,9 @@ def detect_normalization(image_data: np.ndarray) -> dict:
                 "suspiciously uniform for a real sky background"
             )
 
-    # Check for common normalization targets
-    common_targets = [0.0, 0.1, 0.15, 0.2, 0.25]
+    # Check for common normalization targets (0.0 excluded — near-zero is
+    # normal for linear deep-sky data and would cause false positives)
+    common_targets = [0.1, 0.15, 0.2, 0.25]
     for target in common_targets:
         if abs(bg_med - target) < 0.005:
             evidence.append(
@@ -2162,7 +2252,8 @@ def detect_normalization(image_data: np.ndarray) -> dict:
             )
             break
 
-    is_normalized = len(evidence) >= 1
+    # Require at least 2 pieces of evidence to avoid false positives
+    is_normalized = len(evidence) >= 2
 
     if is_normalized:
         desc = (
@@ -2405,7 +2496,15 @@ def read_fits_calibration_headers(image_data: np.ndarray) -> dict:
                 import math
                 cd11 = float(header["CD1_1"])
                 cd12 = float(header["CD1_2"])
-                result["wcs_rotation"] = math.degrees(math.atan2(cd12, cd11))
+                cd21 = float(header.get("CD2_1", 0.0))
+                cd22 = float(header.get("CD2_2", 0.0))
+                # Check parity: det(CD) < 0 means a mirror flip (common in astro)
+                det = cd11 * cd22 - cd12 * cd21
+                if det < 0:
+                    # Parity flip: use cd21 for rotation angle (flipped axis)
+                    result["wcs_rotation"] = math.degrees(math.atan2(cd21, cd11))
+                else:
+                    result["wcs_rotation"] = math.degrees(math.atan2(cd12, cd11))
 
             if "CDELT1" in header:
                 result["plate_scale"] = abs(float(header["CDELT1"])) * 3600.0  # deg to arcsec
@@ -2637,7 +2736,11 @@ def compute_sky_brightness(
         parts.append(f"estimated Bortle {bortle}")
 
     desc = " | ".join(parts) if parts else "Could not compute sky brightness."
-    desc += " (approximate — based on SPCC calibration and estimated zeropoint)"
+    desc += (
+        " (ROUGH ESTIMATE ONLY — uses assumed zeropoint of 25.0 mag; "
+        "actual values may differ by 1-2+ magnitudes without proper photometric calibration. "
+        "Bortle class is indicative only, not a reliable measurement.)"
+    )
 
     return {
         "sky_mag_min": mag_min,
@@ -2954,7 +3057,7 @@ def suggest_tool_and_workflow(
 
     # Warn about poor polynomial fit
     best_r2 = max(complexity["r2_by_degree"].values())
-    if best_r2 < 0.5 and strength > 5.0:
+    if best_r2 < 0.5 and strength > 4.0:
         suggestions.append(
             f"\u26a0 WARNING — Poor polynomial fit (best R\u00b2={best_r2:.2f}):\n"
             "  No polynomial degree explains more than 50% of the background variation.\n"
@@ -2986,7 +3089,7 @@ def suggest_tool_and_workflow(
         )
 
     # --- Step 2: Tool recommendation based on complexity and strength ---
-    if strength < 2.0:
+    if strength < 1.5:
         suggestions.append(
             "RESULT — Background is very uniform. No extraction needed.\n"
             "  Proceed with your processing workflow."
@@ -2994,7 +3097,7 @@ def suggest_tool_and_workflow(
         return suggestions
 
     # AutoBGE recommendation
-    if strength < 8.0 and degree <= 2:
+    if strength < 6.0 and degree <= 2:
         suggestions.append(
             "OPTION A — Siril AutoBGE (recommended for this gradient):\n"
             "  Automatic background extraction, good for moderate gradients.\n"
@@ -3005,12 +3108,13 @@ def suggest_tool_and_workflow(
     # subsky recommendation with degree from complexity analysis
     samples = {1: 15, 2: 25, 3: 40}.get(degree, 25)
     subsky_prefix = "AFTER FIXING ISSUES — " if has_critical else ""
-    option_label = "A" if (strength >= 8.0 or degree > 2) and not has_critical else "B" if not has_critical else ""
+    option_label = "A" if (strength >= 6.0 or degree > 2) and not has_critical else "B" if not has_critical else ""
     option_str = f"OPTION {option_label} — " if option_label else ""
     suggestions.append(
         f"{subsky_prefix}{option_str}Siril subsky (polynomial degree {degree}):\n"
         f"  Manual background extraction with polynomial fitting.\n"
-        f"  Siril: subsky -degree={degree} -samples={samples}\n"
+        f"  Siril: subsky {degree} {samples}\n"
+        f"  (Siril 1.2+; for Siril 1.4+ you can also use: subsky -degree={degree} -samples={samples})\n"
         f"  Complexity analysis: {complexity['description']}\n"
         f"  Fit quality: degree 1 R\u00b2={complexity['r2_by_degree'][1]:.3f}, "
         f"degree 2 R\u00b2={complexity['r2_by_degree'][2]:.3f}, "
@@ -3018,7 +3122,7 @@ def suggest_tool_and_workflow(
     )
 
     # GraXpert recommendation
-    if degree >= 3 or strength >= 15.0 or (complexity["r2_by_degree"][3] < 0.8 and strength >= 5.0):
+    if degree >= 3 or strength >= 12.0 or (complexity["r2_by_degree"][3] < 0.8 and strength >= 4.0):
         suggestions.append(
             "OPTION — GraXpert (AI-based, recommended for complex gradients):\n"
             "  Best choice when polynomial fitting cannot fully model the gradient.\n"
@@ -3027,7 +3131,7 @@ def suggest_tool_and_workflow(
             "  Especially useful for multi-directional or non-linear gradients\n"
             "  that subsky struggles with."
         )
-    elif strength >= 5.0:
+    elif strength >= 4.0:
         suggestions.append(
             "ALTERNATIVE — GraXpert (AI-based):\n"
             "  If subsky/AutoBGE leaves residual gradients, try GraXpert.\n"
@@ -3036,7 +3140,7 @@ def suggest_tool_and_workflow(
         )
 
     # VeraLux Nox recommendation — stronger if chromatic gradient detected
-    if chromatic_spread > 3.0 and strength >= 3.0:
+    if chromatic_spread > 2.5 and strength >= 2.5:
         ch_detail = ""
         if channel_metrics is not None:
             ch_detail = (
@@ -3054,7 +3158,7 @@ def suggest_tool_and_workflow(
             f"{ch_detail}\n"
             "  Install via Siril's script repository or get from the VeraLux project."
         )
-    elif strength >= 5.0:
+    elif strength >= 4.0:
         suggestions.append(
             "ALTERNATIVE — VeraLux Nox (Siril script):\n"
             "  Specialized light pollution removal script for Siril.\n"
@@ -3082,23 +3186,23 @@ def suggest_tool_and_workflow(
         workflow_lines.append(f"  {step}. Re-run Gradient Analyzer to assess remaining gradient")
         step += 1
 
-    if strength >= 2.0:
-        if best_r2 < 0.5 and strength > 5.0:
+    if strength >= 1.5:
+        if best_r2 < 0.5 and strength > 4.0:
             workflow_lines.append(
                 f"  {step}. Investigate anomalies (poor polynomial fit R\u00b2={best_r2:.2f}) — "
                 "fix root cause before extraction"
             )
             step += 1
-        if strength < 8.0 and degree <= 2 and best_r2 >= 0.5:
+        if strength < 6.0 and degree <= 2 and best_r2 >= 0.5:
             workflow_lines.append(f"  {step}. Try AutoBGE first (autobackgroundextraction)")
         else:
-            workflow_lines.append(f"  {step}. Apply subsky -degree={degree} -samples={samples}")
+            workflow_lines.append(f"  {step}. Apply subsky {degree} {samples}")
         step += 1
         workflow_lines.append(f"  {step}. Re-run Gradient Analyzer ('Analyze' / F5)")
         step += 1
-        workflow_lines.append(f"  {step}. If gradient still > 2%, try GraXpert or increase degree")
+        workflow_lines.append(f"  {step}. If gradient still > 1.5%, try GraXpert or increase degree")
         step += 1
-        workflow_lines.append(f"  {step}. Once gradient < 2%, proceed with stretching")
+        workflow_lines.append(f"  {step}. Once gradient < 1.5%, proceed with stretching")
 
     suggestions.append("\n".join(workflow_lines))
 
@@ -3110,7 +3214,7 @@ def build_thresholds(preset_name: str | None = None) -> list:
     if preset_name and preset_name in THRESHOLD_PRESETS:
         t1, t2, t3 = THRESHOLD_PRESETS[preset_name]
     else:
-        t1, t2, t3 = 2.0, 5.0, 15.0
+        t1, t2, t3 = 1.5, 4.0, 12.0
     return [
         (t1, "Very uniform — no extraction needed", "#55aa55"),
         (t2, "Slight gradient — gentle extraction recommended", "#aaaa55"),
@@ -3971,20 +4075,28 @@ class FWHMMapWidget(_MplWidgetBase):
 class GradientGaugeWidget(QWidget):
     """
     A color-coded horizontal gauge showing gradient strength from 0% to 25%+.
-    Green zone (0-2%), yellow (2-5%), orange (5-15%), red (15%+).
+    Green zone (0-1.5%), yellow (1.5-4%), orange (4-12%), red (12%+).
     """
 
     ZONE_COLORS = [
-        (2.0, QColor(85, 170, 85)),     # green
-        (5.0, QColor(170, 170, 85)),     # yellow
-        (15.0, QColor(221, 136, 51)),    # orange
-        (25.0, QColor(221, 68, 68)),     # red
+        (1.5, QColor(85, 170, 85)),     # green
+        (4.0, QColor(170, 170, 85)),     # yellow
+        (12.0, QColor(221, 136, 51)),    # orange
+        (20.0, QColor(221, 68, 68)),     # red
     ]
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setMinimumSize(280, 75)
         self.setMaximumHeight(80)
+        self.setToolTip(
+            "Gradient Strength Gauge\n\n"
+            "Shows how uneven your background is:\n"
+            "  Green (0-1.5%): Very uniform — no action needed.\n"
+            "  Yellow (1.5-4%): Slight gradient — gentle correction helps.\n"
+            "  Orange (4-12%): Noticeable — extraction recommended.\n"
+            "  Red (12%+): Strong — must be corrected before stretching."
+        )
         self._value = 0.0
         self._label = ""
 
@@ -4005,7 +4117,7 @@ class GradientGaugeWidget(QWidget):
         bar_y = 8
         bar_w = w - 20
         bar_h = 22
-        max_pct = 25.0
+        max_pct = 20.0
 
         # Draw zone backgrounds
         prev_x = bar_x
@@ -4059,7 +4171,7 @@ class GradientGaugeWidget(QWidget):
         font.setBold(False)
         painter.setFont(font)
         painter.setPen(QColor(150, 150, 150))
-        zone_labels = [("0%", 0), ("2%", 2), ("5%", 5), ("15%", 15), ("25%", 25)]
+        zone_labels = [("0%", 0), ("1.5%", 1.5), ("4%", 4), ("12%", 12), ("20%", 20)]
         for label, pct in zone_labels:
             lx = bar_x + int(pct / max_pct * bar_w)
             painter.drawText(lx - 10, zone_y, label)
@@ -4093,6 +4205,13 @@ class QuadrantWidget(QWidget):
         super().__init__(parent)
         self.setMinimumSize(220, 140)
         self.setMaximumHeight(160)
+        self.setToolTip(
+            "Quadrant Analysis\n\n"
+            "Shows the average background brightness in each quarter of the image.\n"
+            "The BRIGHTEST quadrant (red border) tells you which direction\n"
+            "the light pollution is coming from.\n"
+            "The DARKEST quadrant (green border) is the cleanest sky area."
+        )
         self._data = None
 
     def set_data(self, quadrant_data: dict) -> None:
@@ -4253,7 +4372,12 @@ class GradientAnalyzerWindow(QMainWindow):
 
         layout.addStretch()
 
-        # Help / Close
+        # Buy me a Coffee / Help / Close
+        btn_coffee = QPushButton("\u2615  Buy me a Coffee")
+        _nofocus(btn_coffee)
+        btn_coffee.setObjectName("CoffeeButton")
+        btn_coffee.setToolTip("Support the development of this tool")
+        btn_coffee.clicked.connect(self._show_coffee_dialog)
         btn_help = QPushButton("Help")
         _nofocus(btn_help)
         btn_help.clicked.connect(self._show_help_dialog)
@@ -4261,6 +4385,7 @@ class GradientAnalyzerWindow(QMainWindow):
         _nofocus(btn_close)
         btn_close.setObjectName("CloseButton")
         btn_close.clicked.connect(self.close)
+        layout.addWidget(btn_coffee)
         layout.addWidget(btn_help)
         layout.addWidget(btn_close)
 
@@ -4342,9 +4467,9 @@ class GradientAnalyzerWindow(QMainWindow):
             self.combo_preset.addItem(name)
         self.combo_preset.setCurrentIndex(0)
         self.combo_preset.setToolTip(
-            "Broadband: standard thresholds (2/5/15%)\n"
-            "Narrowband: stricter thresholds for faint signals (1/3/8%)\n"
-            "Fast optics: tolerant thresholds for fast f-ratio systems (4/8/20%)"
+            "Broadband: standard thresholds (1.5/4/12%)\n"
+            "Narrowband: stricter thresholds for faint signals (0.8/2.5/6%)\n"
+            "Fast optics: tolerant thresholds for fast f-ratio systems (3/6/16%)"
         )
         _nofocus(self.combo_preset)
         grid.addWidget(self.combo_preset, 4, 1, 1, 2)
@@ -4357,23 +4482,43 @@ class GradientAnalyzerWindow(QMainWindow):
 
         self.chk_smoothing = QCheckBox("Smoothing (bilinear interpolation)")
         self.chk_smoothing.setChecked(True)
+        self.chk_smoothing.setToolTip(
+            "Smooths the heatmap for a clearer visual.\n"
+            "Turn OFF only if you want to see raw tile-by-tile data.\n"
+            "Recommended: ON."
+        )
         _nofocus(self.chk_smoothing)
         g_layout.addWidget(self.chk_smoothing)
 
         self.chk_3d = QCheckBox("3D view")
         self.chk_3d.setChecked(True)
+        self.chk_3d.setToolTip(
+            "Shows a 3D elevation view of your gradient on the Heatmap tab.\n"
+            "Hills = brighter areas, valleys = darker areas.\n"
+            "Turn OFF if it slows down the display or you don't need it."
+        )
         _nofocus(self.chk_3d)
         g_layout.addWidget(self.chk_3d)
 
         self.chk_rgb_separate = QCheckBox("Analyze channels separately (RGB)")
         self.chk_rgb_separate.setChecked(False)
+        self.chk_rgb_separate.setToolTip(
+            "Shows gradients separately for Red, Green, and Blue channels.\n"
+            "Reveals COLORED light pollution — for example, orange sodium\n"
+            "street lights affect the red channel more than blue.\n"
+            "Enable this to check if your LP has a color bias.\n"
+            "Only works on color (3-channel) images."
+        )
         _nofocus(self.chk_rgb_separate)
         g_layout.addWidget(self.chk_rgb_separate)
 
         self.chk_sample_guide = QCheckBox("Show sample point guidance")
         self.chk_sample_guide.setChecked(True)
         self.chk_sample_guide.setToolTip(
-            "Overlay green circles (good sample regions) and red X marks (avoid) on the heatmap"
+            "Overlays green circles and red X marks on the heatmap.\n"
+            "Green = good areas to sample (clean, dark background).\n"
+            "Red = avoid (bright, gradient-affected).\n"
+            "Useful if you use manual sample placement for extraction."
         )
         _nofocus(self.chk_sample_guide)
         g_layout.addWidget(self.chk_sample_guide)
@@ -4381,25 +4526,40 @@ class GradientAnalyzerWindow(QMainWindow):
         self.chk_image_underlay = QCheckBox("Show image under heatmap")
         self.chk_image_underlay.setChecked(False)
         self.chk_image_underlay.setToolTip(
-            "Display the auto-stretched image underneath the heatmap overlay.\n"
-            "Helps see which parts of the actual image correspond to the gradient pattern."
+            "Display your actual image underneath the heatmap overlay.\n"
+            "Helps see which parts of the real image (stars, nebula)\n"
+            "correspond to the gradient pattern."
         )
         _nofocus(self.chk_image_underlay)
         g_layout.addWidget(self.chk_image_underlay)
 
         self.chk_save_png = QCheckBox("Save heatmap as PNG")
         self.chk_save_png.setChecked(False)
+        self.chk_save_png.setToolTip(
+            "Saves the heatmap image with metrics burned in.\n"
+            "Good for documentation, forum posts, or comparing sessions."
+        )
         _nofocus(self.chk_save_png)
         g_layout.addWidget(self.chk_save_png)
 
         self.chk_save_json = QCheckBox("Save analysis JSON (for comparison)")
         self.chk_save_json.setChecked(False)
         self.chk_save_json.setToolTip(
-            "Save analysis results to a JSON sidecar file. On next run, "
-            "automatically compare against the saved results."
+            "Saves all analysis results to a file in your working folder.\n"
+            "Next time you analyze, it automatically compares with\n"
+            "the saved results — useful for tracking improvement."
         )
         _nofocus(self.chk_save_json)
         g_layout.addWidget(self.chk_save_json)
+
+        self.chk_colorblind = QCheckBox("Colorblind-friendly colormap")
+        self.chk_colorblind.setChecked(False)
+        self.chk_colorblind.setToolTip(
+            "Switches the heatmap from 'inferno' to 'cividis' colormap\n"
+            "for better visibility with color vision deficiency."
+        )
+        _nofocus(self.chk_colorblind)
+        g_layout.addWidget(self.chk_colorblind)
 
         parent_layout.addWidget(group)
 
@@ -4540,11 +4700,11 @@ class GradientAnalyzerWindow(QMainWindow):
             "balanced = broadband sky glow."
             "<br><i>Use this to decide whether per-channel extraction or a narrowband approach is needed.</i>",
             # 4: Background Model
-            f"<b style='color:{_TAB_HL}'>Background Model</b> — Left: the polynomial surface that subsky would subtract "
-            "(the fitted gradient model). Right: residuals after subtracting the model. "
-            "Small, random residuals = good fit. Structured residuals = the polynomial degree "
-            "is too low or the gradient is non-polynomial."
-            "<br><i>Use this to verify whether the recommended polynomial degree captures the gradient shape.</i>",
+            f"<b style='color:{_TAB_HL}'>Background Model</b> — Left: what the tool thinks your gradient looks like "
+            "(the surface it would subtract). Right: what's left after removing it. "
+            "If the right side shows scattered random colors \u2192 good fit. "
+            "If it shows stripes or blobs \u2192 the model isn't capturing the gradient; try GraXpert."
+            "<br><i>Use this to preview whether the recommended extraction will work well.</i>",
             # 5: Gradient Magnitude
             f"<b style='color:{_TAB_HL}'>Gradient Magnitude</b> — Rate-of-change map showing where the background "
             "changes most steeply. Hot spots mark steep transitions that need the most "
@@ -4558,19 +4718,20 @@ class GradientAnalyzerWindow(QMainWindow):
             "<br><i>Use this to preview what gradient removal would look like before "
             "actually applying it in Siril.</i>",
             # 7: FWHM / Eccentricity
-            f"<b style='color:{_TAB_HL}'>FWHM / Eccentricity</b> — Star shape variation across the field. "
-            "FWHM (left) measures star size — increasing FWHM toward edges suggests tilt or "
-            "field curvature. Eccentricity (right) measures elongation (0 = round, 1 = line). "
-            "Requires minimum 3 stars per tile."
-            "<br><i>Use this to detect optical issues (sensor tilt, spacing, collimation) that "
-            "cause gradients which software extraction cannot fix.</i>",
+            f"<b style='color:{_TAB_HL}'>FWHM / Eccentricity</b> — How star shapes vary across your image. "
+            "Left: FWHM (Full Width at Half Maximum) = how big stars appear. "
+            "Stars getting bigger toward edges \u2192 sensor tilt or focus problems. "
+            "Right: Eccentricity = how stretched stars are (0 = round, 1 = line). "
+            "Increasing toward edges \u2192 collimation or spacing issues."
+            "<br><i>Why this matters: these optical problems CREATE gradients that "
+            "no software can fix \u2014 the hardware needs adjusting.</i>",
             # 8: Residuals / Mask
-            f"<b style='color:{_TAB_HL}'>Residuals / Mask</b> — Left: polynomial fit residuals as a blue–red "
-            "diverging map (blue = model too high, red = model too low). Right: the heatmap "
-            "with the exclusion mask overlaid — red tiles were excluded from the polynomial fit "
-            "(extended objects, hotspots, stacking edges, star-dense regions)."
-            "<br><i>Use this to verify which tiles were excluded and whether the remaining "
-            "residuals are random (good) or show systematic patterns (needs a higher degree).</i>",
+            f"<b style='color:{_TAB_HL}'>Residuals / Mask</b> — Left: what's left after subtracting the gradient model. "
+            "Blue = model removed too much there, red = removed too little. "
+            "Random blue/red scatter = good. Clear patterns = bad (model isn't good enough). "
+            "Right: red-shaded tiles were excluded from the fit (nebulae, artifacts, "
+            "stacking edges) so they don't confuse the gradient measurement."
+            "<br><i>Use this to check the fit quality and see which areas were excluded.</i>",
         ]
         self.lbl_tab_info = QLabel(self._tab_descriptions[0])
         self.lbl_tab_info.setWordWrap(True)
@@ -4656,6 +4817,7 @@ class GradientAnalyzerWindow(QMainWindow):
         self.chk_image_underlay.setChecked(s.value("image_underlay", False, type=bool))
         self.chk_save_png.setChecked(s.value("save_png", False, type=bool))
         self.chk_save_json.setChecked(s.value("save_json", False, type=bool))
+        self.chk_colorblind.setChecked(s.value("colorblind", False, type=bool))
         preset_idx = int(s.value("preset_index", 0))
         if 0 <= preset_idx < self.combo_preset.count():
             self.combo_preset.setCurrentIndex(preset_idx)
@@ -4672,6 +4834,7 @@ class GradientAnalyzerWindow(QMainWindow):
         s.setValue("image_underlay", self.chk_image_underlay.isChecked())
         s.setValue("save_png", self.chk_save_png.isChecked())
         s.setValue("save_json", self.chk_save_json.isChecked())
+        s.setValue("colorblind", self.chk_colorblind.isChecked())
         s.setValue("preset_index", self.combo_preset.currentIndex())
 
     def closeEvent(self, event) -> None:
@@ -4700,6 +4863,11 @@ class GradientAnalyzerWindow(QMainWindow):
                 f"Image: {self._img_width} x {self._img_height} px, {self._ch_str}"
             )
             self.lbl_image_info.setStyleSheet("font-size: 10pt; color: #88aaff;")
+            # Disable RGB-only checkbox for mono images
+            is_color = self._img_channels == 3
+            self.chk_rgb_separate.setEnabled(is_color)
+            if not is_color:
+                self.chk_rgb_separate.setChecked(False)
             return True
 
         except NoImageError:
@@ -4750,7 +4918,7 @@ class GradientAnalyzerWindow(QMainWindow):
         save_png = self.chk_save_png.isChecked()
         sample_guide = self.chk_sample_guide.isChecked()
         image_underlay = self.chk_image_underlay.isChecked()
-        cmap = "inferno"
+        cmap = "cividis" if self.chk_colorblind.isChecked() else "inferno"
         preset_name = self.combo_preset.currentText()
         active_thresholds = build_thresholds(preset_name)
 
@@ -4816,9 +4984,7 @@ class GradientAnalyzerWindow(QMainWindow):
         hotspot_info = detect_hotspots(tile_medians)
 
         # v1.7: Detect stacking edges and build weight mask for robust fitting
-        stacking_edge_info = detect_stacking_edges(
-            luminance, grid_rows, grid_cols,
-        )
+        stacking_edge_info = detect_stacking_edges(tile_medians)
         weight_mask = build_weight_mask(
             tile_medians,
             extended_tiles=extended_obj_info["flagged_tiles"],
@@ -4888,7 +5054,7 @@ class GradientAnalyzerWindow(QMainWindow):
         # --- Update visualizations ---
 
         # Heatmap (with sample point guidance, gradient arrow, and locked colorbar range)
-        show_arrow = metrics["strength_pct"] >= 2.0
+        show_arrow = metrics["strength_pct"] >= 1.5
         self.heatmap_widget.render_heatmap(
             tile_medians, self._img_width, self._img_height,
             cmap_name=cmap, smoothing=smoothing,
@@ -4968,10 +5134,11 @@ class GradientAnalyzerWindow(QMainWindow):
             grid_rows, grid_cols,
         )
 
-        # v1.7: FWHM / Eccentricity map
-        self._update_progress(82, "Computing FWHM map...")
+        # v1.7: FWHM / Eccentricity map (can be slow on large images)
+        self._update_progress(82, "Computing FWHM map (may take a moment)...")
         try:
             fwhm_data = compute_fwhm_map(luminance, grid_rows, grid_cols, sigma)
+            self._update_progress(90, "Rendering FWHM map...")
             self.fwhm_widget.render_fwhm_map(
                 fwhm_data, self._img_width, self._img_height,
             )
@@ -5108,6 +5275,7 @@ class GradientAnalyzerWindow(QMainWindow):
                 panel_info=panel_info,
                 hotspot_info=hotspot_info,
                 prediction_info=prediction_info,
+                tile_medians=tile_medians,
             )
 
         self._update_progress(100, "Done")
@@ -5222,29 +5390,29 @@ class GradientAnalyzerWindow(QMainWindow):
         lines.append("")
 
         # --- Plain-English explanation ---
-        if pct < 2.0:
+        if pct < 1.5:
             lines.append(
                 "Your image background is very uniform. "
                 "No gradient removal is needed — proceed with your normal workflow."
             )
-        elif pct < 5.0:
+        elif pct < 4.0:
             lines.append(
-                f"A <b>slight gradient</b> is present, running toward the <b>{direction}</b>. "
+                f"A <b>slight gradient</b> is present (brightest side faces <b>{direction}</b>). "
                 "A gentle background extraction would improve your result."
             )
-        elif pct < 15.0:
+        elif pct < 12.0:
             lines.append(
-                f"A <b>noticeable gradient</b> is present, running toward the <b>{direction}</b>. "
+                f"A <b>noticeable gradient</b> is present (brightest side faces <b>{direction}</b>). "
                 "Background extraction is recommended before stretching."
             )
         else:
             lines.append(
-                f"A <b>strong gradient</b> is present, running toward the <b>{direction}</b>. "
+                f"A <b>strong gradient</b> is present (brightest side faces <b>{direction}</b>). "
                 "This should be corrected before any further processing."
             )
 
         # Artifact caveat
-        if has_artifacts and pct >= 5.0:
+        if has_artifacts and pct >= 4.0:
             artifact_names = []
             if banding_info and (banding_info.get("has_row_banding") or banding_info.get("has_col_banding")):
                 artifact_names.append("sensor banding")
@@ -5278,7 +5446,7 @@ class GradientAnalyzerWindow(QMainWindow):
         )
 
         # --- Action Plan ---
-        if pct >= 2.0 or has_artifacts:
+        if pct >= 1.5 or has_artifacts:
             lines.append("<br><br>")
             lines.append(
                 "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
@@ -5293,9 +5461,14 @@ class GradientAnalyzerWindow(QMainWindow):
                 step += 1
                 lines.append(
                     f"<b style='color:#ffaa33'>Step {step}:</b> "
-                    "<b>Work on linear data.</b> Your image appears already stretched. "
-                    "Gradient removal works best on linear (unstretched) data. "
-                    "Go back to your linear stack before applying corrections.<br><br>"
+                    "<b>Work on linear data.</b> Your image appears already "
+                    "<b>stretched</b> (contrast-enhanced). "
+                    "'Stretching' means you've adjusted the brightness curve to make "
+                    "faint details visible \u2014 but this changes the background in ways "
+                    "that make gradient removal unreliable.<br>"
+                    "Go back to your original stacked image (before any stretching, "
+                    "auto-stretch, or histogram transformation). It's usually a file like "
+                    "<i>result.fit</i> or <i>stacked.fit</i> in your working folder.<br><br>"
                 )
 
             # Priority 2: Missing flats
@@ -5304,8 +5477,11 @@ class GradientAnalyzerWindow(QMainWindow):
                 lines.append(
                     f"<b style='color:#dd6644'>Step {step}:</b> "
                     "<b>Apply flat frames.</b> Your image was not flat-calibrated. "
-                    "Without flats, vignetting (dark corners) cannot be fixed — "
-                    "no software extraction can replace proper flat calibration.<br><br>"
+                    "Flat frames are calibration images you take of an evenly lit surface "
+                    "(e.g. a white T-shirt over the telescope at dusk). They correct for "
+                    "dust spots, vignetting (dark corners), and optical irregularities. "
+                    "Without flats, dark corners will persist no matter what software you use.<br>"
+                    "In Siril: <i>Processing \u2192 Calibration</i>, select your master flat.<br><br>"
                 )
 
             # Priority 3: Dew/frost
@@ -5324,10 +5500,12 @@ class GradientAnalyzerWindow(QMainWindow):
                 corner = amp_glow_info.get("affected_corner", "a corner")
                 lines.append(
                     f"<b style='color:#dd6644'>Step {step}:</b> "
-                    f"<b>Fix amplifier glow.</b> Amp glow detected in the <b>{corner}</b> "
-                    "corner. This is a sensor artifact that needs better dark frame "
-                    "subtraction (matching temperature and exposure). "
-                    "Software extraction can partially mask it but won't fix the root cause.<br><br>"
+                    f"<b>Fix amplifier glow.</b> A bright glow was detected in the "
+                    f"<b>{corner}</b> corner. This is caused by heat from the camera's "
+                    "readout electronics leaking into long exposures \u2014 not sky glow.<br>"
+                    "Fix: Apply <b>dark frames</b> taken at the <b>same temperature</b> "
+                    "and <b>same exposure time</b> as your lights. If darks are already "
+                    "applied, they may not match closely enough \u2014 try fresh darks.<br><br>"
                 )
 
             # Priority 5: Sensor banding
@@ -5335,10 +5513,12 @@ class GradientAnalyzerWindow(QMainWindow):
                 step += 1
                 lines.append(
                     f"<b style='color:#dd6644'>Step {step}:</b> "
-                    "<b>Address sensor banding.</b> Periodic row/column patterns were "
-                    "detected. This is a sensor readout artifact — apply proper "
-                    "bias and dark subtraction. Background extraction (subsky) "
-                    "cannot remove banding patterns.<br><br>"
+                    "<b>Address sensor banding.</b> Repeating bright/dark stripes were "
+                    "detected. These come from how your camera's electronics read the "
+                    "sensor \u2014 not from the sky. Background extraction cannot remove them.<br>"
+                    "Fix: Apply <b>bias frames</b> (zero-length exposures that capture the "
+                    "sensor's electronic pattern) and <b>dark frames</b> (same exposure, "
+                    "lens capped) during calibration. Re-stack afterward.<br><br>"
                 )
 
             # Priority 6: Stacking edges
@@ -5362,7 +5542,7 @@ class GradientAnalyzerWindow(QMainWindow):
                 )
 
             # Priority 8: Gradient removal
-            if pct >= 2.0:
+            if pct >= 1.5:
                 step += 1
                 deg = complexity_data["best_degree"]
                 best_r2 = max(complexity_data["r2_by_degree"].values())
@@ -5377,16 +5557,18 @@ class GradientAnalyzerWindow(QMainWindow):
                         "nebulosity, and non-polynomial patterns much better.<br>"
                     )
                     lines.append(
-                        "<span style='color:#aaaaaa'>  Alternative: In Siril, try "
+                        "<span style='color:#aaaaaa'>  Alternative: In Siril Console "
+                        "(<i>Windows \u2192 Console</i>), try "
                         f"<span style='color:#aaffaa; background:#1a3a1a; padding:2px 4px;'>"
-                        f"subsky deg {deg}</span> — but expect limited improvement.</span><br>"
+                        f"subsky {deg}</span> — but expect limited improvement.</span><br>"
                     )
                 else:
                     lines.append(
                         f"<b style='color:#88aaff'>Step {step}:</b> "
-                        f"<b>Remove the gradient</b> using Siril's background extraction:<br>"
+                        f"<b>Remove the gradient</b> using Siril's background extraction.<br>"
+                        f"Open the Console (<i>Windows \u2192 Console</i>) and type:<br>"
                         f"<span style='color:#aaffaa; background:#1a3a1a; padding:2px 6px;"
-                        f" font-family:monospace;'>subsky deg {deg}</span><br>"
+                        f" font-family:monospace;'>subsky {deg}</span><br>"
                     )
 
                 # Predicted outcome
@@ -5400,7 +5582,7 @@ class GradientAnalyzerWindow(QMainWindow):
                             "Consider GraXpert instead.</span><br>"
                         )
                     else:
-                        pred_color = "#55aa55" if pred < 5.0 else "#aaaa55"
+                        pred_color = "#55aa55" if pred < 4.0 else "#aaaa55"
                         lines.append(
                             f"<span style='color:{pred_color}'>Expected result: "
                             f"~{pred:.1f}% ({reduction:.0f}% reduction)</span><br>"
@@ -5410,8 +5592,10 @@ class GradientAnalyzerWindow(QMainWindow):
                 if residual_pattern_info and residual_pattern_info.get("has_structure"):
                     lines.append(
                         "<span style='color:#dd6644'><i>Residuals show structured "
-                        "patterns — a higher polynomial degree or GraXpert may give "
-                        "a cleaner result.</i></span><br>"
+                        "patterns — this means the mathematical model didn't fully "
+                        "capture the real gradient shape. A higher polynomial degree "
+                        "or GraXpert (which uses AI instead of a fixed formula) "
+                        "may give a cleaner result.</i></span><br>"
                     )
                 lines.append("<br>")
 
@@ -5484,18 +5668,23 @@ class GradientAnalyzerWindow(QMainWindow):
             f"Confidence: {confidence_data['label']} ({confidence_data['score']:.0%})</span>"
         )
         lines.append(f"<span style='color:{color}'>{assessment}</span>")
-        lines.append(f"Direction:           {metrics['angle_deg']:.0f}\u00b0 ({direction})")
+        lines.append(f"Brightest side faces: {metrics['angle_deg']:.0f}\u00b0 ({direction})")
         lines.append("")
         lines.append(f"Background Min:      {metrics['bg_min']:.6f}     Max: {metrics['bg_max']:.6f}")
         lines.append(f"Background Range:    {metrics['bg_range']:.6f}     Median: {metrics['bg_median']:.6f}")
-        lines.append(f"Uniformity (CV):     {metrics['uniformity']:.1f} %")
+        lines.append(f"Uniformity:          {metrics['uniformity']:.1f} %")
         lines.append("")
         lines.append(f"<b>Complexity:</b> {complexity_data['description']}")
         lines.append(
-            f"  Polynomial fit: deg1 R\u00b2={complexity_data['r2_by_degree'][1]:.3f}  "
-            f"deg2 R\u00b2={complexity_data['r2_by_degree'][2]:.3f}  "
-            f"deg3 R\u00b2={complexity_data['r2_by_degree'][3]:.3f}  "
+            f"  Polynomial fit (R\u00b2 = goodness of fit, 0\u20131, higher is better): "
+            f"deg1={complexity_data['r2_by_degree'][1]:.3f}  "
+            f"deg2={complexity_data['r2_by_degree'][2]:.3f}  "
+            f"deg3={complexity_data['r2_by_degree'][3]:.3f}  "
             f"\u2192 <b>recommended degree: {complexity_data['best_degree']}</b>"
+        )
+        lines.append(
+            "  <span style='color:#888'>(degree 1 = flat tilt, "
+            "degree 2 = curved surface, degree 3 = complex shape)</span>"
         )
         lines.append("")
         lines.append(f"<b>Pattern:</b> {vignetting_data['diagnosis']}")
@@ -5516,7 +5705,7 @@ class GradientAnalyzerWindow(QMainWindow):
             f"  |  Spread: {quadrant_data['spread']:.6f}"
         )
 
-        if has_artifacts and metrics["strength_pct"] >= 5.0:
+        if has_artifacts and metrics["strength_pct"] >= 4.0:
             lines.append(
                 "<span style='color:#ffaa33'><i>Note: the gradient % above includes "
                 "contributions from detected artifacts (banding, amp glow, missing flats, etc.). "
@@ -5564,8 +5753,8 @@ class GradientAnalyzerWindow(QMainWindow):
                 f"{symmetry_info['diagnosis']}</span>"
             )
 
-        if prediction_info is not None and metrics["strength_pct"] >= 2.0:
-            pred_color = "#55aa55" if prediction_info["predicted_strength_pct"] < 2.0 else "#aaaa55"
+        if prediction_info is not None and metrics["strength_pct"] >= 1.5:
+            pred_color = "#55aa55" if prediction_info["predicted_strength_pct"] < 1.5 else "#aaaa55"
             lines.append("")
             lines.append(
                 f"<b>Prediction:</b> <span style='color:{pred_color}'>"
@@ -5574,7 +5763,7 @@ class GradientAnalyzerWindow(QMainWindow):
                 f"({prediction_info['predicted_reduction_pct']:.0f}% reduction)</span>"
             )
 
-        if residual_pattern_info is not None and metrics["strength_pct"] >= 2.0:
+        if residual_pattern_info is not None and metrics["strength_pct"] >= 1.5:
             rp_color = "#dd6644" if residual_pattern_info["has_structure"] else "#55aa55"
             lines.append(
                 f"<b>Residuals:</b> <span style='color:{rp_color}'>"
@@ -5589,7 +5778,8 @@ class GradientAnalyzerWindow(QMainWindow):
 
         if extended_obj_info is not None and extended_obj_info["flagged_count"] > 0:
             lines.append(
-                f"<span style='color:#ffaa33'>\u26a0 <b>Extended objects:</b> "
+                f"<span style='color:#ffaa33'>\u26a0 <b>Extended objects</b> "
+                f"(nebulae or galaxies in your image — these are your target, not gradient!): "
                 f"{extended_obj_info['warning']}</span>"
             )
 
@@ -5667,9 +5857,14 @@ class GradientAnalyzerWindow(QMainWindow):
         if sky_brightness_info is not None and sky_brightness_info.get("has_photometry"):
             lines.append("")
             bortle = sky_brightness_info.get("bortle_estimate")
-            bortle_str = f" (Bortle {bortle})" if bortle else ""
+            bortle_str = f" (~Bortle {bortle})" if bortle else ""
             lines.append(
                 f"<b>Sky Brightness:</b> {sky_brightness_info['description']}{bortle_str}"
+            )
+            lines.append(
+                "<span style='color:#aaaa55'><i>Note: sky brightness and Bortle are rough "
+                "estimates based on an assumed zeropoint. Use a dedicated SQM meter for "
+                "accurate measurements.</i></span>"
             )
 
         if dew_info is not None and dew_info.get("has_dew"):
@@ -6157,7 +6352,7 @@ class GradientAnalyzerWindow(QMainWindow):
         sep = "\u2500" * 40
         self._log(sep)
         self._log(f"Strength: {metrics['strength_pct']:.1f}%  ({assessment})  "
-                   f"Direction: {metrics['angle_deg']:.0f}\u00b0 ({direction})")
+                   f"Brightest side faces: {metrics['angle_deg']:.0f}\u00b0 ({direction})")
         self._log(f"Pattern: {vignetting_data['diagnosis']}  "
                    f"Complexity: degree {complexity_data['best_degree']}")
 
@@ -6217,7 +6412,7 @@ class GradientAnalyzerWindow(QMainWindow):
         direction = angle_to_direction(metrics["angle_deg"])
         annotation = (
             f"Gradient: {metrics['strength_pct']:.1f}%  |  "
-            f"Dir: {metrics['angle_deg']:.0f}\u00b0 ({direction})  |  "
+            f"Brightest: {metrics['angle_deg']:.0f}\u00b0 ({direction})  |  "
             f"Range: {metrics['bg_range']:.6f}  |  "
             f"{assessment}  |  "
             f"Gradient Analyzer v{VERSION}"
@@ -6258,6 +6453,104 @@ class GradientAnalyzerWindow(QMainWindow):
     # HELP
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # BUY ME A COFFEE
+    # ------------------------------------------------------------------
+
+    def _show_coffee_dialog(self) -> None:
+        BMC_URL = "https://buymeacoffee.com/sramuschkat"
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("\u2615 Support Gradient Analyzer")
+        dlg.setMinimumSize(520, 480)
+        dlg.setStyleSheet(
+            "QDialog{background-color:#1e1e1e;color:#e0e0e0}"
+            "QLabel{color:#e0e0e0}"
+            "QPushButton{font-weight:bold;padding:8px;border-radius:6px}"
+        )
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(12)
+
+        # Combined header + message (single box)
+        header_msg = QLabel(
+            "<div style='text-align:center; font-size:12pt; line-height:1.6;'>"
+            "<span style='font-size:48pt;'>\u2615</span><br>"
+            "<span style='font-size:18pt; font-weight:bold; color:#FFDD00;'>"
+            "Buy me a Coffee</span><br><br>"
+            "<b style='color:#e0e0e0;'>Enjoying the Gradient Analyzer?</b><br><br>"
+            "This tool is free and open source. It's built with love for the "
+            "astrophotography community by <b style='color:#88aaff;'>Sven Ramuschkat</b> "
+            "(<span style='color:#88aaff;'>svenesis.org</span>).<br><br>"
+            "If this tool has saved you time, helped you understand your gradients, "
+            "or simply made your processing workflow better \u2014 consider buying "
+            "me a coffee to keep development going!<br><br>"
+            "<span style='color:#FFDD00;'>\u2615 Every coffee fuels a new feature, "
+            "bug fix, or clear-sky night of testing.</span><br><br>"
+            "<span style='color:#aaaaaa;'>Your support helps maintain:</span><br>"
+            "\u2022 Gradient Analyzer \u2022 Image Advisor<br>"
+            "\u2022 Multiple Histogram Viewer \u2022 Script Security Scanner<br>"
+            "</div>"
+        )
+        header_msg.setWordWrap(True)
+        header_msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        header_msg.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(header_msg)
+
+        layout.addSpacing(8)
+
+        # Open link button (BMC branded)
+        btn_open = QPushButton("\u2615  Buy me a Coffee  \u2615")
+        btn_open.setStyleSheet(
+            "QPushButton{"
+            "  background-color:#FFDD00; color:#000000;"
+            "  font-size:14pt; font-weight:bold;"
+            "  padding:12px 24px; border-radius:8px;"
+            "  border:2px solid #ccb100;"
+            "}"
+            "QPushButton:hover{"
+            "  background-color:#ffe740; border-color:#ddcc00;"
+            "}"
+        )
+        btn_open.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_open.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(BMC_URL)))
+        layout.addWidget(btn_open)
+
+        layout.addSpacing(4)
+
+        # Close button
+        btn_close = QPushButton("Close")
+        btn_close.setStyleSheet(
+            "QPushButton{background-color:#444;color:#ddd;border:1px solid #666;padding:6px}"
+            "QPushButton:hover{background-color:#555}"
+        )
+        _nofocus(btn_close)
+        btn_close.clicked.connect(dlg.accept)
+        layout.addWidget(btn_close)
+
+        # Combined footer: URL + thank-you (single block)
+        footer = QLabel(
+            f"<div style='text-align:center; line-height:1.8;'>"
+            f"<a style='color:#88aaff; font-size:12pt;' href='{BMC_URL}'>{BMC_URL}</a><br>"
+            f"<span style='font-size:13pt; color:#999;'>"
+            f"Thank you for supporting open-source astrophotography tools!<br>"
+            f"Clear skies \u2728</span>"
+            f"</div>"
+        )
+        footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        footer.setTextFormat(Qt.TextFormat.RichText)
+        footer.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
+        footer.setOpenExternalLinks(True)
+        layout.addWidget(footer)
+
+        dlg.exec()
+
+    # ------------------------------------------------------------------
+    # HELP
+    # ------------------------------------------------------------------
+
     def _show_help_dialog(self) -> None:
         dlg = QDialog(self)
         dlg.setWindowTitle("Gradient Analyzer \u2014 Help")
@@ -6283,11 +6576,27 @@ class GradientAnalyzerWindow(QMainWindow):
             "<b style='color:#88aaff; font-size:16pt;'>"
             "\ud83d\ude80 Getting Started</b><br><br>"
 
+            "<b style='color:#ffcc66;'>What is a gradient?</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "Look at the background of your astrophoto \u2014 the dark sky between "
+            "the stars. Is one side brighter than the other? Maybe the left edge "
+            "glows faintly orange, or the corners are darker than the center? "
+            "That uneven brightness is a <b>gradient</b>.<br><br>"
+            "Common causes:<br>"
+            "\u2022 <b>Light pollution</b> \u2014 a city or streetlight illuminating "
+            "one side of the sky more than the other.<br>"
+            "\u2022 <b>Vignetting</b> \u2014 your telescope or lens naturally darkens "
+            "the corners (especially fast optics like f/2\u2013f/4).<br>"
+            "\u2022 <b>Sensor artifacts</b> \u2014 amplifier glow (bright corner), "
+            "banding (stripes), or dew on the lens.<br><br>"
+            "Gradients make your final image look uneven and muddy. Removing them "
+            "<b>before</b> stretching is one of the most important processing steps."
+            "</div><br>"
+
             "<b style='color:#ffcc66;'>What does this tool do?</b><br>"
-            "The Gradient Analyzer examines your stacked image for uneven background "
-            "brightness (gradients) caused by light pollution, vignetting, or sensor "
-            "artifacts. It tells you <b>what's wrong</b>, <b>how bad it is</b>, and "
-            "<b>exactly what to do about it</b>.<br><br>"
+            "The Gradient Analyzer measures your gradient, shows you exactly where "
+            "it is, tells you <b>how bad it is</b>, identifies the <b>likely cause</b>, "
+            "and gives you <b>step-by-step instructions</b> to fix it.<br><br>"
 
             "<b style='color:#ffcc66;'>Quick Start \u2014 3 Steps</b><br>"
             "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
@@ -6299,22 +6608,27 @@ class GradientAnalyzerWindow(QMainWindow):
 
             "<b style='color:#ffcc66;'>Understanding the Color Bar</b><br>"
             "<div style='background:#252525; padding:8px; border-radius:4px;'>"
-            "<span style='color:#55aa55;'>\u2588\u2588</span> <b>Green (0\u20132%)</b> "
+            "<span style='color:#55aa55;'>\u2588\u2588</span> <b>Green (0\u20131.5%)</b> "
             "\u2014 Background is uniform. No action needed.<br>"
-            "<span style='color:#aaaa55;'>\u2588\u2588</span> <b>Yellow (2\u20135%)</b> "
+            "<span style='color:#aaaa55;'>\u2588\u2588</span> <b>Yellow (1.5\u20134%)</b> "
             "\u2014 Slight gradient. A gentle correction helps.<br>"
-            "<span style='color:#dd8833;'>\u2588\u2588</span> <b>Orange (5\u201315%)</b> "
+            "<span style='color:#dd8833;'>\u2588\u2588</span> <b>Orange (4\u201312%)</b> "
             "\u2014 Noticeable gradient. Correction recommended.<br>"
-            "<span style='color:#dd4444;'>\u2588\u2588</span> <b>Red (15%+)</b> "
+            "<span style='color:#dd4444;'>\u2588\u2588</span> <b>Red (12%+)</b> "
             "\u2014 Strong gradient. Must be corrected.</div><br>"
 
             "<b style='color:#ffcc66;'>The Preset Dropdown</b><br>"
             "Choose the preset that matches your imaging setup:<br>"
-            "\u2022 <b>Broadband (default)</b> \u2014 Standard thresholds for most setups.<br>"
-            "\u2022 <b>Narrowband (strict)</b> \u2014 Tighter thresholds because narrowband "
-            "signals are faint and gradients are more harmful.<br>"
-            "\u2022 <b>Fast optics (tolerant)</b> \u2014 Relaxed thresholds for fast telescopes "
-            "(f/2\u2013f/4) that naturally have more vignetting.<br><br>"
+            "\u2022 <b>Broadband (default)</b> \u2014 Standard thresholds (1.5/4/12%) for "
+            "most setups with LRGB or one-shot color cameras.<br>"
+            "\u2022 <b>Narrowband (strict)</b> \u2014 Tighter thresholds (0.8/2.5/6%) "
+            "for H-alpha, OIII, SII filters. Narrowband signals are very faint, so even "
+            "a small gradient is relatively loud compared to your signal. A 4% gradient "
+            "that's harmless in broadband can ruin a narrowband image.<br>"
+            "\u2022 <b>Fast optics (tolerant)</b> \u2014 Relaxed thresholds (3/6/16%) for "
+            "fast telescopes (f/2\u2013f/4). Wide-aperture optics naturally darken the corners "
+            "because light travels at steep angles to reach the edges (cos\u2074 falloff). "
+            "This is normal optical behavior, not a processing problem.<br><br>"
 
             "<b style='color:#ffcc66;'>Keyboard Shortcut</b><br>"
             "\u2022 <b>F5</b> \u2014 Load current Siril image and run analysis<br><br>"
@@ -6393,35 +6707,56 @@ class GradientAnalyzerWindow(QMainWindow):
             "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
             " border:1px solid #3a5a7a;'>"
             "<b style='color:#88aaff;'>\u26a1 AutoBGE</b> (Siril built-in)<br>"
-            "Fully automatic. Best for mild-to-moderate gradients.<br>"
-            "Command: <span style='color:#aaffaa; background:#1a3a1a;"
-            " padding:2px 4px; font-family:monospace;'>autobackgroundextraction</span>"
+            "<b>What it does:</b> Automatically finds and removes the gradient.<br>"
+            "<b>Best for:</b> Mild-to-moderate, simple gradients.<br>"
+            "<b>How to use:</b> In Siril menu: <i>Processing \u2192 Background Extraction</i>, "
+            "or type in the Console: <span style='color:#aaffaa; background:#1a3a1a;"
+            " padding:2px 4px; font-family:monospace;'>autobackgroundextraction</span><br>"
+            "<b>Pros:</b> Fast, no parameters needed, built into Siril.<br>"
+            "<b>Cons:</b> Less control; may not work for complex gradients."
             "</div><br>"
 
             "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
             " border:1px solid #3a5a7a;'>"
             "<b style='color:#88aaff;'>\ud83d\udcca subsky</b> (Siril built-in)<br>"
-            "Polynomial background subtraction. Works for all gradient strengths "
-            "when the pattern is smooth and predictable.<br>"
-            "Command: <span style='color:#aaffaa; background:#1a3a1a;"
-            " padding:2px 4px; font-family:monospace;'>subsky -degree=N -samples=M</span><br>"
-            "The analyzer tells you which degree and sample count to use."
+            "<b>What it does:</b> Fits a mathematical surface to the gradient and subtracts it.<br>"
+            "<b>Best for:</b> Any gradient strength with a smooth, predictable pattern.<br>"
+            "<b>How to use:</b> Open the Console (<i>Windows \u2192 Console</i> in Siril), "
+            "then type: <span style='color:#aaffaa; background:#1a3a1a;"
+            " padding:2px 4px; font-family:monospace;'>subsky 2 15</span> "
+            "(this analyzer tells you the right numbers).<br>"
+            "<b>The numbers mean:</b> first = polynomial degree (1=flat tilt, 2=curved, "
+            "3=complex), second = sample grid size.<br>"
+            "<b>Pros:</b> More control than AutoBGE; handles many gradient shapes.<br>"
+            "<b>Cons:</b> Requires choosing parameters (but this tool picks them for you)."
             "</div><br>"
 
             "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
             " border:1px solid #3a5a7a;'>"
-            "<b style='color:#88aaff;'>\ud83e\udde0 GraXpert</b> (external, AI-based)<br>"
-            "Uses AI to separate background from signal. Best for complex, "
-            "multi-directional gradients that polynomial fitting can't handle.<br>"
-            "Download: <span style='color:#88aaff;'>https://www.graxpert.com</span>"
+            "<b style='color:#88aaff;'>\ud83e\udde0 GraXpert</b> (free external tool)<br>"
+            "<b>What it does:</b> Uses AI to separate sky background from your actual signal.<br>"
+            "<b>Best for:</b> Complex, multi-directional, or irregular gradients that "
+            "simple math can't model.<br>"
+            "<b>How to install:</b> Download free from "
+            "<span style='color:#88aaff;'>https://www.graxpert.com</span><br>"
+            "<b>How to use:</b> Save your image from Siril, open it in GraXpert, "
+            "click Background Extraction, save the result, load it back in Siril.<br>"
+            "<b>Pros:</b> Handles very complex gradients and nebulosity beautifully.<br>"
+            "<b>Cons:</b> Separate program to install; slightly slower workflow."
             "</div><br>"
 
             "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
             " border:1px solid #3a5a7a;'>"
             "<b style='color:#88aaff;'>\ud83c\udf08 VeraLux Nox</b> (Siril script)<br>"
-            "Specialized for color-dependent light pollution where R/G/B channels "
-            "show different gradient strengths. Works on linear data.<br>"
-            "Install via Siril's script repository."
+            "<b>What it does:</b> Removes light pollution that has a specific color. "
+            "For example, orange sodium street lights affect the red channel more "
+            "than blue \u2014 VeraLux Nox handles each color channel separately.<br>"
+            "<b>Best for:</b> Colored light pollution (enable 'Analyze channels separately' "
+            "to check if your R/G/B gradients differ).<br>"
+            "<b>How to install:</b> In Siril: <i>Preferences \u2192 Scripts \u2192 "
+            "Get Scripts</i>, search for VeraLux Nox.<br>"
+            "<b>How to use:</b> <i>Processing \u2192 Scripts \u2192 VeraLux Nox</i>.<br>"
+            "<b>Note:</b> Works only on linear (unstretched) color images."
             "</div><br>"
 
             "<b style='color:#ffcc66;'>Recommended Workflow</b><br>"
@@ -6432,8 +6767,8 @@ class GradientAnalyzerWindow(QMainWindow):
             "<b>2.</b> Apply flat field correction if vignetting is detected.<br>"
             "<b>3.</b> Run gradient extraction (tool depends on complexity).<br>"
             "<b>4.</b> Press <b>Analyze (F5)</b> again to check improvement.<br>"
-            "<b>5.</b> If gradient is still > 2%, try a more powerful tool.<br>"
-            "<b>6.</b> Once gradient < 2%, proceed with stretching.</div>"
+            "<b>5.</b> If gradient is still > 1.5%, try a more powerful tool.<br>"
+            "<b>6.</b> Once gradient < 1.5%, proceed with stretching.</div>"
         )
         tabs.addTab(te_tools, "\ud83d\udee0\ufe0f Tools")
 
@@ -6447,9 +6782,14 @@ class GradientAnalyzerWindow(QMainWindow):
 
             "<b style='color:#ffcc66;'>Grid Settings</b><br>"
             "\u2022 <b>Columns / Rows</b> (4\u201364): How many tiles to divide the image into. "
-            "Default 16\u00d716. More tiles = finer detail but slower.<br>"
-            "\u2022 <b>Sigma-Clip</b> (1.5\u20134.0): Controls star exclusion. Lower = more "
-            "aggressive star removal. Default 2.8 works for most images.<br><br>"
+            "Default 16\u00d716. More tiles (32, 64) = finer detail but slower. "
+            "Fewer tiles (8) = faster, good enough for simple gradients. "
+            "Try increasing if you suspect small-scale hotspots or panel seams.<br>"
+            "\u2022 <b>Sigma-Clip</b> (1.5\u20134.0): Controls how aggressively stars are "
+            "excluded from the background measurement. Stars are much brighter than "
+            "the sky, so the tool ignores them. Lower = ignore more pixels (aggressive). "
+            "Higher = only ignore the brightest stars (gentle). Default 2.5 works for "
+            "most images. Use 3.0\u20133.5 for dense star fields.<br><br>"
 
             "<b style='color:#ffcc66;'>Checkboxes</b><br>"
             "\u2022 <b>Smoothing</b> \u2014 Makes the heatmap smoother (interpolation). "
@@ -6465,8 +6805,11 @@ class GradientAnalyzerWindow(QMainWindow):
             "correspond to the gradient.<br>"
             "\u2022 <b>Save heatmap as PNG</b> \u2014 Exports the heatmap with metrics "
             "burned into the image. Good for documentation.<br>"
-            "\u2022 <b>Save analysis JSON</b> \u2014 Saves results to a file. Next time "
-            "you analyze, it automatically compares with previous results.<br><br>"
+            "\u2022 <b>Save analysis JSON</b> \u2014 Saves results to a file (includes tile "
+            "medians array for cross-session comparison). Next time you analyze, "
+            "it automatically compares with previous results.<br>"
+            "\u2022 <b>Colorblind-friendly colormap</b> \u2014 Switches from 'inferno' to 'cividis' "
+            "for better visibility with color vision deficiency.<br><br>"
 
             "<b style='color:#ffcc66;'>Buttons</b><br>"
             "\u2022 <b>Analysis Results</b> \u2014 Opens a dialog with the summary, "
@@ -6490,54 +6833,84 @@ class GradientAnalyzerWindow(QMainWindow):
             "Here's what each warning means and what to do:<br><br>"
 
             "<b style='color:#ff6644;'>Dew / Frost Detected</b><br>"
-            "Moisture on your optics causes a bright center and blurry edges. "
-            "<b>Fix:</b> Discard affected frames. Check your dew heater.<br><br>"
+            "Moisture (dew or frost) has formed on your telescope's front lens "
+            "or corrector plate. This causes a bright, soft glow in the center "
+            "and blurry stars toward the edges (scattering).<br>"
+            "<b>Fix:</b> Discard the affected frames. Check that your dew heater "
+            "is working. No software can fully undo dew scattering.<br><br>"
 
             "<b style='color:#dd6644;'>Amplifier Glow</b><br>"
-            "Sensor artifact causing a bright glow in one corner. "
-            "<b>Fix:</b> Better dark frame subtraction (matching temperature and exposure). "
-            "Software extraction only partially masks it.<br><br>"
+            "Your camera's readout electronics produce heat, and during long "
+            "exposures this heat causes a warm glow in one corner of the sensor. "
+            "It's a hardware artifact, not sky glow.<br>"
+            "<b>Fix:</b> Apply <b>dark frames</b> (images taken with the lens cap on, "
+            "same exposure time and temperature as your lights). If darks are "
+            "already applied but glow remains, your darks may not match closely "
+            "enough \u2014 try fresh darks at the exact same sensor temperature.<br><br>"
 
             "<b style='color:#dd6644;'>Sensor Banding</b><br>"
-            "Periodic row/column patterns from sensor readout. "
-            "<b>Fix:</b> Apply proper bias and dark calibration. "
-            "Background extraction (subsky) cannot remove banding.<br><br>"
+            "Repeating bright/dark horizontal or vertical stripes from how your "
+            "camera's electronics read data off the sensor. This is NOT a gradient "
+            "that subsky can remove.<br>"
+            "<b>Fix:</b> Apply <b>bias frames</b> (zero-length exposures that capture "
+            "the sensor's electronic pattern) and <b>dark frames</b> during calibration. "
+            "Re-stack afterward.<br><br>"
 
             "<b style='color:#dd6644;'>Missing Flat Calibration</b><br>"
-            "Your image wasn't flat-calibrated. Vignetting (dark corners) "
-            "can't be fixed without flats. "
-            "<b>Fix:</b> Apply master flat before gradient extraction.<br><br>"
+            "Your image was not calibrated with flat frames. Flat frames are "
+            "reference images (e.g. of a white T-shirt over the telescope at dusk) "
+            "that correct for dust spots, vignetting (dark corners), and optical "
+            "irregularities. Without them, dark corners will persist no matter "
+            "what gradient extraction you apply.<br>"
+            "<b>Fix:</b> Apply your master flat in Siril before gradient extraction.<br><br>"
 
             "<b style='color:#ffaa33;'>Non-linear Data</b><br>"
-            "Your image appears to be already stretched. Gradient analysis works best "
-            "on linear (unstretched) data. "
-            "<b>Fix:</b> Analyze your linear stack before stretching.<br><br>"
+            "Your image appears to have been 'stretched' (contrast-enhanced). "
+            "Stretching changes the background brightness distribution, making "
+            "gradient analysis less reliable. Gradient removal should be done "
+            "on the original, unstretched ('linear') data.<br>"
+            "<b>Fix:</b> Go back to your stacked result file (before any stretching, "
+            "auto-stretch, or histogram transformation) and re-analyze.<br><br>"
 
             "<b style='color:#ffaa33;'>Normalization Detected</b><br>"
-            "The background was equalized during stacking, which masks gradients. "
-            "<b>Fix:</b> Re-stack without background normalization and re-analyze.<br><br>"
+            "During stacking, your software may have automatically leveled the "
+            "background brightness of each sub-frame ('background normalization'). "
+            "This hides gradients from view, making the analysis unreliable.<br>"
+            "<b>Fix:</b> Re-stack without the 'Normalize background' option enabled "
+            "and re-analyze the un-normalized result.<br><br>"
 
             "<b style='color:#ffaa33;'>Dense Star Field</b><br>"
-            "Many tiles have high star rejection rates, which can bias background "
-            "estimates. <b>Fix:</b> Try increasing sigma or reducing grid resolution.<br><br>"
+            "Many tiles have high star rejection rates. In dense star fields "
+            "(e.g. the Milky Way core), the tool has to exclude a lot of bright "
+            "pixels, which can bias the background estimate.<br>"
+            "<b>Fix:</b> Try increasing the sigma-clip value (3.0\u20133.5) to be "
+            "less aggressive, or reduce the grid resolution so each tile covers "
+            "more sky area.<br><br>"
 
             "<b style='color:#ffaa33;'>Stacking Edges</b><br>"
-            "Dark borders from dithering or rotation. "
-            "<b>Fix:</b> Crop them before gradient removal.<br><br>"
+            "Dark borders around the image from dithering (small shifts between "
+            "exposures) or rotation during stacking. The edges have fewer "
+            "overlapping frames, making them artificially dark.<br>"
+            "<b>Fix:</b> Crop the dark borders in Siril before gradient removal.<br><br>"
 
             "<b style='color:#ffaa33;'>Hotspots</b><br>"
-            "Tiles that deviate significantly from neighbors (satellite trails, "
-            "airplane lights, sensor defects). "
-            "<b>Fix:</b> Inspect and mask or clone out if needed.<br><br>"
+            "Individual tiles that are much brighter or darker than their neighbors. "
+            "Common causes: satellite trails, airplane lights, cosmic rays, or "
+            "sensor defects that survived stacking.<br>"
+            "<b>Fix:</b> Inspect the affected areas; mask or clone them out if needed. "
+            "The tool automatically excludes hotspots from the gradient fit.<br><br>"
 
             "<b style='color:#ffaa33;'>Asymmetry</b><br>"
-            "Opposite sides of the image have very different brightness. "
-            "May indicate incomplete flat correction, tilted sensor, or "
-            "misaligned optical train.<br><br>"
+            "Opposite sides of the image have very different brightness (e.g. left "
+            "is darker than right). This often means flat calibration was incomplete, "
+            "the sensor is tilted, or the optical train is misaligned.<br>"
+            "<b>Fix:</b> Check your flat frames and optical alignment.<br><br>"
 
             "<b style='color:#88aaff;'>Extended Objects</b><br>"
-            "Nebulae or galaxies detected in some tiles. These are automatically "
-            "excluded from the gradient fit so they don't bias the result."
+            "Nebulae or galaxies were detected in some tiles. These bright regions "
+            "are not part of the gradient \u2014 they are your actual target! The tool "
+            "automatically excludes them from the gradient measurement so they "
+            "don't confuse the results."
         )
         tabs.addTab(te_warnings, "\u26a0\ufe0f Warnings")
 
@@ -6552,10 +6925,12 @@ class GradientAnalyzerWindow(QMainWindow):
             "Web: www.svenesis.org\n"
             "GitHub: https://github.com/sramuschkat/Siril-Scripts\n\n"
             "GRADIENT STRENGTH\n"
-            "  Coefficient of variation (CV) of sigma-clipped tile medians.\n"
-            "  Higher = more uneven background.\n\n"
+            "  Robust percentile range (P95-P5) divided by median of tile values.\n"
+            "  Resists outlier tiles (hotspots, artifacts). Higher = more uneven.\n"
+            "  Thresholds (broadband): <1.5% uniform, 1.5-4% slight, 4-12% significant, >12% strong.\n\n"
             "CONFIDENCE\n"
-            "  Signal-to-noise ratio of the gradient range vs. per-tile noise.\n"
+            "  Signal-to-noise ratio of the P95-P5 gradient range vs. per-tile noise.\n"
+            "  Uses the same robust range as the strength metric for consistency.\n"
             "  Low confidence = gradient may be indistinguishable from noise.\n\n"
             "COMPLEXITY / POLYNOMIAL FIT\n"
             "  Fits polynomial surfaces (degree 1, 2, 3) and compares R\u00b2 values.\n"
@@ -6571,15 +6946,16 @@ class GradientAnalyzerWindow(QMainWindow):
             "  Median background per quadrant (NW, NE, SW, SE).\n"
             "  Spread = max - min quadrant value.\n\n"
             "GRADIENT-FREE COVERAGE\n"
-            "  Dual-scale analysis: tiles must pass global check (within 1x CV of\n"
-            "  overall median) AND local check (within 0.5x CV of 3x3 neighborhood).\n\n"
+            "  Dual-scale analysis: tiles must pass global check (within threshold of\n"
+            "  overall median) AND local check (within 0.7x threshold of 3x3 neighborhood).\n\n"
             "RESIDUAL PATTERN DETECTION\n"
             "  Moran's I spatial autocorrelation on polynomial residuals.\n"
             "  I near +1 = structured patterns remain (degree too low).\n"
             "  I near 0 = random residuals (good fit).\n\n"
             "IMPROVEMENT PREDICTION\n"
-            "  Estimated post-extraction strength from model residuals.\n"
+            "  Estimated post-extraction strength from P95-P5 of model residuals.\n"
             "  Uses original image median as reference, not residual median.\n"
+            "  Consistent with main strength metric for accurate comparison.\n"
             "  Warns when predicted reduction < 20% (ineffective extraction).\n\n"
             "SAMPLE POINT GUIDANCE\n"
             "  Green circles: tiles in darkest 40th percentile.\n"
@@ -6601,11 +6977,19 @@ class GradientAnalyzerWindow(QMainWindow):
             "  Detects periodic row/column sensor readout artifacts.\n\n"
             "FWHM / ECCENTRICITY\n"
             "  Per-tile star shape analysis with 3-sigma outlier rejection.\n"
-            "  Minimum 3 stars per tile required.\n"
+            "  Minimum 3 stars per tile, minimum 1.5 px FWHM (filters hot pixels).\n"
             "  Eccentricity >= 0.40 at coarse resolution may be noise artifact.\n\n"
+            "LINEAR DATA DETECTION\n"
+            "  Uses median level AND mean/median ratio (skewness proxy).\n"
+            "  High median + symmetric distribution = stretched.\n"
+            "  High median + right-skewed = likely linear narrowband/nebula.\n\n"
+            "STACKING EDGE DETECTION\n"
+            "  Uses sigma-clipped tile medians (not raw luminance) for consistency.\n"
+            "  Flags edges when >30% of border tiles are >30% darker than interior.\n\n"
             "NORMALIZATION DETECTION\n"
             "  Checks: nearly identical per-channel backgrounds,\n"
-            "  very low CV, median near common normalization targets.\n\n"
+            "  very low CV, median near common normalization targets.\n"
+            "  Requires 2+ evidence pieces to flag (avoids false positives).\n\n"
             "FITS CALIBRATION CHECK\n"
             "  Reads FLATCOR, DARKCOR, BIASCOR, CALSTAT keywords.\n\n"
             "GEOGRAPHIC LP DIRECTION\n"
@@ -6613,13 +6997,50 @@ class GradientAnalyzerWindow(QMainWindow):
             "  using WCS plate-solve headers.\n\n"
             "PHOTOMETRIC SKY BRIGHTNESS\n"
             "  Converts background to mag/arcsec^2 and Bortle class.\n"
-            "  Requires SPCC-calibrated, plate-solved data.\n\n"
+            "  Requires SPCC-calibrated, plate-solved data.\n"
+            "  ROUGH ESTIMATE ONLY — uses assumed zeropoint (25.0 mag).\n"
+            "  Actual values may differ by 1-2+ magnitudes. Use SQM for accuracy.\n\n"
             "DEW / FROST DETECTION\n"
             "  Cross-correlates FWHM map with brightness pattern.\n"
             "  Bright center + radial FWHM increase = dew/frost.\n\n"
             "AMPLIFIER GLOW DETECTION\n"
             "  Exponential brightness profile anchored to one corner.\n"
             "  Distinguished from LP (linear) and vignetting (symmetric).\n\n"
+            "BEGINNER GLOSSARY\n"
+            "  Gradient      Uneven background brightness across the image.\n"
+            "  Light pollution (LP)  Artificial sky glow from street lights,\n"
+            "                cities, etc. Makes one side of the image brighter.\n"
+            "  Vignetting    Dark corners caused by the telescope/lens optics.\n"
+            "                Fixed with flat frames, not background extraction.\n"
+            "  Flat frames   Calibration images of an evenly lit surface.\n"
+            "                They correct dust, vignetting, and optical issues.\n"
+            "  Dark frames   Calibration images taken with the lens cap on.\n"
+            "                Same exposure + temperature as your lights.\n"
+            "                They correct sensor glow and hot pixels.\n"
+            "  Bias frames   Zero-length exposure calibration images.\n"
+            "                They capture the sensor's electronic readout pattern.\n"
+            "  Linear data   Your stacked image BEFORE any stretching.\n"
+            "                Gradient removal must happen at this stage.\n"
+            "  Stretched     After applying contrast enhancement (auto-stretch,\n"
+            "                histogram transformation, GHT, asinh, etc.).\n"
+            "  Polynomial    A mathematical surface fitted to the gradient.\n"
+            "                Degree 1 = flat tilt, 2 = curved, 3 = complex.\n"
+            "  R-squared     Goodness of fit (0-1). Higher = better model.\n"
+            "                R^2 > 0.8 = good fit; < 0.5 = poor fit.\n"
+            "  P95-P5        The brightness range between the 95th and 5th\n"
+            "                percentile tiles. Ignores outliers (hot pixels,\n"
+            "                satellite trails) that would inflate the range.\n"
+            "  FWHM          Full Width at Half Maximum — measures star size.\n"
+            "                Larger FWHM = bigger/blurrier stars.\n"
+            "  Eccentricity  Star elongation: 0 = round, 1 = line.\n"
+            "  SNR           Signal-to-Noise Ratio — how reliably we can\n"
+            "                measure the gradient above the noise level.\n"
+            "  Moran's I     A statistical test for spatial patterns in\n"
+            "                the fit residuals (+1 = patterned, 0 = random).\n"
+            "  subsky        Siril command for polynomial background subtraction.\n"
+            "  AutoBGE       Siril's automatic background extraction.\n"
+            "  GraXpert      Free AI-based gradient removal tool (external).\n"
+            "  VeraLux Nox   Siril script for color-aware LP removal.\n\n"
             "REQUIREMENTS\n"
             "  Siril 1.4+ with Python script support\n"
             "  sirilpy (bundled), numpy, PyQt6, matplotlib, scipy\n"
