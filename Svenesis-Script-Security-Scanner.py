@@ -1,5 +1,5 @@
 """
-Siril Script Security Scanner
+Svenesis Script Security Scanner
 Script Version: 2.0.0
 =====================================
 
@@ -1622,11 +1622,11 @@ def _save_prefs(prefs: dict) -> None:
 # ------------------------------------------------------------------------------
 
 class SecurityScannerWindow(QMainWindow):
-    """Main application window for the Siril Script Security Scanner."""
+    """Main application window for the Svenesis Script Security Scanner."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle(f"Siril Script Security Scanner {VERSION}")
+        self.setWindowTitle(f"Svenesis Svenesis Script Security Scanner {VERSION}")
         self.setMinimumSize(1100, 700)
         self._worker: ScanWorker | None = None
         self._findings: list[Finding] = []
@@ -1764,7 +1764,7 @@ script is safe to run."
         layout.setSpacing(6)
 
         # Title
-        title = QLabel(f"Script Security Scanner {VERSION}")
+        title = QLabel(f"Svenesis Script Security Scanner {VERSION}")
         title.setStyleSheet(
             "font-size:16pt;font-weight:bold;color:#88aaff;margin-top:5px;"
         )
@@ -2391,7 +2391,7 @@ script is safe to run."
             return
         export_findings = self._filtered_findings()
         lines: list[str] = [
-            "Siril Script Security Scanner — Report",
+            "Svenesis Svenesis Script Security Scanner — Report",
             f"Version: {VERSION}",
             "=" * 72,
             f"Scripts scanned: {len(self._scanned_paths)}",
@@ -2434,7 +2434,7 @@ script is safe to run."
         BMC_URL = "https://buymeacoffee.com/sramuschkat"
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("\u2615 Support Script Security Scanner")
+        dlg.setWindowTitle("\u2615 Support Svenesis Script Security Scanner")
         dlg.setMinimumSize(520, 480)
         dlg.setStyleSheet(
             "QDialog{background-color:#1e1e1e;color:#e0e0e0}"
@@ -2451,7 +2451,7 @@ script is safe to run."
             "<span style='font-size:48pt;'>\u2615</span><br>"
             "<span style='font-size:18pt; font-weight:bold; color:#FFDD00;'>"
             "Buy me a Coffee</span><br><br>"
-            "<b style='color:#e0e0e0;'>Enjoying the Script Security Scanner?</b><br><br>"
+            "<b style='color:#e0e0e0;'>Enjoying the Svenesis Script Security Scanner?</b><br><br>"
             "This tool is free and open source. It's built with love for the "
             "astrophotography community by <b style='color:#88aaff;'>Sven Ramuschkat</b> "
             "(<span style='color:#88aaff;'>svenesis.org</span>).<br><br>"
@@ -2461,8 +2461,8 @@ script is safe to run."
             "<span style='color:#FFDD00;'>\u2615 Every coffee fuels a new feature, "
             "bug fix, or clear-sky night of testing.</span><br><br>"
             "<span style='color:#aaaaaa;'>Your support helps maintain:</span><br>"
-            "\u2022 Gradient Analyzer \u2022 Image Advisor<br>"
-            "\u2022 Multiple Histogram Viewer \u2022 Script Security Scanner<br>"
+            "\u2022 Svenesis Gradient Analyzer \u2022 Svenesis Image Advisor<br>"
+            "\u2022 Svenesis Multiple Histogram Viewer \u2022 Svenesis Script Security Scanner<br>"
             "</div>"
         )
         header_msg.setWordWrap(True)
@@ -2524,13 +2524,13 @@ script is safe to run."
 
     def _show_help_dialog(self) -> None:
         dlg = QDialog(self)
-        dlg.setWindowTitle("Script Security Scanner — Help")
+        dlg.setWindowTitle("Svenesis Script Security Scanner — Help")
         dlg.setMinimumSize(620, 560)
         layout = QVBoxLayout(dlg)
         te = QTextEdit()
         te.setReadOnly(True)
         te.setPlainText(
-            "Script Security Scanner — Help\n"
+            "Svenesis Script Security Scanner — Help\n"
             "==============================\n\n"
             "This script was developed by Sven Ramuschkat.\n"
             "Web: www.svenesis.org\n"
@@ -2620,14 +2620,14 @@ def main() -> int:
         win.showMaximized()
         try:
             iface = s.SirilInterface()
-            iface.log(f"Script Security Scanner v{VERSION} loaded.")
+            iface.log(f"Svenesis Script Security Scanner v{VERSION} loaded.")
         except Exception:
             pass
         return app.exec()
     except Exception as e:
         QMessageBox.critical(
             None,
-            "Script Security Scanner Error",
+            "Svenesis Script Security Scanner Error",
             f"{e}\n\n{traceback.format_exc()}"
         )
         return 1

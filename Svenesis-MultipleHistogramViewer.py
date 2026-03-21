@@ -1,5 +1,5 @@
 """
-Siril Multiple Histogram Viewer
+Svenesis Multiple Histogram Viewer
 Script Version: 1.0.1
 =====================================
 
@@ -980,7 +980,7 @@ class MultipleHistogramViewerWindow(QMainWindow):
         left.setFixedWidth(LEFT_PANEL_WIDTH)
         l_layout = QVBoxLayout(left)
         l_layout.setContentsMargins(0, 0, 0, 0)
-        lbl = QLabel(f"Multiple Histogram Viewer {VERSION}")
+        lbl = QLabel(f"Svenesis Multiple Histogram Viewer {VERSION}")
         lbl.setStyleSheet("font-size: 16pt; font-weight: bold; color: #88aaff; margin-top: 5px;")
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         l_layout.addWidget(lbl)
@@ -1012,7 +1012,7 @@ class MultipleHistogramViewerWindow(QMainWindow):
         BMC_URL = "https://buymeacoffee.com/sramuschkat"
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("\u2615 Support Multiple Histogram Viewer")
+        dlg.setWindowTitle("\u2615 Support Svenesis Multiple Histogram Viewer")
         dlg.setMinimumSize(520, 480)
         dlg.setStyleSheet(
             "QDialog{background-color:#1e1e1e;color:#e0e0e0}"
@@ -1029,7 +1029,7 @@ class MultipleHistogramViewerWindow(QMainWindow):
             "<span style='font-size:48pt;'>\u2615</span><br>"
             "<span style='font-size:18pt; font-weight:bold; color:#FFDD00;'>"
             "Buy me a Coffee</span><br><br>"
-            "<b style='color:#e0e0e0;'>Enjoying the Multiple Histogram Viewer?</b><br><br>"
+            "<b style='color:#e0e0e0;'>Enjoying the Svenesis Multiple Histogram Viewer?</b><br><br>"
             "This tool is free and open source. It's built with love for the "
             "astrophotography community by <b style='color:#88aaff;'>Sven Ramuschkat</b> "
             "(<span style='color:#88aaff;'>svenesis.org</span>).<br><br>"
@@ -1039,8 +1039,8 @@ class MultipleHistogramViewerWindow(QMainWindow):
             "<span style='color:#FFDD00;'>\u2615 Every coffee fuels a new feature, "
             "bug fix, or clear-sky night of testing.</span><br><br>"
             "<span style='color:#aaaaaa;'>Your support helps maintain:</span><br>"
-            "\u2022 Gradient Analyzer \u2022 Image Advisor<br>"
-            "\u2022 Multiple Histogram Viewer \u2022 Script Security Scanner<br>"
+            "\u2022 Svenesis Gradient Analyzer \u2022 Svenesis Image Advisor<br>"
+            "\u2022 Svenesis Multiple Histogram Viewer \u2022 Svenesis Script Security Scanner<br>"
             "</div>"
         )
         header_msg.setWordWrap(True)
@@ -1101,13 +1101,13 @@ class MultipleHistogramViewerWindow(QMainWindow):
     def _show_help_dialog(self) -> None:
         """Show a modal Help dialog with usage and controls."""
         dlg = QDialog(self)
-        dlg.setWindowTitle("Multiple Histogram Viewer — Help")
+        dlg.setWindowTitle("Svenesis Multiple Histogram Viewer — Help")
         dlg.setMinimumSize(620, 560)
         layout = QVBoxLayout(dlg)
         te = QTextEdit()
         te.setReadOnly(True)
         te.setPlainText(
-            "Multiple Histogram Viewer — Help\n"
+            "Svenesis Multiple Histogram Viewer — Help\n"
             "=================================\n\n"
             "This script was developed by Sven Ramuschkat.\n"
             "Web: www.svenesis.org\n"
@@ -1522,7 +1522,7 @@ class MultipleHistogramViewerWindow(QMainWindow):
         layout = QHBoxLayout(main)
         layout.addWidget(self._build_left_panel())
         layout.addWidget(self._build_right_panel(), 1)
-        self.setWindowTitle("Siril Multiple Histogram Viewer")
+        self.setWindowTitle("Svenesis Multiple Histogram Viewer")
         self.setStyleSheet(DARK_STYLESHEET)
         self.resize(1200, 700)
 
@@ -1676,7 +1676,7 @@ class MultipleHistogramViewerWindow(QMainWindow):
             self.img_stretched = autostretch_percentile(img)
             self._update_image_display()
             self._compute_histogram()
-            self.setWindowTitle("Siril Multiple Histogram Viewer - Loaded")
+            self.setWindowTitle("Svenesis Multiple Histogram Viewer - Loaded")
             QTimer.singleShot(100, self._fit_all_views)
         except Exception as e:
             QMessageBox.critical(
@@ -2073,7 +2073,7 @@ class MultipleHistogramViewerWindow(QMainWindow):
             self.img_stretched = autostretch_percentile(img)
             self._update_image_display()
             self._compute_histogram()
-            self.setWindowTitle("Siril Multiple Histogram Viewer - Loaded")
+            self.setWindowTitle("Svenesis Multiple Histogram Viewer - Loaded")
             QTimer.singleShot(100, self._fit_all_views)
         except NoImageError:
             QMessageBox.warning(self, "No Image", no_image_msg)
@@ -2111,7 +2111,7 @@ def main() -> int:
         win = MultipleHistogramViewerWindow(siril)
         win.showMaximized()
         try:
-            siril.log(f"Multiple Histogram Viewer v{VERSION} loaded.")
+            siril.log(f"Svenesis Multiple Histogram Viewer v{VERSION} loaded.")
         except Exception:
             pass
         return app.exec()
@@ -2125,7 +2125,7 @@ def main() -> int:
     except Exception as e:
         QMessageBox.critical(
             None,
-            "Multiple Histogram Viewer Error",
+            "Svenesis Multiple Histogram Viewer Error",
             f"{e}\n\n{traceback.format_exc()}"
         )
         return 1

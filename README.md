@@ -15,6 +15,7 @@ GPL-3.0-or-later
 
 | Script | Description |
 |--------|-------------|
+| [Annotate Image](#annotate-image) | Annotate plate-solved images with catalog objects, coordinate grids, and export as PNG/TIFF/JPEG. |
 | [Gradient Analyzer](#gradient-analyzer) | Analyze background gradients with heatmaps, diagnostics, and tool recommendations. |
 | [Image Advisor](#image-advisor) | Analyze a stacked linear image and get a prioritized processing workflow with concrete Siril commands. |
 | [Multiple Histogram Viewer](#multiple-histogram-viewer) | View linear and stretched images with RGB histograms, 3D surface plots, and detailed statistics. |
@@ -22,9 +23,114 @@ GPL-3.0-or-later
 
 ---
 
+## Annotate Image
+
+**File:** `Svenesis-AnnotateImage.py` (v1.0.0)
+
+Renders catalog annotations (deep-sky objects, named stars, coordinate grid, compass, info box) onto a plate-solved image and exports it as a shareable PNG, TIFF, or JPEG. Inspired by PixInsight's AnnotateImage script. Unlike Siril's built-in overlay annotations, this script burns the annotations into an exportable image — ready to post on social media, forums, or include in observation reports.
+
+### Features
+
+#### Object selection by type
+
+Instead of choosing catalogs, you select **which types of objects** to annotate. All embedded catalogs are always searched — objects are filtered by your type selection:
+
+| Color | Type | Examples |
+|-------|------|----------|
+| Gold | Galaxies | M31, M51, M81, NGC 4565, Centaurus A |
+| Red | Emission Nebulae | Orion, Lagoon, Eagle, Rosette, Carina |
+| Light red | Reflection Nebulae | M78, Witch Head, Iris, Rho Ophiuchi |
+| Green | Planetary Nebulae | Ring (M57), Dumbbell (M27), Helix, Owl |
+| Light blue | Open Clusters | Pleiades (M45), Double Cluster, Wild Duck |
+| Orange | Globular Clusters | M13, Omega Centauri, 47 Tucanae |
+| Magenta | Supernova Remnants | Crab (M1), Veil Nebula, Simeis 147 |
+| Grey | Dark Nebulae | Horsehead (B33), Pipe, Snake, Coalsack |
+| Red-pink | HII Regions | Heart, Soul, Barnard's Loop, Cave Nebula |
+| White | Named Stars | ~275 IAU-named stars to mag ~5.5 |
+
+Select All / Deselect All buttons for quick toggling.
+
+#### Embedded catalogs
+
+- **Messier** — all 110 objects with common names
+- **NGC** — ~230 bright objects (popular astrophotography targets)
+- **IC** — ~40 bright Index Catalogue objects (Horsehead, Flaming Star, Pelican, Heart & Soul, Elephant's Trunk, etc.)
+- **Caldwell** — 109 objects complementing Messier (Eta Carinae, Centaurus A, Helix, Double Cluster, Veil, etc.)
+- **Sharpless** — ~60 HII emission regions (Simeis 147, Barnard's Loop, Tulip, Cave, etc.)
+- **Barnard** — ~30 dark nebulae + LDN entries (Horsehead, Pipe, Snake, Barnard's E, Boogeyman)
+- **Named Stars** — ~275 IAU-named and Bayer-designated stars with full-sky coverage to magnitude ~5.5
+
+#### SIMBAD online query
+
+Optional online query to the SIMBAD astronomical database for objects not in the embedded catalogs (UGC, MCG, PGC, Abell, Arp, Markarian, etc.). Survey catalog junk (SDSS, 2MASS, GPM, Gaia, etc.) is automatically filtered out. Requires `astroquery` package and internet connection.
+
+#### Annotation overlays
+
+- **Leader lines:** Thin connecting lines from each label to its object marker — essential in crowded fields to see which label belongs to which object.
+- **Color legend:** Auto-generated legend box (bottom-left) showing only the object types present in the current annotation.
+- **Coordinate grid:** RA/DEC grid with auto-spaced lines and labeled coordinates.
+- **Info box:** Semi-transparent box (top-left) with center RA/DEC, field of view, pixel scale, rotation, and object count.
+- **Compass rose:** North/East direction arrows derived from WCS.
+
+#### Display options
+
+- Configurable font size, marker size, and magnitude limit
+- Object size rendered as scaled ellipses (from catalog angular size)
+- Common names display (e.g. "M31 (Andromeda Galaxy)")
+- Optional magnitude and type labels
+- Color coding by object type (configurable)
+- Label collision avoidance (8-direction greedy algorithm)
+
+#### Output
+
+- **Formats:** PNG (recommended), TIFF, JPEG
+- **DPI:** 72–300 (150 default for screens, 300 for print)
+- **Auto-timestamped filenames** prevent overwriting
+- **Preview tab** shows the result immediately after annotation
+- **Open output folder / Open image** buttons for quick access
+
+#### WCS detection
+
+Robust plate-solve detection with 6 fallback strategies:
+1. FITS header as dict (primary — same approach as Galaxy_Annotations.py)
+2. FITS header as string (astropy parsing)
+3. Keywords `pltsolvd` / `wcsdata` flag check
+4. `pix2radec` sampling to build WCS from Siril's coordinate transform
+5. `pix2radec` probe without plate-solve flag
+6. FITS file on disk
+
+Coordinate transforms use `siril.radec2pix()` for maximum compatibility.
+
+#### Other features
+
+- **Persistent settings:** All checkboxes, sliders, and options saved between sessions via QSettings
+- **Keyboard shortcut:** F5 = Annotate
+- **Progress bar** with status feedback during annotation
+- **Log tab** with detailed diagnostic output
+- **Dark-themed PyQt6 GUI** matching Gradient Analyzer style
+- **Buy me a Coffee** support dialog
+
+### Requirements
+
+- Siril 1.4+ with Python script support
+- sirilpy (bundled with Siril)
+- numpy, PyQt6, matplotlib, astropy (installed automatically via `s.ensure_installed`)
+- Optional: astroquery (for SIMBAD online queries — `pip install astroquery`)
+
+### Usage
+
+1. Load an image in Siril and **plate-solve** it (Tools → Astrometry → Image Plate Solver).
+2. Run **Annotate Image** from Siril: **Processing → Scripts** (or your Scripts menu).
+3. Select which **object types** to annotate using the color-coded checkboxes.
+4. Adjust font size, marker size, magnitude limit, and extras (grid, info box, compass, legend, leader lines).
+5. Click **Annotate Image** (or press F5).
+6. Review the result in the Preview tab. Use **Open Annotated Image** to view it full-size.
+
+---
+
 ## Gradient Analyzer
 
-**File:** `GradientAnalyzer.py` (v1.8.4)
+**File:** `Svenesis-GradientAnalyzer.py` (v1.8.4)
 
 Reads the current image from Siril, divides it into a configurable grid of tiles, computes sigma-clipped median background levels per tile, and renders a color-coded heatmap. It helps you assess background gradients (e.g. from light pollution), decide whether background extraction is needed, and choose the right tool and parameters for the job.
 
@@ -122,7 +228,7 @@ Reads the current image from Siril, divides it into a configurable grid of tiles
 
 ## Image Advisor
 
-**File:** `ImageAdvisor.py` (v1.3.0)
+**File:** `Svenesis-ImageAdvisor.py` (v1.3.0)
 
 Analyses a stacked, linear FITS image loaded in Siril and generates a prioritised list of processing recommendations — including concrete Siril commands, suggested parameters, and reasoning. The script does **not** modify the image; it only diagnoses and advises. Think of it as a second opinion from an experienced astrophotographer before you start processing.
 
@@ -173,7 +279,7 @@ Analyses a stacked, linear FITS image loaded in Siril and generates a prioritise
 
 ## Multiple Histogram Viewer
 
-**File:** `MultipleHistogramViewer.py` (v1.0.1)
+**File:** `Svenesis-MultipleHistogramViewer.py` (v1.0.1)
 
 Reads the current linear image from Siril (or a linear FITS file), applies a 2%–98% percentile autostretch for preview, and displays **Linear** and **Auto-Stretched** views side by side with combined RGB histograms or 3D surface plots. You can also load up to **2 additional stretched FITS** files for comparison. Compressed FITS (e.g. `.fz`, `.gz`) are supported.
 
@@ -215,7 +321,7 @@ Reads the current linear image from Siril (or a linear FITS file), applies a 2%�
 
 ## Script Security Scanner
 
-**File:** `Script-Security-Scanner.py` (v2.0.0)
+**File:** `Svenesis-Script-Security-Scanner.py` (v2.0.0)
 
 Scans all Python scripts in your configured Siril script folders for potentially dangerous patterns across **10 threat categories**. Siril scripts run with full user-level OS permissions, so a malicious script can do virtually anything on your machine. This tool gives you a first-pass analysis before you run any script you did not write yourself.
 

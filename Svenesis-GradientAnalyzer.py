@@ -1,5 +1,5 @@
 """
-Siril Gradient Analyzer
+Svenesis Gradient Analyzer
 Script Version: 1.8.4
 =====================================
 
@@ -4350,7 +4350,7 @@ class GradientAnalyzerWindow(QMainWindow):
         layout.setContentsMargins(4, 4, 4, 4)
 
         # Title
-        lbl = QLabel(f"Gradient Analyzer {VERSION}")
+        lbl = QLabel(f"Svenesis Gradient Analyzer {VERSION}")
         lbl.setStyleSheet("font-size: 15pt; font-weight: bold; color: #88aaff; margin-top: 5px;")
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl)
@@ -4797,7 +4797,7 @@ class GradientAnalyzerWindow(QMainWindow):
         layout = QHBoxLayout(main)
         layout.addWidget(self._build_left_panel())
         layout.addWidget(self._build_right_panel(), 1)
-        self.setWindowTitle("Siril Gradient Analyzer")
+        self.setWindowTitle("Svenesis Gradient Analyzer")
         self.setStyleSheet(DARK_STYLESHEET)
         self.resize(1400, 800)
 
@@ -6415,7 +6415,7 @@ class GradientAnalyzerWindow(QMainWindow):
             f"Brightest: {metrics['angle_deg']:.0f}\u00b0 ({direction})  |  "
             f"Range: {metrics['bg_range']:.6f}  |  "
             f"{assessment}  |  "
-            f"Gradient Analyzer v{VERSION}"
+            f"Svenesis Gradient Analyzer v{VERSION}"
         )
         txt = fig.text(
             0.5, 0.01, annotation,
@@ -6461,7 +6461,7 @@ class GradientAnalyzerWindow(QMainWindow):
         BMC_URL = "https://buymeacoffee.com/sramuschkat"
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("\u2615 Support Gradient Analyzer")
+        dlg.setWindowTitle("\u2615 Support Svenesis Gradient Analyzer")
         dlg.setMinimumSize(520, 480)
         dlg.setStyleSheet(
             "QDialog{background-color:#1e1e1e;color:#e0e0e0}"
@@ -6478,7 +6478,7 @@ class GradientAnalyzerWindow(QMainWindow):
             "<span style='font-size:48pt;'>\u2615</span><br>"
             "<span style='font-size:18pt; font-weight:bold; color:#FFDD00;'>"
             "Buy me a Coffee</span><br><br>"
-            "<b style='color:#e0e0e0;'>Enjoying the Gradient Analyzer?</b><br><br>"
+            "<b style='color:#e0e0e0;'>Enjoying the Svenesis Gradient Analyzer?</b><br><br>"
             "This tool is free and open source. It's built with love for the "
             "astrophotography community by <b style='color:#88aaff;'>Sven Ramuschkat</b> "
             "(<span style='color:#88aaff;'>svenesis.org</span>).<br><br>"
@@ -6488,8 +6488,8 @@ class GradientAnalyzerWindow(QMainWindow):
             "<span style='color:#FFDD00;'>\u2615 Every coffee fuels a new feature, "
             "bug fix, or clear-sky night of testing.</span><br><br>"
             "<span style='color:#aaaaaa;'>Your support helps maintain:</span><br>"
-            "\u2022 Gradient Analyzer \u2022 Image Advisor<br>"
-            "\u2022 Multiple Histogram Viewer \u2022 Script Security Scanner<br>"
+            "\u2022 Svenesis Gradient Analyzer \u2022 Svenesis Image Advisor<br>"
+            "\u2022 Svenesis Multiple Histogram Viewer \u2022 Svenesis Script Security Scanner<br>"
             "</div>"
         )
         header_msg.setWordWrap(True)
@@ -6553,7 +6553,7 @@ class GradientAnalyzerWindow(QMainWindow):
 
     def _show_help_dialog(self) -> None:
         dlg = QDialog(self)
-        dlg.setWindowTitle("Gradient Analyzer \u2014 Help")
+        dlg.setWindowTitle("Svenesis Gradient Analyzer \u2014 Help")
         dlg.setMinimumSize(850, 650)
         layout = QVBoxLayout(dlg)
 
@@ -7067,7 +7067,7 @@ def main() -> int:
         win = GradientAnalyzerWindow(siril)
         win.showMaximized()
         try:
-            siril.log(f"Gradient Analyzer v{VERSION} loaded.")
+            siril.log(f"Svenesis Gradient Analyzer v{VERSION} loaded.")
         except (SirilError, OSError, RuntimeError):
             pass
         return app.exec()
@@ -7081,7 +7081,7 @@ def main() -> int:
     except Exception as e:
         QMessageBox.critical(
             None,
-            "Gradient Analyzer Error",
+            "Svenesis Gradient Analyzer Error",
             f"{e}\n\n{traceback.format_exc()}"
         )
         return 1
