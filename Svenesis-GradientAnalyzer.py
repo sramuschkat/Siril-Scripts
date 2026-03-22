@@ -7049,6 +7049,14 @@ class GradientAnalyzerWindow(QMainWindow):
         tabs.addTab(te_ref, "\ud83d\udcd6 Reference")
 
         layout.addWidget(tabs)
+        lbl_guide = QLabel(
+            '<span style="font-size:10pt;">📖 '
+            '<a href="https://github.com/sramuschkat/Siril-Scripts/blob/main/'
+            'Instructions/Svenesis-GradientAnalyzer-Instructions.md"'
+            ' style="color:#88aaff;">Full User Guide (online)</a></span>'
+        )
+        lbl_guide.setOpenExternalLinks(True)
+        layout.addWidget(lbl_guide)
         btn = QPushButton("Close")
         _nofocus(btn)
         btn.clicked.connect(dlg.accept)

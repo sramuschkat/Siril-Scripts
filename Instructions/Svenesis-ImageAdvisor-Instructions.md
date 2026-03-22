@@ -1,6 +1,6 @@
 # Svenesis Image Advisor — User Instructions
 
-**Version 1.3.0** | Siril Python Script for Image Diagnostics & Workflow Planning
+**Version 1.3.1** | Siril Python Script for Image Diagnostics & Workflow Planning
 
 > *A "second opinion" diagnostic tool — analyzes your stacked image, identifies issues, and generates a prioritized processing workflow with concrete Siril commands.*
 

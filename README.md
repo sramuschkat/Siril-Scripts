@@ -371,7 +371,7 @@ Reads the current image from Siril, divides it into a configurable grid of tiles
 
 ## Svenesis Image Advisor
 
-**File:** `Svenesis-ImageAdvisor.py` (v1.3.0) — **[Detailed Instructions](Instructions/Svenesis-ImageAdvisor-Instructions.md)**
+**File:** `Svenesis-ImageAdvisor.py` (v1.3.1) — **[Detailed Instructions](Instructions/Svenesis-ImageAdvisor-Instructions.md)**
 
 Analyses a stacked, linear FITS image loaded in Siril and generates a prioritised list of processing recommendations — including concrete Siril commands, suggested parameters, and reasoning. The script does **not** modify the image; it only diagnoses and advises. Think of it as a second opinion from an experienced astrophotographer before you start processing.
 
@@ -422,7 +422,7 @@ Analyses a stacked, linear FITS image loaded in Siril and generates a prioritise
 
 ## Svenesis Multiple Histogram Viewer
 
-**File:** `Svenesis-MultipleHistogramViewer.py` (v1.0.1) — **[Detailed Instructions](Instructions/Svenesis-MultipleHistogramViewer-Instructions.md)**
+**File:** `Svenesis-MultipleHistogramViewer.py` (v1.1.0) — **[Detailed Instructions](Instructions/Svenesis-MultipleHistogramViewer-Instructions.md)**
 
 Reads the current linear image from Siril (or a linear FITS file), applies a 2%–98% percentile autostretch for preview, and displays **Linear** and **Auto-Stretched** views side by side with combined RGB histograms or 3D surface plots. You can also load up to **2 additional stretched FITS** files for comparison. Compressed FITS (e.g. `.fz`, `.gz`) are supported.
 

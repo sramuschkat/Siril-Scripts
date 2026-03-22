@@ -1,6 +1,6 @@
 """
 Svenesis Image Advisor
-Script Version: 1.3.0
+Script Version: 1.3.1
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -21,6 +21,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.3.1 - Help dialog UX overhaul
+      - Rewritten help as tabbed dialog with styled HTML (matches Blink Comparator / Gradient Analyzer)
+      - 6 tabs: Getting Started, Analysis, Report, Workflow, Export, Reference
+      - Beginner-friendly explanations (what is linear, the golden rule, workflow rationale)
+      - Dark-themed tab bar matching main application style
+      - Link to full online user guide (GitHub Instructions)
 1.3.0 - Contextual intelligence improvements
       - Add: Gradient pattern classification (vignetting / linear LP / corner amp glow)
       - Add: Integration-time-aware noise advice (short vs long integration context)
@@ -90,11 +96,12 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout,
     QWidget, QLabel, QPushButton, QMessageBox, QGroupBox,
     QDialog, QTextEdit, QFileDialog, QProgressBar,
+    QTabWidget,
 )
 from PyQt6.QtCore import Qt, QTimer, QUrl
 from PyQt6.QtGui import QDesktopServices
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 
 # Layout constants
 LEFT_PANEL_WIDTH = 340
@@ -2632,91 +2639,427 @@ class ImageAdvisorWindow(QMainWindow):
     def _show_help_dialog(self) -> None:
         """Show a modal Help dialog with usage information."""
         dlg = QDialog(self)
-        dlg.setWindowTitle("Svenesis Image Advisor — Help")
-        dlg.setMinimumSize(620, 520)
+        dlg.setWindowTitle("Svenesis Image Advisor \u2014 Help")
+        dlg.setMinimumSize(850, 650)
+        dlg.setStyleSheet(
+            "QDialog{background-color:#1e1e1e;color:#e0e0e0}"
+            "QLabel{color:#e0e0e0}"
+            "QTabWidget::pane{border:1px solid #444444;background:#1e1e1e}"
+            "QTabBar::tab{background:#3c3c3c;color:#cccccc;padding:6px 12px;"
+            "border:1px solid #444444;border-bottom:none;"
+            "border-radius:4px 4px 0 0;margin-right:2px}"
+            "QTabBar::tab:selected{background:#1e1e1e;color:#88aaff;font-weight:bold}"
+            "QTabBar::tab:hover{background:#4a4a4a}"
+        )
         layout = QVBoxLayout(dlg)
-        te = QTextEdit()
-        te.setReadOnly(True)
-        te.setPlainText(
-            f"Svenesis Image Advisor v{VERSION} — Help\n"
-            "==============================\n\n"
-            "This script was developed by Sven Ramuschkat.\n"
+
+        base_style = (
+            "font-size: 13pt; color: #e0e0e0; background: #1e1e1e;"
+            " font-family: 'Helvetica Neue', Helvetica, Arial; padding: 12px;"
+        )
+        mono_style = (
+            "font-size: 10pt; color: #e0e0e0; background: #1e1e1e;"
+            " font-family: 'Courier New'; padding: 10px;"
+        )
+
+        tabs = QTabWidget()
+
+        # ---- Tab 1: Getting Started ----
+        te_start = QTextEdit()
+        te_start.setReadOnly(True)
+        te_start.setStyleSheet(base_style)
+        te_start.setHtml(
+            "<b style='color:#88aaff; font-size:16pt;'>"
+            "\U0001f680 Getting Started</b><br><br>"
+
+            "<b style='color:#ffcc66;'>What is the Image Advisor?</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "The Image Advisor analyses your stacked, linear FITS image and generates "
+            "a <b>prioritised list of processing recommendations</b> with concrete "
+            "Siril commands. It does <b>not</b> modify your image \u2014 it only "
+            "diagnoses and advises.<br><br>"
+            "Think of it as a <b>second opinion from an experienced astrophotographer</b> "
+            "who looks at your data and tells you exactly what to do next, in what "
+            "order, and why."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Quick Start \u2014 3 Steps</b><br>"
+            "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+            " border:1px solid #3a5a7a;'>"
+            "<b>1.</b> Load a <b>stacked, linear</b> FITS image in Siril.<br>"
+            "<b>2.</b> Run <b>Image Advisor</b> from Processing \u2192 Scripts.<br>"
+            "<b>3.</b> The analysis runs automatically. Review the report, follow "
+            "the recommended workflow, and use <b>Re-Analyse</b> after each step."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>What does \"linear\" mean?</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "A <b>linear</b> image is one where pixel values are directly proportional "
+            "to the number of photons received. This is the raw output of calibration "
+            "and stacking \u2014 it looks very dark because most detail is compressed "
+            "near the bottom of the brightness range.<br><br>"
+            "The Image Advisor is designed for linear data because that is when most "
+            "processing decisions need to be made. If the image is already stretched, "
+            "the script detects this and warns you."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>The Golden Rule</b><br>"
+            "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+            " border:1px solid #3a5a7a;'>"
+            "<b>\"Do everything possible in the linear stage.\"</b><br><br>"
+            "Background extraction, colour calibration, denoising, and deconvolution "
+            "all work best on linear data. Stretching should be one of the last steps. "
+            "The Image Advisor follows this principle and orders its recommendations "
+            "accordingly."
+            "</div>"
+        )
+        tabs.addTab(te_start, "\U0001f680 Getting Started")
+
+        # ---- Tab 2: What Is Analysed ----
+        te_analysis = QTextEdit()
+        te_analysis.setReadOnly(True)
+        te_analysis.setStyleSheet(base_style)
+        te_analysis.setHtml(
+            "<b style='color:#88aaff; font-size:16pt;'>"
+            "\U0001f50d What Is Analysed</b><br><br>"
+
+            "The Image Advisor examines over a dozen aspects of your image "
+            "automatically:<br><br>"
+
+            "<b style='color:#ffcc66;'>Image Classification</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "\u2022 <b>Image type:</b> OSC Broadband, Mono, Narrowband, Dual-Narrowband "
+            "(L-eNhance, L-Extreme, NBZ), or Luminance<br>"
+            "\u2022 <b>Linear state:</b> Detects if the image has already been stretched "
+            "(scans FITS HISTORY for GHT, autostretch, MTF, asinh, etc.)<br>"
+            "\u2022 <b>Calibration status:</b> Checks if darks, flats, and biases were "
+            "applied (from FITS HISTORY keywords)"
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Background & Gradients</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "\u2022 <b>Background gradient:</b> 8\u00d78 sigma-clipped tile grid with "
+            "gradient spread percentage<br>"
+            "\u2022 <b>Gradient pattern:</b> Classified as vignetting (dark corners), "
+            "linear gradient (light pollution), or amp glow (bright corner)<br>"
+            "\u2022 <b>Heatmap:</b> Colour-coded tile map showing where the gradient is"
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Signal & Noise</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "\u2022 <b>Noise / SNR:</b> MAD-based noise estimation on the darkest 25% "
+            "of pixels, with integration-time-aware advice<br>"
+            "\u2022 <b>Dynamic range:</b> Usable DR in stops (peak / noise floor)<br>"
+            "\u2022 <b>Per-channel noise:</b> R/G/B noise levels with noisiest channel "
+            "highlighted<br>"
+            "\u2022 <b>Nebulosity:</b> Detection with narrowband-adjusted thresholds "
+            "(3\u03c3 for narrowband, 5\u03c3 for broadband)"
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Stars & Optics</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "\u2022 <b>Star quality:</b> FWHM in pixels and arcseconds (when plate-solved), "
+            "elongation, centre-vs-edge spatial analysis<br>"
+            "\u2022 <b>Saturated stars:</b> Count of clipped star cores<br>"
+            "\u2022 <b>Deconvolution:</b> PSF estimation from star FWHM, suitability check<br>"
+            "\u2022 <b>Field curvature / coma:</b> Detected from edge vs centre star shapes"
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Data Quality</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "\u2022 <b>Pixel clipping:</b> Black and white clipping percentages<br>"
+            "\u2022 <b>Stacking borders:</b> Detects tapered edges from dithering/rotation<br>"
+            "\u2022 <b>Plate-solve status:</b> WCS presence for astrometric calibration<br>"
+            "\u2022 <b>Colour balance:</b> R/G/B ratios and SPCC recommendation<br>"
+            "\u2022 <b>Sanity checks:</b> Flags unusual dimensions (phone/screen resolutions), "
+            "extreme clipping, missing signal"
+            "</div>"
+        )
+        tabs.addTab(te_analysis, "\U0001f50d Analysis")
+
+        # ---- Tab 3: The Report ----
+        te_report = QTextEdit()
+        te_report.setReadOnly(True)
+        te_report.setStyleSheet(base_style)
+        te_report.setHtml(
+            "<b style='color:#88aaff; font-size:16pt;'>"
+            "\U0001f4cb The Report</b><br><br>"
+
+            "After analysis, the right panel shows a scrollable HTML report with "
+            "several sections:<br><br>"
+
+            "<b style='color:#ffcc66;'>Image Summary</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "Type, dimensions, exposure time, pixel scale (if plate-solved), "
+            "and plate-solve status. This gives you a quick overview of what "
+            "you are working with."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Key Statistics</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "The most important numbers at a glance: SNR, noise level, gradient "
+            "spread, dynamic range, nebulosity detection, and star quality."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Processing State</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "Whether the image is linear or stretched, and which calibration "
+            "frames (darks, flats, biases) were applied. Shows \"Unknown\" when "
+            "no FITS HISTORY is present (e.g. stacked in another application)."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Per-Channel Statistics</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "R, G, B noise levels in a table with the noisiest channel "
+            "highlighted. Notes when channels are unusually well-balanced "
+            "(may already be colour-calibrated)."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Background Heatmap</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "An 8\u00d78 colour-coded tile grid showing background brightness "
+            "across the image. Includes a gradient pattern label (vignetting, "
+            "linear LP, amp glow). Bright tiles = problem areas."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Findings</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "All analysis results listed with severity icons:<br>"
+            "<table style='color:#cccccc;' cellpadding='3'>"
+            "<tr><td><b style='color:#88aaff;'>[\u2139]</b></td>"
+            "<td><b>Info</b> \u2014 Informational, no action needed</td></tr>"
+            "<tr><td><b style='color:#55aa55;'>[\u2713]</b></td>"
+            "<td><b>Minor</b> \u2014 Optional improvement</td></tr>"
+            "<tr><td><b style='color:#ddaa33;'>[\u26a0]</b></td>"
+            "<td><b>Moderate</b> \u2014 Recommended action</td></tr>"
+            "<tr><td><b style='color:#dd4444;'>[\u2717]</b></td>"
+            "<td><b>Critical</b> \u2014 Strong recommendation or significant issue</td></tr>"
+            "</table>"
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Recommended Workflow</b><br>"
+            "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+            " border:1px solid #3a5a7a;'>"
+            "Actionable steps with concrete Siril commands, in the correct "
+            "processing order. Each step explains <b>what</b> to do, <b>why</b>, "
+            "and gives you the exact command to type in Siril's console."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Post-Processing Roadmap</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "After the linear-stage workflow, a roadmap for stretching and "
+            "non-linear processing: stretch method suggestions, fine-tuning "
+            "(curves, colour adjustments), star recomposition, and export."
+            "</div>"
+        )
+        tabs.addTab(te_report, "\U0001f4cb Report")
+
+        # ---- Tab 4: Workflow Order ----
+        te_workflow = QTextEdit()
+        te_workflow.setReadOnly(True)
+        te_workflow.setStyleSheet(base_style)
+        te_workflow.setHtml(
+            "<b style='color:#88aaff; font-size:16pt;'>"
+            "\U0001f527 Workflow Order</b><br><br>"
+
+            "The Image Advisor recommends steps in the correct processing order. "
+            "Here is the full pipeline and why each step comes where it does:<br><br>"
+
+            "<b style='color:#ffcc66;'>Linear Stage (before stretching)</b><br>"
+            "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+            " border:1px solid #3a5a7a;'>"
+            "<table style='color:#cccccc;' cellpadding='4'>"
+            "<tr><td><b>1. Crop</b></td>"
+            "<td>Remove stacking borders first \u2014 they bias every subsequent "
+            "measurement.</td></tr>"
+            "<tr><td><b>2. Background Extraction</b></td>"
+            "<td>Remove gradients (subsky / AutoBGE / GraXpert) while data is "
+            "linear and gradients are additive.</td></tr>"
+            "<tr><td><b>3. Plate Solving</b></td>"
+            "<td>Required for SPCC colour calibration. Gives you arcsec/pixel "
+            "and real-world coordinates.</td></tr>"
+            "<tr><td><b>4. SPCC</b></td>"
+            "<td>Spectrophotometric colour calibration \u2014 accurate colour balance "
+            "using star catalogue data.</td></tr>"
+            "<tr><td><b>5. Remove Green</b></td>"
+            "<td>Optional SCNR to remove green cast from OSC images. Only when "
+            "needed.</td></tr>"
+            "<tr><td><b>6. Denoising</b></td>"
+            "<td>Denoise <b>before</b> deconvolution \u2014 Richardson-Lucy amplifies "
+            "noise, so clean first.</td></tr>"
+            "<tr><td><b>7. Deconvolution</b></td>"
+            "<td>Sharpen stars and detail using PSF model. Only when SNR is "
+            "sufficient.</td></tr>"
+            "<tr><td><b>8. Starless</b></td>"
+            "<td>StarNet / SyQon for separate star and starless processing. "
+            "Only when nebulosity warrants it.</td></tr>"
+            "</table>"
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Transition</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "<b>Stretching</b> \u2014 Transform the linear data to reveal faint "
+            "detail. Options include GHT (Generalised Hyperbolic), Asinh, "
+            "VeraLux HMS, or manual curves. The Image Advisor suggests a method "
+            "based on your image's characteristics."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Non-Linear Stage (after stretching)</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "\u2022 <b>Fine-tuning:</b> Revela, curves, Vectra, saturation "
+            "adjustments<br>"
+            "\u2022 <b>Star recomposition:</b> StarComposer to recombine starless "
+            "and star layers<br>"
+            "\u2022 <b>Export:</b> Final TIFF/PNG/JPEG for sharing"
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Smart Behaviour</b><br>"
+            "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+            " border:1px solid #3a5a7a;'>"
+            "The workflow adapts to your image:<br>"
+            "\u2022 Gradient commands include <b>-samples</b> when nebulosity is "
+            "present (prevents overcorrection on nebula regions)<br>"
+            "\u2022 Denoise is promoted before deconvolution (RL amplifies noise)<br>"
+            "\u2022 StarNet uses <b>-stretch</b> only on linear images<br>"
+            "\u2022 Soft stars / elongation are flagged early as acquisition warnings<br>"
+            "\u2022 Stretch advice includes background pedestal warnings for high-background images<br>"
+            "\u2022 When flats are missing, gradient advice notes vignetting risk<br>"
+            "\u2022 Workflow is suppressed when image fails sanity checks (extreme "
+            "clipping, unusual dimensions)"
+            "</div>"
+        )
+        tabs.addTab(te_workflow, "\U0001f527 Workflow")
+
+        # ---- Tab 5: Export & Controls ----
+        te_export = QTextEdit()
+        te_export.setReadOnly(True)
+        te_export.setStyleSheet(base_style)
+        te_export.setHtml(
+            "<b style='color:#88aaff; font-size:16pt;'>"
+            "\u2699\ufe0f Export & Controls</b><br><br>"
+
+            "<b style='color:#ffcc66;'>Left Panel Controls</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "\u2022 <b>Re-Analyse</b> \u2014 Re-runs the analysis on the current "
+            "Siril image. Use after applying processing steps to get updated "
+            "recommendations.<br>"
+            "\u2022 <b>Export Report (.txt)</b> \u2014 Saves the full analysis as a "
+            "plain-text file for archiving or sharing on forums.<br>"
+            "\u2022 <b>Export Script (.ssf)</b> \u2014 Generates an executable Siril "
+            "script with the recommended commands and save checkpoints."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Export Report (.txt)</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "A comprehensive plain-text report containing all sections from the "
+            "HTML report: image summary, statistics, findings, workflow, and "
+            "post-processing roadmap. Ready to paste into forum posts, emails, "
+            "or keep as documentation."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Export Script (.ssf)</b><br>"
+            "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+            " border:1px solid #3a5a7a;'>"
+            "Generates a runnable Siril script file (.ssf) that contains:<br><br>"
+            "\u2022 All recommended Siril commands in the correct order<br>"
+            "\u2022 <b>Save checkpoints</b> after key stages (so you can inspect "
+            "intermediate results)<br>"
+            "\u2022 A <b>requires 1.4.1</b> directive (some commands need "
+            "Siril 1.4.1+)<br><br>"
+            "<b>How to use it:</b> In Siril, go to <b>Processing \u2192 Scripts</b> "
+            "and select the exported .ssf file, or open Siril's Console and type "
+            "<b>@ /path/to/script.ssf</b> to run it."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Image Info (Left Panel)</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "Shows basic image information: dimensions, channel count, bit depth, "
+            "and status messages. Updated after each analysis."
+            "</div>"
+        )
+        tabs.addTab(te_export, "\u2699\ufe0f Export")
+
+        # ---- Tab 6: Technical Reference ----
+        te_ref = QTextEdit()
+        te_ref.setReadOnly(True)
+        te_ref.setStyleSheet(mono_style)
+        te_ref.setPlainText(
+            "Image Advisor \u2014 Technical Reference\n"
+            "======================================\n\n"
+            "Developed by Sven Ramuschkat\n"
             "Web: www.svenesis.org\n"
             "GitHub: https://github.com/sramuschkat/Siril-Scripts\n\n"
-            "1. OVERVIEW\n"
-            "-----------\n"
-            "Svenesis Image Advisor analyses a stacked, linear FITS image loaded in Siril and\n"
-            "generates a prioritised list of processing recommendations with concrete\n"
-            "Siril commands. It does NOT modify the image — it only diagnoses and advises.\n"
-            "Think of it as a second opinion from an experienced astrophotographer.\n\n"
-            "2. WHAT IS ANALYSED\n"
-            "-------------------\n"
-            "• Image type (OSC / Mono / Narrowband / Dual-NB / Luminance)\n"
-            "• Linear state — warns if image is already stretched\n"
-            "• Calibration status — detects darks/flats/biases from HISTORY\n"
-            "• Background gradient (8x8 sigma-clipped tile grid)\n"
-            "• Gradient pattern (vignetting / linear LP / amp glow)\n"
-            "• Plate-solve status (WCS / pltsolvd keyword)\n"
-            "• Colour balance (R/G/B ratios, SPCC recommendation)\n"
-            "• Noise / SNR (MAD-based, integration-time-aware)\n"
-            "• Deconvolution suitability (PSF from star FWHM)\n"
-            "• Nebulosity detection (narrowband-adjusted thresholds)\n"
-            "• Star quality (FWHM in px/arcsec, elongation, centre vs edge)\n"
-            "• Saturated star count\n"
-            "• Dynamic range (usable stops)\n"
-            "• Pixel clipping (black and white)\n"
-            "• Stacking border detection\n"
-            "• Image sanity checks (extreme clipping, unusual dimensions)\n\n"
-            "3. WORKFLOW ORDER\n"
-            "-----------------\n"
-            "The recommended workflow follows the golden rule:\n"
-            "\"Do everything possible in the linear stage.\"\n\n"
-            "  LINEAR:      Crop → Background Extraction → Platesolving → SPCC →\n"
-            "               Remove Green (opt.) → Denoising → Deconvolution →\n"
-            "               Starless (StarNet/SyQon)\n"
-            "  TRANSITION:  Stretching (VeraLux HMS)\n"
-            "  NON-LINEAR:  Fine-tuning (Revela/Curves/Vectra) → StarComposer →\n"
-            "               Signature & Export\n\n"
-            "4. REPORT SECTIONS\n"
-            "------------------\n"
-            "• Image Summary — type, size, exposure, resolution, plate-solve\n"
-            "• Key Statistics — SNR, noise, gradient, DR, nebulosity, stars\n"
-            "• Processing State — linear/stretched, calibration status\n"
-            "• Per-Channel Statistics — R/G/B noise with noisiest highlighted\n"
-            "• Background Heatmap — 8x8 tile grid with gradient pattern label\n"
-            "• Findings — all analysis results with severity icons\n"
-            "• Recommended Workflow — actionable steps with Siril commands\n"
-            "• Post-Processing Roadmap — stretch and non-linear steps\n\n"
-            "5. EXPORT\n"
-            "---------\n"
-            "• Export Report (.txt) — Save the full analysis as a text file.\n"
-            "• Export Script (.ssf) — Generate a Siril script with the\n"
-            "  recommended commands and save checkpoints. The script includes\n"
-            "  a 'requires 1.4.1' directive.\n\n"
-            "6. SEVERITY LEVELS\n"
-            "------------------\n"
-            "  [ℹ] Info      — Informational, no action needed\n"
-            "  [✓] Minor     — Optional improvement\n"
-            "  [⚠] Moderate  — Recommended action\n"
-            "  [✗] Critical  — Strong recommendation or significant issue\n\n"
-            "7. SMART BEHAVIOUR\n"
-            "------------------\n"
-            "• Gradient recommendations include -samples when nebulosity is present\n"
-            "• Denoise is promoted before deconvolution (RL amplifies noise)\n"
-            "• StarNet uses -stretch only on linear images\n"
-            "• Soft stars / elongation are shown early as acquisition warnings\n"
-            "• Stretch advice includes background pedestal warnings\n"
-            "• Workflow is suppressed when image fails sanity checks\n"
-            "• Channel balance note when R/G/B are unusually equal\n\n"
-            "8. REQUIREMENTS\n"
-            "---------------\n"
-            "• Siril ≥ 1.4.1 with Python scripting (sirilpy)\n"
-            "• Image must be loaded in Siril (stacked, linear FITS)\n"
-            "• Python packages: numpy, PyQt6 (auto-installed by sirilpy)\n"
+            "IMAGE TYPE DETECTION\n"
+            "  3 channels + broadband keywords     \u2192 OSC Broadband\n"
+            "  3 channels + narrowband keywords     \u2192 Narrowband\n"
+            "  3 channels + dual-NB keywords        \u2192 Dual-Narrowband OSC\n"
+            "  1 channel + NB keywords              \u2192 Mono Narrowband\n"
+            "  1 channel + luminance keywords        \u2192 Luminance\n"
+            "  1 channel (default)                   \u2192 Mono\n\n"
+            "LINEAR STATE DETECTION\n"
+            "  Scans FITS HISTORY for: ght, autostretch, mtf,\n"
+            "  asinh, histeq, clahe (word-boundary matching)\n\n"
+            "CALIBRATION DETECTION\n"
+            "  Scans FITS HISTORY for: dark, flat, bias, offset\n"
+            "  Shows 'Unknown' when no HISTORY present\n\n"
+            "GRADIENT ANALYSIS\n"
+            "  8x8 sigma-clipped tile grid (2.5\u03c3, 3 iterations)\n"
+            "  Gradient spread = (max - min) / median * 100%\n"
+            "  Pattern: radial (vignetting), linear (LP), corner (amp glow)\n\n"
+            "NOISE ESTIMATION\n"
+            "  MAD-based on darkest 25% of pixels\n"
+            "  noise = 1.4826 * MAD (Gaussian-equivalent)\n"
+            "  SNR = median / noise\n\n"
+            "STAR QUALITY\n"
+            "  FWHM from Siril's star detection (pixels, arcsec if plate-solved)\n"
+            "  Elongation = max(a,b) / min(a,b) for detected stars\n"
+            "  Centre vs edge: compares inner 50% with outer ring\n\n"
+            "DECONVOLUTION\n"
+            "  makepsf manual -gaussian -fwhm={fwhm}\n"
+            "  rl -loadpsf=psf.fits -iters={10-30}\n"
+            "  Only recommended when SNR allows (RL amplifies noise)\n\n"
+            "SEVERITY LEVELS\n"
+            f"  [\u2139] Info      \u2014 Informational\n"
+            f"  [\u2713] Minor     \u2014 Optional improvement\n"
+            f"  [\u26a0] Moderate  \u2014 Recommended action\n"
+            f"  [\u2717] Critical  \u2014 Strong recommendation\n\n"
+            "WORKFLOW ORDER\n"
+            "  LINEAR:     Crop \u2192 Background Extraction \u2192 Platesolving \u2192\n"
+            "              SPCC \u2192 SCNR (opt.) \u2192 Denoise \u2192 Deconvolution \u2192\n"
+            "              Starless (StarNet/SyQon)\n"
+            "  TRANSITION: Stretching (GHT / VeraLux HMS)\n"
+            "  NON-LINEAR: Fine-tuning \u2192 StarComposer \u2192 Export\n\n"
+            "SIRIL COMMANDS (verified against 1.4.x)\n"
+            "  subsky {degree} {samples}    Background extraction\n"
+            "  platesolve                   Astrometric solution\n"
+            "  spcc                         Colour calibration\n"
+            "  denoise -mod={0.x}           Noise reduction\n"
+            "  denoise -mod={0.x} -vst      Photon-starved variant\n"
+            "  makepsf manual -gaussian     PSF for deconvolution\n"
+            "  rl -loadpsf=psf.fits -iters= Richardson-Lucy\n"
+            "  starnet -stretch             Star removal (linear)\n"
+            "  starnet                      Star removal (stretched)\n\n"
+            "REQUIREMENTS\n"
+            "  Siril >= 1.4.1 with Python script support\n"
+            "  sirilpy (bundled), numpy, PyQt6\n"
         )
-        layout.addWidget(te)
+        tabs.addTab(te_ref, "\U0001f4d6 Reference")
 
+        layout.addWidget(tabs)
+        lbl_guide = QLabel(
+            '<span style="font-size:10pt;">\U0001f4d6 '
+            '<a href="https://github.com/sramuschkat/Siril-Scripts/blob/main/'
+            'Instructions/Svenesis-ImageAdvisor-Instructions.md"'
+            ' style="color:#88aaff;">Full User Guide (online)</a></span>'
+        )
+        lbl_guide.setOpenExternalLinks(True)
+        layout.addWidget(lbl_guide)
         btn_close = QPushButton("Close")
+        btn_close.setStyleSheet(
+            "QPushButton{background-color:#444;color:#ddd;border:1px solid #666;"
+            "padding:6px;font-weight:bold;border-radius:4px}"
+            "QPushButton:hover{background-color:#555}"
+        )
         _nofocus(btn_close)
         btn_close.clicked.connect(dlg.close)
         layout.addWidget(btn_close)

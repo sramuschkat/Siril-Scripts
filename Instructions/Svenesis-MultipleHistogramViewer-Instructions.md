@@ -1,6 +1,6 @@
 # Svenesis Multiple Histogram Viewer — User Instructions
 
-**Version 1.0.1** | Siril Python Script for Histogram Comparison & Image Inspection
+**Version 1.1.0** | Siril Python Script for Histogram Comparison & Image Inspection
 
 > *Side-by-side histogram and image comparison — see your linear, auto-stretched, and custom-stretched images together with interactive pixel inspection.*
 

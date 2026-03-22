@@ -4189,6 +4189,14 @@ class BlinkComparatorWindow(QMainWindow):
         tabs.addTab(te_ref, "\U0001f4d6 Reference")
 
         layout.addWidget(tabs)
+        lbl_guide = QLabel(
+            '<span style="font-size:10pt;">📖 '
+            '<a href="https://github.com/sramuschkat/Siril-Scripts/blob/main/'
+            'Instructions/Svenesis-BlinkComparator-Instructions.md"'
+            ' style="color:#88aaff;">Full User Guide (online)</a></span>'
+        )
+        lbl_guide.setOpenExternalLinks(True)
+        layout.addWidget(lbl_guide)
         btn = QPushButton("Close")
         btn.setStyleSheet(
             "QPushButton{background-color:#444;color:#ddd;border:1px solid #666;"

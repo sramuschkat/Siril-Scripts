@@ -3428,6 +3428,14 @@ class AnnotateImageWindow(QMainWindow):
         tabs.addTab(tab4, "Output")
 
         layout.addWidget(tabs)
+        lbl_guide = QLabel(
+            '<span style="font-size:10pt;">📖 '
+            '<a href="https://github.com/sramuschkat/Siril-Scripts/blob/main/'
+            'Instructions/Svenesis-AnnotateImage-Instructions.md"'
+            ' style="color:#88aaff;">Full User Guide (online)</a></span>'
+        )
+        lbl_guide.setOpenExternalLinks(True)
+        layout.addWidget(lbl_guide)
         btn = QPushButton("Close")
         _nofocus(btn)
         btn.clicked.connect(dlg.accept)

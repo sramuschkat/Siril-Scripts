@@ -1,6 +1,6 @@
 """
 Svenesis Multiple Histogram Viewer
-Script Version: 1.0.1
+Script Version: 1.1.0
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -21,6 +21,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.1.0 - Help dialog UX overhaul
+      - Rewritten help as tabbed dialog with styled HTML (matches Blink Comparator / Gradient Analyzer)
+      - 7 tabs: Getting Started, Columns, Channels, Statistics, Look For, Controls, Reference
+      - Beginner-friendly explanations (what is a histogram, linear vs stretched, ADU, etc.)
+      - Dark-themed tab bar matching main application style
+      - Link to full online user guide (GitHub Instructions)
+      - Fixed Qt font alias warning (removed generic 'monospace' fallback)
 1.0.1 - Support compressed FITS (.fz, .gz) in file dialogs and loading.
 1.0.0 - Initial release
       - Read linear image from Siril, autostretch, display image and histogram
@@ -53,7 +60,7 @@ from PyQt6.QtWidgets import (
     QRadioButton, QCheckBox, QGraphicsView, QButtonGroup,
     QGraphicsScene, QGraphicsPixmapItem,
     QFileDialog, QSizePolicy, QDialog, QTextEdit,
-    QStackedWidget,
+    QStackedWidget, QTabWidget,
 )
 from PyQt6.QtCore import Qt, QRectF, QTimer, QEvent, QObject, QUrl
 from PyQt6.QtGui import QImage, QPixmap, QColor, QPainter, QPen, QPainterPath, QFont, QResizeEvent, QDesktopServices
@@ -63,7 +70,7 @@ try:
 except ImportError:
     _pil_Image = None
 
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 
 # Layout constants
 LEFT_PANEL_WIDTH = 320
@@ -1101,107 +1108,519 @@ class MultipleHistogramViewerWindow(QMainWindow):
     def _show_help_dialog(self) -> None:
         """Show a modal Help dialog with usage and controls."""
         dlg = QDialog(self)
-        dlg.setWindowTitle("Svenesis Multiple Histogram Viewer — Help")
-        dlg.setMinimumSize(620, 560)
+        dlg.setWindowTitle("Svenesis Multiple Histogram Viewer \u2014 Help")
+        dlg.setMinimumSize(850, 650)
+        dlg.setStyleSheet(
+            "QDialog{background-color:#1e1e1e;color:#e0e0e0}"
+            "QLabel{color:#e0e0e0}"
+            "QTabWidget::pane{border:1px solid #444444;background:#1e1e1e}"
+            "QTabBar::tab{background:#3c3c3c;color:#cccccc;padding:6px 12px;"
+            "border:1px solid #444444;border-bottom:none;"
+            "border-radius:4px 4px 0 0;margin-right:2px}"
+            "QTabBar::tab:selected{background:#1e1e1e;color:#88aaff;font-weight:bold}"
+            "QTabBar::tab:hover{background:#4a4a4a}"
+        )
         layout = QVBoxLayout(dlg)
-        te = QTextEdit()
-        te.setReadOnly(True)
-        te.setPlainText(
-            "Svenesis Multiple Histogram Viewer — Help\n"
-            "=================================\n\n"
-            "This script was developed by Sven Ramuschkat.\n"
+
+        base_style = (
+            "font-size: 13pt; color: #e0e0e0; background: #1e1e1e;"
+            " font-family: 'Helvetica Neue', Helvetica, Arial; padding: 12px;"
+        )
+        mono_style = (
+            "font-size: 10pt; color: #e0e0e0; background: #1e1e1e;"
+            " font-family: 'Courier New'; padding: 10px;"
+        )
+
+        tabs = QTabWidget()
+
+        # ---- Tab 1: Getting Started ----
+        te_start = QTextEdit()
+        te_start.setReadOnly(True)
+        te_start.setStyleSheet(base_style)
+        te_start.setHtml(
+            "<b style='color:#88aaff; font-size:16pt;'>"
+            "\U0001f680 Getting Started</b><br><br>"
+
+            "<b style='color:#ffcc66;'>What is a histogram?</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "A histogram is a chart that shows <b>how many pixels</b> in your image "
+            "have each brightness value. The horizontal axis (X) represents pixel "
+            "brightness from black (left) to white (right). The vertical axis (Y) "
+            "represents how many pixels have that brightness.<br><br>"
+            "In astrophotography, histograms are essential for understanding your data:<br>"
+            "\u2022 <b>Tall spike on the far left</b> \u2014 most pixels are very dark "
+            "(normal for a linear/unstretched image)<br>"
+            "\u2022 <b>Smooth bell curve in the middle</b> \u2014 well-stretched image "
+            "with good tonal range<br>"
+            "\u2022 <b>Spike touching the right edge</b> \u2014 clipped highlights "
+            "(some stars or bright regions lost detail)<br>"
+            "\u2022 <b>Wide, spread-out curve</b> \u2014 good dynamic range with lots "
+            "of tonal detail"
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>What does this tool do?</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "The Multiple Histogram Viewer displays your image's histogram alongside "
+            "the image itself, in up to <b>four side-by-side columns</b> for direct "
+            "comparison. It reads the current linear image from Siril, applies an "
+            "autostretch for preview, and lets you load up to two additional stretched "
+            "FITS files for comparison.<br><br>"
+            "Think of it as a <b>visual comparison workbench</b> \u2014 see your linear "
+            "data, the auto-stretched preview, and your custom stretches all at once."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Quick Start \u2014 3 Steps</b><br>"
+            "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+            " border:1px solid #3a5a7a;'>"
+            "<b>1.</b> Load an image in Siril (or use <b>Load linear FITS...</b>).<br>"
+            "<b>2.</b> Run <b>Multiple Histogram Viewer</b> from "
+            "Processing \u2192 Scripts.<br>"
+            "<b>3.</b> The script shows <b>Linear</b> and <b>Auto-Stretched</b> "
+            "columns side by side. Optionally load stretched FITS files for comparison."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>What is Linear vs. Stretched?</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "A <b>linear</b> image is the raw output of calibration and stacking \u2014 "
+            "it looks very dark because most detail is compressed into the bottom few "
+            "percent of the brightness range. This is normal!<br><br>"
+            "A <b>stretched</b> image has been mathematically transformed to reveal "
+            "faint detail. The transformation expands the shadows while compressing "
+            "the highlights, making nebulae and faint structures visible.<br><br>"
+            "The Histogram Viewer shows both side-by-side so you can see exactly "
+            "how stretching transforms the data."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>What is ADU?</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "<b>ADU (Analog-to-Digital Units)</b> is the raw numerical value your "
+            "camera sensor records for each pixel. The histogram X-axis shows values "
+            "in ADU so you can see the actual numbers your camera recorded:<br>"
+            "\u2022 <b>8-bit:</b> 0\u2013255<br>"
+            "\u2022 <b>14-bit:</b> 0\u201316,383<br>"
+            "\u2022 <b>16-bit:</b> 0\u201365,535"
+            "</div>"
+        )
+        tabs.addTab(te_start, "\U0001f680 Getting Started")
+
+        # ---- Tab 2: Columns & Views ----
+        te_cols = QTextEdit()
+        te_cols.setReadOnly(True)
+        te_cols.setStyleSheet(base_style)
+        te_cols.setHtml(
+            "<b style='color:#88aaff; font-size:16pt;'>"
+            "\U0001f4ca Columns & Views</b><br><br>"
+
+            "<b style='color:#ffcc66;'>The Four Columns</b><br>"
+            "The right panel shows up to four columns, each displaying one version "
+            "of the image with its histogram and statistics:<br><br>"
+
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "<b style='color:#88aaff;'>Linear</b> (always visible)<br>"
+            "Your original linear image data \u2014 pixel values exactly as they came "
+            "from calibration and stacking. The image may appear very dark because "
+            "linear data has most of its information compressed near the bottom of "
+            "the brightness range. This is normal."
+            "</div><br>"
+
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "<b style='color:#88aaff;'>Auto-Stretched</b> (always visible)<br>"
+            "The same linear data with an automatic percentile stretch applied. "
+            "Maps the 2nd percentile to black and the 98th percentile to white, "
+            "making faint structures visible. This is a quick preview stretch \u2014 "
+            "not the same as Siril's GHT or MTF stretches."
+            "</div><br>"
+
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "<b style='color:#88aaff;'>Stretched FITS 1 / 2</b> (optional)<br>"
+            "Appear when you load stretched FITS files via the left panel buttons. "
+            "Use these to compare different stretching approaches (e.g. Siril GHT "
+            "vs VeraLux vs Asinh) side by side with their histograms and statistics."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Each Column Contains</b><br>"
+            "\u2022 <b>Column title</b> \u2014 \"Linear\", \"Auto-Stretched\", or the "
+            "loaded filename<br>"
+            "\u2022 <b>Zoom toolbar</b> \u2014 \u2212 (out), Fit, 1:1, + (in)<br>"
+            "\u2022 <b>Image view</b> \u2014 scrollable, zoomable display<br>"
+            "\u2022 <b>Histogram or 3D plot</b> \u2014 selected via the View group<br>"
+            "\u2022 <b>\"Enlarge Diagram\" button</b> \u2014 opens a large, "
+            "maximisable modal with the same diagram<br>"
+            "\u2022 <b>Statistics</b> \u2014 Min, Max, Mean, Median, Std, IQR, MAD, "
+            "P2/P98, Range, Near-black/Near-white<br><br>"
+
+            "<b style='color:#ffcc66;'>View Modes</b><br>"
+            "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+            " border:1px solid #3a5a7a;'>"
+            "<b>Histogram</b> (default) \u2014 2D chart showing the distribution of "
+            "pixel brightness values. X-axis = ADU, Y-axis = pixel count. "
+            "Multiple channels can be overlaid simultaneously.<br><br>"
+            "<b>3D Surface Plot</b> \u2014 Treats each pixel's brightness as height. "
+            "Bright areas become peaks, dark areas become valleys. Makes gradients, "
+            "vignetting, and brightness patterns immediately obvious. A tilted plane "
+            "= gradient, a bowl shape = vignetting, sharp spikes = bright stars."
+            "</div>"
+        )
+        tabs.addTab(te_cols, "\U0001f4ca Columns")
+
+        # ---- Tab 3: Channels & Modes ----
+        te_chan = QTextEdit()
+        te_chan.setReadOnly(True)
+        te_chan.setStyleSheet(base_style)
+        te_chan.setHtml(
+            "<b style='color:#88aaff; font-size:16pt;'>"
+            "\U0001f3a8 Channels & Data Modes</b><br><br>"
+
+            "<b style='color:#ffcc66;'>Histogram Channels (checkboxes)</b><br>"
+            "You can show or hide any combination of channels on the histogram:<br><br>"
+
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "<table style='color:#cccccc;' cellpadding='4'>"
+            "<tr><td><b style='color:#ffffff;'>\u2588\u2588 RGB</b></td>"
+            "<td>Luminance (Rec.709: 0.2126R + 0.7152G + 0.0722B). "
+            "Shown as a <b>filled semi-transparent area</b> \u2014 good for seeing "
+            "the overall shape.</td></tr>"
+            "<tr><td><b style='color:#ff5050;'>\u2588\u2588 R</b></td>"
+            "<td>Red channel. Check red signal strength, H\u03b1 emission, "
+            "red light pollution.</td></tr>"
+            "<tr><td><b style='color:#50ff50;'>\u2588\u2588 G</b></td>"
+            "<td>Green channel. Check noise levels, OIII emission, "
+            "colour balance.</td></tr>"
+            "<tr><td><b style='color:#5050ff;'>\u2588\u2588 B</b></td>"
+            "<td>Blue channel. Often the noisiest \u2014 check blue signal "
+            "and OIII emission.</td></tr>"
+            "<tr><td><b style='color:#ffdc32;'>\u2588\u2588 L</b></td>"
+            "<td>Luminance (same formula as RGB). Drawn as a <b>thin yellow "
+            "line</b> \u2014 good for overlaying on individual channel lines "
+            "without obscuring them.</td></tr>"
+            "</table>"
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Typical combinations</b><br>"
+            "\u2022 <b>RGB only</b> \u2014 quick overview of the overall histogram shape<br>"
+            "\u2022 <b>R + G + B</b> \u2014 compare individual channel distributions "
+            "(colour balance check)<br>"
+            "\u2022 <b>RGB + R + G + B</b> \u2014 all channels overlaid for "
+            "comprehensive view<br>"
+            "\u2022 <b>L only</b> \u2014 clean luminance view without the filled "
+            "area<br><br>"
+
+            "<b style='color:#ffcc66;'>3D Plot Channels (radio buttons)</b><br>"
+            "Only one channel can drive the 3D surface height at a time. "
+            "Select RGB (luminance), R, G, B, or L. Use individual channels "
+            "to see a single channel's spatial brightness distribution.<br><br>"
+
+            "<b style='color:#ffcc66;'>Data Modes</b><br>"
+            "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+            " border:1px solid #3a5a7a;'>"
+            "<b>Normal (linear)</b><br>"
+            "Histogram Y-axis shows direct pixel count. 3D Z-axis shows ADU value. "
+            "Best for seeing the dominant features \u2014 the main peak, the overall "
+            "shape. The brightest/most-common values dominate the display.<br><br>"
+            "<b>Logarithmic</b><br>"
+            "Histogram Y-axis shows log\u2081\u2080(count + 1). 3D Z-axis shows "
+            "log\u2081\u2080(ADU + 1). Best for seeing faint tails and low-level "
+            "features that are invisible on a linear scale.<br><br>"
+            "<b>When to use logarithmic:</b><br>"
+            "\u2022 Your linear image's histogram looks like a single spike with "
+            "nothing else visible<br>"
+            "\u2022 You want to see the faint star/nebula tail on the right side<br>"
+            "\u2022 The 3D surface is dominated by a few bright stars and the "
+            "background is flat"
+            "</div>"
+        )
+        tabs.addTab(te_chan, "\U0001f3a8 Channels")
+
+        # ---- Tab 4: Statistics & Pixel Inspection ----
+        te_stats = QTextEdit()
+        te_stats.setReadOnly(True)
+        te_stats.setStyleSheet(base_style)
+        te_stats.setHtml(
+            "<b style='color:#88aaff; font-size:16pt;'>"
+            "\U0001f4cf Statistics & Pixel Inspection</b><br><br>"
+
+            "<b style='color:#ffcc66;'>Statistics Panel</b><br>"
+            "Below each column's histogram/3D plot, a statistics panel shows "
+            "comprehensive numerical data about the image:<br><br>"
+
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "<table style='color:#cccccc;' cellpadding='3'>"
+            "<tr><td><b>Size</b></td><td>Image dimensions (width \u00d7 height)</td></tr>"
+            "<tr><td><b>Pixels</b></td><td>Total pixel count "
+            "(\"subsampled\" if > 5M pixels)</td></tr>"
+            "<tr><td><b>Min / Max</b></td><td>Minimum and maximum pixel values "
+            "in ADU</td></tr>"
+            "<tr><td><b>Mean</b></td><td>Average pixel value in ADU</td></tr>"
+            "<tr><td><b>Median</b></td><td>Middle pixel value (50th percentile) "
+            "in ADU</td></tr>"
+            "<tr><td><b>Std</b></td><td>Standard deviation \u2014 measures the "
+            "spread of values</td></tr>"
+            "<tr><td><b>IQR</b></td><td>Interquartile range (P75 \u2212 P25) "
+            "\u2014 robust spread measure</td></tr>"
+            "<tr><td><b>MAD</b></td><td>Median Absolute Deviation \u2014 another "
+            "robust spread measure</td></tr>"
+            "<tr><td><b>P2 / P98</b></td><td>2nd and 98th percentile values "
+            "\u2014 the autostretch reference points</td></tr>"
+            "<tr><td><b>Range</b></td><td>P98 \u2212 P2 \u2014 the \"useful\" "
+            "dynamic range</td></tr>"
+            "<tr><td><b>Near-black</b></td><td>% of pixels with value "
+            "\u2264 1/255 of full range</td></tr>"
+            "<tr><td><b>Near-white</b></td><td>% of pixels with value "
+            "\u2265 254/255 of full range</td></tr>"
+            "</table>"
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Interpreting Statistics</b><br>"
+            "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+            " border:1px solid #3a5a7a;'>"
+            "<b>For a linear image:</b><br>"
+            "\u2022 Min near 0, Max much higher \u2192 normal linear data<br>"
+            "\u2022 P2 very close to P98 \u2192 most data compressed in a narrow "
+            "range (normal for linear)<br>"
+            "\u2022 High near-black % \u2192 normal (most pixels are background "
+            "near zero)<br><br>"
+            "<b>For a stretched image:</b><br>"
+            "\u2022 Std and IQR indicate the tonal spread<br>"
+            "\u2022 Near-white > 0% \u2192 some clipping at the bright end<br>"
+            "\u2022 Compare P2/P98 range between different stretches to see which "
+            "uses more of the tonal range"
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Clicking on an Image</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "Click anywhere on any image to inspect that pixel:<br><br>"
+            "\u2022 <b>Stats panel:</b> A new line appears with the exact pixel "
+            "coordinates and R, G, B, I (intensity) values in ADU:<br>"
+            "<span style='font-family:'Courier New'; color:#aaffaa; background:#1a3a1a;"
+            " padding:2px 4px;'>Click (x=1234, y=567): R=1023 G=987 B=876  "
+            "I=974</span><br><br>"
+            "\u2022 <b>Histogram:</b> A vertical dashed marker line appears at the "
+            "clicked pixel's intensity, with a label showing the ADU value and how "
+            "many other pixels share that brightness.<br><br>"
+            "\u2022 <b>3D surface:</b> A vertical line and marker dot appear at the "
+            "corresponding position, showing the Z-value.<br><br>"
+            "<b>Tip:</b> Click the same star or region in each column to compare "
+            "how different stretches affect that specific pixel."
+            "</div>"
+        )
+        tabs.addTab(te_stats, "\U0001f4cf Statistics")
+
+        # ---- Tab 5: What to Look For ----
+        te_look = QTextEdit()
+        te_look.setReadOnly(True)
+        te_look.setStyleSheet(base_style)
+        te_look.setHtml(
+            "<b style='color:#88aaff; font-size:16pt;'>"
+            "\U0001f50d What to Look For</b><br><br>"
+
+            "<b style='color:#ffcc66;'>Understanding Your Linear Data</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "Your linear histogram will look like a tall spike near the far left "
+            "with a faint tail extending to the right. This is completely normal:<br>"
+            "\u2022 <b>The tall spike</b> = background sky (the darkest, most "
+            "common pixel value)<br>"
+            "\u2022 <b>The faint tail to the right</b> = your signal (stars, nebulae, "
+            "galaxies)<br>"
+            "\u2022 Switch to <b>Logarithmic</b> mode to see the faint tail clearly"
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Checking Colour Balance</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "Enable <b>R, G, B</b> channels (disable RGB and L for clarity):<br>"
+            "\u2022 <b>Well-balanced:</b> R, G, B peaks align at roughly the same "
+            "position<br>"
+            "\u2022 <b>Colour cast:</b> One channel's peak is shifted significantly "
+            "left or right<br>"
+            "Compare the per-channel Median values in the statistics."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Detecting Clipping</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "Check the statistics panel for each column:<br>"
+            "\u2022 <b>Near-black > 0%</b> \u2014 shadow clipping (normal for "
+            "linear data; concerning for stretched data)<br>"
+            "\u2022 <b>Near-white > 0%</b> \u2014 highlight clipping (star cores, "
+            "bright nebula regions saturated)<br>"
+            "A good stretch maximises tonal range <b>without clipping</b> either end."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Comparing Stretching Methods</b><br>"
+            "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+            " border:1px solid #3a5a7a;'>"
+            "Load different stretches into the comparison slots, then compare:<br><br>"
+            "\u2022 <b>Histograms:</b> Which stretch gives the smoothest, widest "
+            "distribution?<br>"
+            "\u2022 <b>Near-white %:</b> Which stretch clips the fewest highlights?<br>"
+            "\u2022 <b>Std / IQR:</b> Higher = more tonal spread (generally better)<br>"
+            "\u2022 <b>Images:</b> Zoom to 1:1 and compare fine detail, star sizes, "
+            "and noise<br>"
+            "\u2022 <b>Pixel clicks:</b> Click the same star in each column to compare "
+            "its ADU value across stretches"
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Spotting Gradients & Vignetting</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "Switch to the <b>3D Surface Plot</b> view:<br>"
+            "\u2022 <b>Tilted plane</b> = directional gradient (light pollution)<br>"
+            "\u2022 <b>Bowl / dome shape</b> = vignetting (dark corners, bright "
+            "centre)<br>"
+            "\u2022 <b>Sharp spikes</b> = bright stars<br>"
+            "Use <b>Logarithmic</b> 3D mode if bright stars dominate the plot \u2014 "
+            "log compression reveals the background shape underneath."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Tips</b><br>"
+            "\u2022 Always check <b>Logarithmic mode</b> \u2014 the faint signal "
+            "tail is often invisible until you switch to log<br>"
+            "\u2022 Use the same zoom level across columns for fair visual "
+            "comparison<br>"
+            "\u2022 The autostretch is a baseline \u2014 your custom stretches "
+            "should produce better results<br>"
+            "\u2022 Multiple pixel clicks accumulate in the stats \u2014 sample "
+            "several pixels to compare"
+        )
+        tabs.addTab(te_look, "\U0001f50d Look For")
+
+        # ---- Tab 6: Controls & Options ----
+        te_opts = QTextEdit()
+        te_opts.setReadOnly(True)
+        te_opts.setStyleSheet(base_style)
+        te_opts.setHtml(
+            "<b style='color:#88aaff; font-size:16pt;'>"
+            "\u2699\ufe0f Controls & Options</b><br><br>"
+
+            "<b style='color:#ffcc66;'>Image Sources</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "\u2022 <b>Refresh from Siril</b> \u2014 Reloads the current image from "
+            "Siril. Use after applying processing steps (background extraction, "
+            "colour calibration, etc.) to see how the histogram changed.<br>"
+            "\u2022 <b>Load linear FITS...</b> \u2014 Opens a file dialog to load "
+            "a linear FITS file directly from disk, instead of from Siril. Supports "
+            "compressed FITS (.fz, .gz)."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Stretched Comparisons</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "\u2022 <b>Load stretched FITS 1 / 2</b> \u2014 Load an already-stretched "
+            "FITS file into a comparison slot. A new column appears with its own "
+            "image, histogram/3D plot, and statistics.<br>"
+            "\u2022 <b>Clear</b> \u2014 Remove the file and hide the column.<br>"
+            "Slots are independent \u2014 you can use one or both. Use this to "
+            "compare different stretches (e.g. Siril GHT vs VeraLux HMS vs "
+            "manual curves) side by side."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Image Zoom</b><br>"
+            "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+            " border:1px solid #3a5a7a;'>"
+            "Each column has four zoom buttons:<br>"
+            "<table style='color:#cccccc;' cellpadding='3'>"
+            "<tr><td><b>\u2212</b></td><td>Zoom out (\u00f7 1.2)</td></tr>"
+            "<tr><td><b>Fit</b></td><td>Fit entire image to viewport, "
+            "keeping aspect ratio</td></tr>"
+            "<tr><td><b>1:1</b></td><td>100% zoom (1 screen pixel = 1 image "
+            "pixel)</td></tr>"
+            "<tr><td><b>+</b></td><td>Zoom in (\u00d7 1.2)</td></tr>"
+            "</table><br>"
+            "Zoom levels are independent per column, so you can zoom into "
+            "the same region on different columns to compare."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Enlarge Diagram</b><br>"
+            "Click the <b>\"Enlarge Diagram\"</b> button below any column's "
+            "histogram or 3D plot to open it in a large, maximisable modal. "
+            "Great for detailed inspection of subtle histogram features or for "
+            "presentations.<br><br>"
+
+            "<b style='color:#ffcc66;'>Performance Notes</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "\u2022 Images larger than <b>4096 px</b> are downscaled for display "
+            "using high-quality Lanczos resampling \u2014 the original full-resolution "
+            "data is preserved for statistics and pixel inspection.<br>"
+            "\u2022 For images with more than <b>5 million pixels</b>, statistics "
+            "and histograms use a uniform subsample for responsiveness. The values "
+            "remain accurate."
+            "</div>"
+        )
+        tabs.addTab(te_opts, "\u2699\ufe0f Controls")
+
+        # ---- Tab 7: Technical Reference ----
+        te_ref = QTextEdit()
+        te_ref.setReadOnly(True)
+        te_ref.setStyleSheet(mono_style)
+        te_ref.setPlainText(
+            "Multiple Histogram Viewer \u2014 Technical Reference\n"
+            "================================================\n\n"
+            "Developed by Sven Ramuschkat\n"
             "Web: www.svenesis.org\n"
             "GitHub: https://github.com/sramuschkat/Siril-Scripts\n\n"
-            "1. GETTING STARTED\n"
-            "------------------\n"
-            "The script reads the current image from Siril, builds a 2%-98% percentile autostretch for "
-            "preview, and shows the Linear and Auto-Stretched views side by side with histograms (or 3D "
-            "surface plots). You can also load a linear FITS file directly and up to 2 stretched FITS for "
-            "comparison.\n\n"
-            "2. LEFT PANEL — VIEW\n"
-            "-------------------\n"
-            "• Histogram — Shows the combined RGB (and per-channel) distribution as a 2D histogram. "
-            "X-axis is always Pixel Value in ADU (0 to your camera’s max, e.g. 0–65535). Y-axis is "
-            "pixel count (or log10(count+1) in Logarithmic mode).\n"
-            "• 3D Surface Plot — Same data as a 3D surface: X/Y = image columns/rows (subsampled), "
-            "Z = pixel value (or log) for the selected 3D channel. Use this to see spatial vs intensity "
-            "distribution.\n\n"
-            "3. LEFT PANEL — DATA-MODE\n"
-            "--------------------------\n"
-            "• Normal — Y-axis (histogram count) is linear. Good for seeing absolute counts.\n"
-            "• Logarithmic — Y-axis is log10(count+1). Use when the peak is huge and the tail is faint; "
-            "log mode makes the faint tail visible.\n\n"
-            "4. LEFT PANEL — HISTOGRAM CHANNELS\n"
-            "-----------------------------------\n"
-            "Checkboxes: RGB, R, G, B, L.\n"
-            "• RGB — Combined distribution (all channels flattened).\n"
-            "• R, G, B — Red, green, blue channel histograms.\n"
-            "• L — Luminance (Rec.709: 0.213R + 0.715G + 0.072B).\n"
-            "Toggle any combination to compare channels. All affect both the inline histogram and the "
-            "Enlarge Diagram view.\n\n"
-            "5. LEFT PANEL — 3D PLOT CHANNELS\n"
-            "--------------------------------\n"
-            "When View is \"3D Surface Plot\", choose which channel drives the Z-axis: RGB (combined), "
-            "R, G, B, or L. Same Rec.709 luminance for L.\n\n"
-            "6. LEFT PANEL — IMAGE\n"
-            "---------------------\n"
-            "• Refresh from Siril — Reload the current image from Siril (e.g. after loading a different "
-            "frame). Recomputes linear/autostretch and all histograms.\n"
-            "• Load linear FITS... — Open a linear FITS file as the primary image instead of Siril’s "
-            "current image. Useful if you want to inspect a file that is not loaded in Siril.\n\n"
-            "7. LEFT PANEL — STRETCHED COMPARISONS\n"
-            "-------------------------------------\n"
-            "• Load stretched FITS 1 / 2 — Load an already-stretched FITS file into that slot. "
-            "The script displays it in a separate column with its own image, histogram/3D, and stats. "
-            "Use this to compare different stretches (e.g. Siril MTF vs VeraLux vs manual) side by side.\n"
-            "• Clear — Remove the file from that slot and hide the column.\n"
-            "Slots are independent; you can use 1 or 2.\n\n"
-            "8. RIGHT PANEL — COLUMNS\n"
-            "------------------------\n"
-            "• Linear — Raw sensor data (normalized 0–1). No stretch; histogram shows the real "
-            "distribution (usually a strong peak at low values and a long tail).\n"
-            "• Auto-Stretched — Internal 2%-98% percentile stretch for quick preview. Values below "
-            "the 2nd percentile clip to 0, above the 98th to 1; in between they are linearly mapped. "
-            "This is not Siril’s full MTF/GHT; it’s for visual comparison only.\n"
-            "• Stretched 1 / 2 — Shown only when you load a file into that slot. Displays the "
-            "loaded stretched FITS with its histogram and stats.\n\n"
-            "9. EACH COLUMN — IMAGE ZOOM\n"
-            "----------------------------\n"
-            "• - (Zoom Out) — Scale down the image in that column.\n"
-            "• Fit — Fit the image to the view while keeping aspect ratio.\n"
-            "• 1:1 — View at 100% (one pixel = one screen pixel).\n"
-            "• + (Zoom In) — Scale up the image.\n\n"
-            "10. EACH COLUMN — STATS AND ENLARGE DIAGRAM\n"
-            "-----------------------------------------\n"
-            "• Stats (below histogram) — Computed over all channels combined (RGB flattened). "
-            "Size, pixel count; Min/Max, Mean, Median, Std, IQR, MAD (ADU); P2/P98 (2nd/98th percentile, "
-            "the range used for Auto-Stretch); Range (P2–P98) in ADU; Near-black / Near-white (percentage "
-            "of pixels at or below 1/255 or at or above 1−1/255 in normalized space). For large images, "
-            "stats show \"(subsampled)\" when computed on a subset of pixels. Hover the stats text for a tooltip.\n"
-            "• Enlarge Diagram — Opens a larger modal with the same histogram (or 3D surface) for that "
-            "column, with the same channel and Data-Mode settings. Useful for fine inspection.\n\n"
-            "11. CLICKING ON AN IMAGE\n"
-            "----------------------\n"
-            "Click anywhere on an image in any column. The script shows:\n"
-            "• In the stats area: Click (x=..., y=...): R=... G=... B=... I=... (ADU).\n"
-            "• In the histogram: A vertical line at the clicked pixel’s intensity and a label with "
-            "Value (ADU) and pixel count in that bin. This helps you see where a given pixel sits in "
-            "the distribution.\n\n"
-            "12. X-AXIS (ADU)\n"
-            "---------------\n"
-            "Histogram X-axis is always \"Pixel Value (ADU 0–max)\". The max is derived from your data "
-            "(e.g. 65535 for 16-bit). Values are in camera ADU, not 0–1, so you can compare with "
-            "other tools and with the stats (Min/Max, percentiles) which are also in ADU.\n\n"
-            "13. REQUIREMENTS\n"
-            "---------------\n"
-            "Siril 1.4+ with Python script support, sirilpy (bundled with Siril), and numpy, PyQt6, "
-            "Pillow, astropy (installed automatically when the script runs).\n\n"
-            "For more details and menu setup (e.g. show under \"Utility\"), see the repository README "
-            "at https://github.com/sramuschkat/Siril-Scripts"
+            "HISTOGRAM COMPUTATION\n"
+            "  256 bins over normalised [0, 1] range\n"
+            "  Large images subsampled (stride) when > 5M pixels\n"
+            "  X-axis displayed as ADU (0 to data max, e.g. 65535)\n\n"
+            "AUTOSTRETCH\n"
+            "  Percentile-based: maps [P2, P98] to [0, 1]\n"
+            "  Formula: (value - P2) / (P98 - P2), clipped to [0, 1]\n"
+            "  Not the same as Siril's MTF/GHT stretches\n\n"
+            "LUMINANCE (Rec.709 / BT.709)\n"
+            "  L = 0.2126 * R + 0.7152 * G + 0.0722 * B\n"
+            "  Used for both RGB and L channel displays\n\n"
+            "NORMALISATION\n"
+            "  uint8:  divide by 255\n"
+            "  uint16: divide by actual max in data\n"
+            "  int16:  (value + 32768) / 65535\n"
+            "  Outlier clip at 99.99th percentile\n"
+            "  Final clip to [0, 1] float32\n\n"
+            "STATISTICS\n"
+            "  Min/Max      P0 / P100 in ADU\n"
+            "  Mean         Arithmetic mean in ADU\n"
+            "  Median       P50 in ADU\n"
+            "  Std          Standard deviation in ADU\n"
+            "  IQR          P75 - P25 in ADU\n"
+            "  MAD          median(|x - median(x)|) in ADU\n"
+            "  P2/P98       2nd/98th percentile in ADU\n"
+            "  Range        P98 - P2 in ADU\n"
+            "  Near-black   % pixels <= 1/255 normalised\n"
+            "  Near-white   % pixels >= 1 - 1/255 normalised\n\n"
+            "3D SURFACE PLOT\n"
+            "  Downsampled to 100x100 grid max\n"
+            "  Z-axis: channel value (ADU) or log10(ADU + 1)\n"
+            "  Colourmap: matplotlib viridis\n"
+            "  Z scale factor: 0.35 (aspect ratio)\n\n"
+            "DISPLAY\n"
+            "  Images > 4096 px: Lanczos downscale (Pillow)\n"
+            "  Vertical flip for display coordinate system\n"
+            "  Click mapping accounts for downscale factor\n\n"
+            "SIRIL API\n"
+            "  image_lock()              Thread-safe image access\n"
+            "  get_image_pixeldata()     Full-resolution pixel data\n"
+            "  log()                     Console message\n\n"
+            "SUPPORTED FORMATS\n"
+            "  .fit, .fits, .fts         Standard FITS\n"
+            "  .fz                       fpack compressed FITS\n"
+            "  .gz                       gzip compressed FITS\n\n"
+            "REQUIREMENTS\n"
+            "  Siril 1.4+ with Python script support\n"
+            "  sirilpy (bundled), numpy, PyQt6, Pillow, astropy\n"
+            "  Optional: matplotlib (for 3D surface plots)\n"
         )
-        te.setStyleSheet("font-size: 10pt; color: #e0e0e0; background: #2b2b2b;")
-        layout.addWidget(te)
+        tabs.addTab(te_ref, "\U0001f4d6 Reference")
+
+        layout.addWidget(tabs)
+        lbl_guide = QLabel(
+            '<span style="font-size:10pt;">\U0001f4d6 '
+            '<a href="https://github.com/sramuschkat/Siril-Scripts/blob/main/'
+            'Instructions/Svenesis-MultipleHistogramViewer-Instructions.md"'
+            ' style="color:#88aaff;">Full User Guide (online)</a></span>'
+        )
+        lbl_guide.setOpenExternalLinks(True)
+        layout.addWidget(lbl_guide)
         btn = QPushButton("Close")
+        btn.setStyleSheet(
+            "QPushButton{background-color:#444;color:#ddd;border:1px solid #666;"
+            "padding:6px;font-weight:bold;border-radius:4px}"
+            "QPushButton:hover{background-color:#555}"
+        )
         _nofocus(btn)
         btn.clicked.connect(dlg.accept)
         layout.addWidget(btn)
@@ -1434,7 +1853,7 @@ class MultipleHistogramViewerWindow(QMainWindow):
             stats_layout = QVBoxLayout(stats_section)
             stats_layout.setContentsMargins(0, 0, 0, 0)
             stats_label = QLabel("")
-            stats_label.setStyleSheet("font-size: 10pt; color: #bbb; font-family: 'Courier New', monospace;")
+            stats_label.setStyleSheet("font-size: 10pt; color: #bbb; font-family: 'Courier New';")
             stats_label.setWordWrap(True)
             stats_label.setMinimumHeight(STATS_LABEL_MIN_HEIGHT)
             stats_label.setMinimumWidth(240)
