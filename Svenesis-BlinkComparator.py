@@ -3813,7 +3813,155 @@ class BlinkComparatorWindow(QMainWindow):
         )
         tabs.addTab(te_tabs, "\U0001f4ca Tabs")
 
-        # ---- Tab 3: Frame Selection ----
+        # ---- Tab 3: Metrics & Statistics ----
+        te_metrics = QTextEdit()
+        te_metrics.setReadOnly(True)
+        te_metrics.setStyleSheet(base_style)
+        te_metrics.setHtml(
+            "<b style='color:#88aaff; font-size:16pt;'>"
+            "\U0001f4cf Metrics & Statistics</b><br><br>"
+
+            "The Statistics Table shows ten columns for every frame. Here is what "
+            "each metric means, where the data comes from, and how to interpret the "
+            "values for astrophotography frame selection.<br><br>"
+
+            # ---- FWHM ----
+            "<b style='color:#ffcc66;'>FWHM (Full Width at Half Maximum)</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "<b>What it is:</b> The diameter of stars measured at half their peak "
+            "brightness (in pixels). A smaller FWHM means sharper, tighter stars.<br>"
+            "<b>Source:</b> Siril registration data (<span style='font-family:monospace;'>"
+            "get_seq_regdata</span>). Requires star detection to have been run.<br>"
+            "<b>Good values:</b> Depends on your focal length and seeing, but lower "
+            "is always better. Typical range: 2\u20136 px for most setups.<br>"
+            "<b>What to watch for:</b> A sudden increase indicates <b>focus drift</b>, "
+            "<b>wind gusts</b>, or <b>poor seeing</b>. A gradual ramp across frames "
+            "often indicates thermal focus shift.</div><br>"
+
+            # ---- Roundness ----
+            "<b style='color:#ffcc66;'>Roundness</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "<b>What it is:</b> How circular the stars are, on a scale of 0 to 1 "
+            "(1.0 = perfect circle, 0.0 = a line). Related to eccentricity: "
+            "<span style='font-family:monospace;'>ecc \u2248 1 \u2212 roundness</span>.<br>"
+            "<b>Source:</b> Siril registration data.<br>"
+            "<b>Good values:</b> Above 0.75 is generally good. Below 0.6 usually "
+            "indicates problems.<br>"
+            "<b>What to watch for:</b> Low roundness means <b>tracking errors</b> "
+            "(elongated stars), <b>wind</b>, or <b>optical problems</b> (tilt, coma). "
+            "If roundness drops in a group of frames, check for a wind gust or mount hiccup."
+            "</div><br>"
+
+            # ---- Background ----
+            "<b style='color:#ffcc66;'>Background Level (BG Level)</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "<b>What it is:</b> The median pixel value of the frame's sky background, "
+            "normalized to [0, 1]. Lower = darker sky.<br>"
+            "<b>Source:</b> Siril registration data (<span style='font-family:monospace;'>"
+            "background_lvl</span>) or, if unavailable, <span style='font-family:monospace;'>"
+            "stats.median</span> as fallback.<br>"
+            "<b>Good values:</b> Consistent across frames. The absolute value depends "
+            "on your light pollution, camera gain, and exposure length.<br>"
+            "<b>What to watch for:</b> A sharp <b>spike</b> = clouds, airplane lights, "
+            "or the moon moving into the field. A <b>rising trend</b> = dawn approaching "
+            "or increasing light pollution (e.g. stadium lights turning on).</div><br>"
+
+            # ---- Stars ----
+            "<b style='color:#ffcc66;'>Stars (Star Count)</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "<b>What it is:</b> Number of stars detected in the frame.<br>"
+            "<b>Source:</b> Siril registration data (<span style='font-family:monospace;'>"
+            "number_of_stars</span>).<br>"
+            "<b>Good values:</b> Consistent count across frames. Higher is generally "
+            "better, but the absolute number depends on your field of view and focal length.<br>"
+            "<b>What to watch for:</b> A <b>sudden drop</b> = clouds obscuring the field, "
+            "dew on the optics, or severe defocus. A <b>gradual decline</b> may indicate "
+            "thin clouds or rising humidity.</div><br>"
+
+            # ---- Weight ----
+            "<b style='color:#ffcc66;'>Weight (Composite Quality Score)</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "<b>What it is:</b> A single quality score from 0 to 1 that combines "
+            "FWHM, Roundness, Background, and Stars into one number. Higher = better.<br>"
+            "<b>Formula:</b><br>"
+            "<span style='font-family:monospace; color:#aaffaa; background:#1a3a1a; "
+            "padding:2px 4px;'>"
+            "w_fwhm  = 1 \u2212 (fwhm \u2212 min) / (max \u2212 min)<br>"
+            "w_round = roundness<br>"
+            "w_bg    = 1 \u2212 (bg \u2212 min) / (max \u2212 min)<br>"
+            "w_stars = sqrt(stars) / sqrt(max_stars)<br>"
+            "Weight  = mean of available factors</span><br><br>"
+            "<b>How to use it:</b> Sort by Weight ascending to see the worst frames "
+            "first. Use 'Reject worst N%' with Weight to cull the lowest-quality "
+            "subframes in one click. This is comparable to PixInsight's PSFSignalWeight, "
+            "though with a simpler, transparent formula.</div><br>"
+
+            # ---- Median ----
+            "<b style='color:#ffcc66;'>Median</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "<b>What it is:</b> The median pixel value of the entire frame "
+            "(normalized to [0, 1]). Represents the 'typical' brightness of a pixel.<br>"
+            "<b>Source:</b> Siril per-channel statistics (<span style='font-family:monospace;'>"
+            "get_seq_stats</span>). Always available, even without star detection.<br>"
+            "<b>How to use it:</b> Nearly identical to Background Level for typical "
+            "astro images (where the sky dominates). Useful as a fallback when "
+            "registration data is unavailable.</div><br>"
+
+            # ---- Sigma ----
+            "<b style='color:#ffcc66;'>Sigma (\u03c3)</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "<b>What it is:</b> Standard deviation of pixel values in the frame. "
+            "A measure of how much the pixel values vary \u2014 roughly proportional "
+            "to signal + noise.<br>"
+            "<b>Source:</b> Siril per-channel statistics.<br>"
+            "<b>How to use it:</b> Higher sigma can indicate more signal (good) "
+            "or more noise (bad). Compare with other metrics: if sigma is high AND "
+            "background is high, it's noise from clouds. If sigma is high AND "
+            "background is low, it's genuine deep-sky signal.</div><br>"
+
+            # ---- Date ----
+            "<b style='color:#ffcc66;'>Date</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "<b>What it is:</b> The observation timestamp from the FITS header "
+            "(<span style='font-family:monospace;'>DATE-OBS</span> keyword).<br>"
+            "<b>Source:</b> FITS file metadata via <span style='font-family:monospace;'>"
+            "get_seq_imgdata</span>.<br>"
+            "<b>Note:</b> Not all cameras write DATE-OBS (e.g. SeeStar S50 may leave "
+            "this empty). When unavailable, the column shows '\u2014'.</div><br>"
+
+            # ---- Status ----
+            "<b style='color:#ffcc66;'>Status</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "<b>What it is:</b> Shows <span style='color:#55aa55;'>Included</span> or "
+            "<span style='color:#dd4444;'>Excluded</span> for each frame.<br>"
+            "<b>Note:</b> Changes are <b>local</b> until you click 'Apply Changes to "
+            "Siril'. The pending changes counter shows how many frames differ from "
+            "the Siril sequence status.</div><br>"
+
+            # ---- Star Detection ----
+            "<b style='color:#ffcc66; font-size:12pt;'>"
+            "\u2b50 Star Detection (required for FWHM, Roundness, Stars)</b><br>"
+            "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+            " border:1px solid #3a5a7a;'>"
+            "If the FWHM, Roundness, Stars, and Weight columns are empty, "
+            "star detection has not been run on the sequence. Click the yellow "
+            "<b>'Run Star Detection'</b> banner at the top of the window.<br><br>"
+            "This executes Siril's <span style='font-family:monospace;'>register "
+            "&lt;seq&gt; -2pass</span> command, which:<br>"
+            "\u2022 Detects stars in every frame<br>"
+            "\u2022 Computes FWHM, roundness, background, and star count<br>"
+            "\u2022 Stores results in the .seq file (persistent)<br>"
+            "\u2022 Does <b>not</b> create new output files (no r_ prefix added)<br><br>"
+            "<b>Note:</b> For RGB images, Siril stores registration data on the "
+            "<b>green channel</b> (highest SNR). The script automatically scans "
+            "all channels to find the data.<br><br>"
+            "<b>Median and Sigma</b> are always available from Siril's basic "
+            "per-channel statistics \u2014 no star detection needed."
+            "</div>"
+        )
+        tabs.addTab(te_metrics, "\U0001f4cf Metrics")
+
+        # ---- Tab 4: Frame Selection ----
         te_select = QTextEdit()
         te_select.setReadOnly(True)
         te_select.setStyleSheet(base_style)
