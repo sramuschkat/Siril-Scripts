@@ -15,18 +15,18 @@ GPL-3.0-or-later
 
 | Script | Description | Instructions |
 |--------|-------------|:------------:|
-| [Svenesis Annotate Image](#svenesis-annotate-image) | Annotate plate-solved images with catalog objects, coordinate grids, and export as PNG/TIFF/JPEG. | [Guide](Instructions/Svenesis-AnnotateImage-Instructions.md) |
-| [Svenesis Blink Comparator](#svenesis-blink-comparator) | Animate sequences for rapid visual inspection and data-driven frame selection with statistics, scatter plots, and batch reject. | [Guide](Instructions/Svenesis-BlinkComparator-Instructions.md) |
-| [Svenesis Gradient Analyzer](#svenesis-gradient-analyzer) | Analyze background gradients with heatmaps, diagnostics, and tool recommendations. | [Guide](Instructions/Svenesis-GradientAnalyzer-Instructions.md) |
-| [Svenesis Image Advisor](#svenesis-image-advisor) | Analyze a stacked linear image and get a prioritized processing workflow with concrete Siril commands. | [Guide](Instructions/Svenesis-ImageAdvisor-Instructions.md) |
-| [Svenesis Multiple Histogram Viewer](#svenesis-multiple-histogram-viewer) | View linear and stretched images with RGB histograms, 3D surface plots, and detailed statistics. | [Guide](Instructions/Svenesis-MultipleHistogramViewer-Instructions.md) |
+| [Svenesis Annotate Image](#svenesis-annotate-image) | Annotate plate-solved images with catalog objects, coordinate grids, and export as PNG/TIFF/JPEG. | [Guide](Instructions/Svenesis-AnnotateImage-Instructions.md) · [DE](Instructions/Svenesis-AnnotateImage-Instructions_de.md) |
+| [Svenesis Blink Comparator](#svenesis-blink-comparator) | Animate sequences for rapid visual inspection and data-driven frame selection with statistics, scatter plots, and batch reject. | [Guide](Instructions/Svenesis-BlinkComparator-Instructions.md) · [DE](Instructions/Svenesis-BlinkComparator-Instructions_de.md) |
+| [Svenesis Gradient Analyzer](#svenesis-gradient-analyzer) | Analyze background gradients with heatmaps, diagnostics, and tool recommendations. | [Guide](Instructions/Svenesis-GradientAnalyzer-Instructions.md) · [DE](Instructions/Svenesis-GradientAnalyzer-Instructions_de.md) |
+| [Svenesis Image Advisor](#svenesis-image-advisor) | Analyze a stacked linear image and get a prioritized processing workflow with concrete Siril commands. | [Guide](Instructions/Svenesis-ImageAdvisor-Instructions.md) · [DE](Instructions/Svenesis-ImageAdvisor-Instructions_de.md) |
+| [Svenesis Multiple Histogram Viewer](#svenesis-multiple-histogram-viewer) | View linear and stretched images with RGB histograms, 3D surface plots, and detailed statistics. | [Guide](Instructions/Svenesis-MultipleHistogramViewer-Instructions.md) · [DE](Instructions/Svenesis-MultipleHistogramViewer-Instructions_de.md) |
 | [Svenesis Script Security Scanner](#svenesis-script-security-scanner) | Scan Siril Python scripts for malicious patterns across 10 threat categories. | — |
 
 ---
 
 ## Svenesis Annotate Image
 
-**File:** `Svenesis-AnnotateImage.py` (v1.0.0) — **[Detailed Instructions](Instructions/Svenesis-AnnotateImage-Instructions.md)**
+**File:** `Svenesis-AnnotateImage.py` (v1.0.0) — **[Detailed Instructions](Instructions/Svenesis-AnnotateImage-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-AnnotateImage-Instructions_de.md)**
 
 Renders catalog annotations (deep-sky objects, named stars, coordinate grid, compass, info box) onto a plate-solved image and exports it as a shareable PNG, TIFF, or JPEG. Inspired by PixInsight's AnnotateImage script. Unlike Siril's built-in overlay annotations, this script burns the annotations into an exportable image — ready to post on social media, forums, or include in observation reports.
 
@@ -137,7 +137,7 @@ Coordinate transforms use `siril.radec2pix()` for maximum compatibility.
 
 ## Svenesis Blink Comparator
 
-**File:** `Svenesis-BlinkComparator.py` (v1.2.3) — **[Detailed Instructions](Instructions/Svenesis-BlinkComparator-Instructions.md)**
+**File:** `Svenesis-BlinkComparator.py` (v1.2.3) — **[Detailed Instructions](Instructions/Svenesis-BlinkComparator-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-BlinkComparator-Instructions_de.md)**
 
 Animates the currently loaded sequence as a blink animation for rapid visual inspection and data-driven frame selection. Comparable to PixInsight's Blink + SubframeSelector — identify satellite trails, clouds, tracking errors, focus drift, and bad frames, then reject them with a single click. All changes are collected locally and only applied to Siril when you confirm.
 
@@ -273,7 +273,7 @@ Animates the currently loaded sequence as a blink animation for rapid visual ins
 
 ## Svenesis Gradient Analyzer
 
-**File:** `Svenesis-GradientAnalyzer.py` (v1.8.4) — **[Detailed Instructions](Instructions/Svenesis-GradientAnalyzer-Instructions.md)**
+**File:** `Svenesis-GradientAnalyzer.py` (v1.8.4) — **[Detailed Instructions](Instructions/Svenesis-GradientAnalyzer-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-GradientAnalyzer-Instructions_de.md)**
 
 Reads the current image from Siril, divides it into a configurable grid of tiles, computes sigma-clipped median background levels per tile, and renders a color-coded heatmap. It helps you assess background gradients (e.g. from light pollution), decide whether background extraction is needed, and choose the right tool and parameters for the job.
 
@@ -371,7 +371,7 @@ Reads the current image from Siril, divides it into a configurable grid of tiles
 
 ## Svenesis Image Advisor
 
-**File:** `Svenesis-ImageAdvisor.py` (v1.3.1) — **[Detailed Instructions](Instructions/Svenesis-ImageAdvisor-Instructions.md)**
+**File:** `Svenesis-ImageAdvisor.py` (v1.3.1) — **[Detailed Instructions](Instructions/Svenesis-ImageAdvisor-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-ImageAdvisor-Instructions_de.md)**
 
 Analyses a stacked, linear FITS image loaded in Siril and generates a prioritised list of processing recommendations — including concrete Siril commands, suggested parameters, and reasoning. The script does **not** modify the image; it only diagnoses and advises. Think of it as a second opinion from an experienced astrophotographer before you start processing.
 
@@ -422,7 +422,7 @@ Analyses a stacked, linear FITS image loaded in Siril and generates a prioritise
 
 ## Svenesis Multiple Histogram Viewer
 
-**File:** `Svenesis-MultipleHistogramViewer.py` (v1.1.0) — **[Detailed Instructions](Instructions/Svenesis-MultipleHistogramViewer-Instructions.md)**
+**File:** `Svenesis-MultipleHistogramViewer.py` (v1.1.0) — **[Detailed Instructions](Instructions/Svenesis-MultipleHistogramViewer-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-MultipleHistogramViewer-Instructions_de.md)**
 
 Reads the current linear image from Siril (or a linear FITS file), applies a 2%–98% percentile autostretch for preview, and displays **Linear** and **Auto-Stretched** views side by side with combined RGB histograms or 3D surface plots. You can also load up to **2 additional stretched FITS** files for comparison. Compressed FITS (e.g. `.fz`, `.gz`) are supported.
 
