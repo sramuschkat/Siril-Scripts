@@ -1,57 +1,99 @@
 """
 Svenesis Annotate Image
-Script Version: 1.0.0
+Script Version: 1.1.0
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
 Contact and support: See repository README and Siril forum / scripts repository.
 
-This script reads the current plate-solved image from Siril, identifies catalog objects
-(Messier, NGC, IC, named stars) within the field of view, and renders configurable
-annotations (markers, labels, coordinate grid, info box, compass) onto an exportable
-PNG/TIFF image. Inspired by PixInsight's AnnotateImage script.
+This script reads the current plate-solved image from Siril, queries online
+catalogs for objects in the field of view, and renders configurable annotations
+(markers, labels, coordinate grid, info box, compass, legend) onto an exportable
+PNG/TIFF/JPEG image. Inspired by PixInsight's AnnotateImage script.
+
+All catalog data comes from live online queries -- no hardcoded object data.
+
+Data Sources:
+- VizieR VII/118 (NGC 2000.0): NGC, IC, and Messier objects
+- VizieR VII/20 (Sharpless 1959): HII regions
+- VizieR VII/220A (Barnard 1927): Dark nebulae
+- VizieR V/50 (Yale BSC): Named bright stars
+- SIMBAD: Supplementary objects (UGC, Abell, Arp, Hickson, Markarian,
+  vdB, PGC, MCG, etc.) plus common name resolution via TAP
+
+Object Types (12 categories, selectable via checkboxes):
+- Galaxies (gold), Nebulae (red), Planetary Nebulae (green)
+- Open Clusters (blue), Globular Clusters (orange), Named Stars (white)
+- Reflection Nebulae (light red), Supernova Remnants (magenta)
+- Dark Nebulae (grey), HII Regions (red-pink)
+- Asterisms (pale blue), Quasars (violet)
 
 Features:
-- Requires a plate-solved image (WCS solution in FITS header)
-- Embedded Messier catalog (110 objects) for zero-dependency annotation
-- NGC/IC bright subset catalog (~600 objects)
-- Named stars catalog (~50 brightest)
-- Sharpless HII regions catalog (~50 brightest)
-- Configurable colors per object type (Galaxy, Nebula, PN, OC, GC, SNR, etc.)
-- Object size rendered as scaled ellipses (from catalog angular size)
-- Magnitude limit filter
-- Label collision avoidance (greedy placement algorithm)
-- Optional coordinate grid overlay with RA/DEC labels
-- Optional info box (center coords, FOV, pixel scale, rotation)
-- Optional compass rose (N/E arrows)
+- Object-type selection UI (not catalog selection) -- user controls what
+  types of objects appear, catalogs are queried automatically
+- Parallel catalog queries via ThreadPoolExecutor for fast annotation
+- Thread-safe siril coordinate access via locking
+- Common names from SIMBAD (e.g. "Andromeda Galaxy", "Eyes")
+  with automatic filtering of catalog-like names (FAUST, IRAS, etc.)
+- Object size rendered as scaled ellipses from catalog angular size
+- Smart label collision avoidance (32 candidates, spatial grid scoring)
+- Configurable magnitude limit (dark nebulae bypass this)
+- RA/DEC coordinate grid with auto-scaled spacing
+- Info box (center coords, FOV, pixel scale, rotation, object count)
+- N/E compass rose with WCS-derived orientation
+- Color legend (auto-generated, only shows present types)
+- Leader lines connecting labels to objects
+- Color-by-type toggle (gold/red/green/blue/orange/etc.)
+- Deduplication across catalogs (by name + spatial proximity)
+- Large mosaic support (display downscaling, DPI capping, memory mgmt)
 - Configurable font size, marker size, DPI
 - Output as PNG, TIFF, or JPEG
-- Auto-stretch preview from Siril or raw linear data
-- Dark-themed PyQt6 GUI matching Gradient Analyzer style
+- Dark-themed PyQt6 GUI with two-column checkbox layout
 - Persistent settings via QSettings
 - Progress feedback during annotation
 
-Run from Siril via Processing -> Scripts. Place AnnotateImage.py inside a folder named
-Utility in one of Siril's Script Storage Directories (Preferences -> Scripts).
+Run from Siril via Processing -> Scripts. Place AnnotateImage.py inside a folder
+named Utility in one of Siril's Script Storage Directories (Preferences -> Scripts).
 
-(c) 2025
+(c) 2025-2026
 SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis Annotate Image
-# Script Version: 1.0.0
+# Script Version: 1.1.0
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: processing
-# Script Description: Renders catalog annotations (Messier, NGC, IC,
-#   named stars) onto a plate-solved image and exports it as PNG/TIFF.
-#   Similar to PixInsight's AnnotateImage script. Requires a plate-solved image.
+# Script Description: Annotates a plate-solved image with catalog objects
+#   (NGC, IC, Messier, Sharpless, Barnard, bright stars, SIMBAD supplements),
+#   coordinate grid, compass, info box, and legend. Exports as PNG/TIFF/JPEG.
+#   All data from live VizieR/SIMBAD queries. Requires a plate-solved image.
 # Script Author: Sven Ramuschkat
 
 CHANGELOG:
+1.1.0 - Performance and correctness update
+      - Parallel catalog queries (VizieR + SIMBAD run concurrently)
+      - Thread-safe siril coordinate access via locking
+      - Parallel SIMBAD tiling for wide-field images
+      - Removed "Extended Catalogs" checkbox -- SIMBAD always queried
+      - Common name quality filter (discards catalog-like names)
+      - IC naming fix (handles all NGC 2000.0 IC prefix formats)
+      - Spatial grid deduplication with precise distance check
+      - Spatial grid label collision avoidance (O(1) per candidate)
+      - Pre-compiled regex patterns for hot paths
+      - First-char dispatch for SIMBAD prefix filtering
+      - Pre-resolved column names in SIMBAD result loop
+      - Display data downscaling for large mosaics
+      - Memory cleanup after rendering (gc.collect)
+      - Fixed type defaults (Ast/QSO now correctly default to off)
+      - Suppressed vstack MergeConflictWarnings
+      - Two-column checkbox layout for Display and Extras groups
+      - Consistent checkbox spacing and alignment across all groups
+      - Updated help dialog to match current features
+
 1.0.0 - Initial release
       - Plate-solved image annotation with catalog objects
-      - Embedded Messier, NGC bright, named stars, Sharpless catalogs
+      - Dynamic VizieR catalog queries (NGC/IC, Sharpless, Barnard, bright stars)
       - Color-coded markers and labels by object type
       - Coordinate grid overlay with RA/DEC labels
       - Info box with center, FOV, scale, rotation
@@ -66,9 +108,13 @@ from __future__ import annotations
 
 import sys
 import os
+import re
+import gc
 import traceback
 import math
 import datetime
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 
 import sirilpy as s
@@ -95,8 +141,12 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QSettings, QUrl
 from PyQt6.QtGui import (
     QPainter, QColor, QPen, QFont, QLinearGradient,
-    QShortcut, QKeySequence, QDesktopServices,
+    QShortcut, QKeySequence, QDesktopServices, QImageReader,
 )
+
+# Remove Qt's default image allocation limit (256 MB) so large mosaics can be
+# saved/loaded without "Rejecting image as it exceeds the allocation limit".
+QImageReader.setAllocationLimit(0)
 
 import matplotlib
 matplotlib.use("Agg")
@@ -108,8 +158,16 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 from astropy.wcs import WCS
 from astropy.io import fits as astropy_fits
+from astropy.coordinates import SkyCoord, Angle
+import astropy.units as u
+from astroquery.vizier import Vizier
+from astroquery.simbad import Simbad
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
+
+# Pre-compiled regex patterns for hot paths
+_RE_WHITESPACE = re.compile(r'\s+')
+_RE_IC_PREFIX = re.compile(r'^I\s*(\d+)')
 
 # Settings keys
 SETTINGS_ORG = "Svenesis"
@@ -117,6 +175,24 @@ SETTINGS_APP = "AnnotateImage"
 
 # Layout constants
 LEFT_PANEL_WIDTH = 360
+
+
+def _safe_radec2pix(siril, ra: float, dec: float,
+                    lock: threading.Lock | None = None):
+    """Thread-safe wrapper for siril.radec2pix()."""
+    if lock:
+        with lock:
+            return siril.radec2pix(ra, dec)
+    return siril.radec2pix(ra, dec)
+
+
+def _safe_pix2radec(siril, x: float, y: float,
+                    lock: threading.Lock | None = None):
+    """Thread-safe wrapper for siril.pix2radec()."""
+    if lock:
+        with lock:
+            return siril.pix2radec(x, y)
+    return siril.pix2radec(x, y)
 
 
 # ------------------------------------------------------------------------------
@@ -214,923 +290,590 @@ OBJECT_TYPE_LABELS = {
 
 
 # ------------------------------------------------------------------------------
-# EMBEDDED CATALOGS
+# DYNAMIC CATALOG QUERIES (VizieR / SIMBAD)
 # ------------------------------------------------------------------------------
+# All catalog data is fetched dynamically from online databases.
+# No hardcoded object positions — queries VizieR catalogs at runtime.
+# Supported catalogs:
+#   NGC/IC/Messier: VII/118 (NGC 2000.0)
+#   Sharpless HII:  VII/20
+#   Barnard dark:   VII/220A
+#   Lynds dark:     VII/7A
+#   Bright stars:   V/50 (Yale BSC)
+# SIMBAD is used as a supplementary source for additional objects.
 
-# All catalogs: (name, ra_deg, dec_deg, type, mag, size_arcmin, common_name)
-# Coordinates: J2000 epoch. Magnitudes: integrated visual magnitude.
-# Sizes: major axis angular diameter in arcminutes.
-# Sources: SEDS Messier database, OpenNGC, IAU star names, Sharpless 1959,
-#          Barnard 1927, Caldwell list (P. Moore), IC catalog.
 
-# Messier catalog — all 110 objects, complete with common names
-MESSIER_CATALOG = [
-    ("M1", 83.6331, 22.0145, "SNR", 8.4, 6.0, "Crab Nebula"),
-    ("M2", 323.3626, -0.8233, "GC", 6.5, 16.0, ""),
-    ("M3", 205.5484, 28.3773, "GC", 6.2, 18.0, ""),
-    ("M4", 245.8968, -26.5258, "GC", 5.6, 36.0, "Cat's Eye Cluster"),
-    ("M5", 229.6384, 2.0811, "GC", 5.7, 23.0, "Rose Cluster"),
-    ("M6", 265.0834, -32.2536, "OC", 4.2, 33.0, "Butterfly Cluster"),
-    ("M7", 268.4667, -34.7928, "OC", 3.3, 80.0, "Ptolemy Cluster"),
-    ("M8", 270.9042, -24.3833, "Neb", 6.0, 90.0, "Lagoon Nebula"),
-    ("M9", 259.7980, -18.5161, "GC", 7.7, 12.0, ""),
-    ("M10", 254.2877, -4.1003, "GC", 6.6, 20.0, ""),
-    ("M11", 282.7667, -6.2667, "OC", 6.3, 14.0, "Wild Duck Cluster"),
-    ("M12", 251.8093, -1.9483, "GC", 6.7, 16.0, "Gumball Globular"),
-    ("M13", 250.4218, 36.4613, "GC", 5.8, 20.0, "Great Hercules Cluster"),
-    ("M14", 264.4004, -3.2458, "GC", 7.6, 11.0, ""),
-    ("M15", 322.4930, 12.1670, "GC", 6.2, 18.0, "Great Pegasus Cluster"),
-    ("M16", 274.7000, -13.7833, "Neb", 6.0, 7.0, "Eagle Nebula"),
-    ("M17", 275.1917, -16.1708, "Neb", 6.0, 11.0, "Omega Nebula"),
-    ("M18", 275.2375, -17.1278, "OC", 7.5, 9.0, ""),
-    ("M19", 255.6571, -26.2681, "GC", 6.8, 17.0, ""),
-    ("M20", 270.6225, -23.0300, "Neb", 6.3, 28.0, "Trifid Nebula"),
-    ("M21", 270.9708, -22.4917, "OC", 6.5, 13.0, ""),
-    ("M22", 279.0998, -23.9047, "GC", 5.1, 32.0, "Sagittarius Cluster"),
-    ("M23", 269.2667, -19.0167, "OC", 6.9, 27.0, ""),
-    ("M24", 274.5375, -18.5167, "OC", 4.6, 90.0, "Sagittarius Star Cloud"),
-    ("M25", 277.9042, -19.1167, "OC", 6.5, 40.0, ""),
-    ("M26", 281.3208, -9.3833, "OC", 8.0, 15.0, ""),
-    ("M27", 299.9015, 22.7211, "PN", 7.5, 8.0, "Dumbbell Nebula"),
-    ("M28", 276.1364, -24.8700, "GC", 6.8, 11.0, ""),
-    ("M29", 305.9708, 38.5083, "OC", 7.1, 7.0, "Cooling Tower"),
-    ("M30", 325.0922, -23.1797, "GC", 7.2, 12.0, ""),
-    ("M31", 10.6847, 41.2687, "Gal", 3.4, 178.0, "Andromeda Galaxy"),
-    ("M32", 10.6743, 40.8652, "Gal", 8.1, 8.7, ""),
-    ("M33", 23.4621, 30.6602, "Gal", 5.7, 73.0, "Triangulum Galaxy"),
-    ("M34", 40.5125, 42.7833, "OC", 5.5, 35.0, "Spiral Cluster"),
-    ("M35", 92.2250, 24.3500, "OC", 5.3, 28.0, ""),
-    ("M36", 84.0833, 34.1333, "OC", 6.3, 12.0, "Pinwheel Cluster"),
-    ("M37", 88.0708, 32.5500, "OC", 6.2, 24.0, "January Salt-and-Pepper"),
-    ("M38", 82.1667, 35.8333, "OC", 7.4, 21.0, "Starfish Cluster"),
-    ("M39", 323.0625, 48.4333, "OC", 4.6, 32.0, ""),
-    ("M40", 185.5500, 58.0833, "Star", 8.4, 0.8, "Winnecke 4"),
-    ("M41", 101.5042, -20.7500, "OC", 4.5, 38.0, "Little Beehive"),
-    ("M42", 83.8221, -5.3911, "Neb", 4.0, 85.0, "Orion Nebula"),
-    ("M43", 83.8917, -5.2667, "Neb", 9.0, 20.0, "De Mairan's Nebula"),
-    ("M44", 130.0250, 19.6833, "OC", 3.7, 95.0, "Beehive Cluster"),
-    ("M45", 56.6010, 24.1153, "OC", 1.6, 110.0, "Pleiades"),
-    ("M46", 115.4417, -14.8167, "OC", 6.1, 27.0, ""),
-    ("M47", 114.1500, -14.4833, "OC", 5.2, 30.0, ""),
-    ("M48", 123.4167, -5.8000, "OC", 5.5, 54.0, ""),
-    ("M49", 187.4449, 8.0004, "Gal", 8.4, 10.2, ""),
-    ("M50", 105.6833, -8.3667, "OC", 5.9, 16.0, "Heart-Shaped Cluster"),
-    ("M51", 202.4696, 47.1952, "Gal", 8.4, 11.2, "Whirlpool Galaxy"),
-    ("M52", 351.2042, 61.5833, "OC", 7.3, 13.0, ""),
-    ("M53", 198.2303, 18.1681, "GC", 7.6, 13.0, ""),
-    ("M54", 283.7636, -30.4783, "GC", 7.6, 12.0, ""),
-    ("M55", 294.9988, -30.9647, "GC", 6.3, 19.0, "Summer Rose Star"),
-    ("M56", 289.1483, 30.1842, "GC", 8.3, 9.0, ""),
-    ("M57", 283.3963, 33.0289, "PN", 8.8, 1.4, "Ring Nebula"),
-    ("M58", 189.4316, 11.8181, "Gal", 9.7, 5.9, ""),
-    ("M59", 190.5092, 11.6472, "Gal", 9.6, 5.4, ""),
-    ("M60", 190.9167, 11.5528, "Gal", 8.8, 7.6, ""),
-    ("M61", 185.4790, 4.4736, "Gal", 9.7, 6.5, "Swelling Spiral"),
-    ("M62", 255.3032, -30.1136, "GC", 6.5, 15.0, ""),
-    ("M63", 198.9553, 42.0293, "Gal", 8.6, 12.6, "Sunflower Galaxy"),
-    ("M64", 194.1826, 21.6828, "Gal", 8.5, 10.7, "Black Eye Galaxy"),
-    ("M65", 169.7330, 13.0922, "Gal", 9.3, 9.8, "Leo Triplet"),
-    ("M66", 170.0626, 12.9914, "Gal", 8.9, 9.1, "Leo Triplet"),
-    ("M67", 132.8500, 11.8167, "OC", 6.1, 30.0, "King Cobra Cluster"),
-    ("M68", 189.8667, -26.7447, "GC", 7.8, 11.0, ""),
-    ("M69", 277.8463, -32.3481, "GC", 7.6, 10.0, ""),
-    ("M70", 280.8029, -32.2911, "GC", 7.9, 8.0, ""),
-    ("M71", 298.4438, 18.7792, "GC", 8.2, 7.2, ""),
-    ("M72", 313.3654, -12.5372, "GC", 9.3, 6.6, ""),
-    ("M73", 314.7500, -12.6333, "Ast", 9.0, 2.8, ""),
-    ("M74", 24.1740, 15.7836, "Gal", 9.4, 10.5, "Phantom Galaxy"),
-    ("M75", 301.5201, -21.9211, "GC", 8.5, 7.4, ""),
-    ("M76", 25.5821, 51.5753, "PN", 10.1, 2.7, "Little Dumbbell Nebula"),
-    ("M77", 40.6696, -0.0133, "Gal", 8.9, 7.1, "Cetus A"),
-    ("M78", 86.6500, 0.0833, "RN", 8.3, 8.0, "Casper the Friendly Ghost"),
-    ("M79", 81.0462, -24.5247, "GC", 7.7, 9.6, ""),
-    ("M80", 244.2601, -22.9758, "GC", 7.3, 10.0, ""),
-    ("M81", 148.8882, 69.0653, "Gal", 6.9, 26.9, "Bode's Galaxy"),
-    ("M82", 148.9685, 69.6797, "Gal", 8.4, 11.2, "Cigar Galaxy"),
-    ("M83", 204.2538, -29.8654, "Gal", 7.6, 12.9, "Southern Pinwheel Galaxy"),
-    ("M84", 186.2655, 12.8870, "Gal", 9.1, 6.5, ""),
-    ("M85", 186.3504, 18.1912, "Gal", 9.1, 7.1, ""),
-    ("M86", 186.5491, 12.9464, "Gal", 8.9, 8.9, ""),
-    ("M87", 187.7059, 12.3911, "Gal", 8.6, 8.3, "Virgo A"),
-    ("M88", 188.9960, 14.4204, "Gal", 9.6, 6.9, ""),
-    ("M89", 188.9159, 12.5563, "Gal", 9.8, 5.1, ""),
-    ("M90", 189.2093, 13.1631, "Gal", 9.5, 9.5, ""),
-    ("M91", 188.8601, 14.4968, "Gal", 10.2, 5.4, ""),
-    ("M92", 259.2808, 43.1364, "GC", 6.4, 14.0, ""),
-    ("M93", 116.1375, -23.8667, "OC", 6.0, 22.0, ""),
-    ("M94", 192.7215, 41.1203, "Gal", 8.2, 14.4, "Croc's Eye Galaxy"),
-    ("M95", 160.9902, 11.7037, "Gal", 9.7, 7.4, ""),
-    ("M96", 161.6904, 11.8197, "Gal", 9.3, 7.6, ""),
-    ("M97", 168.6987, 55.0192, "PN", 9.9, 3.4, "Owl Nebula"),
-    ("M98", 183.4512, 14.9003, "Gal", 10.1, 9.8, ""),
-    ("M99", 184.7063, 14.4165, "Gal", 9.9, 5.4, "Coma Pinwheel"),
-    ("M100", 185.7289, 15.8222, "Gal", 9.3, 7.4, "Mirror Galaxy"),
-    ("M101", 210.8024, 54.3492, "Gal", 7.9, 28.8, "Pinwheel Galaxy"),
-    ("M102", 226.6232, 55.7634, "Gal", 9.9, 6.5, "Spindle Galaxy"),
-    ("M103", 23.3417, 60.6583, "OC", 7.4, 6.0, ""),
-    ("M104", 189.9976, -11.6230, "Gal", 8.0, 8.7, "Sombrero Galaxy"),
-    ("M105", 161.9565, 12.5816, "Gal", 9.3, 5.4, ""),
-    ("M106", 184.7397, 47.3039, "Gal", 8.4, 18.6, ""),
-    ("M107", 248.1333, -13.0531, "GC", 7.9, 13.0, ""),
-    ("M108", 167.8791, 55.6741, "Gal", 10.0, 8.7, "Surfboard Galaxy"),
-    ("M109", 179.3999, 53.3746, "Gal", 9.8, 7.6, "Vacuum Cleaner Galaxy"),
-    ("M110", 10.0918, 41.6853, "Gal", 8.5, 21.9, ""),
-]
+# NGC 2000.0 object type code → our internal type code
+NGC2000_TYPE_MAP: dict[str, str] = {
+    "Gx": "Gal",    # Galaxy
+    "Gb": "GC",     # Globular cluster
+    "OC": "OC",     # Open cluster
+    "Pl": "PN",     # Planetary nebula
+    "Nb": "Neb",    # Bright emission or reflection nebula
+    "C+N": "OC",    # Cluster associated with nebulosity
+    "Kt": "Neb",    # Knot in external galaxy
+    "Ast": "Ast",    # Asterism / star group
+    "*": "Star",    # Single star
+    "D*": "Star",   # Double star
+    "***": "Star",  # Triple star
+    "?": "Other",   # Uncertain type
+    "PD": "Other",  # Plate defect
+    "-": "Other",   # Nonexistent
+    "": "Other",    # Unknown type
+}
 
-# NGC bright subset — popular astrophotography targets not in Messier
-# Only objects NOT duplicated by Messier are included (Messier takes priority).
-NGC_BRIGHT_CATALOG = [
-    ("NGC 55", 3.7231, -39.1967, "Gal", 7.9, 32.0, ""),
-    ("NGC 104", 6.0236, -72.0814, "GC", 4.1, 50.0, "47 Tucanae"),
-    ("NGC 224", 10.6847, 41.2687, "Gal", 3.4, 178.0, "Andromeda Galaxy"),
-    ("NGC 253", 11.8881, -25.2883, "Gal", 7.1, 27.0, "Sculptor Galaxy"),
-    ("NGC 281", 13.4708, 56.6244, "Neb", 7.4, 35.0, "Pacman Nebula"),
-    ("NGC 292", 13.1867, -72.8286, "Gal", 2.3, 316.0, "Small Magellanic Cloud"),
-    ("NGC 362", 15.8094, -70.8489, "GC", 6.4, 14.0, ""),
-    ("NGC 457", 19.8208, 58.2833, "OC", 6.4, 13.0, "Owl Cluster"),
-    ("NGC 663", 26.5583, 61.2333, "OC", 7.1, 16.0, ""),
-    ("NGC 752", 29.1625, 37.7833, "OC", 5.7, 50.0, ""),
-    ("NGC 869", 34.7583, 57.1333, "OC", 5.3, 30.0, "h Persei"),
-    ("NGC 884", 35.0583, 57.1500, "OC", 6.1, 30.0, "Chi Persei"),
-    ("NGC 891", 35.6393, 42.3478, "Gal", 9.9, 14.0, ""),
-    ("NGC 1023", 40.1001, 39.0626, "Gal", 9.4, 9.0, ""),
-    ("NGC 1039", 40.5125, 42.7833, "OC", 5.5, 35.0, ""),
-    ("NGC 1068", 40.6696, -0.0133, "Gal", 8.9, 7.0, ""),
-    ("NGC 1261", 48.0675, -55.2164, "GC", 8.4, 7.0, ""),
-    ("NGC 1275", 49.9507, 41.5117, "Gal", 11.6, 3.0, "Perseus A"),
-    ("NGC 1300", 49.9207, -19.4111, "Gal", 10.4, 6.0, ""),
-    ("NGC 1316", 50.6738, -37.2083, "Gal", 8.5, 12.0, "Fornax A"),
-    ("NGC 1333", 52.2917, 31.3167, "RN", 5.6, 6.0, ""),
-    ("NGC 1365", 53.4015, -36.1404, "Gal", 9.6, 11.0, "Great Barred Spiral"),
-    ("NGC 1399", 54.6211, -35.4506, "Gal", 9.6, 7.0, ""),
-    ("NGC 1491", 61.4833, 51.3167, "Neb", 10.0, 3.0, ""),
-    ("NGC 1499", 60.2042, 36.3833, "Neb", 5.0, 145.0, "California Nebula"),
-    ("NGC 1502", 61.0708, 62.3333, "OC", 6.9, 8.0, ""),
-    ("NGC 1528", 63.3500, 51.2167, "OC", 6.4, 24.0, ""),
-    ("NGC 1535", 63.0833, -12.7433, "PN", 9.6, 0.8, ""),
-    ("NGC 1555", 63.3125, 19.5367, "RN", 10.0, 0.5, "Hind's Variable Nebula"),
-    ("NGC 1566", 65.0025, -54.9381, "Gal", 9.4, 8.0, ""),
-    ("NGC 1614", 68.4986, -8.5783, "Gal", 11.6, 1.0, ""),
-    ("NGC 1647", 71.4833, 19.1167, "OC", 6.4, 45.0, ""),
-    ("NGC 1746", 75.7333, 23.7833, "OC", 6.1, 42.0, ""),
-    ("NGC 1851", 78.5282, -40.0464, "GC", 7.1, 11.0, ""),
-    ("NGC 1904", 81.0462, -24.5247, "GC", 7.7, 9.0, ""),
-    ("NGC 1952", 83.6331, 22.0145, "SNR", 8.4, 6.0, "Crab Nebula"),
-    ("NGC 1973", 83.8250, -4.7833, "RN", 7.0, 5.0, "Running Man Nebula"),
-    ("NGC 1975", 83.8625, -4.6833, "RN", 7.0, 5.0, ""),
-    ("NGC 1976", 83.8221, -5.3911, "Neb", 4.0, 85.0, "Orion Nebula"),
-    ("NGC 1977", 83.8458, -4.8000, "RN", 7.0, 20.0, ""),
-    ("NGC 1981", 83.8292, -4.4333, "OC", 4.6, 25.0, ""),
-    ("NGC 1982", 83.8917, -5.2667, "Neb", 9.0, 20.0, "De Mairan's Nebula"),
-    ("NGC 2024", 85.4213, -1.9033, "Neb", 2.0, 30.0, "Flame Nebula"),
-    ("NGC 2070", 84.6763, -69.1009, "Neb", 5.0, 40.0, "Tarantula Nebula"),
-    ("NGC 2099", 88.0708, 32.5500, "OC", 6.2, 24.0, ""),
-    ("NGC 2158", 91.8583, 24.0833, "OC", 8.6, 5.0, ""),
-    ("NGC 2168", 92.2250, 24.3500, "OC", 5.3, 28.0, ""),
-    ("NGC 2174", 92.2125, 20.4833, "Neb", 6.8, 40.0, "Monkey Head Nebula"),
-    ("NGC 2237", 97.9667, 5.0333, "Neb", 6.0, 80.0, "Rosette Nebula"),
-    ("NGC 2244", 97.9833, 4.9333, "OC", 4.8, 24.0, ""),
-    ("NGC 2261", 100.2458, 8.7400, "RN", 9.0, 2.0, "Hubble's Variable Nebula"),
-    ("NGC 2264", 100.2417, 9.8833, "OC", 3.9, 20.0, "Christmas Tree Cluster"),
-    ("NGC 2287", 101.5042, -20.7500, "OC", 4.5, 38.0, ""),
-    ("NGC 2323", 105.6833, -8.3667, "OC", 5.9, 16.0, ""),
-    ("NGC 2359", 109.2750, -13.2167, "Neb", 11.5, 10.0, "Thor's Helmet"),
-    ("NGC 2362", 109.4292, -24.9583, "OC", 4.1, 8.0, "Tau Canis Majoris Cluster"),
-    ("NGC 2392", 112.2917, 20.9117, "PN", 9.2, 0.8, "Eskimo Nebula"),
-    ("NGC 2403", 114.2142, 65.6025, "Gal", 8.5, 22.0, ""),
-    ("NGC 2419", 114.5333, 38.8817, "GC", 10.4, 6.0, ""),
-    ("NGC 2438", 115.4542, -14.7333, "PN", 10.8, 1.1, ""),
-    ("NGC 2440", 115.4250, -18.2083, "PN", 9.4, 1.2, ""),
-    ("NGC 2447", 114.1500, -14.4833, "OC", 5.2, 30.0, ""),
-    ("NGC 2451", 116.0167, -37.9667, "OC", 2.8, 45.0, ""),
-    ("NGC 2477", 118.0458, -38.5333, "OC", 5.8, 27.0, ""),
-    ("NGC 2516", 119.5167, -60.7500, "OC", 3.8, 30.0, ""),
-    ("NGC 2548", 123.4167, -5.8000, "OC", 5.5, 54.0, ""),
-    ("NGC 2682", 132.8500, 11.8167, "OC", 6.1, 30.0, ""),
-    ("NGC 2736", 135.0417, -45.9500, "SNR", 12.0, 20.0, "Pencil Nebula"),
-    ("NGC 2841", 140.5111, 50.9764, "Gal", 9.2, 8.0, ""),
-    ("NGC 2903", 143.0422, 21.5006, "Gal", 9.0, 13.0, ""),
-    ("NGC 2976", 146.8143, 67.9156, "Gal", 10.2, 6.0, ""),
-    ("NGC 3031", 148.8882, 69.0653, "Gal", 6.9, 27.0, "Bode's Galaxy"),
-    ("NGC 3034", 148.9685, 69.6797, "Gal", 8.4, 11.0, "Cigar Galaxy"),
-    ("NGC 3079", 150.4908, 55.6797, "Gal", 10.9, 8.0, ""),
-    ("NGC 3114", 150.6917, -60.0667, "OC", 4.2, 35.0, ""),
-    ("NGC 3115", 151.3080, -7.7186, "Gal", 8.9, 7.0, "Spindle Galaxy"),
-    ("NGC 3132", 151.7583, -40.4369, "PN", 8.2, 1.4, "Eight-Burst Nebula"),
-    ("NGC 3184", 154.5706, 41.4242, "Gal", 9.8, 7.0, ""),
-    ("NGC 3190", 154.5243, 21.8327, "Gal", 11.1, 4.0, ""),
-    ("NGC 3195", 153.0000, -80.8611, "PN", 11.6, 0.6, ""),
-    ("NGC 3201", 154.4034, -46.4116, "GC", 6.7, 18.0, ""),
-    ("NGC 3228", 155.3375, -51.7167, "OC", 6.0, 18.0, ""),
-    ("NGC 3242", 156.1833, -18.6414, "PN", 7.3, 0.8, "Ghost of Jupiter"),
-    ("NGC 3293", 157.8917, -58.2333, "OC", 4.7, 6.0, ""),
-    ("NGC 3324", 159.2625, -58.6333, "Neb", 6.7, 16.0, "Gabriela Mistral Nebula"),
-    ("NGC 3344", 160.8811, 24.9225, "Gal", 9.9, 7.0, ""),
-    ("NGC 3351", 160.9902, 11.7037, "Gal", 9.7, 7.0, ""),
-    ("NGC 3368", 161.6904, 11.8197, "Gal", 9.3, 7.0, ""),
-    ("NGC 3372", 161.2542, -59.8667, "Neb", 3.0, 120.0, "Carina Nebula"),
-    ("NGC 3379", 161.9565, 12.5816, "Gal", 9.3, 5.0, ""),
-    ("NGC 3521", 166.4526, -0.0361, "Gal", 8.9, 11.0, ""),
-    ("NGC 3532", 166.4375, -58.7667, "OC", 3.0, 55.0, "Wishing Well Cluster"),
-    ("NGC 3556", 167.8791, 55.6741, "Gal", 10.0, 8.0, ""),
-    ("NGC 3587", 168.6987, 55.0192, "PN", 9.9, 3.4, "Owl Nebula"),
-    ("NGC 3603", 168.7917, -61.2500, "OC", 9.1, 12.0, ""),
-    ("NGC 3623", 169.7330, 13.0922, "Gal", 9.3, 10.0, ""),
-    ("NGC 3627", 170.0626, 12.9914, "Gal", 8.9, 9.0, ""),
-    ("NGC 3628", 170.0716, 13.5886, "Gal", 9.5, 15.0, "Hamburger Galaxy"),
-    ("NGC 3766", 174.7958, -61.6167, "OC", 5.3, 12.0, ""),
-    ("NGC 3918", 177.5042, -57.1853, "PN", 8.1, 0.3, "Blue Planetary"),
-    ("NGC 4038", 180.4712, -18.8676, "Gal", 10.5, 5.0, "Antennae Galaxy"),
-    ("NGC 4039", 180.4844, -18.8842, "Gal", 10.5, 3.0, ""),
-    ("NGC 4244", 184.3739, 37.8071, "Gal", 10.4, 16.0, "Silver Needle"),
-    ("NGC 4258", 184.7397, 47.3039, "Gal", 8.4, 19.0, ""),
-    ("NGC 4321", 185.7289, 15.8222, "Gal", 9.3, 7.0, ""),
-    ("NGC 4372", 186.4400, -72.6592, "GC", 7.8, 19.0, ""),
-    ("NGC 4374", 186.2655, 12.8870, "Gal", 9.1, 7.0, ""),
-    ("NGC 4382", 186.3504, 18.1912, "Gal", 9.1, 7.0, ""),
-    ("NGC 4406", 186.5491, 12.9464, "Gal", 8.9, 9.0, ""),
-    ("NGC 4472", 187.4449, 8.0004, "Gal", 8.4, 10.0, ""),
-    ("NGC 4486", 187.7059, 12.3911, "Gal", 8.6, 8.0, "Virgo A"),
-    ("NGC 4501", 188.0058, 14.4204, "Gal", 9.6, 7.0, ""),
-    ("NGC 4548", 188.8601, 14.4968, "Gal", 10.2, 5.0, ""),
-    ("NGC 4552", 188.9159, 12.5563, "Gal", 9.8, 5.0, ""),
-    ("NGC 4565", 189.0866, 25.9876, "Gal", 9.6, 16.0, "Needle Galaxy"),
-    ("NGC 4569", 189.2093, 13.1631, "Gal", 9.5, 10.0, ""),
-    ("NGC 4579", 189.4316, 11.8181, "Gal", 9.7, 6.0, ""),
-    ("NGC 4590", 189.8667, -26.7447, "GC", 7.8, 11.0, ""),
-    ("NGC 4594", 189.9976, -11.6230, "Gal", 8.0, 9.0, "Sombrero Galaxy"),
-    ("NGC 4631", 190.5333, 32.5417, "Gal", 9.2, 15.0, "Whale Galaxy"),
-    ("NGC 4636", 190.7076, 2.6876, "Gal", 9.5, 6.0, ""),
-    ("NGC 4649", 190.9167, 11.5528, "Gal", 8.8, 7.0, ""),
-    ("NGC 4656", 190.9917, 32.1667, "Gal", 10.5, 15.0, "Hockey Stick Galaxy"),
-    ("NGC 4676", 191.5387, 30.7271, "Gal", 13.0, 2.0, "Mice Galaxies"),
-    ("NGC 4725", 192.6108, 25.5007, "Gal", 9.4, 11.0, ""),
-    ("NGC 4736", 192.7215, 41.1203, "Gal", 8.2, 14.0, ""),
-    ("NGC 4755", 193.4250, -60.3667, "OC", 4.2, 10.0, "Jewel Box"),
-    ("NGC 4826", 194.1826, 21.6828, "Gal", 8.5, 10.0, "Black Eye Galaxy"),
-    ("NGC 4833", 194.8913, -70.8764, "GC", 6.9, 14.0, ""),
-    ("NGC 5024", 198.2303, 18.1681, "GC", 7.6, 13.0, ""),
-    ("NGC 5055", 198.9553, 42.0293, "Gal", 8.6, 13.0, "Sunflower Galaxy"),
-    ("NGC 5128", 201.3651, -43.0191, "Gal", 6.8, 26.0, "Centaurus A"),
-    ("NGC 5139", 201.6968, -47.4797, "GC", 3.7, 36.0, "Omega Centauri"),
-    ("NGC 5194", 202.4696, 47.1952, "Gal", 8.4, 11.0, "Whirlpool Galaxy"),
-    ("NGC 5195", 202.4983, 47.2661, "Gal", 9.6, 6.0, ""),
-    ("NGC 5236", 204.2538, -29.8654, "Gal", 7.6, 13.0, "Southern Pinwheel"),
-    ("NGC 5272", 205.5484, 28.3773, "GC", 6.2, 18.0, ""),
-    ("NGC 5457", 210.8024, 54.3492, "Gal", 7.9, 29.0, "Pinwheel Galaxy"),
-    ("NGC 5466", 211.3637, 28.5339, "GC", 9.0, 11.0, ""),
-    ("NGC 5822", 226.0583, -54.3500, "OC", 6.5, 40.0, ""),
-    ("NGC 5866", 226.6232, 55.7634, "Gal", 9.9, 6.0, "Spindle Galaxy"),
-    ("NGC 5897", 229.3519, -21.0106, "GC", 8.5, 13.0, ""),
-    ("NGC 5904", 229.6384, 2.0811, "GC", 5.7, 23.0, ""),
-    ("NGC 5907", 228.9732, 56.3287, "Gal", 10.3, 13.0, "Splinter Galaxy"),
-    ("NGC 5986", 236.5125, -37.7864, "GC", 7.1, 10.0, ""),
-    ("NGC 6087", 244.7583, -57.9333, "OC", 5.4, 12.0, ""),
-    ("NGC 6093", 244.2601, -22.9758, "GC", 7.3, 10.0, ""),
-    ("NGC 6121", 245.8968, -26.5258, "GC", 5.6, 36.0, ""),
-    ("NGC 6171", 248.1333, -13.0531, "GC", 7.9, 13.0, ""),
-    ("NGC 6205", 250.4218, 36.4613, "GC", 5.8, 20.0, "Hercules Cluster"),
-    ("NGC 6210", 251.1250, 23.7997, "PN", 8.8, 0.3, ""),
-    ("NGC 6218", 251.8093, -1.9483, "GC", 6.7, 16.0, ""),
-    ("NGC 6231", 253.5417, -41.8333, "OC", 2.6, 15.0, ""),
-    ("NGC 6254", 254.2877, -4.1003, "GC", 6.6, 20.0, ""),
-    ("NGC 6266", 255.3032, -30.1136, "GC", 6.5, 15.0, ""),
-    ("NGC 6273", 255.6571, -26.2681, "GC", 6.8, 17.0, ""),
-    ("NGC 6302", 258.0833, -37.1044, "PN", 7.1, 1.4, "Bug Nebula"),
-    ("NGC 6341", 259.2808, 43.1364, "GC", 6.4, 14.0, ""),
-    ("NGC 6352", 261.3714, -48.4222, "GC", 8.1, 7.0, ""),
-    ("NGC 6362", 262.9750, -67.0489, "GC", 7.6, 10.0, ""),
-    ("NGC 6369", 261.3125, -23.7597, "PN", 11.4, 0.5, "Little Ghost Nebula"),
-    ("NGC 6388", 264.0718, -44.7356, "GC", 6.7, 10.0, ""),
-    ("NGC 6397", 265.1755, -53.6744, "GC", 5.7, 32.0, ""),
-    ("NGC 6402", 264.4004, -3.2458, "GC", 7.6, 11.0, ""),
-    ("NGC 6405", 265.0834, -32.2536, "OC", 4.2, 33.0, "Butterfly Cluster"),
-    ("NGC 6475", 268.4667, -34.7928, "OC", 3.3, 80.0, "Ptolemy Cluster"),
-    ("NGC 6494", 269.2667, -19.0167, "OC", 6.9, 27.0, ""),
-    ("NGC 6514", 270.6225, -23.0300, "Neb", 6.3, 28.0, "Trifid Nebula"),
-    ("NGC 6523", 270.9042, -24.3833, "Neb", 6.0, 90.0, "Lagoon Nebula"),
-    ("NGC 6530", 271.1042, -24.2833, "OC", 4.6, 15.0, ""),
-    ("NGC 6531", 270.9708, -22.4917, "OC", 6.5, 13.0, ""),
-    ("NGC 6543", 269.6392, 66.6331, "PN", 8.1, 0.6, "Cat's Eye Nebula"),
-    ("NGC 6544", 271.8333, -24.9972, "GC", 7.5, 9.0, ""),
-    ("NGC 6572", 273.1250, 6.8528, "PN", 8.1, 0.1, ""),
-    ("NGC 6603", 274.5375, -18.5167, "OC", 11.1, 5.0, ""),
-    ("NGC 6611", 274.7000, -13.7833, "OC", 6.0, 7.0, "Eagle Nebula Cluster"),
-    ("NGC 6613", 275.2375, -17.1278, "OC", 7.5, 9.0, ""),
-    ("NGC 6618", 275.1917, -16.1708, "Neb", 6.0, 11.0, "Omega Nebula"),
-    ("NGC 6626", 276.1364, -24.8700, "GC", 6.8, 11.0, ""),
-    ("NGC 6633", 276.8417, 6.6167, "OC", 4.6, 27.0, ""),
-    ("NGC 6637", 277.8463, -32.3481, "GC", 7.6, 10.0, ""),
-    ("NGC 6656", 279.0998, -23.9047, "GC", 5.1, 32.0, ""),
-    ("NGC 6681", 280.8029, -32.2911, "GC", 7.9, 8.0, ""),
-    ("NGC 6694", 281.3208, -9.3833, "OC", 8.0, 15.0, ""),
-    ("NGC 6705", 282.7667, -6.2667, "OC", 6.3, 14.0, "Wild Duck Cluster"),
-    ("NGC 6709", 282.8417, 10.3333, "OC", 6.7, 13.0, ""),
-    ("NGC 6720", 283.3963, 33.0289, "PN", 8.8, 1.4, "Ring Nebula"),
-    ("NGC 6723", 284.8875, -36.6322, "GC", 7.3, 13.0, ""),
-    ("NGC 6726", 285.4583, -36.9500, "RN", 7.0, 2.0, ""),
-    ("NGC 6752", 287.7170, -59.9847, "GC", 5.4, 29.0, ""),
-    ("NGC 6779", 289.1483, 30.1842, "GC", 8.3, 9.0, ""),
-    ("NGC 6809", 294.9988, -30.9647, "GC", 6.3, 19.0, ""),
-    ("NGC 6818", 295.3583, -14.1711, "PN", 9.3, 0.4, "Little Gem Nebula"),
-    ("NGC 6822", 296.2354, -14.8003, "Gal", 8.7, 20.0, "Barnard's Galaxy"),
-    ("NGC 6826", 296.2000, 50.5253, "PN", 8.8, 0.4, "Blinking Planetary"),
-    ("NGC 6838", 298.4438, 18.7792, "GC", 8.2, 7.0, ""),
-    ("NGC 6853", 299.9015, 22.7211, "PN", 7.5, 8.0, "Dumbbell Nebula"),
-    ("NGC 6864", 301.5201, -21.9211, "GC", 8.5, 7.0, ""),
-    ("NGC 6888", 303.0625, 38.3500, "Neb", 7.4, 18.0, "Crescent Nebula"),
-    ("NGC 6913", 305.9708, 38.5083, "OC", 7.1, 7.0, ""),
-    ("NGC 6934", 308.5474, 7.4044, "GC", 8.8, 7.0, ""),
-    ("NGC 6946", 308.7179, 60.1539, "Gal", 8.8, 11.0, "Fireworks Galaxy"),
-    ("NGC 6960", 312.1750, 30.7167, "SNR", 7.0, 70.0, "Western Veil"),
-    ("NGC 6979", 313.0500, 32.1667, "SNR", 7.0, 25.0, "Pickering's Triangle"),
-    ("NGC 6981", 313.3654, -12.5372, "GC", 9.3, 6.0, ""),
-    ("NGC 6992", 313.9167, 31.7167, "SNR", 7.0, 60.0, "Eastern Veil"),
-    ("NGC 6994", 314.7500, -12.6333, "Ast", 9.0, 2.8, ""),
-    ("NGC 7000", 314.6802, 44.3117, "Neb", 4.0, 120.0, "North America Nebula"),
-    ("NGC 7006", 315.3746, 16.1872, "GC", 10.6, 4.0, ""),
-    ("NGC 7009", 316.0583, -11.3639, "PN", 8.0, 0.4, "Saturn Nebula"),
-    ("NGC 7023", 315.3917, 68.1667, "RN", 7.1, 18.0, "Iris Nebula"),
-    ("NGC 7027", 316.7583, 42.2353, "PN", 8.5, 0.3, ""),
-    ("NGC 7078", 322.4930, 12.1670, "GC", 6.2, 18.0, ""),
-    ("NGC 7089", 323.3626, -0.8233, "GC", 6.5, 16.0, ""),
-    ("NGC 7099", 325.0922, -23.1797, "GC", 7.2, 12.0, ""),
-    ("NGC 7129", 325.7375, 66.1167, "RN", 11.5, 3.0, ""),
-    ("NGC 7209", 331.2833, 46.5000, "OC", 6.7, 25.0, ""),
-    ("NGC 7235", 333.8458, 57.2500, "OC", 7.7, 4.0, ""),
-    ("NGC 7243", 333.7917, 49.8833, "OC", 6.4, 21.0, ""),
-    ("NGC 7293", 337.4108, -20.8372, "PN", 7.6, 16.0, "Helix Nebula"),
-    ("NGC 7317", 338.8917, 33.9406, "Gal", 13.6, 0.5, ""),
-    ("NGC 7318", 338.9583, 33.9628, "Gal", 13.0, 1.0, "Stephan's Quintet"),
-    ("NGC 7320", 339.0208, 33.9483, "Gal", 12.6, 2.0, ""),
-    ("NGC 7331", 339.2670, 34.4157, "Gal", 9.5, 11.0, ""),
-    ("NGC 7380", 341.8250, 58.1333, "OC", 7.2, 12.0, "Wizard Nebula"),
-    ("NGC 7479", 346.2361, 12.3228, "Gal", 10.9, 4.0, ""),
-    ("NGC 7510", 348.0667, 60.5833, "OC", 7.9, 4.0, ""),
-    ("NGC 7635", 350.2042, 61.2000, "Neb", 10.0, 15.0, "Bubble Nebula"),
-    ("NGC 7654", 351.2042, 61.5833, "OC", 7.3, 13.0, ""),
-    ("NGC 7662", 351.6583, 42.5328, "PN", 8.3, 0.5, "Blue Snowball"),
-    ("NGC 7789", 359.3375, 56.7167, "OC", 6.7, 16.0, "Caroline's Rose"),
-    ("NGC 7793", 359.4576, -32.5914, "Gal", 9.1, 6.0, ""),
-]
+def resolve_common_names(objects: list[dict], log_func=None) -> None:
+    """
+    Resolve common names for all objects via SIMBAD TAP query.
+    Queries the SIMBAD 'ident' table in batch to find identifiers
+    starting with 'NAME ' (= common/popular names).
+    Updates objects in-place, setting the 'common_name' field.
+    """
+    if not objects:
+        return
 
-# Named stars — ~300 IAU-named and Bayer-designated stars to mag ~5.5
-# Provides full-sky coverage so any field will have labeled reference stars.
-NAMED_STARS_CATALOG = [
-    # --- Magnitude < 0 ---
-    ("Sirius", 101.2872, -16.7161, "Star", -1.46, 0, "Alpha CMa"),
-    ("Canopus", 95.9880, -52.6957, "Star", -0.74, 0, "Alpha Car"),
-    ("Arcturus", 213.9153, 19.1824, "Star", -0.05, 0, "Alpha Boo"),
-    # --- Magnitude 0–1 ---
-    ("Vega", 279.2347, 38.7837, "Star", 0.03, 0, "Alpha Lyr"),
-    ("Capella", 79.1723, 45.9980, "Star", 0.08, 0, "Alpha Aur"),
-    ("Rigel", 78.6344, -8.2016, "Star", 0.13, 0, "Beta Ori"),
-    ("Procyon", 114.8255, 5.2250, "Star", 0.34, 0, "Alpha CMi"),
-    ("Betelgeuse", 88.7929, 7.4071, "Star", 0.42, 0, "Alpha Ori"),
-    ("Achernar", 24.4285, -57.2368, "Star", 0.46, 0, "Alpha Eri"),
-    ("Hadar", 210.9558, -60.3730, "Star", 0.61, 0, "Beta Cen"),
-    ("Altair", 297.6958, 8.8683, "Star", 0.77, 0, "Alpha Aql"),
-    ("Acrux", 186.6496, -63.0990, "Star", 0.76, 0, "Alpha Cru"),
-    ("Aldebaran", 68.9802, 16.5093, "Star", 0.86, 0, "Alpha Tau"),
-    ("Antares", 247.3519, -26.4320, "Star", 0.96, 0, "Alpha Sco"),
-    ("Spica", 201.2983, -11.1614, "Star", 0.97, 0, "Alpha Vir"),
-    # --- Magnitude 1–2 ---
-    ("Pollux", 116.3289, 28.0262, "Star", 1.14, 0, "Beta Gem"),
-    ("Fomalhaut", 344.4127, -29.6222, "Star", 1.16, 0, "Alpha PsA"),
-    ("Deneb", 310.3580, 45.2803, "Star", 1.25, 0, "Alpha Cyg"),
-    ("Mimosa", 191.9302, -59.6885, "Star", 1.25, 0, "Beta Cru"),
-    ("Regulus", 152.0929, 11.9672, "Star", 1.35, 0, "Alpha Leo"),
-    ("Adhara", 104.6565, -28.9723, "Star", 1.50, 0, "Epsilon CMa"),
-    ("Shaula", 263.4022, -37.1038, "Star", 1.63, 0, "Lambda Sco"),
-    ("Castor", 113.6497, 31.8884, "Star", 1.58, 0, "Alpha Gem"),
-    ("Gacrux", 187.7914, -57.1132, "Star", 1.64, 0, "Gamma Cru"),
-    ("Bellatrix", 81.2828, 6.3497, "Star", 1.64, 0, "Gamma Ori"),
-    ("Elnath", 81.5728, 28.6075, "Star", 1.65, 0, "Beta Tau"),
-    ("Miaplacidus", 138.3000, -69.7172, "Star", 1.68, 0, "Beta Car"),
-    ("Alnilam", 84.0533, -1.2019, "Star", 1.69, 0, "Epsilon Ori"),
-    ("Alnair", 332.0583, -46.9611, "Star", 1.74, 0, "Alpha Gru"),
-    ("Alnitak", 85.1897, -1.9425, "Star", 1.77, 0, "Zeta Ori"),
-    ("Alioth", 193.5073, 55.9599, "Star", 1.77, 0, "Epsilon UMa"),
-    ("Dubhe", 165.9319, 61.7510, "Star", 1.79, 0, "Alpha UMa"),
-    ("Mirfak", 51.0808, 49.8613, "Star", 1.80, 0, "Alpha Per"),
-    ("Wezen", 107.0978, -26.3932, "Star", 1.84, 0, "Delta CMa"),
-    ("Kaus Australis", 276.0430, -34.3845, "Star", 1.85, 0, "Epsilon Sgr"),
-    ("Alkaid", 206.8853, 49.3133, "Star", 1.86, 0, "Eta UMa"),
-    ("Avior", 125.6285, -59.5095, "Star", 1.86, 0, "Epsilon Car"),
-    ("Sargas", 264.3297, -42.9980, "Star", 1.87, 0, "Theta Sco"),
-    ("Menkalinan", 89.8827, 44.9474, "Star", 1.90, 0, "Beta Aur"),
-    ("Atria", 252.1662, -69.0277, "Star", 1.92, 0, "Alpha TrA"),
-    ("Alhena", 99.4279, 16.3993, "Star", 1.93, 0, "Gamma Gem"),
-    ("Peacock", 306.4119, -56.7350, "Star", 1.94, 0, "Alpha Pav"),
-    ("Alsephina", 131.1760, -54.7087, "Star", 1.96, 0, "Delta Vel"),
-    ("Mirzam", 95.6749, -17.9559, "Star", 1.98, 0, "Beta CMa"),
-    # --- Magnitude 2–3 ---
-    ("Alphard", 141.8968, -8.6586, "Star", 2.00, 0, "Alpha Hya"),
-    ("Polaris", 37.9546, 89.2641, "Star", 2.02, 0, "Alpha UMi"),
-    ("Hamal", 31.7933, 23.4624, "Star", 2.00, 0, "Alpha Ari"),
-    ("Diphda", 10.8974, -17.9866, "Star", 2.02, 0, "Beta Cet"),
-    ("Mizar", 200.9814, 54.9254, "Star", 2.04, 0, "Zeta UMa"),
-    ("Nunki", 283.8163, -26.2967, "Star", 2.05, 0, "Sigma Sgr"),
-    ("Menkent", 211.6706, -36.3700, "Star", 2.06, 0, "Theta Cen"),
-    ("Rasalhague", 263.7334, 12.5600, "Star", 2.08, 0, "Alpha Oph"),
-    ("Kochab", 222.6764, 74.1555, "Star", 2.08, 0, "Beta UMi"),
-    ("Saiph", 86.9391, -9.6696, "Star", 2.09, 0, "Kappa Ori"),
-    ("Algol", 47.0422, 40.9564, "Star", 2.12, 0, "Beta Per"),
-    ("Denebola", 177.2649, 14.5720, "Star", 2.14, 0, "Beta Leo"),
-    ("Tiaki", 340.6668, -46.8847, "Star", 2.17, 0, "Beta Gru"),
-    ("Muhlifain", 190.3794, -48.9600, "Star", 2.17, 0, "Gamma Cen"),
-    ("Sadr", 305.5572, 40.2567, "Star", 2.20, 0, "Gamma Cyg"),
-    ("Aspidiske", 139.2725, -59.2753, "Star", 2.21, 0, "Iota Car"),
-    ("Suhail", 136.9990, -43.4326, "Star", 2.21, 0, "Lambda Vel"),
-    ("Alphecca", 233.6720, 26.7147, "Star", 2.23, 0, "Alpha CrB"),
-    ("Mintaka", 83.0017, -0.2992, "Star", 2.23, 0, "Delta Ori"),
-    ("Schedar", 10.1268, 56.5373, "Star", 2.23, 0, "Alpha Cas"),
-    ("Eltanin", 269.1516, 51.4890, "Star", 2.23, 0, "Gamma Dra"),
-    ("Naos", 120.8961, -40.0033, "Star", 2.25, 0, "Zeta Pup"),
-    ("Caph", 2.2946, 59.1498, "Star", 2.27, 0, "Beta Cas"),
-    ("Merak", 165.4603, 56.3824, "Star", 2.37, 0, "Beta UMa"),
-    ("Enif", 326.0465, 9.8750, "Star", 2.39, 0, "Epsilon Peg"),
-    ("Scheat", 345.9437, 28.0828, "Star", 2.42, 0, "Beta Peg"),
-    ("Phecda", 178.4576, 53.6948, "Star", 2.44, 0, "Gamma UMa"),
-    ("Aludra", 111.0238, -29.3031, "Star", 2.45, 0, "Eta CMa"),
-    ("Markab", 346.1903, 15.2053, "Star", 2.49, 0, "Alpha Peg"),
-    ("Alderamin", 319.6448, 62.5856, "Star", 2.51, 0, "Alpha Cep"),
-    ("Zubeneschamali", 229.2519, -9.3830, "Star", 2.61, 0, "Beta Lib"),
-    ("Unukalhai", 236.0670, 6.4256, "Star", 2.65, 0, "Alpha Ser"),
-    ("Ruchbah", 21.4540, 60.2353, "Star", 2.68, 0, "Delta Cas"),
-    ("Tarazed", 296.5647, 10.6133, "Star", 2.72, 0, "Gamma Aql"),
-    ("Rasalgethi", 258.6618, 14.3903, "Star", 2.81, 0, "Alpha Her"),
-    ("Algenib", 3.3089, 15.1836, "Star", 2.83, 0, "Gamma Peg"),
-    ("Vindemiatrix", 195.5443, 10.9592, "Star", 2.83, 0, "Epsilon Vir"),
-    ("Cor Caroli", 194.0068, 38.3183, "Star", 2.90, 0, "Alpha CVn"),
-    ("Tureis", 121.8861, -24.3044, "Star", 2.93, 0, "Rho Pup"),
-    ("Alshat", 305.2571, -14.7814, "Star", 2.87, 0, "Alpha Cap"),
-    ("Zubenelgenubi", 222.7196, -16.0416, "Star", 2.75, 0, "Alpha Lib"),
-    ("Sabik", 257.5948, -15.7249, "Star", 2.43, 0, "Eta Oph"),
-    ("Kaus Media", 275.2485, -29.8281, "Star", 2.70, 0, "Delta Sgr"),
-    ("Kaus Borealis", 275.3255, -25.4217, "Star", 2.81, 0, "Lambda Sgr"),
-    ("Ascella", 285.6530, -29.8801, "Star", 2.59, 0, "Zeta Sgr"),
-    # --- Magnitude 3–4 ---
-    ("Mira", 34.8366, -2.9776, "Star", 2.00, 0, "Omicron Cet"),
-    ("Albireo", 292.6804, 27.9597, "Star", 3.18, 0, "Beta Cyg"),
-    ("Propus", 95.7400, 22.5069, "Star", 3.28, 0, "Eta Gem"),
-    ("Megrez", 183.8565, 57.0326, "Star", 3.31, 0, "Delta UMa"),
-    ("Thuban", 211.0973, 64.3757, "Star", 3.67, 0, "Alpha Dra"),
-    ("Alcor", 201.3063, 54.9879, "Star", 3.99, 0, "80 UMa"),
-    ("Errai", 354.8365, 77.6324, "Star", 3.21, 0, "Gamma Cep"),
-    ("Alfirk", 322.1649, 70.5607, "Star", 3.23, 0, "Beta Cep"),
-    ("Pherkad", 230.1821, 71.8340, "Star", 3.05, 0, "Gamma UMi"),
-    ("Muscida", 127.5661, 60.7183, "Star", 3.36, 0, "Omicron UMa"),
-    ("Tania Borealis", 154.2744, 42.9144, "Star", 3.45, 0, "Lambda UMa"),
-    ("Tania Australis", 155.5825, 41.4994, "Star", 3.06, 0, "Mu UMa"),
-    ("Talitha", 134.8019, 48.0418, "Star", 3.14, 0, "Iota UMa"),
-    ("Chara", 188.4357, 41.3575, "Star", 4.26, 0, "Beta CVn"),
-    ("La Superba", 191.2826, 45.4403, "Star", 4.80, 0, "Y CVn"),
-    ("Nusakan", 231.9574, 29.1057, "Star", 3.68, 0, "Beta CrB"),
-    ("Izar", 221.2466, 27.0743, "Star", 2.37, 0, "Epsilon Boo"),
-    ("Nekkar", 225.3654, 40.3906, "Star", 3.58, 0, "Beta Boo"),
-    ("Seginus", 218.0197, 38.3083, "Star", 3.03, 0, "Gamma Boo"),
-    ("Muphrid", 208.6712, 18.3977, "Star", 2.68, 0, "Eta Boo"),
-    ("Princeps", 218.5178, 19.1825, "Star", 3.47, 0, "Delta Boo"),
-    ("Alkalurops", 219.9063, 37.3773, "Star", 4.31, 0, "Mu Boo"),
-    ("Rastaban", 262.6082, 52.3014, "Star", 2.79, 0, "Beta Dra"),
-    ("Altais", 288.1388, 67.6616, "Star", 3.07, 0, "Delta Dra"),
-    ("Edasich", 231.2328, 58.9660, "Star", 3.29, 0, "Iota Dra"),
-    ("Grumium", 268.3828, 56.8726, "Star", 3.75, 0, "Xi Dra"),
-    ("Giausar", 172.8510, 69.3311, "Star", 3.85, 0, "Lambda Dra"),
-    ("Aldhibah", 256.1175, 65.7148, "Star", 3.17, 0, "Zeta Dra"),
-    ("Tyl", 271.0873, 72.1488, "Star", 3.57, 0, "Epsilon Dra"),
-    ("Sheliak", 282.5199, 33.3628, "Star", 3.52, 0, "Beta Lyr"),
-    ("Sulafat", 284.7360, 32.6896, "Star", 3.24, 0, "Gamma Lyr"),
-    ("Gienah", 183.9516, -17.5419, "Star", 2.59, 0, "Gamma Crv"),
-    ("Algorab", 187.4660, -16.5152, "Star", 2.95, 0, "Delta Crv"),
-    ("Kraz", 188.5968, -23.3968, "Star", 2.65, 0, "Beta Crv"),
-    ("Minkar", 182.1034, -22.6198, "Star", 3.02, 0, "Epsilon Crv"),
-    ("Zosma", 168.5270, 20.5242, "Star", 2.56, 0, "Delta Leo"),
-    ("Chertan", 168.5600, 15.4297, "Star", 3.33, 0, "Theta Leo"),
-    ("Algieba", 154.9929, 19.8414, "Star", 2.28, 0, "Gamma Leo"),
-    ("Subra", 148.1908, 9.8925, "Star", 3.52, 0, "Omicron Leo"),
-    ("Adhafera", 154.1725, 23.4173, "Star", 3.44, 0, "Zeta Leo"),
-    ("Rasalas", 148.1908, 26.0070, "Star", 3.88, 0, "Mu Leo"),
-    ("Alterf", 142.9302, 22.9681, "Star", 4.31, 0, "Lambda Leo"),
-    ("Zavijava", 177.6738, 1.7647, "Star", 3.61, 0, "Beta Vir"),
-    ("Porrima", 190.4151, -1.4494, "Star", 2.74, 0, "Gamma Vir"),
-    ("Heze", 203.6733, -0.5958, "Star", 3.37, 0, "Zeta Vir"),
-    ("Zaniah", 185.1798, -0.6668, "Star", 3.89, 0, "Eta Vir"),
-    ("Syrma", 214.0036, -6.0006, "Star", 4.07, 0, "Iota Vir"),
-    ("Rijl al Awwa", 193.9002, 3.3975, "Star", 3.89, 0, "Mu Vir"),
-    ("Navi", 14.1772, 60.7167, "Star", 2.47, 0, "Gamma Cas"),
-    ("Segin", 28.5987, 63.6701, "Star", 3.37, 0, "Epsilon Cas"),
-    ("Achird", 12.2763, 57.8152, "Star", 3.44, 0, "Eta Cas"),
-    ("Marfak", 36.4868, 55.8955, "Star", 4.17, 0, "Theta Cas"),
-    ("Fulu", 24.4984, 48.6284, "Star", 4.59, 0, "Zeta Cas"),
-    ("Mirach", 17.4333, 35.6206, "Star", 2.06, 0, "Beta And"),
-    ("Almach", 30.9751, 42.3298, "Star", 2.17, 0, "Gamma And"),
-    ("Alpheratz", 2.0965, 29.0904, "Star", 2.06, 0, "Alpha And"),
-    ("Sheratan", 28.6604, 20.8081, "Star", 2.64, 0, "Beta Ari"),
-    ("Mesarthim", 28.3826, 19.2937, "Star", 3.86, 0, "Gamma Ari"),
-    ("Botein", 44.5657, 19.7267, "Star", 4.35, 0, "Delta Ari"),
-    ("Bharani", 41.2358, 27.2607, "Star", 3.63, 0, "41 Ari"),
-    ("Menkib", 59.7413, 35.7911, "Star", 3.98, 0, "Xi Per"),
-    ("Atik", 56.0792, 32.2882, "Star", 3.85, 0, "Omicron Per"),
-    ("Electra", 56.2188, 24.1134, "Star", 3.70, 0, "17 Tau"),
-    ("Taygeta", 56.3025, 24.4673, "Star", 4.30, 0, "19 Tau"),
-    ("Maia", 56.4565, 24.3678, "Star", 3.87, 0, "20 Tau"),
-    ("Merope", 56.5812, 23.9484, "Star", 4.18, 0, "23 Tau"),
-    ("Alcyone", 56.8712, 24.1053, "Star", 2.87, 0, "Eta Tau"),
-    ("Atlas", 57.2907, 24.0534, "Star", 3.63, 0, "27 Tau"),
-    ("Pleione", 57.2967, 24.1367, "Star", 5.09, 0, "28 Tau"),
-    ("Ain", 67.1542, 19.1804, "Star", 3.53, 0, "Epsilon Tau"),
-    ("Hyadum I", 65.7337, 15.9622, "Star", 3.65, 0, "Gamma Tau"),
-    ("Hyadum II", 64.9484, 15.6276, "Star", 3.76, 0, "Delta1 Tau"),
-    ("Prima Hyadum", 64.9484, 15.6276, "Star", 3.76, 0, "Delta1 Tau"),
-    ("Tianguan", 84.4112, 21.1426, "Star", 3.00, 0, "Zeta Tau"),
-    ("Tejat", 95.7400, 22.5069, "Star", 3.28, 0, "Mu Gem"),
-    ("Mebsuta", 100.9833, 25.1311, "Star", 3.06, 0, "Epsilon Gem"),
-    ("Wasat", 110.0308, 21.9822, "Star", 3.53, 0, "Delta Gem"),
-    ("Alzirr", 104.6557, 16.5404, "Star", 3.36, 0, "Xi Gem"),
-    ("Furud", 95.0784, -30.0634, "Star", 3.02, 0, "Zeta CMa"),
-    ("Muliphein", 100.9821, -15.6333, "Star", 4.07, 0, "Gamma CMa"),
-    ("Gomeisa", 111.7876, 8.2894, "Star", 2.89, 0, "Beta CMi"),
-    ("Acubens", 134.6215, 11.8577, "Star", 4.25, 0, "Alpha Cnc"),
-    ("Tegmine", 123.0531, 17.6476, "Star", 4.67, 0, "Zeta Cnc"),
-    ("Asellus Borealis", 131.1712, 21.4686, "Star", 4.66, 0, "Gamma Cnc"),
-    ("Asellus Australis", 131.6714, 18.1543, "Star", 3.94, 0, "Delta Cnc"),
-    ("Alkes", 164.9437, -18.2986, "Star", 4.08, 0, "Alpha Crt"),
-    ("Lesath", 263.6189, -37.2958, "Star", 2.69, 0, "Upsilon Sco"),
-    ("Acrab", 241.3593, -19.8054, "Star", 2.62, 0, "Beta Sco"),
-    ("Dschubba", 240.0833, -22.6217, "Star", 2.32, 0, "Delta Sco"),
-    ("Sargas", 264.3297, -42.9980, "Star", 1.87, 0, "Theta Sco"),
-    ("Fang", 239.7130, -26.1140, "Star", 3.96, 0, "Pi Sco"),
-    ("Iklil", 239.2213, -25.5925, "Star", 3.88, 0, "Rho Sco"),
-    ("Jabbah", 242.9990, -19.4608, "Star", 4.00, 0, "Nu Sco"),
-    ("Grafias", 241.0930, -19.8053, "Star", 2.62, 0, "Beta1 Sco"),
-    ("Cebalrai", 265.8682, 4.5673, "Star", 2.77, 0, "Beta Oph"),
-    ("Yed Prior", 243.5862, -3.6945, "Star", 2.74, 0, "Delta Oph"),
-    ("Yed Posterior", 244.5804, -4.6925, "Star", 3.24, 0, "Epsilon Oph"),
-    ("Marfik", 248.9711, 1.9840, "Star", 3.82, 0, "Lambda Oph"),
-    ("Kornephoros", 247.5549, 21.4896, "Star", 2.77, 0, "Beta Her"),
-    ("Sarin", 258.7580, 24.8392, "Star", 3.14, 0, "Delta Her"),
-    ("Maasym", 262.6846, 26.1106, "Star", 4.40, 0, "Lambda Her"),
-    ("Ruticulus", 258.0380, 33.1004, "Star", 3.89, 0, "Zeta Her"),
-    ("Kajam", 265.8682, 27.7245, "Star", 3.16, 0, "Omega Her"),
-    ("Marsic", 258.7580, 17.0467, "Star", 3.42, 0, "Kappa Her"),
-    ("Rotanev", 309.3872, 14.5954, "Star", 3.63, 0, "Beta Del"),
-    ("Sualocin", 309.9095, 15.9122, "Star", 3.77, 0, "Alpha Del"),
-    ("Albali", 311.9189, -9.4958, "Star", 3.77, 0, "Epsilon Aqr"),
-    ("Sadalsuud", 322.8897, -5.5712, "Star", 2.91, 0, "Beta Aqr"),
-    ("Sadalmelik", 331.4461, -0.3199, "Star", 2.96, 0, "Alpha Aqr"),
-    ("Skat", 343.9864, -15.8208, "Star", 3.27, 0, "Delta Aqr"),
-    ("Ancha", 339.1876, -7.7838, "Star", 4.17, 0, "Theta Aqr"),
-    ("Situla", 342.3911, -4.2283, "Star", 5.03, 0, "Kappa Aqr"),
-    ("Biham", 345.9693, 6.1979, "Star", 3.52, 0, "Theta Peg"),
-    ("Homam", 340.7506, 10.8311, "Star", 3.41, 0, "Zeta Peg"),
-    ("Matar", 340.3655, 30.2214, "Star", 2.94, 0, "Eta Peg"),
-    ("Alkarab", 349.2945, 23.4041, "Star", 4.40, 0, "Upsilon Peg"),
-    ("Sadalbari", 343.2925, 24.6018, "Star", 3.51, 0, "Mu Peg"),
-    ("Errakis", 262.0853, 58.5662, "Star", 3.75, 0, "Mu Dra"),
-    ("Alsafi", 288.1396, 69.6613, "Star", 3.17, 0, "Sigma Dra"),
-    ("Athebyne", 274.4100, 67.1613, "Star", 4.22, 0, "Eta Dra"),
-    ("Fawaris", 296.2444, 45.1309, "Star", 2.87, 0, "Delta Cyg"),
-    ("Aljanah", 311.5528, 33.9703, "Star", 2.48, 0, "Epsilon Cyg"),
-    ("Azelfafage", 326.7607, 51.1895, "Star", 4.56, 0, "Pi1 Cyg"),
-    ("Rukh", 296.8296, 36.0897, "Star", 3.89, 0, "Delta2 Cyg"),
-    # --- Magnitude 4–5.5 (key constellation stars for field identification) ---
-    # Ursa Major faint members
-    ("Muscida", 127.5661, 60.7183, "Star", 3.36, 0, "Omicron UMa"),
-    ("Alula Borealis", 169.6197, 33.0944, "Star", 3.49, 0, "Nu UMa"),
-    ("Alula Australis", 169.5451, 31.5293, "Star", 3.78, 0, "Xi UMa"),
-    # Cassiopeia
-    ("Tsih", 14.1772, 60.7167, "Star", 2.47, 0, "Gamma Cas"),
-    # Cepheus
-    ("Kurhah", 332.7137, 64.6279, "Star", 4.29, 0, "Xi Cep"),
-    # Draco far north
-    ("Kuma", 260.5018, 61.5142, "Star", 4.57, 0, "Nu Dra"),
-    # Cygnus
-    ("Ruchba", 296.2444, 45.1309, "Star", 2.87, 0, "Delta Cyg"),
-    # Lyra
-    ("Aladfar", 286.3536, 39.1458, "Star", 4.34, 0, "Eta Lyr"),
-    # Hercules keystone
-    ("Cujam", 265.2035, 31.6025, "Star", 4.41, 0, "Omega Her"),
-    # Bootes
-    ("Xuange", 222.7285, 51.7850, "Star", 4.18, 0, "Lambda Boo"),
-    # Corona Borealis
-    ("Nusakan", 231.9574, 29.1057, "Star", 3.68, 0, "Beta CrB"),
-    # Serpens
-    ("Alya", 284.0544, 4.2035, "Star", 4.62, 0, "Theta Ser"),
-    # Aquila
-    ("Deneb el Okab", 286.3526, 13.8634, "Star", 3.36, 0, "Zeta Aql"),
-    ("Okab", 286.1725, 13.7265, "Star", 3.44, 0, "Epsilon Aql"),
-    # Sagitta
-    ("Sham", 295.0244, 18.0139, "Star", 4.37, 0, "Alpha Sge"),
-    # Vulpecula
-    ("Anser", 297.6322, 24.6648, "Star", 4.44, 0, "Alpha Vul"),
-    # Perseus
-    ("Miram", 55.7313, 48.4093, "Star", 4.04, 0, "Eta Per"),
-    # Auriga
-    ("Hassaleh", 74.2489, 33.1661, "Star", 2.69, 0, "Iota Aur"),
-    ("Saclateni", 75.4923, 41.2346, "Star", 3.03, 0, "Zeta Aur"),
-    ("Haedus", 75.6196, 41.0762, "Star", 3.17, 0, "Eta Aur"),
-    ("Mahasim", 74.6370, 43.8232, "Star", 4.71, 0, "Theta Aur"),
-    # Triangulum
-    ("Mothallah", 28.2705, 29.5790, "Star", 3.41, 0, "Alpha Tri"),
-    ("Deltotum", 32.3856, 34.9872, "Star", 3.00, 0, "Beta Tri"),
-    # Pisces
-    ("Alpherg", 21.4962, 15.3454, "Star", 3.62, 0, "Eta Psc"),
-    ("Fumalsamakah", 22.8710, 3.8205, "Star", 4.52, 0, "Beta Psc"),
-    # Cetus
-    ("Menkar", 45.5700, 4.0897, "Star", 2.53, 0, "Alpha Cet"),
-    ("Kaffaljidhma", 40.8254, 10.1142, "Star", 3.47, 0, "Gamma Cet"),
-    ("Baten Kaitos", 27.8655, -10.3352, "Star", 3.74, 0, "Zeta Cet"),
-    # Eridanus
-    ("Cursa", 76.9625, -5.0864, "Star", 2.79, 0, "Beta Eri"),
-    ("Zaurak", 59.5074, -13.5085, "Star", 2.95, 0, "Gamma Eri"),
-    ("Rana", 53.2328, -9.4583, "Star", 3.54, 0, "Delta Eri"),
-    ("Azha", 44.1066, -8.8983, "Star", 3.89, 0, "Eta Eri"),
-    ("Zibal", 48.9589, -8.8200, "Star", 4.80, 0, "Zeta Eri"),
-    # Orion additional
-    ("Meissa", 83.7845, 9.9342, "Star", 3.33, 0, "Lambda Ori"),
-    ("Tabit", 72.4600, 6.9614, "Star", 3.16, 0, "Pi3 Ori"),
-    ("Hatsya", 83.8583, -5.9098, "Star", 2.77, 0, "Iota Ori"),
-    # Monoceros
-    ("Lucida", 99.1717, -7.0331, "Star", 3.93, 0, "Alpha Mon"),
-    # Hydra
-    ("Minchir", 126.4153, -3.9066, "Star", 3.82, 0, "Sigma Hya"),
-    # Centaurus
-    ("Rigil Kentaurus", 219.9021, -60.8340, "Star", -0.27, 0, "Alpha Cen"),
-    ("Proxima Centauri", 217.4290, -62.6794, "Star", 11.13, 0, "Alpha Cen C"),
-    # Crux
-    ("Imai", 183.7863, -63.0989, "Star", 1.28, 0, "Delta Cru"),
-    # Sagittarius
-    ("Alnasl", 275.2485, -30.4241, "Star", 2.99, 0, "Gamma Sgr"),
-    ("Kaus Borealis", 275.3255, -25.4217, "Star", 2.81, 0, "Lambda Sgr"),
-    ("Arkab Prior", 290.6598, -44.7997, "Star", 3.96, 0, "Beta1 Sgr"),
-    ("Rukbat", 290.9714, -40.6159, "Star", 3.97, 0, "Alpha Sgr"),
-    # Scorpius additional
-    ("Paikauhale", 265.6225, -37.0431, "Star", 3.32, 0, "Tau Sco"),
-    ("Al Niyat", 244.5803, -25.5928, "Star", 2.89, 0, "Sigma Sco"),
-    # Libra
-    ("Brachium", 228.0720, -25.2818, "Star", 3.29, 0, "Sigma Lib"),
-    # Lupus
-    ("Men", 227.2080, -47.3880, "Star", 2.30, 0, "Alpha Lup"),
-    # Ara
-    ("Choo", 262.7748, -49.8764, "Star", 2.85, 0, "Beta Ara"),
-    # Corona Australis
-    ("Meridiana", 287.3681, -37.9045, "Star", 4.10, 0, "Alpha CrA"),
-    # Piscis Austrinus
-    ("Delta PsA", 339.2900, -32.5397, "Star", 4.20, 0, "Delta PsA"),
-    # Sculptor
-    ("Alpha Scl", 14.6608, -29.3573, "Star", 4.31, 0, "Alpha Scl"),
-    # Fornax
-    ("Dalim", 48.0188, -28.9836, "Star", 3.87, 0, "Alpha For"),
-    # Columba
-    ("Phact", 84.9121, -34.0741, "Star", 2.64, 0, "Alpha Col"),
-    ("Wazn", 87.7400, -35.7683, "Star", 3.12, 0, "Beta Col"),
-    # Lepus
-    ("Arneb", 83.1826, -17.8224, "Star", 2.58, 0, "Alpha Lep"),
-    ("Nihal", 82.0613, -20.7595, "Star", 2.84, 0, "Beta Lep"),
-    # Puppis
-    ("Naos", 120.8961, -40.0033, "Star", 2.25, 0, "Zeta Pup"),
-    ("Azmidi", 105.9396, -23.8334, "Star", 3.34, 0, "Xi Pup"),
-    # Vela
-    ("Regor", 122.3831, -47.3367, "Star", 1.83, 0, "Gamma Vel"),
-    ("Markeb", 138.3000, -55.0107, "Star", 2.50, 0, "Kappa Vel"),
-]
+    # Collect names that need resolving (skip objects that already have a common name)
+    to_resolve = [obj for obj in objects if not obj.get("common_name")]
+    if not to_resolve:
+        return
 
-# Sharpless HII regions — expanded with accurate positions and sizes
-SHARPLESS_CATALOG = [
-    ("Sh2-1", 244.2500, -24.8000, "HII", 10.0, 15.0, ""),
-    ("Sh2-9", 247.7917, -10.5333, "HII", 5.0, 240.0, "Zeta Oph Nebula"),
-    ("Sh2-11", 248.0625, -19.3167, "HII", 8.0, 30.0, ""),
-    ("Sh2-25", 270.9042, -24.3833, "HII", 6.0, 90.0, "Lagoon Nebula"),
-    ("Sh2-30", 270.6225, -23.0300, "HII", 6.3, 28.0, "Trifid Nebula"),
-    ("Sh2-45", 274.7000, -13.7833, "HII", 6.0, 30.0, "Eagle Nebula region"),
-    ("Sh2-49", 275.1917, -16.1708, "HII", 6.0, 46.0, "Omega Nebula region"),
-    ("Sh2-54", 275.2000, -13.7833, "HII", 6.0, 30.0, ""),
-    ("Sh2-71", 284.0833, 2.3167, "HII", 12.0, 4.0, ""),
-    ("Sh2-82", 286.6875, 18.2667, "HII", 10.0, 8.0, "Little Cocoon Nebula"),
-    ("Sh2-86", 289.0625, 24.7333, "HII", 7.0, 28.0, ""),
-    ("Sh2-88", 290.8750, 25.2667, "HII", 10.0, 7.0, ""),
-    ("Sh2-91", 291.6250, 29.0000, "HII", 10.0, 25.0, ""),
-    ("Sh2-101", 299.2083, 35.2833, "HII", 8.0, 12.0, "Tulip Nebula"),
-    ("Sh2-103", 303.0000, 40.0000, "HII", 5.0, 230.0, "Cygnus Loop"),
-    ("Sh2-105", 303.0625, 38.3500, "HII", 7.4, 18.0, "Crescent Nebula"),
-    ("Sh2-106", 303.7167, 37.4167, "HII", 11.0, 3.0, "Celestial Snow Angel"),
-    ("Sh2-108", 306.4917, 40.1667, "HII", 5.0, 80.0, ""),
-    ("Sh2-112", 316.7583, 45.6833, "HII", 8.0, 20.0, ""),
-    ("Sh2-115", 317.7917, 48.5000, "HII", 10.0, 30.0, ""),
-    ("Sh2-119", 313.0000, 45.0000, "HII", 4.0, 300.0, "Cygnus-X region"),
-    ("Sh2-125", 316.7500, 43.9167, "HII", 8.0, 10.0, "Cocoon Nebula"),
-    ("Sh2-126", 318.0000, 59.0000, "HII", 8.0, 80.0, ""),
-    ("Sh2-129", 321.4583, 59.8833, "HII", 8.0, 190.0, "Flying Bat Nebula"),
-    ("Sh2-131", 323.0000, 55.0000, "HII", 8.0, 120.0, ""),
-    ("Sh2-132", 335.0417, 56.3833, "HII", 10.0, 40.0, "Lion Nebula"),
-    ("Sh2-140", 345.0000, 62.0000, "HII", 10.0, 10.0, ""),
-    ("Sh2-142", 350.2042, 61.2000, "HII", 10.0, 15.0, "Bubble Nebula"),
-    ("Sh2-155", 352.3917, 62.6333, "HII", 7.7, 50.0, "Cave Nebula"),
-    ("Sh2-157", 354.2917, 60.3000, "HII", 10.0, 40.0, "Lobster Claw Nebula"),
-    ("Sh2-162", 356.0500, 60.5000, "HII", 8.0, 60.0, ""),
-    ("Sh2-170", 0.0000, 67.4000, "HII", 12.0, 3.0, "Little Rosette Nebula"),
-    ("Sh2-171", 0.2083, 67.8833, "HII", 8.0, 20.0, ""),
-    ("Sh2-173", 3.0000, 61.0000, "HII", 10.0, 10.0, "Phantom of the Opera"),
-    ("Sh2-184", 22.5000, 61.5000, "HII", 10.0, 20.0, "Pacman Nebula region"),
-    ("Sh2-188", 25.0000, 58.5000, "HII", 12.0, 9.0, "Dolphin Nebula"),
-    ("Sh2-190", 38.3333, 61.4667, "HII", 7.0, 150.0, "Heart Nebula"),
-    ("Sh2-199", 43.3750, 62.0667, "HII", 7.0, 150.0, "Soul Nebula"),
-    ("Sh2-202", 52.0000, 56.0000, "HII", 8.0, 250.0, ""),
-    ("Sh2-216", 63.5000, 42.5833, "HII", 8.0, 100.0, ""),
-    ("Sh2-220", 57.5000, 32.0000, "HII", 6.0, 330.0, "California Nebula region"),
-    ("Sh2-224", 67.0000, 46.0000, "HII", 10.0, 100.0, ""),
-    ("Sh2-229", 74.0000, 36.0000, "HII", 8.0, 100.0, "Flaming Star region"),
-    ("Sh2-232", 83.1250, 36.1667, "HII", 10.0, 35.0, ""),
-    ("Sh2-235", 84.7917, 35.8167, "HII", 10.0, 12.0, ""),
-    ("Sh2-236", 82.0000, 34.0000, "HII", 8.0, 60.0, ""),
-    ("Sh2-240", 85.0000, 28.0000, "HII", 8.0, 180.0, "Simeis 147"),
-    ("Sh2-245", 86.5000, 25.0000, "HII", 8.0, 200.0, ""),
-    ("Sh2-248", 88.0000, 21.0000, "HII", 10.0, 30.0, ""),
-    ("Sh2-252", 92.2125, 20.4833, "HII", 6.8, 40.0, "Monkey Head Nebula"),
-    ("Sh2-261", 93.2917, 13.7667, "HII", 10.0, 10.0, "Lower's Nebula"),
-    ("Sh2-264", 87.0000, 2.0000, "HII", 4.0, 300.0, "Lambda Orionis Ring"),
-    ("Sh2-273", 97.9667, 5.0333, "HII", 6.0, 80.0, "Rosette Nebula"),
-    ("Sh2-275", 100.0000, 9.0000, "HII", 7.0, 60.0, "Cone Nebula region"),
-    ("Sh2-276", 93.0000, -4.0000, "HII", 5.0, 480.0, "Barnard's Loop"),
-    ("Sh2-277", 83.8000, -5.4000, "HII", 4.0, 100.0, "Orion Nebula region"),
-    ("Sh2-278", 83.0000, -3.0000, "HII", 4.0, 210.0, ""),
-    ("Sh2-301", 102.5000, -16.0000, "HII", 10.0, 10.0, ""),
-    ("Sh2-308", 103.5500, -26.3500, "HII", 10.0, 40.0, "Dolphin Head Nebula"),
-    ("Sh2-311", 108.5000, -15.0000, "HII", 10.0, 15.0, ""),
-]
+    try:
+        # Build a single TAP query to resolve all names at once.
+        # The ident table maps object IDs (oidref) to all known identifiers.
+        # We join it with itself: one side matches our catalog names,
+        # the other side finds "NAME ..." identifiers (common names).
+        #
+        # Process in batches to avoid overly long SQL queries.
+        BATCH_SIZE = 80
+        name_map: dict[str, str] = {}
 
-# Caldwell catalog — 109 objects selected by Patrick Moore
-# Only objects NOT already in Messier are included.
-CALDWELL_CATALOG = [
-    ("C1", 11.3125, 85.3333, "OC", 8.1, 45.0, ""),
-    ("C2", 11.3125, 72.5333, "OC", 6.4, 13.0, ""),
-    ("C3", 19.7208, -75.3167, "Gal", 8.0, 25.0, ""),
-    ("C4", 20.0000, 62.6333, "Neb", 9.0, 50.0, "Iris Nebula region"),
-    ("C5", 351.2042, 68.1667, "RN", 7.1, 18.0, "IC 342"),
-    ("C6", 350.2042, 61.2000, "Neb", 10.0, 15.0, "Cat's Paw Nebula"),
-    ("C7", 352.3917, 62.6333, "Neb", 7.7, 50.0, ""),
-    ("C8", 7.8583, 59.0167, "OC", 7.0, 18.0, ""),
-    ("C9", 352.3917, 62.6333, "Neb", 10.0, 50.0, "Cave Nebula"),
-    ("C10", 23.3417, 60.6583, "OC", 7.4, 6.0, ""),
-    ("C11", 350.2042, 61.2000, "Neb", 10.0, 15.0, "Bubble Nebula"),
-    ("C12", 314.6802, 44.3117, "Neb", 4.0, 120.0, ""),
-    ("C13", 305.5572, 40.2567, "OC", 4.6, 60.0, "Owl Cluster"),
-    ("C14", 34.7583, 57.1333, "OC", 5.3, 30.0, "Double Cluster h Per"),
-    ("C15", 270.0000, -24.0000, "Neb", 6.0, 90.0, "Blinking Planetary"),
-    ("C16", 2.9375, 72.2167, "OC", 3.5, 330.0, ""),
-    ("C17", 19.7867, 60.7142, "OC", 6.4, 29.0, ""),
-    ("C18", 21.0333, 61.2333, "OC", 5.7, 18.0, ""),
-    ("C19", 315.3917, 68.1667, "RN", 7.1, 18.0, "Cocoon Nebula"),
-    ("C20", 314.6802, 44.3117, "Neb", 4.0, 120.0, "North America Nebula"),
-    ("C22", 296.2354, -14.8003, "Gal", 8.7, 20.0, "Blue Snowball"),
-    ("C23", 346.8583, 57.5167, "OC", 5.7, 24.0, ""),
-    ("C24", 0.8000, 61.3333, "OC", 7.9, 5.0, ""),
-    ("C25", 329.2708, 60.4167, "OC", 8.2, 5.0, ""),
-    ("C27", 303.0625, 38.3500, "Neb", 7.4, 18.0, "Crescent Nebula"),
-    ("C28", 26.5583, 61.2333, "OC", 7.1, 16.0, ""),
-    ("C30", 315.0000, 68.0000, "RN", 7.1, 18.0, ""),
-    ("C31", 61.4833, 51.3167, "Neb", 10.0, 3.0, "Flaming Star Nebula"),
-    ("C33", 313.9167, 31.7167, "SNR", 7.0, 60.0, "Eastern Veil Nebula"),
-    ("C34", 312.1750, 30.7167, "SNR", 7.0, 70.0, "Western Veil Nebula"),
-    ("C35", 116.0167, -37.9667, "OC", 2.8, 45.0, ""),
-    ("C37", 119.5167, -60.7500, "OC", 3.8, 30.0, ""),
-    ("C38", 253.5417, -41.8333, "OC", 2.6, 15.0, ""),
-    ("C39", 296.2354, -14.8003, "Gal", 8.7, 20.0, "Eskimo Nebula"),
-    ("C40", 187.7914, -57.1132, "OC", 4.0, 10.0, ""),
-    ("C41", 107.6250, -26.5833, "OC", 4.5, 15.0, "Hyades"),
-    ("C43", 258.0833, -37.1044, "PN", 7.1, 1.4, "Bug Nebula"),
-    ("C44", 265.1755, -53.6744, "GC", 5.7, 32.0, ""),
-    ("C45", 287.7170, -59.9847, "GC", 5.4, 29.0, ""),
-    ("C46", 118.0458, -38.5333, "OC", 5.8, 27.0, ""),
-    ("C47", 201.6968, -47.4797, "GC", 3.7, 36.0, "Omega Centauri"),
-    ("C48", 194.8913, -70.8764, "GC", 6.9, 14.0, ""),
-    ("C49", 193.4250, -60.3667, "OC", 4.2, 10.0, "Jewel Box Cluster"),
-    ("C50", 174.7958, -61.6167, "OC", 5.3, 12.0, ""),
-    ("C51", 150.6917, -60.0667, "OC", 4.2, 35.0, ""),
-    ("C53", 166.4375, -58.7667, "OC", 3.0, 55.0, "Wishing Well Cluster"),
-    ("C55", 262.9750, -67.0489, "GC", 7.6, 10.0, "Saturn Nebula"),
-    ("C56", 156.1833, -18.6414, "PN", 7.3, 0.8, "Ghost of Jupiter"),
-    ("C57", 151.7583, -40.4369, "PN", 8.2, 1.4, "Eight-Burst Nebula"),
-    ("C58", 161.2542, -59.8667, "Neb", 3.0, 120.0, "Eta Carinae Nebula"),
-    ("C59", 159.2625, -58.6333, "Neb", 6.7, 16.0, ""),
-    ("C60", 207.4000, -47.5000, "Gal", 7.0, 23.0, "Antennae Galaxy"),
-    ("C61", 157.8917, -58.2333, "OC", 4.7, 6.0, ""),
-    ("C63", 337.4108, -20.8372, "PN", 7.6, 16.0, "Helix Nebula"),
-    ("C64", 3.2000, -72.0814, "GC", 4.1, 50.0, "47 Tucanae"),
-    ("C65", 11.8881, -25.2883, "Gal", 7.1, 27.5, "Sculptor Galaxy"),
-    ("C67", 13.1867, -72.8286, "Gal", 2.3, 316.0, "Small Magellanic Cloud"),
-    ("C69", 258.0833, -37.1044, "PN", 7.1, 1.4, ""),
-    ("C71", 236.5125, -37.7864, "GC", 7.1, 10.0, ""),
-    ("C72", 226.0583, -54.3500, "OC", 6.5, 40.0, ""),
-    ("C73", 154.4034, -46.4116, "GC", 6.7, 18.0, ""),
-    ("C74", 235.0000, -33.0000, "PN", 8.0, 0.5, ""),
-    ("C76", 244.7583, -57.9333, "OC", 5.4, 12.0, ""),
-    ("C77", 201.3651, -43.0191, "Gal", 6.8, 25.6, "Centaurus A"),
-    ("C78", 204.2538, -29.8654, "Gal", 7.6, 12.9, ""),
-    ("C79", 154.4034, -46.4116, "GC", 6.7, 18.0, ""),
-    ("C80", 264.0718, -44.7356, "GC", 6.7, 10.0, ""),
-    ("C82", 261.3714, -48.4222, "GC", 8.1, 7.0, ""),
-    ("C84", 139.2725, -59.2753, "OC", 3.0, 50.0, ""),
-    ("C85", 138.3000, -69.7172, "OC", 4.5, 50.0, ""),
-    ("C86", 244.7583, -57.9333, "OC", 5.4, 12.0, ""),
-    ("C87", 168.7917, -61.2500, "OC", 9.1, 12.0, ""),
-    ("C89", 186.4400, -72.6592, "GC", 7.8, 19.0, ""),
-    ("C91", 153.0000, -80.8611, "PN", 11.6, 0.6, ""),
-    ("C92", 161.2542, -59.8667, "Neb", 3.0, 120.0, "Eta Carinae Nebula"),
-    ("C93", 186.4400, -72.6592, "GC", 7.8, 19.0, ""),
-    ("C94", 193.4250, -60.3667, "OC", 4.2, 10.0, ""),
-    ("C96", 118.0458, -38.5333, "OC", 5.8, 27.0, ""),
-    ("C98", 155.3375, -51.7167, "OC", 6.0, 18.0, ""),
-    ("C99", 286.0000, -37.0000, "DN", 5.0, 30.0, "Coalsack Nebula"),
-    ("C100", 261.3125, -23.7597, "PN", 11.4, 0.5, ""),
-    ("C102", 6.0236, -72.0814, "GC", 4.1, 50.0, "47 Tucanae"),
-    ("C103", 30.0000, -73.0000, "Neb", 5.0, 60.0, "Tarantula Nebula"),
-    ("C106", 201.6968, -47.4797, "GC", 3.7, 36.0, ""),
-    ("C109", 252.1662, -69.0277, "OC", 6.0, 12.0, ""),
-]
+        # Normalize whitespace: "NGC  5473" → "NGC 5473"
+        def _normalize(n: str) -> str:
+            return _RE_WHITESPACE.sub(' ', n).strip()
 
-# IC catalog — bright Index Catalogue objects popular for astrophotography
-IC_BRIGHT_CATALOG = [
-    ("IC 59", 14.1750, 61.1833, "RN", 10.0, 10.0, "Gamma Cas Nebula"),
-    ("IC 63", 14.3000, 60.9333, "RN", 10.0, 10.0, "Ghost of Cassiopeia"),
-    ("IC 342", 56.7042, 68.0958, "Gal", 9.1, 21.0, "Hidden Galaxy"),
-    ("IC 405", 75.2500, 34.2667, "Neb", 6.0, 30.0, "Flaming Star Nebula"),
-    ("IC 410", 77.3958, 33.3500, "Neb", 7.0, 40.0, "Tadpole Nebula"),
-    ("IC 417", 78.1208, 34.4167, "Neb", 10.0, 13.0, "Spider Nebula"),
-    ("IC 418", 81.8708, -12.6983, "PN", 9.3, 0.2, "Spirograph Nebula"),
-    ("IC 434", 85.2500, -2.4500, "Neb", 7.3, 60.0, "Horsehead Nebula"),
-    ("IC 443", 94.2542, 22.5333, "SNR", 12.0, 50.0, "Jellyfish Nebula"),
-    ("IC 1275", 271.7500, -23.7167, "Neb", 10.0, 10.0, ""),
-    ("IC 1284", 273.5750, -19.6833, "RN", 10.0, 20.0, ""),
-    ("IC 1295", 281.3958, -29.1833, "PN", 12.7, 1.5, ""),
-    ("IC 1318", 305.0000, 40.3333, "Neb", 7.0, 60.0, "Butterfly Nebula"),
-    ("IC 1396", 324.7500, 57.5000, "Neb", 3.5, 170.0, "Elephant's Trunk Nebula"),
-    ("IC 1613", 16.1992, 2.1178, "Gal", 9.2, 16.0, ""),
-    ("IC 1795", 38.0208, 62.0000, "Neb", 7.0, 27.0, "Fishhead Nebula"),
-    ("IC 1805", 38.2083, 61.4667, "Neb", 6.5, 60.0, "Heart Nebula"),
-    ("IC 1848", 43.3750, 60.4333, "Neb", 6.5, 60.0, "Soul Nebula"),
-    ("IC 1871", 47.2917, 60.2167, "Neb", 10.0, 8.0, ""),
-    ("IC 2118", 77.7500, -7.2333, "RN", 10.0, 180.0, "Witch Head Nebula"),
-    ("IC 2177", 103.7917, -10.4167, "Neb", 7.0, 120.0, "Seagull Nebula"),
-    ("IC 2220", 114.7917, -62.0667, "RN", 10.0, 2.0, "Toby Jug Nebula"),
-    ("IC 2391", 130.0542, -53.0333, "OC", 2.5, 50.0, "Omicron Vel Cluster"),
-    ("IC 2395", 130.5750, -48.1333, "OC", 4.6, 20.0, ""),
-    ("IC 2488", 141.8583, -56.9833, "OC", 7.4, 15.0, ""),
-    ("IC 2574", 157.0853, 68.4121, "Gal", 10.8, 13.0, "Coddington's Nebula"),
-    ("IC 2602", 160.7375, -64.4000, "OC", 1.9, 100.0, "Southern Pleiades"),
-    ("IC 2944", 170.6250, -63.3833, "Neb", 4.5, 75.0, "Running Chicken Nebula"),
-    ("IC 3568", 186.5833, 82.5653, "PN", 10.6, 0.3, "Lemon Slice Nebula"),
-    ("IC 4406", 215.4875, -44.1617, "PN", 10.6, 1.6, "Retina Nebula"),
-    ("IC 4592", 242.0000, -19.5000, "RN", 7.0, 90.0, "Blue Horsehead Nebula"),
-    ("IC 4603", 243.5000, -19.5000, "RN", 10.0, 60.0, ""),
-    ("IC 4604", 246.0833, -23.6000, "RN", 4.6, 60.0, "Rho Ophiuchi Nebula"),
-    ("IC 4628", 254.5542, -40.3500, "Neb", 7.0, 90.0, "Prawn Nebula"),
-    ("IC 4665", 266.5542, 5.6167, "OC", 4.2, 41.0, ""),
-    ("IC 4703", 274.7000, -13.7833, "Neb", 6.0, 35.0, "Eagle Nebula cloud"),
-    ("IC 4756", 279.6458, 5.4333, "OC", 4.6, 52.0, "Graff's Cluster"),
-    ("IC 5067", 314.0000, 44.4000, "Neb", 8.0, 60.0, "Pelican Nebula"),
-    ("IC 5070", 313.5000, 44.0000, "Neb", 8.0, 80.0, "Pelican Nebula"),
-    ("IC 5146", 328.3917, 47.2667, "Neb", 7.2, 12.0, "Cocoon Nebula"),
-    ("IC 5332", 354.7583, -36.1000, "Gal", 11.0, 7.0, ""),
-]
+        # Build mapping: normalized name → original object indices
+        all_names_raw = [obj["name"] for obj in to_resolve]
+        all_names = [_normalize(n) for n in all_names_raw]
+        # Also normalize object names in-place so they display cleanly
+        for i, obj in enumerate(to_resolve):
+            obj["name"] = all_names[i]
 
-# Barnard dark nebulae — the most prominent dark nebulae
-BARNARD_CATALOG = [
-    ("B33", 85.2708, -2.4583, "DN", 0.0, 6.0, "Horsehead Nebula"),
-    ("B34", 85.0000, -2.5000, "DN", 0.0, 15.0, ""),
-    ("B59", 258.0000, -27.2000, "DN", 0.0, 30.0, "Pipe Nebula stem"),
-    ("B68", 262.5000, -23.9167, "DN", 0.0, 4.0, ""),
-    ("B72", 262.0000, -23.5000, "DN", 0.0, 30.0, "Snake Nebula"),
-    ("B77", 263.0000, -23.0000, "DN", 0.0, 60.0, "Pipe Nebula bowl"),
-    ("B78", 264.5000, -25.7500, "DN", 0.0, 200.0, "Pipe Nebula"),
-    ("B86", 272.1250, -27.8500, "DN", 0.0, 5.0, "Inkspot Nebula"),
-    ("B87", 273.3750, -32.5000, "DN", 0.0, 12.0, ""),
-    ("B88", 273.5000, -32.7500, "DN", 0.0, 20.0, ""),
-    ("B92", 274.2500, -18.2500, "DN", 0.0, 15.0, ""),
-    ("B93", 274.5000, -18.4167, "DN", 0.0, 10.0, ""),
-    ("B133", 290.0000, -6.5000, "DN", 0.0, 10.0, ""),
-    ("B142", 295.0000, 10.4167, "DN", 0.0, 40.0, "Barnard's E"),
-    ("B143", 295.2500, 11.0833, "DN", 0.0, 30.0, "Barnard's E"),
-    ("B150", 308.3750, 35.3333, "DN", 0.0, 15.0, "Seahorse Nebula"),
-    ("B163", 319.0000, 52.0000, "DN", 0.0, 15.0, ""),
-    ("B168", 314.7500, 44.0000, "DN", 0.0, 30.0, ""),
-    ("B169", 315.0000, 44.5000, "DN", 0.0, 20.0, ""),
-    ("B170", 318.0000, 52.0000, "DN", 0.0, 15.0, ""),
-    ("B171", 320.0000, 55.0000, "DN", 0.0, 10.0, ""),
-    ("B173", 321.5000, 60.5000, "DN", 0.0, 15.0, ""),
-    ("B174", 322.0000, 60.0000, "DN", 0.0, 10.0, ""),
-    ("B175", 323.0000, 59.0000, "DN", 0.0, 10.0, ""),
-    ("B352", 297.0000, 24.0000, "DN", 0.0, 8.0, ""),
-    ("B361", 311.0000, 36.0000, "DN", 0.0, 30.0, ""),
-    ("B362", 312.0000, 37.0000, "DN", 0.0, 15.0, ""),
-    ("B367", 317.0000, 42.0000, "DN", 0.0, 10.0, ""),
-    ("LDN 1622", 86.0833, 1.8167, "DN", 0.0, 10.0, "Boogeyman Nebula"),
-    ("LDN 1251", 340.0000, 75.0000, "DN", 0.0, 30.0, ""),
-    ("LDN 1495", 63.5000, 28.0000, "DN", 0.0, 200.0, "Taurus Dark Cloud"),
-    ("LDN 673", 286.5000, 11.0000, "DN", 0.0, 30.0, ""),
-]
+        n_batches = (len(all_names) + BATCH_SIZE - 1) // BATCH_SIZE
+
+        if log_func:
+            log_func(f"SIMBAD names: resolving {len(all_names)} objects "
+                      f"in {n_batches} batch(es) via TAP query")
+            # Show first few names being queried
+            sample = all_names[:5]
+            log_func(f"  sample names: {sample}")
+
+        for batch_start in range(0, len(all_names), BATCH_SIZE):
+            batch = all_names[batch_start:batch_start + BATCH_SIZE]
+            batch_num = batch_start // BATCH_SIZE + 1
+            # Escape single quotes in names
+            escaped = [n.replace("'", "''") for n in batch]
+            in_clause = ", ".join(f"'{n}'" for n in escaped)
+
+            query = (
+                "SELECT id1.id AS catalog_id, id2.id AS common_name "
+                "FROM ident AS id1 "
+                "JOIN ident AS id2 ON id1.oidref = id2.oidref "
+                f"WHERE id1.id IN ({in_clause}) "
+                "AND id2.id LIKE 'NAME %'"
+            )
+
+            try:
+                result = Simbad.query_tap(query)
+                batch_found = 0
+                if result is not None and len(result) > 0:
+                    if log_func and len(result) > 0:
+                        log_func(f"  TAP returned {len(result)} rows, first: {dict(result[0])}")
+                    for row in result:
+                        cat_id = _normalize(str(row["catalog_id"]).strip())
+                        common = str(row["common_name"]).strip()
+                        # Remove the "NAME " prefix
+                        if common.upper().startswith("NAME "):
+                            common = common[5:]
+                        # Discard catalog-like names entirely — they are not
+                        # useful common names (e.g. "FAUST V051", "IRAS 12345")
+                        _JUNK_PREFIXES = (
+                            "FAUST", "IRAS", "2MASS", "SDSS", "WISE",
+                            "GALEX", "XMM", "ROSAT", "NVSS", "FIRST",
+                            "UGCA", "MCG", "PGC", "UGC", "KUG",
+                            "MRK", "ARK", "CGCG", "ZWG", "LEDA",
+                            "1RXS", "2E", "RX J", "LBQS", "QSO",
+                        )
+                        first_word = common.split()[0].upper() if common else ""
+                        if any(first_word.startswith(p.upper()) for p in _JUNK_PREFIXES):
+                            continue  # skip this name entirely
+                        # Prefer the longest (most descriptive) common name
+                        if cat_id not in name_map or len(common) > len(name_map[cat_id]):
+                            if cat_id not in name_map:
+                                batch_found += 1
+                            name_map[cat_id] = common
+                if log_func:
+                    log_func(f"SIMBAD names: batch {batch_num}/{n_batches}: "
+                              f"{batch_found} common names found for {len(batch)} objects")
+            except Exception as batch_err:
+                if log_func:
+                    log_func(f"SIMBAD names: batch {batch_num}/{n_batches} failed: {batch_err}")
+                continue
+
+        # Apply resolved names to objects
+        resolved = 0
+        for obj in to_resolve:
+            common = name_map.get(obj["name"], "")
+            if common:
+                obj["common_name"] = common
+                resolved += 1
+
+        if log_func:
+            log_func(f"SIMBAD names: resolved {resolved}/{len(to_resolve)} common names total")
+            # Show some examples
+            examples = [(obj["name"], obj["common_name"])
+                        for obj in to_resolve if obj.get("common_name")][:5]
+            for cat_name, common in examples:
+                log_func(f"  {cat_name} \u2192 {common}")
+
+    except Exception as e:
+        if log_func:
+            log_func(f"SIMBAD name resolution failed: {e}")
+            import traceback
+            log_func(f"  traceback: {traceback.format_exc().splitlines()[-1]}")
+
+
+def query_vizier_ngc_ic(
+    center_ra: float, center_dec: float, radius_deg: float,
+    mag_limit: float, siril, log_func, img_width: int, img_height: int,
+    siril_lock: threading.Lock | None = None,
+) -> list[dict]:
+    """
+    Query VizieR VII/118 (NGC 2000.0) for NGC/IC/Messier objects in the FOV.
+    Returns list of object dicts with pixel coordinates.
+    """
+    try:
+        vizier = Vizier(
+            columns=["**", "+_RAJ2000", "+_DEJ2000"],
+            row_limit=5000,
+        )
+
+        center = SkyCoord(center_ra, center_dec, unit="deg")
+        if log_func:
+            log_func(f"VizieR NGC/IC: querying VII/118 radius={radius_deg:.2f}\u00b0 "
+                      f"around RA={center_ra:.4f} DEC={center_dec:.4f}, mag<={mag_limit:.1f}")
+        results = vizier.query_region(
+            center, radius=radius_deg * u.deg, catalog="VII/118/ngc2000",
+        )
+        if not results or len(results) == 0:
+            if log_func:
+                log_func("VizieR NGC/IC: no results returned from server")
+            return []
+
+        table = results[0]
+        if log_func:
+            log_func(f"VizieR NGC/IC: {len(table)} objects returned from server")
+            log_func(f"VizieR NGC/IC: columns = {table.colnames}")
+
+        objects = []
+        skipped_mag = 0
+        skipped_pix = 0
+        skipped_margin = 0
+        skipped_err = 0
+        first_err_logged = False
+        margin = 30
+        for row in table:
+            try:
+                # Name: VizieR returns just the number (e.g. "5457"), need prefix
+                raw_name = str(row["Name"]).strip()
+                # Detect NGC vs IC from the catalog (Name column format)
+                # NGC 2000.0 uses "I" prefix for IC objects: "I 3280", "I0123", "I3280"
+                ic_match = _RE_IC_PREFIX.match(raw_name)
+                if ic_match:
+                    name = f"IC {ic_match.group(1)}"
+                else:
+                    name = f"NGC {raw_name}"
+
+                # Coordinates from VizieR computed columns (J2000, degrees)
+                ra_deg = float(row["_RAJ2000"])
+                dec_deg = float(row["_DEJ2000"])
+
+                # Magnitude — try multiple possible column names
+                mag = 0.0
+                for mag_col in ("Mag", "mag", "Vmag"):
+                    if mag_col in table.colnames and not np.ma.is_masked(row[mag_col]):
+                        mag = float(row[mag_col])
+                        break
+                mag_known = mag > 0.0
+                if mag_known and mag > mag_limit:
+                    skipped_mag += 1
+                    continue
+
+                # Size — try multiple possible column names
+                size = 0.0
+                for size_col in ("size", "Diam", "diam", "MajAxis", "Size"):
+                    if size_col in table.colnames and not np.ma.is_masked(row[size_col]):
+                        size = float(row[size_col])
+                        break
+
+                # Type mapping
+                raw_type = ""
+                for type_col in ("Type", "type", "OType"):
+                    if type_col in table.colnames and not np.ma.is_masked(row[type_col]):
+                        raw_type = str(row[type_col]).strip()
+                        break
+                obj_type = NGC2000_TYPE_MAP.get(raw_type, "Other")
+
+                # Messier designation — try multiple column names
+                messier = ""
+                for m_col in ("Messier", "messier", "Mno"):
+                    if m_col in table.colnames and not np.ma.is_masked(row[m_col]):
+                        m = str(row[m_col]).strip()
+                        if m:
+                            messier = f"M{m}"
+                            break
+
+                # Display name: prefer Messier, then NGC/IC
+                display_name = messier if messier else name
+
+                # Convert to pixel coordinates (thread-safe)
+                result_pix = _safe_radec2pix(siril, ra_deg, dec_deg, siril_lock)
+                if result_pix is None:
+                    skipped_pix += 1
+                    continue
+                x, y = float(result_pix[0]), float(result_pix[1])
+                if not (margin < x < img_width - margin and margin < y < img_height - margin):
+                    skipped_margin += 1
+                    continue
+
+                objects.append({
+                    "name": display_name,
+                    "ra": ra_deg,
+                    "dec": dec_deg,
+                    "type": obj_type,
+                    "mag": mag,
+                    "size_arcmin": size,
+                    "common_name": "",  # resolved later via SIMBAD TAP
+                    "pixel_x": x,
+                    "pixel_y": y,
+                })
+            except Exception as row_err:
+                skipped_err += 1
+                if not first_err_logged and log_func:
+                    first_err_logged = True
+                    log_func(f"VizieR NGC/IC: first row error: {row_err}")
+                    try:
+                        log_func(f"  row data: {dict(zip(table.colnames, [row[c] for c in table.colnames]))}")
+                    except Exception:
+                        pass
+                continue
+
+        if log_func:
+            log_func(f"VizieR NGC/IC: {len(objects)} in FOV "
+                      f"(skipped: {skipped_mag} too faint, {skipped_pix} pix2radec fail, "
+                      f"{skipped_margin} outside margin, {skipped_err} errors)")
+        return objects
+
+    except Exception as e:
+        if log_func:
+            log_func(f"VizieR NGC/IC query failed: {e}")
+            import traceback
+            log_func(f"  traceback: {traceback.format_exc().splitlines()[-1]}")
+        return []
+
+
+def query_vizier_sharpless(
+    center_ra: float, center_dec: float, radius_deg: float,
+    siril, log_func, img_width: int, img_height: int,
+    siril_lock: threading.Lock | None = None,
+) -> list[dict]:
+    """
+    Query VizieR VII/20 (Sharpless 1959) for HII regions in the FOV.
+    """
+    try:
+        vizier = Vizier(
+            columns=["**", "+_RAJ2000", "+_DEJ2000"],
+            row_limit=5000,
+        )
+        center = SkyCoord(center_ra, center_dec, unit="deg")
+        if log_func:
+            log_func(f"VizieR Sharpless: querying VII/20 radius={radius_deg:.2f}\u00b0")
+        results = vizier.query_region(
+            center, radius=radius_deg * u.deg, catalog="VII/20",
+        )
+        if not results or len(results) == 0:
+            if log_func:
+                log_func("VizieR Sharpless: no results returned from server")
+            return []
+
+        table = results[0]
+        if log_func:
+            log_func(f"VizieR Sharpless: {len(table)} objects returned, columns={table.colnames}")
+
+        objects = []
+        skipped_pix = 0
+        skipped_margin = 0
+        skipped_err = 0
+        first_err_logged = False
+        margin = 30
+        for row in table:
+            try:
+                # Find the Sharpless number column
+                num = ""
+                for sh_col in ("Sh2", "Sh 2", "SH2"):
+                    if sh_col in table.colnames and not np.ma.is_masked(row[sh_col]):
+                        num = str(row[sh_col]).strip()
+                        break
+                if not num:
+                    num = str(row[table.colnames[0]]).strip()
+                name = f"Sh2-{num}"
+
+                ra_deg = float(row["_RAJ2000"])
+                dec_deg = float(row["_DEJ2000"])
+
+                size = 0.0
+                for size_col in ("Diam", "diam", "Dia"):
+                    if size_col in table.colnames and not np.ma.is_masked(row[size_col]):
+                        size = float(row[size_col])
+                        break
+
+                result_pix = _safe_radec2pix(siril, ra_deg, dec_deg, siril_lock)
+                if result_pix is None:
+                    skipped_pix += 1
+                    continue
+                x, y = float(result_pix[0]), float(result_pix[1])
+                if not (margin < x < img_width - margin and margin < y < img_height - margin):
+                    skipped_margin += 1
+                    continue
+
+                objects.append({
+                    "name": name,
+                    "ra": ra_deg,
+                    "dec": dec_deg,
+                    "type": "HII",
+                    "mag": 0.0,
+                    "size_arcmin": size,
+                    "common_name": "",  # resolved later via SIMBAD TAP
+                    "pixel_x": x,
+                    "pixel_y": y,
+                })
+            except Exception as row_err:
+                skipped_err += 1
+                if not first_err_logged and log_func:
+                    first_err_logged = True
+                    log_func(f"VizieR Sharpless: first row error: {row_err}")
+                    try:
+                        log_func(f"  row data: {dict(zip(table.colnames, [row[c] for c in table.colnames]))}")
+                    except Exception:
+                        pass
+                continue
+
+        if log_func:
+            log_func(f"VizieR Sharpless: {len(objects)} in FOV "
+                      f"(skipped: {skipped_pix} pix fail, {skipped_margin} outside, {skipped_err} errors)")
+        return objects
+
+    except Exception as e:
+        if log_func:
+            log_func(f"VizieR Sharpless query failed: {e}")
+            import traceback
+            log_func(f"  traceback: {traceback.format_exc().splitlines()[-1]}")
+        return []
+
+
+def query_vizier_barnard(
+    center_ra: float, center_dec: float, radius_deg: float,
+    siril, log_func, img_width: int, img_height: int,
+    siril_lock: threading.Lock | None = None,
+) -> list[dict]:
+    """
+    Query VizieR VII/220A (Barnard 1927) for dark nebulae in the FOV.
+    """
+    try:
+        vizier = Vizier(
+            columns=["**", "+_RAJ2000", "+_DEJ2000"],
+            row_limit=5000,
+        )
+        center = SkyCoord(center_ra, center_dec, unit="deg")
+        if log_func:
+            log_func(f"VizieR Barnard: querying VII/220A radius={radius_deg:.2f}\u00b0")
+        results = vizier.query_region(
+            center, radius=radius_deg * u.deg, catalog="VII/220A",
+        )
+
+        objects = []
+        margin = 30
+
+        if results and len(results) > 0:
+            table = results[0]
+            if log_func:
+                log_func(f"VizieR Barnard: {len(table)} objects returned, columns={table.colnames}")
+            skipped_err = 0
+            first_err_logged = False
+            for row in table:
+                try:
+                    # Find the Barnard number column
+                    num = ""
+                    for b_col in ("Barn", "Bern", "No"):
+                        if b_col in table.colnames and not np.ma.is_masked(row[b_col]):
+                            num = str(row[b_col]).strip()
+                            break
+                    if not num:
+                        num = str(row[table.colnames[0]]).strip()
+                    name = f"B{num}"
+
+                    ra_deg = float(row["_RAJ2000"])
+                    dec_deg = float(row["_DEJ2000"])
+
+                    size = 0.0
+                    for size_col in ("Diam", "diam", "Dia"):
+                        if size_col in table.colnames and not np.ma.is_masked(row[size_col]):
+                            size = float(row[size_col])
+                            break
+
+                    result_pix = _safe_radec2pix(siril, ra_deg, dec_deg, siril_lock)
+                    if result_pix is None:
+                        continue
+                    x, y = float(result_pix[0]), float(result_pix[1])
+                    if not (margin < x < img_width - margin and margin < y < img_height - margin):
+                        continue
+
+                    objects.append({
+                        "name": name,
+                        "ra": ra_deg,
+                        "dec": dec_deg,
+                        "type": "DN",
+                        "mag": 0.0,
+                        "size_arcmin": size,
+                        "common_name": "",  # resolved later via SIMBAD TAP
+                        "pixel_x": x,
+                        "pixel_y": y,
+                    })
+                except Exception as row_err:
+                    skipped_err += 1
+                    if not first_err_logged and log_func:
+                        first_err_logged = True
+                        log_func(f"VizieR Barnard: first row error: {row_err}")
+                        try:
+                            log_func(f"  row data: {dict(zip(table.colnames, [row[c] for c in table.colnames]))}")
+                        except Exception:
+                            pass
+                    continue
+
+        if log_func:
+            log_func(f"VizieR Barnard: {len(objects)} in FOV")
+        return objects
+
+    except Exception as e:
+        if log_func:
+            log_func(f"VizieR Barnard query failed: {e}")
+        return []
+
+
+def query_vizier_bright_stars(
+    center_ra: float, center_dec: float, radius_deg: float,
+    mag_limit: float, siril, log_func, img_width: int, img_height: int,
+    siril_lock: threading.Lock | None = None,
+) -> list[dict]:
+    """
+    Query VizieR V/50 (Yale Bright Star Catalogue) for named stars in the FOV.
+    """
+    try:
+        vizier = Vizier(
+            columns=["**", "+_RAJ2000", "+_DEJ2000"],
+            row_limit=5000,
+            column_filters={"Vmag": f"<{mag_limit}"},
+        )
+        center = SkyCoord(center_ra, center_dec, unit="deg")
+        if log_func:
+            log_func(f"VizieR BSC: querying V/50 radius={radius_deg:.2f}\u00b0, Vmag<{mag_limit:.1f}")
+        results = vizier.query_region(
+            center, radius=radius_deg * u.deg, catalog="V/50/catalog",
+        )
+        if not results or len(results) == 0:
+            if log_func:
+                log_func("VizieR BSC: no results returned from server")
+            return []
+
+        table = results[0]
+        if log_func:
+            log_func(f"VizieR BSC: {len(table)} stars returned, columns={table.colnames}")
+
+        objects = []
+        skipped_pix = 0
+        skipped_margin = 0
+        skipped_err = 0
+        first_err_logged = False
+        margin = 30
+        for row in table:
+            try:
+                # Find HR number
+                hr = 0
+                for hr_col in ("HR", "hr"):
+                    if hr_col in table.colnames and not np.ma.is_masked(row[hr_col]):
+                        hr = int(row[hr_col])
+                        break
+
+                ra_deg = float(row["_RAJ2000"])
+                dec_deg = float(row["_DEJ2000"])
+
+                mag = 0.0
+                for mag_col in ("Vmag", "mag", "Mag"):
+                    if mag_col in table.colnames and not np.ma.is_masked(row[mag_col]):
+                        mag = float(row[mag_col])
+                        break
+                if mag > mag_limit:
+                    continue
+
+                # Name: use VizieR Name column, fall back to HR number
+                viz_name = ""
+                for name_col in ("Name", "name"):
+                    if name_col in table.colnames and not np.ma.is_masked(row[name_col]):
+                        viz_name = str(row[name_col]).strip()
+                        break
+                display_name = viz_name if viz_name else f"HR {hr}"
+
+                result_pix = _safe_radec2pix(siril, ra_deg, dec_deg, siril_lock)
+                if result_pix is None:
+                    skipped_pix += 1
+                    continue
+                x, y = float(result_pix[0]), float(result_pix[1])
+                if not (margin < x < img_width - margin and margin < y < img_height - margin):
+                    skipped_margin += 1
+                    continue
+
+                objects.append({
+                    "name": display_name,
+                    "ra": ra_deg,
+                    "dec": dec_deg,
+                    "type": "Star",
+                    "mag": mag,
+                    "size_arcmin": 0.0,
+                    "common_name": "",  # resolved later via SIMBAD TAP
+                    "pixel_x": x,
+                    "pixel_y": y,
+                })
+            except Exception as row_err:
+                skipped_err += 1
+                if not first_err_logged and log_func:
+                    first_err_logged = True
+                    log_func(f"VizieR BSC: first row error: {row_err}")
+                    try:
+                        log_func(f"  row data: {dict(zip(table.colnames, [row[c] for c in table.colnames]))}")
+                    except Exception:
+                        pass
+                continue
+
+        if log_func:
+            log_func(f"VizieR BSC: {len(objects)} stars in FOV "
+                      f"(skipped: {skipped_pix} pix fail, {skipped_margin} outside, {skipped_err} errors)")
+        return objects
+
+    except Exception as e:
+        if log_func:
+            log_func(f"VizieR BSC query failed: {e}")
+            import traceback
+            log_func(f"  traceback: {traceback.format_exc().splitlines()[-1]}")
+        return []
 
 
 # ------------------------------------------------------------------------------
@@ -1170,133 +913,99 @@ def choose_grid_step(fov_degrees: float) -> float:
 
 
 # ------------------------------------------------------------------------------
-# CATALOG FILTERING
-# ------------------------------------------------------------------------------
-
-def filter_objects_in_fov(
-    catalog: list[tuple],
-    wcs: WCS | None,
-    width: int,
-    height: int,
-    mag_limit: float = 15.0,
-    margin: int = 30,
-    siril=None,
-    log_func=None,
-) -> list[dict]:
-    """
-    Filter catalog objects to those visible in the image field of view.
-    Uses siril.radec2pix() as primary method (like Galaxy_Annotations.py),
-    falls back to astropy WCS if siril is not available.
-    Returns list of dicts with pixel coordinates added.
-    """
-    visible = []
-
-    # Strategy 1: Use siril.radec2pix() — most reliable, same as Galaxy_Annotations.py
-    if siril is not None:
-        for i, obj in enumerate(catalog):
-            mag = obj[4]
-            if mag > mag_limit:
-                continue
-            try:
-                result = siril.radec2pix(obj[1], obj[2])
-                if result is None:
-                    continue
-                x, y = result
-                x, y = float(x), float(y)
-            except Exception:
-                continue
-            if margin < x < width - margin and margin < y < height - margin:
-                visible.append({
-                    "name": obj[0],
-                    "ra": obj[1],
-                    "dec": obj[2],
-                    "type": obj[3],
-                    "mag": obj[4],
-                    "size_arcmin": obj[5],
-                    "common_name": obj[6],
-                    "pixel_x": x,
-                    "pixel_y": y,
-                })
-        if log_func and len(catalog) > 0:
-            log_func(f"  filter: {len(visible)}/{len(catalog)} objects via radec2pix")
-        return visible
-
-    # Strategy 2: Fall back to astropy WCS
-    if wcs is None:
-        return visible
-
-    ra_arr = np.array([obj[1] for obj in catalog])
-    dec_arr = np.array([obj[2] for obj in catalog])
-
-    try:
-        pixel_coords = wcs.all_world2pix(np.column_stack([ra_arr, dec_arr]), 0)
-    except Exception as e:
-        if log_func:
-            log_func(f"  filter: all_world2pix failed: {e}")
-        return visible
-
-    for i, obj in enumerate(catalog):
-        x, y = float(pixel_coords[i][0]), float(pixel_coords[i][1])
-        mag = obj[4]
-        if mag > mag_limit:
-            continue
-        if margin < x < width - margin and margin < y < height - margin:
-            visible.append({
-                "name": obj[0],
-                "ra": obj[1],
-                "dec": obj[2],
-                "type": obj[3],
-                "mag": obj[4],
-                "size_arcmin": obj[5],
-                "common_name": obj[6],
-                "pixel_x": x,
-                "pixel_y": y,
-            })
-    if log_func and len(catalog) > 0:
-        log_func(f"  filter: {len(visible)}/{len(catalog)} objects via astropy WCS")
-    return visible
-
-
-# ------------------------------------------------------------------------------
 # LABEL COLLISION AVOIDANCE
 # ------------------------------------------------------------------------------
 
-def resolve_label_collisions(objects: list[dict], min_distance_px: int = 60) -> list[dict]:
+def resolve_label_collisions(
+    objects: list[dict],
+    img_width: int = 0,
+    img_height: int = 0,
+    min_distance_px: int = 80,
+) -> list[dict]:
     """
     Assign label offsets to avoid overlapping labels.
-    Uses a greedy algorithm with 4 placement quadrants.
+    Uses a greedy algorithm with multiple placement positions.
+    Clamps labels to stay within image bounds.
     """
-    placements = [
-        (15, 15),    # top-right
-        (-15, 15),   # top-left
-        (15, -15),   # bottom-right
-        (-15, -15),  # bottom-left
-        (25, 0),     # right
-        (-25, 0),    # left
-        (0, 25),     # above
-        (0, -25),    # below
-    ]
-    placed: list[tuple[float, float]] = []
+    # Generate placement candidates at multiple distances
+    placements = []
+    for dist in (25, 50, 90, 140):
+        placements.extend([
+            (dist, dist),      # top-right
+            (-dist, dist),     # top-left
+            (dist, -dist),     # bottom-right
+            (-dist, -dist),    # bottom-left
+            (dist, 0),         # right
+            (-dist, 0),        # left
+            (0, dist),         # above
+            (0, -dist),        # below
+        ])
+    # Spatial grid for O(1) collision checks instead of O(n) per candidate
+    _cell = max(min_distance_px, 1)
+    _placed_grid: dict[tuple[int, int], int] = {}  # grid cell → count
+
+    def _add_to_grid(px: float, py: float) -> None:
+        gx, gy = int(px) // _cell, int(py) // _cell
+        _placed_grid[(gx, gy)] = _placed_grid.get((gx, gy), 0) + 1
+
+    def _count_collisions(px: float, py: float) -> int:
+        gx, gy = int(px) // _cell, int(py) // _cell
+        total = 0
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                total += _placed_grid.get((gx + dx, gy + dy), 0)
+        return total
 
     for obj in objects:
         x, y = obj["pixel_x"], obj["pixel_y"]
         best_offset = placements[0]
+        best_score = float("inf")
+
+        # Estimate this label's pixel width based on text length
+        name = obj.get("name", "")
+        common = obj.get("common_name", "")
+        label_text = f"{name} ({common})" if common else name
+        est_label_width = len(label_text) * 8
 
         for offset_x, offset_y in placements:
             lx = x + offset_x
             ly = y + offset_y
-            collision = False
-            for px, py in placed:
-                if abs(lx - px) < min_distance_px and abs(ly - py) < min_distance_px:
-                    collision = True
-                    break
-            if not collision:
+
+            # --- Edge penalty ---
+            edge_penalty = 0
+            if img_width > 0:
+                if offset_x >= 0:
+                    remaining = img_width - lx
+                    if remaining < est_label_width:
+                        edge_penalty += 5000
+                else:
+                    if lx < est_label_width * 0.3:
+                        edge_penalty += 5000
+            if img_height > 0:
+                if ly < 40 or ly > img_height - 40:
+                    edge_penalty += 3000
+
+            # --- Positional bias ---
+            side_bias = 0
+            if img_width > 0:
+                frac_x = x / img_width
+                if frac_x > 0.35 and offset_x > 0:
+                    side_bias += int(frac_x * 150)
+                elif frac_x < 0.25 and offset_x < 0:
+                    side_bias += int((1.0 - frac_x) * 80)
+
+            # --- Collision penalty (O(1) grid lookup) ---
+            collision_count = _count_collisions(lx, ly)
+
+            dist_penalty = (abs(offset_x) + abs(offset_y)) * 0.3
+            score = collision_count * 300 + edge_penalty + side_bias + dist_penalty
+            if score < best_score:
+                best_score = score
                 best_offset = (offset_x, offset_y)
-                break
 
         obj["label_offset_x"] = best_offset[0]
         obj["label_offset_y"] = best_offset[1]
-        placed.append((x + best_offset[0], y + best_offset[1]))
+        _add_to_grid(x + best_offset[0], y + best_offset[1])
 
     return objects
 
@@ -1319,6 +1028,32 @@ def render_annotated_image(
     """
     dpi = config.get("dpi", 150)
     height, width = image_data.shape[:2]
+
+    # Cap output resolution for very large mosaics to avoid multi-GB files,
+    # excessive render times, and out-of-memory errors.
+    # Target: output pixel count <= 8k x 8k (~256 Mpx RGBA buffer).
+    MAX_OUTPUT_DIM = 8000
+    output_w = width
+    output_h = height
+    if output_w > MAX_OUTPUT_DIM or output_h > MAX_OUTPUT_DIM:
+        scale_factor = min(MAX_OUTPUT_DIM / output_w, MAX_OUTPUT_DIM / output_h)
+        dpi = max(72, int(dpi * scale_factor))
+        print(f"[AnnotateImage] Large image detected ({width}x{height}), "
+              f"reducing output DPI to {dpi} to keep file size manageable")
+
+    # For very large images, downscale the pixel data for matplotlib display.
+    # Annotations are vector overlays and render at full quality regardless.
+    # This avoids matplotlib duplicating the full array in its Agg backend.
+    MAX_DISPLAY_DIM = 6000
+    display_data = image_data
+    if width > MAX_DISPLAY_DIM or height > MAX_DISPLAY_DIM:
+        ds = max(width / MAX_DISPLAY_DIM, height / MAX_DISPLAY_DIM)
+        step = max(2, int(ds))
+        display_data = image_data[::step, ::step]
+        print(f"[AnnotateImage] Downscaling display data by {step}x for rendering "
+              f"({display_data.shape[1]}x{display_data.shape[0]})")
+        del image_data  # free the full-res copy
+
     fig_w = width / dpi
     fig_h = height / dpi
 
@@ -1331,7 +1066,8 @@ def render_annotated_image(
     # while radec2pix returns FITS coordinates (y=0 = bottom).
     # Use origin='upper' so the image displays correctly, then
     # flip y-coordinates of annotations: y_display = height - y_fits.
-    ax.imshow(image_data, origin="upper", aspect="equal", interpolation="nearest")
+    ax.imshow(display_data, origin="upper", aspect="equal", interpolation="bilinear",
+              extent=[0, width, height, 0])
     ax.set_xlim(0, width)
     ax.set_ylim(0, height)
     ax.axis("off")
@@ -1379,9 +1115,10 @@ def render_annotated_image(
     if progress_callback:
         progress_callback(85, "Saving output file...")
 
-    # Save
+    # Save and free memory
     fig.savefig(output_path, dpi=dpi, facecolor="black", edgecolor="none")
     plt.close(fig)
+    del fig, canvas, display_data
 
     if progress_callback:
         progress_callback(100, "Done!")
@@ -1398,7 +1135,7 @@ def _render_object(ax, obj: dict, config: dict, pixel_scale: float) -> None:
     if config.get("color_by_type", True):
         color = colors.get(obj_type, colors.get("Other", "#CCCCCC"))
     else:
-        color = colors.get(obj_type, "#CCCCCC")
+        color = "#CCCCCC"  # Uniform color when type coloring is disabled
 
     font_size = config.get("font_size", 10)
     marker_size = config.get("marker_size", 20)
@@ -1408,9 +1145,12 @@ def _render_object(ax, obj: dict, config: dict, pixel_scale: float) -> None:
     if config.get("show_ellipses", True) and obj.get("size_arcmin", 0) > 0 and pixel_scale > 0:
         size_px = obj["size_arcmin"] * 60.0 / pixel_scale
         size_px = max(size_px, marker_size * 0.6)
+        # Use thinner lines for large ellipses so they don't dominate
+        ell_lw = line_width if size_px < 100 else line_width * 0.7
+        ell_alpha = 0.8 if size_px < 200 else 0.5
         ellipse = Ellipse(
             (x, y), size_px, size_px,
-            fill=False, edgecolor=color, linewidth=line_width, alpha=0.8,
+            fill=False, edgecolor=color, linewidth=ell_lw, alpha=ell_alpha,
         )
         ax.add_patch(ellipse)
     else:
@@ -1466,9 +1206,9 @@ def _render_object(ax, obj: dict, config: dict, pixel_scale: float) -> None:
 
 def _render_grid(ax, wcs: WCS, width: int, height: int, config: dict) -> None:
     """Render RA/DEC coordinate grid overlay."""
-    grid_color = config.get("grid_color", "#4466AA")
-    grid_alpha = config.get("grid_alpha", 0.4)
-    label_size = config.get("grid_label_size", 7)
+    grid_color = config.get("grid_color", "#66AADD")
+    grid_alpha = config.get("grid_alpha", 0.6)
+    label_size = config.get("grid_label_size", 8)
 
     # Get FOV corners in world coordinates
     corners_pix = np.array([[0, 0], [width, 0], [width, height], [0, height]], dtype=float)
@@ -1503,7 +1243,7 @@ def _render_grid(ax, wcs: WCS, width: int, height: int, config: dict) -> None:
         mask = (x_px >= 0) & (x_px < width) & (y_px >= 0) & (y_px < height)
         if np.any(mask):
             ax.plot(x_px[mask], y_px[mask], "-", color=grid_color,
-                    alpha=grid_alpha, linewidth=0.5)
+                    alpha=grid_alpha, linewidth=0.8)
             # Label at first visible point
             idx = np.where(mask)[0][0]
             ra_label = degrees_to_hms(ra % 360)
@@ -1530,7 +1270,7 @@ def _render_grid(ax, wcs: WCS, width: int, height: int, config: dict) -> None:
         mask = (x_px >= 0) & (x_px < width) & (y_px >= 0) & (y_px < height)
         if np.any(mask):
             ax.plot(x_px[mask], y_px[mask], "-", color=grid_color,
-                    alpha=grid_alpha, linewidth=0.5)
+                    alpha=grid_alpha, linewidth=0.8)
             idx = np.where(mask)[0][0]
             dec_label = degrees_to_dms(dec)
             ax.text(
@@ -1591,7 +1331,8 @@ def _render_info_box(
 
 def _render_legend(ax, width: int, height: int, objects: list[dict], config: dict) -> None:
     """Render a color legend box showing which types are present in the annotation."""
-    colors = config.get("colors", DEFAULT_COLORS)
+    clrs = config.get("colors", DEFAULT_COLORS)
+    color_by_type = config.get("color_by_type", True)
 
     # Collect unique types actually present in the annotated objects
     present_types = {}
@@ -1610,110 +1351,125 @@ def _render_legend(ax, width: int, height: int, objects: list[dict], config: dic
         key=lambda kv: type_order.index(kv[0]) if kv[0] in type_order else 99,
     )
 
-    # Build legend text lines
-    font_size = max(7, config.get("font_size", 10) - 2)
-    line_height = font_size * 1.8
-    padding = 8
-    box_w = 14  # color swatch width
+    # Build legend as a single text block with colored lines.
+    # Use "\u2588\u2588" (full block chars) as color swatches rendered per-line.
+    font_size = max(9, config.get("font_size", 10))
 
-    # Position: bottom-left corner (opposite to info box which is top-left)
-    x_base = width * 0.02
-    y_base = height * 0.02
+    # Build the full legend text (white) — swatches are rendered separately
+    lines = []
+    for type_key, type_label in sorted_types:
+        lines.append(f"       {type_label}")
+    legend_text = "Legend\n" + "\n".join(lines)
 
-    # Background box
-    total_h = len(sorted_types) * line_height + padding * 2 + font_size
-    total_w = 180  # approximate width
-
-    from matplotlib.patches import FancyBboxPatch
-    bg = FancyBboxPatch(
-        (x_base - padding, y_base - padding),
-        total_w + padding * 2, total_h,
-        boxstyle="round,pad=4", facecolor="black", alpha=0.6,
-        edgecolor="none",
-    )
-    ax.add_patch(bg)
-
-    # Title
-    ax.text(
-        x_base + total_w / 2, y_base + total_h - padding - font_size * 0.5,
-        "Legend", fontsize=font_size, color="white", fontweight="bold",
-        ha="center", va="top",
-        path_effects=[pe.withStroke(linewidth=1, foreground="black")],
+    # Render the text block with a background box
+    txt = ax.text(
+        0.02, 0.02, legend_text,
+        fontsize=font_size, color="white", fontweight="bold",
+        fontfamily="sans-serif", linespacing=1.6,
+        transform=ax.transAxes, ha="left", va="bottom",
+        bbox=dict(boxstyle="round,pad=0.5", facecolor="black", alpha=0.8,
+                  edgecolor="#888888", linewidth=1),
+        path_effects=[pe.withStroke(linewidth=2.5, foreground="black")],
     )
 
-    # Legend entries
+    # Now overlay the colored swatch blocks on each entry line.
+    # We need the renderer to get exact text positions.
+    fig = ax.get_figure()
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    bbox = txt.get_window_extent(renderer=renderer)
+
+    # Convert text bbox to axes coordinates
+    inv = ax.transAxes.inverted()
+    ax_bbox = inv.transform(bbox)
+    x0, y0 = ax_bbox[0]  # bottom-left in axes coords
+    x1, y1 = ax_bbox[1]  # top-right in axes coords
+
+    # Each line height in axes fraction
+    n_lines = len(sorted_types) + 1  # +1 for title
+    total_text_h = y1 - y0
+    line_h = total_text_h / n_lines
+
     for i, (type_key, type_label) in enumerate(sorted_types):
-        color = colors.get(type_key, "#CCCCCC")
-        y_pos = y_base + total_h - padding - font_size * 2.2 - i * line_height
-
-        # Color swatch
-        swatch = FancyBboxPatch(
-            (x_base, y_pos - font_size * 0.3),
-            box_w, font_size * 0.8,
-            boxstyle="round,pad=1", facecolor=color, alpha=0.9,
-            edgecolor="none",
-        )
-        ax.add_patch(swatch)
-
-        # Label text
+        color = clrs.get(type_key, "#CCCCCC") if color_by_type else "#CCCCCC"
+        # Lines go top-down: title is line 0, first entry is line 1, etc.
+        # y position for line i+1 (skip title), centered vertically in line
+        line_y = y1 - (i + 1.5) * line_h
         ax.text(
-            x_base + box_w + 6, y_pos,
-            type_label, fontsize=font_size - 1, color="white",
-            ha="left", va="center",
+            x0 + 0.008, line_y,
+            "\u2588\u2588", fontsize=font_size, color=color,
+            fontfamily="monospace",
+            transform=ax.transAxes, ha="left", va="center",
             path_effects=[pe.withStroke(linewidth=1, foreground="black")],
         )
 
 
 def _render_compass(ax, wcs: WCS, width: int, height: int, config: dict) -> None:
     """Render N/E compass arrows in the corner."""
-    # Place compass in bottom-right corner
-    cx = width * 0.92
-    cy = height * 0.08
-    arrow_len = min(width, height) * 0.05
+    # Place compass in bottom-right corner (in display coordinates)
+    cx_display = width * 0.92
+    cy_display = height * 0.08
+
+    arrow_len = min(width, height) * 0.06
+    font_size = max(11, int(min(width, height) * 0.015))
+
+    # Convert display position to FITS coordinates for WCS
+    # Display y is flipped: cy_fits = height - cy_display
+    cx_fits = cx_display
+    cy_fits = height - cy_display
 
     try:
-        # Get the direction of North and East at the compass position
-        ra0, dec0 = wcs.all_pix2world([[cx, cy]], 0)[0]
+        # Get the RA/DEC at the compass position
+        ra0, dec0 = wcs.all_pix2world([[cx_fits, cy_fits]], 0)[0]
 
         # North direction: increase DEC slightly
         delta = 0.01  # degrees
-        x_n, y_n = wcs.all_world2pix([[ra0, dec0 + delta]], 0)[0]
-        dx_n = x_n - cx
-        dy_n = y_n - cy
+        x_n_fits, y_n_fits = wcs.all_world2pix([[ra0, dec0 + delta]], 0)[0]
+        # Convert to display coords
+        dx_n = x_n_fits - cx_fits
+        dy_n = -(y_n_fits - cy_fits)  # flip y for display
         norm_n = math.hypot(dx_n, dy_n)
         if norm_n > 0:
             dx_n, dy_n = dx_n / norm_n * arrow_len, dy_n / norm_n * arrow_len
 
-        # East direction: decrease RA slightly (RA increases to the East)
-        x_e, y_e = wcs.all_world2pix([[ra0 - delta, dec0]], 0)[0]
-        dx_e = x_e - cx
-        dy_e = y_e - cy
+        # East direction: decrease RA slightly (RA increases to the East in sky)
+        x_e_fits, y_e_fits = wcs.all_world2pix([[ra0 - delta, dec0]], 0)[0]
+        dx_e = x_e_fits - cx_fits
+        dy_e = -(y_e_fits - cy_fits)  # flip y for display
         norm_e = math.hypot(dx_e, dy_e)
         if norm_e > 0:
             dx_e, dy_e = dx_e / norm_e * arrow_len, dy_e / norm_e * arrow_len
     except Exception:
         return
 
-    compass_color = config.get("compass_color", "#88AAFF")
+    compass_color = config.get("compass_color", "#88CCFF")
 
     # North arrow
     ax.annotate(
-        "N", (cx + dx_n, cy + dy_n),
-        xytext=(cx, cy),
-        fontsize=10, fontweight="bold", color=compass_color,
+        "", (cx_display + dx_n, cy_display + dy_n),
+        xytext=(cx_display, cy_display),
+        arrowprops=dict(arrowstyle="-|>", color=compass_color, lw=2.5,
+                        mutation_scale=15),
+    )
+    ax.text(
+        cx_display + dx_n * 1.35, cy_display + dy_n * 1.35,
+        "N", fontsize=font_size, fontweight="bold", color=compass_color,
         ha="center", va="center",
-        arrowprops=dict(arrowstyle="->", color=compass_color, lw=2),
-        path_effects=[pe.withStroke(linewidth=2, foreground="black")],
+        path_effects=[pe.withStroke(linewidth=3, foreground="black")],
     )
 
     # East arrow
     ax.annotate(
-        "E", (cx + dx_e, cy + dy_e),
-        xytext=(cx, cy),
-        fontsize=10, fontweight="bold", color=compass_color,
+        "", (cx_display + dx_e, cy_display + dy_e),
+        xytext=(cx_display, cy_display),
+        arrowprops=dict(arrowstyle="-|>", color=compass_color, lw=2.5,
+                        mutation_scale=15),
+    )
+    ax.text(
+        cx_display + dx_e * 1.35, cy_display + dy_e * 1.35,
+        "E", fontsize=font_size, fontweight="bold", color=compass_color,
         ha="center", va="center",
-        arrowprops=dict(arrowstyle="->", color=compass_color, lw=2),
-        path_effects=[pe.withStroke(linewidth=2, foreground="black")],
+        path_effects=[pe.withStroke(linewidth=3, foreground="black")],
     )
 
 
@@ -1899,6 +1655,8 @@ class AnnotateImageWindow(QMainWindow):
         self._wcs: WCS | None = None
         self._pixel_scale = 1.0
         self._header_str = ""
+        self._log_buffer: list[str] = []    # thread-safe log buffer
+        self._siril_lock = threading.Lock()  # protect siril API calls from threads
         self._last_output_path = ""
         self._settings = QSettings(SETTINGS_ORG, SETTINGS_APP)
         self.init_ui()
@@ -1963,81 +1721,99 @@ class AnnotateImageWindow(QMainWindow):
 
     def _build_catalogs_group(self, parent_layout: QVBoxLayout) -> None:
         group = QGroupBox("Annotate Objects")
-        layout = QVBoxLayout(group)
+        outer = QVBoxLayout(group)
 
-        # Object type checkboxes — matching the color coding scheme
+        # Object type checkboxes in two columns using a grid layout
+        # Column 1: Common DSO types  |  Column 2: Specialized types
         self._type_checkboxes: dict[str, QCheckBox] = {}
+
+        # (type_key, label, color, default_on, tooltip, column, row)
         type_defs = [
+            # --- Column 0: Common DSO types ---
             ("Gal", "Galaxies", "#FFD700", True,
-             "Galaxies from all catalogs (Messier, NGC, IC, Caldwell, SIMBAD).\n"
-             "Shown in gold."),
-            ("Neb", "Emission Nebulae", "#FF4444", True,
-             "Emission nebulae (HII regions, star-forming regions).\n"
-             "Includes Orion, Lagoon, Eagle, Rosette, etc. Shown in red."),
-            ("RN", "Reflection Nebulae", "#FF8888", True,
-             "Reflection nebulae (dust clouds illuminated by nearby stars).\n"
-             "Includes M78, Witch Head, Iris Nebula, etc. Shown in light red."),
-            ("PN", "Planetary Nebulae", "#44FF44", True,
-             "Planetary nebulae (dying star shells).\n"
-             "Includes Ring, Dumbbell, Helix, Owl, etc. Shown in green."),
+             "Galaxies from NGC/IC (VizieR VII/118) + SIMBAD.\n"
+             "Includes galaxy clusters (Abell, Hickson) when\n"
+             "Includes galaxy clusters (Abell, Hickson) via SIMBAD. Shown in gold.",
+             0, 0),
+            ("Neb", "Nebulae", "#FF4444", True,
+             "Bright nebulae from NGC/IC catalog (VizieR VII/118).\n"
+             "Includes emission, unclassified, and knots in galaxies.\n"
+             "Orion, Lagoon, Eagle, Rosette, etc. Shown in red.",
+             0, 1),
+            ("PN", "Planetary Neb.", "#44FF44", True,
+             "Planetary nebulae from NGC/IC catalog.\n"
+             "Ring, Dumbbell, Helix, Owl, etc. Shown in green.",
+             0, 2),
             ("OC", "Open Clusters", "#44AAFF", True,
-             "Open star clusters.\n"
-             "Includes Pleiades, Double Cluster, Wild Duck, etc. Shown in blue."),
+             "Open star clusters from NGC/IC catalog.\n"
+             "Pleiades, Double Cluster, Wild Duck, etc. Shown in blue.",
+             0, 3),
             ("GC", "Globular Clusters", "#FF8800", True,
-             "Globular star clusters.\n"
-             "Includes M13, Omega Centauri, 47 Tucanae, etc. Shown in orange."),
-            ("SNR", "Supernova Remnants", "#FF44FF", True,
-             "Supernova remnants.\n"
-             "Includes Crab Nebula, Veil Nebula, Simeis 147, etc. Shown in magenta."),
-            ("DN", "Dark Nebulae", "#888888", False,
-             "Dark nebulae (opaque dust clouds).\n"
-             "Includes Horsehead, Pipe, Snake, Barnard's E, Coalsack.\n"
-             "No magnitude — always shown regardless of mag limit. Shown in grey."),
-            ("HII", "HII Regions", "#FF6666", False,
-             "HII ionized hydrogen regions (Sharpless catalog).\n"
-             "Large emission complexes: Heart, Soul, Barnard's Loop, etc.\n"
-             "Best for wide-field Milky Way images. Shown in red-pink."),
+             "Globular star clusters from NGC/IC catalog.\n"
+             "M13, Omega Centauri, 47 Tucanae, etc. Shown in orange.",
+             0, 4),
             ("Star", "Named Stars", "#FFFFFF", True,
-             "~300 IAU-named and Bayer-designated stars to magnitude ~5.5.\n"
-             "Full-sky coverage for field identification. Shown in white."),
+             "Bright stars from Yale BSC (VizieR V/50) + SIMBAD HD stars.\n"
+             "Vega, Deneb, Polaris, Betelgeuse, etc.\n"
+             "Filtered by magnitude limit. Shown in white.",
+             0, 5),
+            # --- Column 1: Specialized types ---
+            ("RN", "Reflection Neb.", "#FF8888", False,
+             "Reflection nebulae from SIMBAD (dust illuminated by stars).\n"
+             "M78, Witch Head, Iris Nebula, vdB catalog, etc.\n"
+             "Queried from SIMBAD. Shown in light red.",
+             1, 0),
+            ("SNR", "Supernova Rem.", "#FF44FF", False,
+             "Supernova remnants from SIMBAD.\n"
+             "Crab Nebula, Veil Nebula, Simeis 147, etc.\n"
+             "Queried from SIMBAD. Shown in magenta.",
+             1, 1),
+            ("DN", "Dark Nebulae", "#888888", False,
+             "Dark nebulae from Barnard catalog (VizieR VII/220A).\n"
+             "Horsehead, Pipe, Snake, Barnard's E, etc.\n"
+             "Best for Milky Way fields. No mag filter. Shown in grey.",
+             1, 2),
+            ("HII", "HII Regions", "#FF6666", False,
+             "HII regions from Sharpless catalog (VizieR VII/20).\n"
+             "Heart, Soul, Barnard's Loop, etc.\n"
+             "Best for wide-field Milky Way images. Shown in red-pink.",
+             1, 3),
+            ("Ast", "Asterisms", "#AADDFF", False,
+             "Asterisms (star patterns, not true clusters).\n"
+             "Coathanger, Kemble's Cascade, etc. Shown in pale blue.",
+             1, 4),
+            ("QSO", "Quasars", "#DDAAFF", False,
+             "Quasars and AGN from SIMBAD.\n"
+             "Queried from SIMBAD. Shown in violet.",
+             1, 5),
         ]
 
-        for type_key, label, color, default_on, tooltip in type_defs:
-            chk = QCheckBox(f"  {label}")
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(4)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+
+        for type_key, label, color, default_on, tooltip, col, row in type_defs:
+            chk = QCheckBox(f" {label}")
             chk.setChecked(default_on)
             chk.setToolTip(tooltip)
             chk.setStyleSheet(
-                f"QCheckBox{{color:{color};spacing:5px}}"
-                f"QCheckBox::indicator{{width:14px;height:14px;border:1px solid #666;"
+                f"QCheckBox{{color:{color};spacing:3px;font-size:8pt}}"
+                f"QCheckBox::indicator{{width:13px;height:13px;border:1px solid #666;"
                 f"background:#3c3c3c;border-radius:3px}}"
                 f"QCheckBox::indicator:checked{{background:{color};border:1px solid {color}}}"
             )
             _nofocus(chk)
-            layout.addWidget(chk)
+            grid.addWidget(chk, row, col)
             self._type_checkboxes[type_key] = chk
+
+        outer.addLayout(grid)
 
         # Separator
         sep = QLabel("")
         sep.setFixedHeight(4)
-        layout.addWidget(sep)
-
-        # SIMBAD online option
-        self.chk_simbad = QCheckBox("  SIMBAD online (additional objects)")
-        self.chk_simbad.setChecked(False)
-        self.chk_simbad.setToolTip(
-            "Query the SIMBAD astronomical database online for additional objects\n"
-            "not found in the embedded catalogs (UGC, MCG, PGC, Abell, etc.).\n\n"
-            "Requires internet connection and the 'astroquery' package.\n"
-            "Found objects are filtered by the type checkboxes above."
-        )
-        self.chk_simbad.setStyleSheet(
-            "QCheckBox{color:#AADDFF;spacing:5px}"
-            "QCheckBox::indicator{width:14px;height:14px;border:1px solid #666;"
-            "background:#3c3c3c;border-radius:3px}"
-            "QCheckBox::indicator:checked{background:#AADDFF;border:1px solid #AADDFF}"
-        )
-        _nofocus(self.chk_simbad)
-        layout.addWidget(self.chk_simbad)
+        outer.addWidget(sep)
 
         # Select All / Deselect All buttons
         btn_row = QHBoxLayout()
@@ -2052,7 +1828,7 @@ class AnnotateImageWindow(QMainWindow):
         btn_none.clicked.connect(lambda: self._set_all_types(False))
         btn_row.addWidget(btn_none)
         btn_row.addStretch()
-        layout.addLayout(btn_row)
+        outer.addLayout(btn_row)
 
         parent_layout.addWidget(group)
 
@@ -2132,68 +1908,85 @@ class AnnotateImageWindow(QMainWindow):
         self.spin_mag.valueChanged.connect(lambda v: self.slider_mag.setValue(int(v * 10)))
         self.slider_mag.valueChanged.connect(lambda v: self.spin_mag.setValue(v / 10.0))
 
-        # Checkboxes
-        row = 3
-        self.chk_ellipses = QCheckBox("Show object size as ellipse")
+        # Checkboxes in two aligned columns below the sliders
+        chk_grid = QGridLayout()
+        chk_grid.setHorizontalSpacing(16)
+        chk_grid.setVerticalSpacing(4)
+        chk_grid.setColumnStretch(0, 1)
+        chk_grid.setColumnStretch(1, 1)
+        chk_style = "QCheckBox{font-size:8pt;spacing:3px}"
+
+        self.chk_ellipses = QCheckBox("Size ellipses")
         self.chk_ellipses.setChecked(True)
         self.chk_ellipses.setToolTip(
             "Draw ellipses proportional to the cataloged angular size.\n"
             "Disable for a cleaner look with crosshair markers only."
         )
+        self.chk_ellipses.setStyleSheet(chk_style)
         _nofocus(self.chk_ellipses)
-        grid.addWidget(self.chk_ellipses, row, 0, 1, 3)
+        chk_grid.addWidget(self.chk_ellipses, 0, 0)
 
-        row = 4
-        self.chk_magnitude = QCheckBox("Show magnitude in label")
+        self.chk_magnitude = QCheckBox("Magnitude")
         self.chk_magnitude.setChecked(False)
         self.chk_magnitude.setToolTip("Append the visual magnitude to each label (e.g. 'M31 3.4m').")
+        self.chk_magnitude.setStyleSheet(chk_style)
         _nofocus(self.chk_magnitude)
-        grid.addWidget(self.chk_magnitude, row, 0, 1, 3)
+        chk_grid.addWidget(self.chk_magnitude, 0, 1)
 
-        row = 5
-        self.chk_type_label = QCheckBox("Show object type in label")
+        self.chk_type_label = QCheckBox("Object type")
         self.chk_type_label.setChecked(False)
         self.chk_type_label.setToolTip("Append the object type to each label (e.g. 'M31 [Galaxy]').")
+        self.chk_type_label.setStyleSheet(chk_style)
         _nofocus(self.chk_type_label)
-        grid.addWidget(self.chk_type_label, row, 0, 1, 3)
+        chk_grid.addWidget(self.chk_type_label, 1, 0)
 
-        row = 6
-        self.chk_common_names = QCheckBox("Show common names")
+        self.chk_common_names = QCheckBox("Common names")
         self.chk_common_names.setChecked(True)
         self.chk_common_names.setToolTip(
             "Show common names where available (e.g. 'M31 (Andromeda Galaxy)').\n"
             "Disable for a more compact display."
         )
+        self.chk_common_names.setStyleSheet(chk_style)
         _nofocus(self.chk_common_names)
-        grid.addWidget(self.chk_common_names, row, 0, 1, 3)
+        chk_grid.addWidget(self.chk_common_names, 1, 1)
 
-        row = 7
-        self.chk_color_by_type = QCheckBox("Color by object type")
+        self.chk_color_by_type = QCheckBox("Color by type")
         self.chk_color_by_type.setChecked(True)
         self.chk_color_by_type.setToolTip(
             "Use different colors for different object types:\n"
             "Gold = Galaxies, Red = Nebulae, Green = Planetary Nebulae,\n"
             "Blue = Open Clusters, Orange = Globular Clusters, etc."
         )
+        self.chk_color_by_type.setStyleSheet(chk_style)
         _nofocus(self.chk_color_by_type)
-        grid.addWidget(self.chk_color_by_type, row, 0, 1, 3)
+        chk_grid.addWidget(self.chk_color_by_type, 2, 0)
+
+        # Add the checkbox grid below the slider grid
+        row = 3
+        grid.addLayout(chk_grid, row, 0, 1, 3)
 
         parent_layout.addWidget(group)
 
     def _build_extras_group(self, parent_layout: QVBoxLayout) -> None:
         group = QGroupBox("Extras")
-        layout = QVBoxLayout(group)
+        grid = QGridLayout(group)
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(4)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        chk_style = "QCheckBox{font-size:8pt;spacing:3px}"
 
-        self.chk_grid = QCheckBox("Coordinate grid (RA/DEC)")
+        self.chk_grid = QCheckBox("RA/DEC grid")
         self.chk_grid.setChecked(True)
         self.chk_grid.setToolTip(
             "Overlay an equatorial coordinate grid with RA/DEC labels.\n"
             "Grid spacing is chosen automatically based on the field of view."
         )
+        self.chk_grid.setStyleSheet(chk_style)
         _nofocus(self.chk_grid)
-        layout.addWidget(self.chk_grid)
+        grid.addWidget(self.chk_grid, 0, 0)
 
-        self.chk_info_box = QCheckBox("Info box (center, FOV, scale)")
+        self.chk_info_box = QCheckBox("Info box")
         self.chk_info_box.setChecked(True)
         self.chk_info_box.setToolTip(
             "Show a semi-transparent info box with:\n"
@@ -2202,17 +1995,19 @@ class AnnotateImageWindow(QMainWindow):
             "- Pixel scale and rotation angle\n"
             "- Number of annotated objects"
         )
+        self.chk_info_box.setStyleSheet(chk_style)
         _nofocus(self.chk_info_box)
-        layout.addWidget(self.chk_info_box)
+        grid.addWidget(self.chk_info_box, 0, 1)
 
-        self.chk_compass = QCheckBox("Compass (N/E arrows)")
+        self.chk_compass = QCheckBox("N/E compass")
         self.chk_compass.setChecked(False)
         self.chk_compass.setToolTip(
             "Show North and East direction arrows in the corner.\n"
             "Useful for understanding image orientation."
         )
+        self.chk_compass.setStyleSheet(chk_style)
         _nofocus(self.chk_compass)
-        layout.addWidget(self.chk_compass)
+        grid.addWidget(self.chk_compass, 1, 0)
 
         self.chk_legend = QCheckBox("Color legend")
         self.chk_legend.setChecked(True)
@@ -2221,18 +2016,20 @@ class AnnotateImageWindow(QMainWindow):
             "Only shows types that are actually present in the annotated image.\n"
             "Placed in the bottom-left corner."
         )
+        self.chk_legend.setStyleSheet(chk_style)
         _nofocus(self.chk_legend)
-        layout.addWidget(self.chk_legend)
+        grid.addWidget(self.chk_legend, 1, 1)
 
-        self.chk_leader_lines = QCheckBox("Leader lines (label to object)")
+        self.chk_leader_lines = QCheckBox("Leader lines")
         self.chk_leader_lines.setChecked(True)
         self.chk_leader_lines.setToolTip(
             "Draw thin connecting lines from each label to its object marker.\n"
             "Essential in crowded fields to see which label belongs to which object.\n"
             "Disable for a cleaner look on sparse fields."
         )
+        self.chk_leader_lines.setStyleSheet(chk_style)
         _nofocus(self.chk_leader_lines)
-        layout.addWidget(self.chk_leader_lines)
+        grid.addWidget(self.chk_leader_lines, 2, 0)
 
         parent_layout.addWidget(group)
 
@@ -2394,12 +2191,13 @@ class AnnotateImageWindow(QMainWindow):
     def _load_settings(self) -> None:
         st = self._settings
         # Object type checkboxes
-        type_defaults = {"Gal": True, "Neb": True, "RN": True, "PN": True,
-                         "OC": True, "GC": True, "SNR": True, "DN": False,
-                         "HII": False, "Star": True}
+        # Must match defaults in _build_catalogs_group type_defs
+        type_defaults = {"Gal": True, "Neb": True, "PN": True,
+                         "OC": True, "GC": True, "Star": True,
+                         "RN": False, "SNR": False, "DN": False,
+                         "HII": False, "Ast": False, "QSO": False}
         for key, chk in self._type_checkboxes.items():
             chk.setChecked(st.value(f"type_{key}", type_defaults.get(key, True), type=bool))
-        self.chk_simbad.setChecked(st.value("cat_simbad", False, type=bool))
         self.spin_font.setValue(int(st.value("font_size", 10)))
         self.spin_marker.setValue(int(st.value("marker_size", 20)))
         self.spin_mag.setValue(float(st.value("mag_limit", 12.0)))
@@ -2427,7 +2225,6 @@ class AnnotateImageWindow(QMainWindow):
         st = self._settings
         for key, chk in self._type_checkboxes.items():
             st.setValue(f"type_{key}", chk.isChecked())
-        st.setValue("cat_simbad", self.chk_simbad.isChecked())
         st.setValue("font_size", self.spin_font.value())
         st.setValue("marker_size", self.spin_marker.value())
         st.setValue("mag_limit", self.spin_mag.value())
@@ -2459,12 +2256,29 @@ class AnnotateImageWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _log(self, msg: str) -> None:
-        """Append a message to the log tab and Siril console."""
+        """Append a message to the log tab and Siril console.
+        Thread-safe: if called from a worker thread, buffers the message
+        for later flush on the main thread.
+        """
+        if threading.current_thread() is not threading.main_thread():
+            # Buffer messages from worker threads — Qt widgets are NOT thread-safe
+            self._log_buffer.append(f"[AnnotateImage] {msg}")
+            return
         self.log_text.append(f"[AnnotateImage] {msg}")
         try:
             self.siril.log(f"[AnnotateImage] {msg}")
         except (SirilError, OSError, RuntimeError, AttributeError):
             pass
+
+    def _flush_log_buffer(self) -> None:
+        """Flush buffered log messages from worker threads to the UI (main thread only)."""
+        while self._log_buffer:
+            msg = self._log_buffer.pop(0)
+            self.log_text.append(msg)
+            try:
+                self.siril.log(msg)
+            except (SirilError, OSError, RuntimeError, AttributeError):
+                pass
 
     # ------------------------------------------------------------------
     # PROGRESS
@@ -2496,21 +2310,25 @@ class AnnotateImageWindow(QMainWindow):
                     else:
                         raise ValueError("No preview data")
                 except Exception:
-                    # Fallback: get raw data
+                    # Fallback: get raw data — process in-place to limit memory
                     fit = self.siril.get_image()
                     fit.ensure_data_type(np.float32)
                     data = np.array(fit.data, dtype=np.float32)
+                    del fit  # free the siril image copy
                     # Simple autostretch for display
                     if data.ndim == 3:
                         # (C, H, W) -> (H, W, C)
                         data = np.transpose(data, (1, 2, 0))
                     elif data.ndim == 2:
                         data = np.stack([data] * 3, axis=-1)
-                    # Normalize to 0-255
+                    # Normalize to 0-255 in-place
                     vmin, vmax = np.percentile(data, [1, 99])
                     if vmax > vmin:
-                        data = np.clip((data - vmin) / (vmax - vmin) * 255, 0, 255)
+                        data -= vmin
+                        data *= (255.0 / (vmax - vmin))
+                        np.clip(data, 0, 255, out=data)
                     self._image_data = data.astype(np.uint8)
+                    del data  # free float32 copy
 
                 fit = self.siril.get_image()
                 self._img_width = fit.width
@@ -2754,7 +2572,7 @@ class AnnotateImageWindow(QMainWindow):
         except Exception:
             pass
 
-        self._update_progress(10, "Loading catalogs...")
+        self._update_progress(10, "Querying online catalogs...")
 
         # Collect catalog objects
         all_objects: list[dict] = []
@@ -2764,50 +2582,121 @@ class AnnotateImageWindow(QMainWindow):
         enabled_types = {k for k, chk in self._type_checkboxes.items() if chk.isChecked()}
         self._log(f"Enabled types: {', '.join(sorted(enabled_types))}")
 
-        # Common kwargs for all filter calls
-        fov_kw = dict(
-            wcs=self._wcs, width=self._img_width, height=self._img_height,
+        # Calculate FOV radius for catalog queries
+        cx, cy = self._img_width / 2, self._img_height / 2
+        try:
+            center_result = self.siril.pix2radec(cx, cy)
+            corner_result = self.siril.pix2radec(0, 0)
+            if center_result and corner_result:
+                c1 = SkyCoord(center_result[0], center_result[1], unit="deg")
+                c2 = SkyCoord(corner_result[0], corner_result[1], unit="deg")
+                fov_radius_deg = c1.separation(c2).deg
+                center_ra, center_dec = center_result
+            else:
+                self._log("ERROR: Cannot determine FOV — pix2radec failed")
+                return
+        except Exception as e:
+            self._log(f"ERROR: FOV calculation failed: {e}")
+            return
+
+        fov_w = self._img_width * self._pixel_scale / 3600
+        fov_h = self._img_height * self._pixel_scale / 3600
+        self._log(f"FOV: {fov_w:.2f}\u00b0 x {fov_h:.2f}\u00b0 "
+                  f"({fov_w * 60:.1f}' x {fov_h * 60:.1f}'), "
+                  f"query radius={fov_radius_deg:.2f}\u00b0 ({fov_radius_deg * 60:.1f}')")
+
+        # Common kwargs for all VizieR query functions
+        query_kw = dict(
+            center_ra=center_ra, center_dec=center_dec,
+            radius_deg=fov_radius_deg,
             siril=self.siril, log_func=self._log,
+            img_width=self._img_width, img_height=self._img_height,
+            siril_lock=self._siril_lock,
         )
 
-        # Load ALL offline catalogs, then filter by selected object types
-        all_catalogs = [
-            ("Messier", MESSIER_CATALOG, mag_limit),
-            ("NGC", NGC_BRIGHT_CATALOG, mag_limit),
-            ("Named Stars", NAMED_STARS_CATALOG, mag_limit),
-            ("Sharpless", SHARPLESS_CATALOG, mag_limit),
-            ("Caldwell", CALDWELL_CATALOG, mag_limit),
-            ("IC", IC_BRIGHT_CATALOG, mag_limit),
-            ("Barnard", BARNARD_CATALOG, 99.0),  # dark nebulae bypass mag limit
-        ]
-
         catalog_summary = []
-        for cat_name, cat_data, cat_mag in all_catalogs:
-            raw = filter_objects_in_fov(cat_data, mag_limit=cat_mag, **fov_kw)
-            # Filter by enabled object types
-            typed = [o for o in raw if o["type"] in enabled_types]
-            # Deduplicate against already collected objects
-            deduped = self._deduplicate(typed, all_objects)
+
+        # ── Parallel catalog queries ──────────────────────────────
+        # All VizieR + SIMBAD queries are independent network calls.
+        # Run them concurrently to reduce total wall-clock time.
+        self._update_progress(12, "Querying online catalogs (parallel)...")
+
+        dso_types = {"Gal", "Neb", "OC", "GC", "PN", "RN", "SNR", "Ast", "Other"}
+        futures: dict[str, any] = {}
+
+        with ThreadPoolExecutor(max_workers=5, thread_name_prefix="catalog") as pool:
+            if enabled_types & dso_types:
+                futures["ngc"] = pool.submit(
+                    query_vizier_ngc_ic, mag_limit=mag_limit, **query_kw)
+            if "HII" in enabled_types:
+                futures["sh"] = pool.submit(query_vizier_sharpless, **query_kw)
+            if "DN" in enabled_types:
+                futures["bn"] = pool.submit(query_vizier_barnard, **query_kw)
+            if "Star" in enabled_types:
+                futures["star"] = pool.submit(
+                    query_vizier_bright_stars, mag_limit=mag_limit, **query_kw)
+            futures["simbad"] = pool.submit(self._query_simbad, mag_limit)
+
+            # Collect results as they complete (order doesn't matter for futures,
+            # but we process in catalog priority order for deduplication)
+            results: dict[str, list[dict]] = {}
+            for key, future in futures.items():
+                try:
+                    results[key] = future.result(timeout=120)
+                except Exception as exc:
+                    self._log(f"Catalog query '{key}' failed: {exc}")
+                    results[key] = []
+
+        # Flush log messages buffered by worker threads
+        self._flush_log_buffer()
+
+        # ── Merge results (sequential — dedup depends on order) ──
+        if "ngc" in results and results["ngc"]:
+            ngc_objs = results["ngc"]
+            typed = [o for o in ngc_objs if o["type"] in enabled_types]
+            if ngc_objs:
+                filtered_out = len(ngc_objs) - len(typed)
+                if filtered_out > 0:
+                    self._log(f"  NGC/IC type filter: {len(typed)} kept, "
+                              f"{filtered_out} excluded by type selection")
+            if typed:
+                catalog_summary.append(f"NGC/IC: {len(typed)}")
+                all_objects.extend(typed)
+
+        if "sh" in results and results["sh"]:
+            deduped = self._deduplicate(results["sh"], all_objects)
             if deduped:
-                catalog_summary.append(f"{cat_name}: {len(deduped)}")
+                catalog_summary.append(f"Sharpless: {len(deduped)}")
                 all_objects.extend(deduped)
 
-        # SIMBAD online query (optional)
-        if self.chk_simbad.isChecked():
-            self._update_progress(12, "Querying SIMBAD online...")
-            simbad_objs = self._query_simbad(mag_limit)
-            if simbad_objs:
-                # Filter by enabled types
-                typed = [o for o in simbad_objs if o["type"] in enabled_types]
-                deduped = self._deduplicate(typed, all_objects)
-                if deduped:
-                    catalog_summary.append(f"SIMBAD: {len(deduped)}")
-                    all_objects.extend(deduped)
+        if "bn" in results and results["bn"]:
+            deduped = self._deduplicate(results["bn"], all_objects)
+            if deduped:
+                catalog_summary.append(f"Barnard: {len(deduped)}")
+                all_objects.extend(deduped)
+
+        if "star" in results and results["star"]:
+            deduped = self._deduplicate(results["star"], all_objects)
+            if deduped:
+                catalog_summary.append(f"Stars: {len(deduped)}")
+                all_objects.extend(deduped)
+
+        if "simbad" in results and results["simbad"]:
+            typed = [o for o in results["simbad"] if o["type"] in enabled_types]
+            deduped = self._deduplicate(typed, all_objects)
+            if deduped:
+                catalog_summary.append(f"SIMBAD: {len(deduped)}")
+                all_objects.extend(deduped)
 
         self._log("\u2500" * 40)
         self._log(f"Catalogs loaded: {', '.join(catalog_summary)}")
         self._log(f"Magnitude limit: {mag_limit:.1f}")
         self._log(f"Total objects in field: {len(all_objects)}")
+
+        # Resolve common names via SIMBAD TAP (batch query)
+        if all_objects:
+            self._update_progress(25, "Resolving common names via SIMBAD...")
+            resolve_common_names(all_objects, log_func=self._log)
 
         if len(all_objects) == 0:
             self._log("No catalog objects found in the field of view.")
@@ -2817,14 +2706,15 @@ class AnnotateImageWindow(QMainWindow):
         for obj in all_objects:
             common = f" ({obj['common_name']})" if obj.get("common_name") else ""
             mag_str = f"{obj['mag']:.1f}" if obj['mag'] != 0.0 else "?"
-            self._log(f"  {obj['name']}{common}  [{obj['type']}]  mag={mag_str}")
+            size_str = f"  size={obj['size_arcmin']:.1f}'" if obj.get('size_arcmin', 0) > 0 else ""
+            self._log(f"  {obj['name']}{common}  [{obj['type']}]  mag={mag_str}{size_str}")
 
         self._log("\u2500" * 40)
 
         self._update_progress(15, "Resolving label positions...")
 
         # Resolve label collisions
-        all_objects = resolve_label_collisions(all_objects)
+        all_objects = resolve_label_collisions(all_objects, self._img_width, self._img_height)
 
         # Build config
         config = {
@@ -2844,10 +2734,10 @@ class AnnotateImageWindow(QMainWindow):
             "show_legend": self.chk_legend.isChecked(),
             "show_leader_lines": self.chk_leader_lines.isChecked(),
             "dpi": self.spin_dpi.value(),
-            "grid_color": "#4466AA",
-            "grid_alpha": 0.4,
-            "grid_label_size": 7,
-            "compass_color": "#88AAFF",
+            "grid_color": "#66AADD",
+            "grid_alpha": 0.6,
+            "grid_label_size": 8,
+            "compass_color": "#88CCFF",
         }
 
         # Try to get object name from FITS header
@@ -2903,6 +2793,9 @@ class AnnotateImageWindow(QMainWindow):
                 output_path,
                 progress_callback=self._update_progress,
             )
+            # Free image data after rendering — no longer needed
+            self._image_data = None
+            gc.collect()
             self._last_output_path = result_path
             self.btn_open_folder.setEnabled(True)
             self.btn_open_image.setEnabled(True)
@@ -2937,10 +2830,8 @@ class AnnotateImageWindow(QMainWindow):
         Returns list of dicts compatible with embedded catalog format.
         """
         try:
-            from astroquery.simbad import Simbad
-            from astropy.coordinates import SkyCoord
-            import astropy.units as u
-        except ImportError:
+            Simbad  # verify import succeeded at module level
+        except NameError:
             self._log("SIMBAD: astroquery not installed. Run: pip install astroquery")
             QMessageBox.warning(
                 self, "Missing Package",
@@ -2950,10 +2841,10 @@ class AnnotateImageWindow(QMainWindow):
             return []
 
         try:
-            # Get field center and radius via siril.pix2radec
+            # Get field center and radius via siril.pix2radec (thread-safe)
             cx, cy = self._img_width / 2, self._img_height / 2
-            center_result = self.siril.pix2radec(cx, cy)
-            corner_result = self.siril.pix2radec(0, 0)
+            center_result = _safe_pix2radec(self.siril, cx, cy, self._siril_lock)
+            corner_result = _safe_pix2radec(self.siril, 0, 0, self._siril_lock)
             if center_result is None or corner_result is None:
                 self._log("SIMBAD: pix2radec failed for center/corner")
                 return []
@@ -2961,20 +2852,108 @@ class AnnotateImageWindow(QMainWindow):
             corner_ra, corner_dec = corner_result
             center_coord = SkyCoord(center_ra, center_dec, unit="deg")
             corner_coord = SkyCoord(corner_ra, corner_dec, unit="deg")
-            radius = center_coord.separation(corner_coord)
+            fov_radius = center_coord.separation(corner_coord)
 
-            self._log(f"SIMBAD: querying radius={radius.arcmin:.1f}' "
+            self._log(f"SIMBAD: FOV radius={fov_radius.arcmin:.1f}' "
                       f"around RA={center_ra:.4f} DEC={center_dec:.4f}")
 
             # Configure Simbad query
             custom_simbad = Simbad()
             custom_simbad.add_votable_fields("V", "galdim_majaxis", "otype")
-            custom_simbad.ROW_LIMIT = 1000
+            custom_simbad.ROW_LIMIT = 2000
 
-            result = custom_simbad.query_region(center_coord, radius=radius)
-            if result is None or len(result) == 0:
+            # For wide fields (> 1°), tile the query to avoid SIMBAD row
+            # limits filling up with objects from only part of the FOV.
+            MAX_QUERY_RADIUS_DEG = 0.75  # SIMBAD works best with ≤45' radius
+            fov_radius_deg = fov_radius.deg
+
+            if fov_radius_deg <= MAX_QUERY_RADIUS_DEG:
+                query_centers = [center_coord]
+                query_radius = fov_radius
+            else:
+                # Tile the FOV with overlapping circles
+                step = MAX_QUERY_RADIUS_DEG * 1.2  # overlap factor
+                half_w_deg = (self._img_width * self._pixel_scale / 3600) / 2
+                half_h_deg = (self._img_height * self._pixel_scale / 3600) / 2
+                query_centers = []
+                dec_start = center_dec - half_h_deg
+                dec_end = center_dec + half_h_deg
+                d = dec_start
+                while d <= dec_end + step * 0.5:
+                    # RA step needs cos(dec) correction
+                    ra_step = step / max(0.1, np.cos(np.radians(d)))
+                    ra_start = center_ra - half_w_deg / max(0.1, np.cos(np.radians(d)))
+                    ra_end = center_ra + half_w_deg / max(0.1, np.cos(np.radians(d)))
+                    r = ra_start
+                    while r <= ra_end + ra_step * 0.5:
+                        query_centers.append(SkyCoord(r, d, unit="deg"))
+                        r += ra_step
+                    d += step
+                query_radius = Angle(MAX_QUERY_RADIUS_DEG, unit="deg")
+                self._log(f"SIMBAD: wide field — tiling into {len(query_centers)} queries "
+                          f"(radius={query_radius.arcmin:.1f}' each)")
+
+            # Execute queries — parallelize tiles for wide fields
+            from astropy.table import vstack  # lightweight, rarely used elsewhere
+            all_results = []
+            if len(query_centers) == 1:
+                # Single query — no need for threading overhead
+                try:
+                    r = custom_simbad.query_region(query_centers[0], radius=query_radius)
+                    if r is not None and len(r) > 0:
+                        all_results.append(r)
+                        self._log(f"SIMBAD: {len(r)} objects")
+                except Exception as e:
+                    self._log(f"SIMBAD: query failed: {e}")
+            else:
+                # Parallel tile queries — each thread gets its own Simbad instance
+                # because astroquery's Simbad is NOT thread-safe
+                def _query_tile(idx_qc):
+                    i, qc = idx_qc
+                    tile_simbad = Simbad()
+                    tile_simbad.add_votable_fields("V", "galdim_majaxis", "otype")
+                    tile_simbad.ROW_LIMIT = 2000
+                    return i, tile_simbad.query_region(qc, radius=query_radius)
+
+                with ThreadPoolExecutor(
+                    max_workers=min(4, len(query_centers)),
+                    thread_name_prefix="simbad_tile",
+                ) as tile_pool:
+                    tile_futures = tile_pool.map(_query_tile, enumerate(query_centers))
+                    for i, r in tile_futures:
+                        if r is not None and len(r) > 0:
+                            all_results.append(r)
+                            self._log(f"SIMBAD: tile {i + 1}/{len(query_centers)}: "
+                                      f"{len(r)} objects")
+
+            if not all_results:
                 self._log("SIMBAD: no objects found")
                 return []
+
+            if len(all_results) == 1:
+                result = all_results[0]
+            else:
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")  # suppress vstack MergeConflictWarning
+                    result = vstack(all_results)
+                # Remove duplicates by main_id
+                seen = set()
+                unique_mask = []
+                id_col_tmp = None
+                for c in result.colnames:
+                    if c.lower() == "main_id":
+                        id_col_tmp = c
+                        break
+                if id_col_tmp:
+                    for row in result:
+                        name = str(row[id_col_tmp]).strip()
+                        if name not in seen:
+                            seen.add(name)
+                            unique_mask.append(True)
+                        else:
+                            unique_mask.append(False)
+                    result = result[unique_mask]
 
             self._log(f"SIMBAD: {len(result)} objects returned")
 
@@ -2999,33 +2978,44 @@ class AnnotateImageWindow(QMainWindow):
                 "G": "Gal", "GiG": "Gal", "GiP": "Gal", "BiC": "Gal",
                 "IG": "Gal", "PaG": "Gal", "SBG": "Gal", "SyG": "Gal",
                 "Sy1": "Gal", "Sy2": "Gal", "AGN": "Gal", "LIN": "Gal",
+                "ClG": "Gal", "GrG": "Gal", "CGG": "Gal",  # Galaxy clusters/groups (Abell, Hickson)
+                "EmG": "Gal", "H2G": "Gal", "bCG": "Gal", "LSB": "Gal",  # Galaxy subtypes
                 "HII": "HII", "RNe": "RN", "ISM": "Neb", "EmO": "Neb",
+                "DNe": "DN", "dNe": "DN", "MoC": "DN",  # Dark nebulae / molecular clouds
                 "SNR": "SNR", "PN": "PN", "Cl*": "OC", "GlC": "GC",
                 "OpC": "OC", "As*": "Ast", "QSO": "QSO",
-                "**": "Star", "*": "Star", "V*": "Star",
+                "**": "Star", "*": "Star", "V*": "Star", "PM*": "Star",
+                "HB*": "Star", "C*": "Star", "S*": "Star", "LP*": "Star",
+                "Mi*": "Star", "sr*": "Star", "Ce*": "Star", "RR*": "Star",
+                "WR*": "Star", "Be*": "Star", "Pe*": "Star", "HV*": "Star",
+                "No*": "Star", "Psr": "Star", "**?": "Star",
                 "Galaxy": "Gal", "GinCl": "Gal", "GinPair": "Gal",
                 "StarburstG": "Gal", "Seyfert": "Gal", "BClG": "Gal",
                 "InteractingG": "Gal",
             }
 
-            # Prefixes of catalogs worth showing in astrophotography annotations.
-            # Skip survey/survey-star catalogs (SDSS, 2MASS, GPM, Pul, UCAC, TYC, etc.)
-            USEFUL_PREFIXES = (
-                "NGC", "IC", "M ", "M1", "M2", "M3", "M4", "M5", "M6", "M7",
-                "M8", "M9", "UGC", "MCG", "Arp", "Abell", "Mrk", "VV",
-                "Ced", "Sh2", "LBN", "LDN", "Barnard", "B ", "Cr ",
-                "Mel", "Tr ", "Pal", "NGC", "PGC", "ESO", "CGCG",
+            # Only keep objects from well-known astrophotography catalogs.
+            # Everything else (survey IDs, sub-regions, etc.) is filtered out.
+            # Pre-grouped by first character for O(1) dispatch instead of O(n) scan.
+            _USEFUL_PREFIXES = (
+                "NGC", "IC ", "IC1", "IC2", "IC3", "IC4", "IC5",
+                "M ", "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9",
+                "UGC", "MCG", "Arp", "Abell", "Mrk", "VV ",
+                "Ced", "Sh2", "LBN", "LDN", "Barnard", "B ",
+                "Cr ", "Mel", "Tr ", "Pal", "PGC", "ESO", "CGCG",
                 "Hickson", "HCG", "Minkowski", "PK", "PN G",
                 "Hen", "He ", "Haro", "Ho ", "K ", "Terzan",
                 "NAME ", "V*", "HD ", "HR ",
+                "vdB", "RCW", "Gum", "Collinder", "Stock", "DWB",
             )
-            # Prefixes to always skip (survey junk)
-            JUNK_PREFIXES = (
-                "SDSS", "2MASS", "2XMM", "GPM", "Pul", "UCAC", "TYC",
-                "WISEA", "LEDA", "FIRST", "NVSS", "[", "Gaia",
-                "USNO", "GSC", "IRAS", "PSO", "GALEX", "XMM", "ROSAT",
-                "AG+", "BD+", "BD-", "CPD-", "CD-",
-            )
+            # Build first-char → prefix list for fast filtering
+            _prefix_by_char: dict[str, list[str]] = {}
+            for p in _USEFUL_PREFIXES:
+                _prefix_by_char.setdefault(p[0], []).append(p)
+
+            def _is_useful(name: str) -> bool:
+                candidates = _prefix_by_char.get(name[0]) if name else None
+                return candidates is not None and any(name.startswith(p) for p in candidates)
 
             def _safe_float(val, default: float = 0.0) -> float:
                 """Safely convert a possibly-masked value to float."""
@@ -3037,6 +3027,19 @@ class AnnotateImageWindow(QMainWindow):
                 except (ValueError, TypeError):
                     return default
 
+            # Pre-resolve column names once (avoid per-row lookups)
+            _size_col = None
+            for sc in ("galdim_majaxis", "GALDIM_MAJAXIS", "DIM_MAJAXIS", "dim_majaxis"):
+                if sc in result.colnames:
+                    _size_col = sc
+                    break
+            _otype_col = None
+            for tc in ("otype", "OTYPE"):
+                if tc in result.colnames:
+                    _otype_col = tc
+                    break
+            _has_V = "V" in result.colnames
+
             objects = []
             skipped_junk = 0
             for row in result:
@@ -3045,10 +3048,8 @@ class AnnotateImageWindow(QMainWindow):
                 except Exception:
                     continue
 
-                # Filter: skip junk survey catalog IDs
-                is_junk = any(name.startswith(p) for p in JUNK_PREFIXES)
-                is_useful = any(name.startswith(p) for p in USEFUL_PREFIXES)
-                if is_junk and not is_useful:
+                # Filter: only keep objects from well-known catalogs
+                if not _is_useful(name):
                     skipped_junk += 1
                     continue
 
@@ -3068,38 +3069,31 @@ class AnnotateImageWindow(QMainWindow):
                     continue
 
                 # Magnitude
-                mag = _safe_float(row.get("V", None) if hasattr(row, "get")
-                                  else row["V"] if "V" in result.colnames else None,
-                                  default=0.0)
-                mag_known = mag != 0.0
-
-                # Filter by magnitude: skip only if known and too faint
-                if mag_known and mag > mag_limit:
+                mag = _safe_float(row["V"] if _has_V else None, default=0.0)
+                if mag != 0.0 and mag > mag_limit:
                     continue
 
                 # Size
-                size = 0.0
-                for sc in ("galdim_majaxis", "GALDIM_MAJAXIS",
-                           "DIM_MAJAXIS", "dim_majaxis"):
-                    if sc in result.colnames:
-                        size = _safe_float(row[sc], 0.0)
-                        if size > 0:
-                            break
+                size = _safe_float(row[_size_col], 0.0) if _size_col else 0.0
 
                 # Type
                 otype = ""
-                for tc in ("otype", "OTYPE"):
-                    if tc in result.colnames:
-                        try:
-                            otype = str(row[tc]).strip()
-                            break
-                        except Exception:
-                            pass
-                obj_type = type_map.get(otype, "Other")
+                if _otype_col:
+                    try:
+                        otype = str(row[_otype_col]).strip()
+                    except Exception:
+                        pass
+                obj_type = type_map.get(otype, None)
+                if obj_type is None:
+                    # Any star-like otype (contains '*') maps to Star
+                    if "*" in otype:
+                        obj_type = "Star"
+                    else:
+                        obj_type = "Other"
 
-                # Convert to pixel via siril.radec2pix
+                # Convert to pixel via siril.radec2pix (thread-safe)
                 try:
-                    result_pix = self.siril.radec2pix(ra, dec)
+                    result_pix = _safe_radec2pix(self.siril, ra, dec, self._siril_lock)
                     if result_pix is None:
                         continue
                     x, y = float(result_pix[0]), float(result_pix[1])
@@ -3130,20 +3124,45 @@ class AnnotateImageWindow(QMainWindow):
 
     @staticmethod
     def _deduplicate(
-        new_objs: list[dict], existing: list[dict], min_dist: int = 20,
+        new_objs: list[dict], existing: list[dict], min_dist: int = 40,
     ) -> list[dict]:
-        """Remove objects from new_objs that are too close to existing ones."""
+        """Remove objects from new_objs that are too close to or have the same name as existing ones."""
+        def _norm_name(n: str) -> str:
+            return _RE_WHITESPACE.sub(' ', n).strip().upper()
+        existing_names = {_norm_name(ex["name"]) for ex in existing}
+
+        # Spatial grid for fast proximity lookup.
+        # Use cell = min_dist so 3x3 neighborhood covers all candidates.
+        # Store actual coordinates per cell for precise distance check.
+        cell = max(min_dist, 1)
+        grid: dict[tuple[int, int], list[tuple[float, float]]] = {}
+        for ex in existing:
+            gx, gy = int(ex["pixel_x"]) // cell, int(ex["pixel_y"]) // cell
+            grid.setdefault((gx, gy), []).append((ex["pixel_x"], ex["pixel_y"]))
+
         deduped = []
         for obj in new_objs:
+            if _norm_name(obj["name"]) in existing_names:
+                continue
+            # Check 3x3 neighborhood with actual distance
+            ox, oy = obj["pixel_x"], obj["pixel_y"]
+            gx = int(ox) // cell
+            gy = int(oy) // cell
             too_close = False
-            for ex in existing:
-                dx = abs(obj["pixel_x"] - ex["pixel_x"])
-                dy = abs(obj["pixel_y"] - ex["pixel_y"])
-                if dx < min_dist and dy < min_dist:
-                    too_close = True
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for (ex, ey) in grid.get((gx + dx, gy + dy), ()):
+                        if abs(ox - ex) < min_dist and abs(oy - ey) < min_dist:
+                            too_close = True
+                            break
+                    if too_close:
+                        break
+                if too_close:
                     break
             if not too_close:
                 deduped.append(obj)
+                existing_names.add(_norm_name(obj["name"]))
+                grid.setdefault((gx, gy), []).append((ox, oy))
         return deduped
 
     def _on_open_folder(self) -> None:
@@ -3280,29 +3299,40 @@ class AnnotateImageWindow(QMainWindow):
             "<ul>"
             "<li><b>Plate-solved image:</b> Your image must have a WCS (World Coordinate System) "
             "solution in its FITS header. In Siril: <i>Tools \u2192 Astrometry \u2192 Image Plate Solver</i>.</li>"
-            "<li>The script will check this automatically and warn you if the image is not plate-solved.</li>"
+            "<li><b>Internet connection:</b> The script queries VizieR and SIMBAD online "
+            "for catalog data \u2014 no hardcoded object lists.</li>"
+            "<li>The script will check for plate-solve status automatically and warn you if missing.</li>"
             "</ul>"
             "<hr>"
             "<p><b>Quick Start:</b></p>"
             "<ol>"
             "<li>Load a plate-solved image in Siril</li>"
             "<li>Run this script</li>"
-            "<li>Select which <b>object types</b> to annotate (Galaxies, Nebulae, Stars...)</li>"
+            "<li>Select which <b>object types</b> to annotate (left panel checkboxes)</li>"
             "<li>Adjust display settings (font size, magnitude limit, etc.)</li>"
-            "<li>Click <b>Annotate Image</b> (or press F5)</li>"
+            "<li>Click <b>Annotate Image</b> (or press <b>F5</b>)</li>"
             "<li>The annotated image is saved as PNG/TIFF/JPEG in Siril's working directory</li>"
+            "<li>Use <b>Open Image</b> or <b>Open Folder</b> buttons to view the result</li>"
             "</ol>"
             "<hr>"
             "<p><b>How it works:</b></p>"
-            "<p>The script searches all embedded catalogs (Messier, NGC, IC, Caldwell, "
-            "Sharpless, Barnard, Named Stars) and optionally queries SIMBAD online. "
-            "Objects are filtered by the type checkboxes you select \u2014 so you control "
-            "<i>what kinds</i> of objects appear, not which catalog they come from.</p>"
+            "<p>The script queries five online catalogs <b>in parallel</b> for fast results:</p>"
+            "<ul>"
+            "<li><b>VizieR VII/118</b> (NGC 2000.0) \u2014 NGC, IC, and Messier objects</li>"
+            "<li><b>VizieR VII/20</b> (Sharpless) \u2014 HII regions</li>"
+            "<li><b>VizieR VII/220A</b> (Barnard) \u2014 Dark nebulae</li>"
+            "<li><b>VizieR V/50</b> (Yale BSC) \u2014 Named bright stars</li>"
+            "<li><b>SIMBAD</b> \u2014 Supplementary objects (UGC, Abell, Arp, Hickson, "
+            "vdB, Markarian, etc.) plus common name resolution</li>"
+            "</ul>"
+            "<p>Objects are filtered by the <b>type checkboxes</b> you select \u2014 so you control "
+            "<i>what kinds</i> of objects appear, not which catalog they come from. "
+            "Duplicates across catalogs are automatically removed.</p>"
             "<hr>"
             "<p><b>Color Coding:</b></p>"
             "<table cellpadding='4'>"
             "<tr><td style='color:#FFD700;'>\u2588\u2588</td><td>Galaxies</td>"
-            "<td style='color:#FF4444;'>\u2588\u2588</td><td>Emission Nebulae</td></tr>"
+            "<td style='color:#FF4444;'>\u2588\u2588</td><td>Nebulae</td></tr>"
             "<tr><td style='color:#44FF44;'>\u2588\u2588</td><td>Planetary Nebulae</td>"
             "<td style='color:#44AAFF;'>\u2588\u2588</td><td>Open Clusters</td></tr>"
             "<tr><td style='color:#FF8800;'>\u2588\u2588</td><td>Globular Clusters</td>"
@@ -3311,7 +3341,13 @@ class AnnotateImageWindow(QMainWindow):
             "<td style='color:#FFFFFF;'>\u2588\u2588</td><td>Named Stars</td></tr>"
             "<tr><td style='color:#FF6666;'>\u2588\u2588</td><td>HII Regions</td>"
             "<td style='color:#FF8888;'>\u2588\u2588</td><td>Reflection Nebulae</td></tr>"
+            "<tr><td style='color:#AADDFF;'>\u2588\u2588</td><td>Asterisms</td>"
+            "<td style='color:#DDAAFF;'>\u2588\u2588</td><td>Quasars</td></tr>"
             "</table>"
+            "<hr>"
+            "<p><b>Large Mosaics:</b> The script handles very large images by "
+            "automatically downscaling the display data for rendering and capping "
+            "the output resolution. Annotations remain sharp as vector overlays.</p>"
         )
         tabs.addTab(tab1, "Getting Started")
 
@@ -3320,20 +3356,23 @@ class AnnotateImageWindow(QMainWindow):
         tab2.setReadOnly(True)
         tab2.setHtml(
             "<h2 style='color:#88aaff;'>Object Types</h2>"
-            "<p>Select which types of astronomical objects to annotate. "
-            "All embedded catalogs (Messier, NGC, IC, Caldwell, Sharpless, Barnard, "
-            "Named Stars) are always searched — objects are filtered by type.</p>"
+            "<p>Select which types of astronomical objects to annotate using the "
+            "checkboxes in the left panel. All catalogs are always queried \u2014 "
+            "you control visibility by object type, not by data source.</p>"
+            "<p>The left column contains common types (enabled by default), "
+            "the right column contains specialized types (disabled by default). "
+            "Use <b>Select All</b> / <b>Deselect All</b> for quick toggling.</p>"
             "<hr>"
             "<table cellpadding='6' style='width:100%'>"
-            "<tr><td style='color:#FFD700;font-weight:bold'>Galaxies</td>"
-            "<td>Spiral, elliptical, and irregular galaxies from all catalogs. "
+            "<tr style='background:#2a2a2a'>"
+            "<td colspan='2'><b style='color:#88aaff'>Common Types (default ON)</b></td></tr>"
+            "<tr><td style='color:#FFD700;font-weight:bold;width:150px'>Galaxies</td>"
+            "<td>Spiral, elliptical, irregular galaxies, galaxy clusters (Abell, Hickson), "
+            "and galaxy groups from NGC/IC and SIMBAD. "
             "M31, M51, M81, NGC 4565, Centaurus A, etc.</td></tr>"
-            "<tr><td style='color:#FF4444;font-weight:bold'>Emission Nebulae</td>"
-            "<td>HII regions and star-forming clouds. "
+            "<tr><td style='color:#FF4444;font-weight:bold'>Nebulae</td>"
+            "<td>Bright emission nebulae from NGC/IC catalog. "
             "Orion, Lagoon, Eagle, Rosette, Carina, etc.</td></tr>"
-            "<tr><td style='color:#FF8888;font-weight:bold'>Reflection Nebulae</td>"
-            "<td>Dust clouds illuminated by nearby stars. "
-            "M78, Witch Head, Iris, Running Man, Rho Ophiuchi, etc.</td></tr>"
             "<tr><td style='color:#44FF44;font-weight:bold'>Planetary Nebulae</td>"
             "<td>Dying star shells. Ring (M57), Dumbbell (M27), "
             "Helix, Owl, Cat's Eye, Ghost of Jupiter, etc.</td></tr>"
@@ -3343,30 +3382,36 @@ class AnnotateImageWindow(QMainWindow):
             "<tr><td style='color:#FF8800;font-weight:bold'>Globular Clusters</td>"
             "<td>Ancient dense star balls. M13, M3, Omega Centauri, "
             "47 Tucanae, M22, etc.</td></tr>"
+            "<tr><td style='color:#FFFFFF;font-weight:bold'>Named Stars</td>"
+            "<td>Bright stars from the Yale BSC and SIMBAD HD stars. "
+            "Vega, Deneb, Polaris, Betelgeuse, etc. Filtered by magnitude limit.</td></tr>"
+            "<tr style='background:#2a2a2a'>"
+            "<td colspan='2'><b style='color:#88aaff'>Specialized Types (default OFF)</b></td></tr>"
+            "<tr><td style='color:#FF8888;font-weight:bold'>Reflection Nebulae</td>"
+            "<td>Dust clouds illuminated by nearby stars (from SIMBAD). "
+            "M78, Witch Head, Iris, vdB catalog, etc.</td></tr>"
             "<tr><td style='color:#FF44FF;font-weight:bold'>Supernova Remnants</td>"
-            "<td>Explosion debris. Crab (M1), Veil Nebula, "
+            "<td>Explosion debris (from SIMBAD). Crab (M1), Veil Nebula, "
             "Simeis 147, Pencil Nebula, etc.</td></tr>"
             "<tr><td style='color:#888888;font-weight:bold'>Dark Nebulae</td>"
-            "<td>Opaque dust clouds (Barnard catalog). Horsehead (B33), "
-            "Pipe (B78), Snake (B72), Coalsack. Always shown regardless of "
-            "magnitude limit.</td></tr>"
+            "<td>Opaque dust clouds from the Barnard catalog. Horsehead (B33), "
+            "Pipe (B78), Snake (B72), Coalsack. <b>Not filtered by magnitude.</b></td></tr>"
             "<tr><td style='color:#FF6666;font-weight:bold'>HII Regions</td>"
             "<td>Sharpless catalog ionized hydrogen regions. Large emission "
-            "complexes: Heart, Soul, Barnard's Loop, Simeis 147, etc. "
+            "complexes: Heart, Soul, Barnard's Loop. "
             "Best for wide-field Milky Way images.</td></tr>"
-            "<tr><td style='color:#FFFFFF;font-weight:bold'>Named Stars</td>"
-            "<td>~275 IAU-named stars to mag ~5.5 with Bayer designations. "
-            "Full-sky coverage for orientation: Vega, Deneb, Polaris, "
-            "Betelgeuse, Pleiades members, constellation stars, etc.</td></tr>"
+            "<tr><td style='color:#AADDFF;font-weight:bold'>Asterisms</td>"
+            "<td>Star patterns that are not true clusters. "
+            "Coathanger, Kemble's Cascade, etc.</td></tr>"
+            "<tr><td style='color:#DDAAFF;font-weight:bold'>Quasars</td>"
+            "<td>Quasi-stellar objects and AGN from SIMBAD. "
+            "Extremely distant active galactic nuclei.</td></tr>"
             "</table>"
             "<hr>"
-            "<p><b>SIMBAD Online:</b> Queries the SIMBAD database for additional "
-            "objects not in the embedded catalogs. Finds fainter galaxies, "
-            "obscure NGC/IC objects, UGC, MCG, Abell clusters, etc. "
-            "Requires internet and the <code>astroquery</code> package.</p>"
-            "<hr>"
             "<p><b>Magnitude Limit:</b> Only objects brighter than this value "
-            "are annotated. 12.0 is good for most images. Dark nebulae bypass this.</p>"
+            "are annotated. 12.0 is a good default for most images. "
+            "Dark nebulae bypass this filter since they have no standard magnitude. "
+            "Set to 20.0 to see all cataloged objects regardless of brightness.</p>"
         )
         tabs.addTab(tab2, "Object Types")
 
@@ -3375,37 +3420,57 @@ class AnnotateImageWindow(QMainWindow):
         tab3.setReadOnly(True)
         tab3.setHtml(
             "<h2 style='color:#88aaff;'>Display Options</h2>"
-            "<p><b>Font Size:</b> Controls the label text size. Larger for social media sharing, "
-            "smaller for high-resolution prints. Default: 10pt.</p>"
-            "<p><b>Marker Size:</b> Controls the crosshair/ellipse marker size for point-like "
-            "objects. Default: 20px.</p>"
-            "<p><b>Object Size as Ellipse:</b> When enabled, extended objects (galaxies, nebulae) "
-            "are shown as ellipses proportional to their cataloged angular size. When disabled, "
-            "all objects get simple crosshair markers.</p>"
-            "<p><b>Magnitude in Label:</b> Appends the visual magnitude to each label, "
-            "e.g. 'M31 3.4m'. Useful for understanding object brightness.</p>"
-            "<p><b>Object Type in Label:</b> Appends the type designation, "
-            "e.g. 'M31 [Galaxy]'. Helpful for identification.</p>"
-            "<p><b>Common Names:</b> Shows popular names where available, "
-            "e.g. 'M31 (Andromeda Galaxy)'. Disable for a cleaner, more compact look.</p>"
-            "<p><b>Color by Type:</b> Uses different colors for different object categories "
-            "(see Getting Started tab for color legend).</p>"
+            "<h3>Controls</h3>"
+            "<p><b>Font Size:</b> Controls the label text size (6\u201324 pt). "
+            "Larger for social media sharing, smaller for high-resolution prints. "
+            "Default: 10 pt.</p>"
+            "<p><b>Marker Size:</b> Controls the crosshair marker size for point-like "
+            "objects without catalog size data (8\u201360 px). Default: 20 px.</p>"
+            "<p><b>Magnitude Limit:</b> Slider and spin box to set the faintest magnitude "
+            "to include (1.0\u201320.0). Lower = fewer, brighter objects only.</p>"
             "<hr>"
-            "<h3 style='color:#88aaff;'>Extras</h3>"
-            "<p><b>Coordinate Grid:</b> Overlays RA/DEC grid lines with labels. "
-            "Grid spacing is chosen automatically based on your field of view.</p>"
-            "<p><b>Info Box:</b> Semi-transparent box (top-left) with center coordinates, "
-            "field of view, pixel scale, rotation, and object count.</p>"
-            "<p><b>Compass:</b> North/East direction arrows (bottom-right) showing "
-            "image orientation derived from the WCS solution.</p>"
-            "<p><b>Color Legend:</b> Auto-generated legend box (bottom-left) showing "
-            "color swatches for each object type present in the annotation. Only types "
-            "that actually appear in the image are listed.</p>"
-            "<p><b>Leader Lines:</b> Thin connecting lines from each label to its "
-            "object marker. Essential in crowded fields to see which label belongs "
-            "to which object. Can be disabled for a cleaner look on sparse fields.</p>"
+            "<h3>Display Checkboxes</h3>"
+            "<table cellpadding='4' style='width:100%'>"
+            "<tr><td style='width:140px'><b>Size ellipses</b></td>"
+            "<td>Show extended objects (galaxies, nebulae) as ellipses proportional "
+            "to their cataloged angular size. When off, all objects use crosshair markers. "
+            "Large ellipses (&gt;100 px) are drawn thinner; very large ones (&gt;200 px) "
+            "are also more transparent.</td></tr>"
+            "<tr><td><b>Magnitude</b></td>"
+            "<td>Append the visual magnitude to each label (e.g. 'M31 3.4m').</td></tr>"
+            "<tr><td><b>Object type</b></td>"
+            "<td>Append the type designation (e.g. 'M31 [Galaxy]').</td></tr>"
+            "<tr><td><b>Common names</b></td>"
+            "<td>Show well-known names where available (e.g. 'NGC 224 (Andromeda Galaxy)'). "
+            "Names are resolved via SIMBAD TAP query. Catalog-like names "
+            "(FAUST, IRAS, 2MASS, etc.) are automatically filtered out.</td></tr>"
+            "<tr><td><b>Color by type</b></td>"
+            "<td>Use different colors per object category (see color table). "
+            "When off, all annotations are drawn in a uniform light grey.</td></tr>"
+            "</table>"
+            "<hr>"
+            "<h3>Extras Checkboxes</h3>"
+            "<table cellpadding='4' style='width:100%'>"
+            "<tr><td style='width:140px'><b>RA/DEC grid</b></td>"
+            "<td>Overlays equatorial coordinate grid lines with RA (hours) and DEC (degrees) "
+            "labels. Grid spacing is chosen automatically based on the field of view "
+            "(from arcminutes for narrow fields to degrees for mosaics).</td></tr>"
+            "<tr><td><b>Info box</b></td>"
+            "<td>Semi-transparent box (top-left) showing center RA/DEC, "
+            "field of view dimensions, pixel scale, rotation angle, and the number "
+            "of annotated objects.</td></tr>"
+            "<tr><td><b>N/E compass</b></td>"
+            "<td>North and East direction arrows (bottom-right) derived from the WCS "
+            "solution. Shows the true orientation of the image on the sky.</td></tr>"
+            "<tr><td><b>Color legend</b></td>"
+            "<td>Auto-generated legend (bottom-left) with colored swatches for each "
+            "object type present in the annotation. Types not in the image are omitted.</td></tr>"
+            "<tr><td><b>Leader lines</b></td>"
+            "<td>Thin connecting lines from each label to its object marker. "
+            "Essential in crowded fields. Can be disabled for a cleaner look.</td></tr>"
+            "</table>"
         )
-        tabs.addTab(tab3, "Display Options")
+        tabs.addTab(tab3, "Display & Extras")
 
         # --- Output ---
         tab4 = QTextEdit()
@@ -3418,14 +3483,27 @@ class AnnotateImageWindow(QMainWindow):
             "<li><b>TIFF:</b> Lossless, larger files. Good for further editing.</li>"
             "<li><b>JPEG:</b> Lossy compression, smaller files. Good for web uploads.</li>"
             "</ul>"
-            "<p><b>DPI:</b> Controls the output resolution. 150 DPI is good for screens "
-            "and social media. Use 300 DPI for print-quality output (larger file size).</p>"
+            "<p><b>DPI:</b> Controls the output resolution (72\u2013300). "
+            "150 DPI is good for screens and social media. "
+            "300 DPI for print-quality output (larger file size). "
+            "For very large images (&gt;8000 px), DPI is automatically reduced "
+            "to keep file size manageable.</p>"
             "<p><b>Filename:</b> Base name for the output file. A timestamp is appended "
-            "automatically to avoid overwriting previous annotations.</p>"
+            "automatically (e.g. <i>annotated_20260405_193649.png</i>) to avoid "
+            "overwriting previous annotations.</p>"
             "<p>The output file is saved in Siril's working directory (the same folder "
             "as your image).</p>"
+            "<hr>"
+            "<h3 style='color:#88aaff;'>Performance</h3>"
+            "<p>All five catalog queries run <b>in parallel</b> using thread pools, "
+            "so annotation typically takes just 2\u20135 seconds even for wide fields.</p>"
+            "<p>For wide-field mosaics (&gt;1\u00b0), SIMBAD queries are automatically "
+            "tiled into overlapping regions and queried in parallel.</p>"
+            "<p><b>Memory:</b> Large images (&gt;6000 px) are automatically downscaled "
+            "for the display layer. Annotations remain sharp as vector overlays. "
+            "Image data is freed after rendering to minimize memory usage.</p>"
         )
-        tabs.addTab(tab4, "Output")
+        tabs.addTab(tab4, "Output & Performance")
 
         layout.addWidget(tabs)
         lbl_guide = QLabel(

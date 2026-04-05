@@ -1,6 +1,6 @@
 # Svenesis Annotate Image — User Instructions
 
-**Version 1.0.0** | Siril Python Script for Plate-Solved Image Annotation
+**Version 1.1.0** | Siril Python Script for Plate-Solved Image Annotation
 
 > *Comparable to PixInsight's AnnotateImage script — but free, open-source, and tightly integrated with Siril.*
 
@@ -32,7 +32,7 @@ The **Svenesis Annotate Image** script takes your plate-solved astrophotography 
 
 Think of it as a **labeling machine** for your astrophotos. It combines:
 
-- **Automatic object identification** — finds galaxies, nebulae, clusters, stars, and more in your field of view using 7 embedded catalogs
+- **Automatic object identification** — finds galaxies, nebulae, clusters, stars, and more in your field of view by querying 5 online data sources in parallel via live VizieR and SIMBAD queries
 - **Publication-quality rendering** — color-coded markers, ellipses scaled to actual object size, and clean label placement with collision avoidance
 - **Rich overlays** — coordinate grid, info box, compass rose, and color legend
 - **One-click export** — saves annotated images as PNG, TIFF, or JPEG at configurable DPI
@@ -81,6 +81,8 @@ Deep-sky objects (DSOs) are anything beyond our solar system. They come in many 
 | **Supernova Remnant** | The expanding debris from an exploded star | M1 (Crab Nebula), NGC 6960 (Veil Nebula) |
 | **Dark Nebula** | An opaque dust cloud that blocks light from objects behind it | B33 (Horsehead), B78 (Pipe Nebula) |
 | **HII Region** | A large region of ionized hydrogen — essentially a giant emission nebula | Sh2-155 (Cave Nebula), Sh2-240 (Simeis 147) |
+| **Asterism** | A star pattern that is not a true cluster | Coathanger, Kemble's Cascade |
+| **Quasar** | A quasi-stellar object or active galactic nucleus | 3C 273, Markarian 421 |
 
 ### What Is Magnitude?
 
@@ -106,7 +108,8 @@ The magnitude limit slider in Annotate Image controls the faintest objects that 
 | **PyQt6** | 6.x | Auto-installed by the script |
 | **matplotlib** | 3.x | Auto-installed by the script |
 | **astropy** | Any recent | Auto-installed by the script |
-| **astroquery** | Any | *Optional* — only needed for SIMBAD online queries |
+| **astroquery** | Any recent | Auto-installed by the script — required for all catalog queries |
+| **Internet connection** | — | Required for live VizieR and SIMBAD catalog queries |
 
 ### Installation
 
@@ -117,12 +120,7 @@ The magnitude limit slider in Annotate Image controls the faintest objects that 
    - **Windows:** `%APPDATA%\Siril\scripts\`
 3. Restart Siril. The script appears under **Processing → Scripts**.
 
-The script automatically installs missing Python dependencies (`numpy`, `PyQt6`, `matplotlib`, `astropy`) on first run.
-
-**For SIMBAD online queries** (optional), install astroquery manually:
-```
-pip install astroquery
-```
+The script automatically installs missing Python dependencies (`numpy`, `PyQt6`, `matplotlib`, `astropy`, `astroquery`) on first run.
 
 ---
 
@@ -170,8 +168,8 @@ Click **"Annotate Image"** (or press **F5**).
 
 The script will:
 1. Load the image and WCS data from Siril
-2. Search all embedded catalogs for objects in your field of view
-3. Optionally query SIMBAD for additional online objects
+2. Search all online catalogs for objects in your field of view (VizieR and SIMBAD queried in parallel)
+3. Deduplicate results across catalogs
 4. Resolve label collisions so labels don't overlap
 5. Render the annotated image with all selected overlays
 6. Save the output file to Siril's working directory
@@ -194,9 +192,9 @@ The window is divided into two main areas:
 
 The left side (360px wide) contains all configuration controls, organized in collapsible sections:
 
-- **Annotate Objects:** Object type checkboxes with color-coded labels, SIMBAD toggle, Select All / Deselect All
-- **Display:** Font size, marker size, magnitude limit (all with sliders), plus checkboxes for ellipses, magnitude labels, type labels, common names, and color-by-type
-- **Extras:** Coordinate grid, info box, compass, color legend, leader lines
+- **Annotate Objects:** Object type checkboxes with color-coded labels in a two-column layout. The left column contains common types that are ON by default (Galaxies, Nebulae, Planetary Nebulae, Open Clusters, Globular Clusters, Stars). The right column contains specialized types that are OFF by default (Reflection Nebulae, Supernova Remnants, Dark Nebulae, HII Regions, Asterisms, Quasars). Select All / Deselect All buttons at the bottom.
+- **Display:** Font size, marker size, magnitude limit (all with sliders). Checkboxes in a two-column layout below the sliders for ellipses, magnitude labels, type labels, common names, and color-by-type.
+- **Extras:** Checkboxes in a two-column layout for coordinate grid, info box, compass, color legend, and leader lines.
 - **Output:** Format selector (PNG/TIFF/JPEG), DPI slider (72–300), base filename
 - **Actions:** "Annotate Image" button, progress bar, status label
 
@@ -235,44 +233,45 @@ Below the tabs:
 
 ## 6. Understanding the Catalogs
 
-The script includes **7 embedded catalogs** with over 1,500 objects, plus an optional online query:
+The script queries **5 online data sources** in parallel via live VizieR and SIMBAD queries. There are no embedded catalogs — all object data comes from the internet at annotation time.
 
-| Catalog | Objects | What It Contains |
-|---------|---------|-----------------|
-| **Messier** | 110 | The classic Messier catalog — the most famous deep-sky objects visible from the northern hemisphere |
-| **NGC Bright** | ~250 | Bright objects from the New General Catalogue — galaxies, nebulae, clusters beyond Messier |
-| **IC Bright** | ~40 | Bright objects from the Index Catalogue — supplements NGC |
-| **Caldwell** | ~110 | Patrick Moore's Caldwell catalog — interesting DSOs not in the Messier list |
-| **Sharpless** | ~312 | Sharpless HII regions — ionized hydrogen emission complexes, best for wide-field Milky Way images |
-| **Barnard** | ~30 | Barnard dark nebulae — opaque dust clouds (with LDN cross-references) |
-| **Named Stars** | ~300 | IAU-named and Bayer-designated stars to magnitude ~5.5 — full-sky coverage for field identification |
-| **SIMBAD** (online) | Variable | Queries the SIMBAD astronomical database for additional objects not in the embedded catalogs |
+| Data Source | Catalog ID | What It Contains |
+|-------------|-----------|-----------------|
+| **VizieR VII/118** | NGC 2000.0 | NGC, IC, and Messier objects — the core deep-sky catalogs covering galaxies, nebulae, and clusters |
+| **VizieR VII/20** | Sharpless (1959) | HII regions — ionized hydrogen emission complexes, best for wide-field Milky Way images |
+| **VizieR VII/220A** | Barnard (1927) | Dark nebulae — opaque dust clouds that block background light |
+| **VizieR V/50** | Yale Bright Star Catalogue (BSC) | Named bright stars for field identification |
+| **SIMBAD** | TAP query | UGC, Abell, Arp, Hickson, Markarian, vdB, PGC, MCG objects, plus common name resolution for all objects |
 
 ### How Catalogs Work
 
-All embedded catalogs are **always searched** — the object type checkboxes control *which kinds* of objects are displayed, not which catalogs are searched. For example, if you check only "Galaxies," the script searches all 7 catalogs but only shows galaxy-type objects from any of them.
+All 5 data sources are **always queried** in parallel using a ThreadPoolExecutor — the object type checkboxes control *which kinds* of objects are displayed, not which catalogs are searched. For example, if you check only "Galaxies," the script queries all 5 sources but only shows galaxy-type objects from any of them.
 
 This means:
-- **M31** comes from the Messier catalog as a Galaxy
-- **NGC 7000** comes from the NGC catalog as an Emission Nebula
-- **Sh2-240** comes from the Sharpless catalog as an HII Region
-- **B33** comes from the Barnard catalog as a Dark Nebula
-- **Vega** comes from the Named Stars catalog
+- **M31** comes from VizieR NGC 2000.0 as a Galaxy
+- **NGC 7000** comes from VizieR NGC 2000.0 as an Emission Nebula
+- **Sh2-240** comes from VizieR Sharpless as an HII Region
+- **B33** comes from VizieR Barnard as a Dark Nebula
+- **Vega** comes from the Yale BSC
+- **UGC 12345** comes from SIMBAD
 
 ### Deduplication
 
-Objects that appear in multiple catalogs (e.g., M42 is also NGC 1976) are automatically deduplicated. The first catalog to provide an object wins — so Messier designations take priority over NGC, which takes priority over IC.
+Objects that appear in multiple data sources (e.g., M42 is also NGC 1976) are automatically deduplicated by name and spatial proximity. When two results refer to the same object, the more commonly known designation takes priority — so Messier designations take priority over NGC, which takes priority over IC.
 
-### SIMBAD Online
+### SIMBAD
 
-When enabled, the script queries the **SIMBAD** astronomical database over the internet for objects not found in the embedded catalogs. This can find:
+SIMBAD is **always queried automatically** alongside the VizieR catalogs. It provides:
 
 - Faint galaxies (UGC, MCG, PGC catalogs)
 - Abell galaxy clusters
-- Obscure NGC/IC objects below the brightness cutoff of the embedded catalog
-- Additional nebulae and clusters
+- Arp peculiar galaxies and Hickson compact groups
+- Markarian galaxies
+- vdB reflection nebulae
+- Common name resolution for all objects
+- Additional NGC/IC objects not in the VizieR VII/118 selection
 
-**Requirements:** Internet connection and the `astroquery` Python package. Junk entries from survey catalogs (SDSS, 2MASS, WISE, etc.) are automatically filtered out.
+**Requirements:** Internet connection and the `astroquery` Python package. Junk entries from survey catalogs (SDSS, 2MASS, WISE, FAUST, IRAS, etc.) are automatically filtered out.
 
 ---
 
@@ -291,13 +290,15 @@ Each object type has a unique color for easy identification:
 | **Magenta** | Supernova Remnants | Explosion debris | M1 (Crab), Veil Nebula, Simeis 147 |
 | **Grey** | Dark Nebulae | Opaque dust clouds | B33 (Horsehead), B78 (Pipe) |
 | **Red-Pink** | HII Regions | Sharpless ionized hydrogen regions | Heart, Soul, Barnard's Loop |
-| **White** | Named Stars | IAU-named and Bayer stars to ~mag 5.5 | Vega, Deneb, Polaris, Betelgeuse |
+| **Pale Blue** | Asterisms | Star patterns, not true clusters | Coathanger, Kemble's Cascade |
+| **Violet** | Quasars | QSOs and AGN | 3C 273, Markarian 421 |
+| **White** | Named Stars | Bright stars from Yale BSC and SIMBAD | Vega, Deneb, Polaris, Betelgeuse |
 
 ### Default Settings
 
-By default, these types are **enabled**: Galaxies, Emission Nebulae, Reflection Nebulae, Planetary Nebulae, Open Clusters, Globular Clusters, Supernova Remnants, Named Stars.
+By default, the **left column** types are **enabled** (ON): Galaxies, Emission Nebulae, Planetary Nebulae, Open Clusters, Globular Clusters, Named Stars.
 
-By default, these types are **disabled**: Dark Nebulae, HII Regions. (These can produce a lot of labels on wide-field images; enable them when relevant.)
+By default, the **right column** types are **disabled** (OFF): Reflection Nebulae, Supernova Remnants, Dark Nebulae, HII Regions, Asterisms, Quasars. (These can produce a lot of labels on wide-field images or are specialized types; enable them when relevant.)
 
 ### Magnitude Limit
 
@@ -346,7 +347,7 @@ When enabled, appends the type designation:
 
 ### Show Common Names
 
-When **enabled** (default): Shows popular names where available:
+When **enabled** (default): Shows popular names where available. Common names are resolved via a SIMBAD TAP query and filtered to exclude catalog-like identifiers (FAUST, IRAS, 2MASS, SDSS, etc.) so only recognizable names are displayed:
 - `M31 (Andromeda Galaxy)` instead of just `M31`
 - `NGC 7000 (North America Nebula)`
 
@@ -356,7 +357,7 @@ When **disabled**: Shows only the catalog designation for a more compact look.
 
 When **enabled** (default): Uses the color scheme from Section 7 — different colors for different object types.
 
-When **disabled**: All annotations use the same color. Produces a more uniform look but makes it harder to distinguish object types at a glance.
+When **disabled**: All annotations use a uniform light grey color. Produces a more uniform look but makes it harder to distinguish object types at a glance.
 
 ---
 
@@ -483,12 +484,11 @@ The annotated image is saved in **Siril's working directory** — the same folde
 1. Load the plate-solved image
 2. Run Annotate Image
 3. Deselect all types except **Galaxies**
-4. Enable **SIMBAD online** to catch fainter galaxies not in the embedded catalogs
-5. Increase magnitude limit to 14–16
-6. Disable common names for a cleaner look (many faint galaxies don't have common names anyway)
-7. Click **Annotate Image**
+4. Increase magnitude limit to 14–16
+5. Disable common names for a cleaner look (many faint galaxies don't have common names anyway)
+6. Click **Annotate Image**
 
-**Result:** Every galaxy in the field is labeled with its catalog designation, including faint background galaxies that SIMBAD discovers.
+**Result:** Every galaxy in the field is labeled with its catalog designation, including faint background galaxies discovered via SIMBAD.
 
 ### Use Case 4: Print-Quality Annotated Image
 
@@ -517,7 +517,7 @@ The annotated image is saved in **Siril's working directory** — the same folde
 5. Disable the coordinate grid and info box for a cleaner look
 6. Click **Annotate Image**
 
-**Result:** A clean annotation showing only named stars — Vega, Deneb, Altair, constellation stars, etc.
+**Result:** A clean annotation showing only named stars from the Yale Bright Star Catalogue and SIMBAD HD stars — Vega, Deneb, Altair, constellation stars, etc.
 
 ### Use Case 6: Minimal Clean Annotation
 
@@ -540,7 +540,7 @@ The annotated image is saved in **Siril's working directory** — the same folde
 
 **Workflow:**
 1. Load the plate-solved image
-2. Enable all object types including HII Regions and Dark Nebulae
+2. Enable all object types including HII Regions, Dark Nebulae, Asterisms, and Quasars
 3. Enable: magnitude labels, type labels, common names
 4. Enable all extras: grid, info box, compass, legend
 5. Set font size to 12 for readability
@@ -590,11 +590,9 @@ The timestamp in the filename ensures you never overwrite a previous output. All
 
 5. **Match font size to intended viewing size.** For images that will be viewed full-screen on a monitor, 10 pt is fine. For images that will be viewed as thumbnails on social media, increase to 14–16 pt.
 
-6. **Use SIMBAD sparingly.** SIMBAD can find hundreds of objects, which may clutter the annotation. It's most useful for galaxy-rich fields where the embedded catalogs don't go deep enough.
+6. **The magnitude limit is your primary control for annotation density.** Lower it to reduce clutter; raise it to find hidden objects. This is the single most effective way to tune how busy or clean your annotation looks. Experiment with different values to find the sweet spot for your image.
 
 7. **Dark nebulae and HII regions are best for wide-field images.** On narrow-field images (small FOV), these large structures often extend beyond the frame edges, producing labels for objects you can't really see.
-
-8. **The magnitude limit is your most powerful control.** Lower it to reduce clutter; raise it to find hidden objects. Experiment with different values to find the sweet spot for your image.
 
 ### Output
 
@@ -628,8 +626,7 @@ The timestamp in the filename ensures you never overwrite a previous output. All
 **Cause:** The field of view may not contain any catalog objects above the magnitude limit, or the magnitude limit is too restrictive.
 **Fix:**
 - Increase the magnitude limit (e.g., from 12 to 15)
-- Enable additional object types (HII Regions, Dark Nebulae)
-- Enable SIMBAD online for deeper object discovery
+- Enable additional object types (HII Regions, Dark Nebulae, Asterisms)
 - Check the Log tab — it shows exactly which catalogs were searched and how many objects were found
 
 ### Annotation is too cluttered
@@ -642,10 +639,19 @@ The timestamp in the filename ensures you never overwrite a previous output. All
 - Reduce font size
 - Disable magnitude and type labels
 
+### Annotation is slow
+
+**Cause:** All 5 data sources are queried over the internet in parallel. Wide-field images may trigger tiled queries to cover the full field.
+**Fix:**
+- This is normal for the first annotation of a given field — subsequent runs benefit from caching
+- Wide-field mosaics require more queries to cover the larger sky area
+- Check your internet connection if queries are timing out
+- The Log tab shows the progress of each catalog query
+
 ### SIMBAD query fails
 
-**Cause:** The `astroquery` package is not installed, or there's no internet connection.
-**Fix:** Install astroquery with `pip install astroquery` in a terminal. Ensure you have internet access.
+**Cause:** SIMBAD is always queried automatically. A failure may be caused by no internet connection, SIMBAD server maintenance, or a timeout.
+**Fix:** The script handles SIMBAD failures gracefully — it falls back to VizieR-only results. You will still get annotations from the NGC 2000.0, Sharpless, Barnard, and Yale BSC catalogs. Check the Log tab for the specific error. If SIMBAD is temporarily down, try again later.
 
 ### Output file is very large
 
@@ -659,7 +665,7 @@ The timestamp in the filename ensures you never overwrite a previous output. All
 
 ### Labels overlapping despite collision avoidance
 
-**Cause:** In very crowded fields (galaxy clusters, dense Milky Way regions), the 8-position placement algorithm may not find a collision-free position for every label.
+**Cause:** In very crowded fields (galaxy clusters, dense Milky Way regions), the 32-candidate placement algorithm may not find a collision-free position for every label.
 **Fix:** Reduce the number of labeled objects by lowering the magnitude limit or disabling some object types. The collision avoidance works best with fewer than ~50 objects.
 
 ---
@@ -667,13 +673,16 @@ The timestamp in the filename ensures you never overwrite a previous output. All
 ## 15. FAQ
 
 **Q: Does this replace PixInsight's AnnotateImage script?**
-A: For most purposes, yes. It offers the same core functionality — catalog object labeling on plate-solved images — with additional features like a graphical interface, SIMBAD online queries, and persistent settings. PixInsight's script supports a few additional catalog sources, but Annotate Image's 7 embedded catalogs cover the vast majority of interesting objects.
+A: For most purposes, yes. It offers the same core functionality — catalog object labeling on plate-solved images — with additional features like a graphical interface, live online catalog queries, and persistent settings. PixInsight's script supports a few additional catalog sources, but Annotate Image's 5 online data sources cover the vast majority of interesting objects.
 
 **Q: Can I annotate non-plate-solved images?**
 A: No. The script requires WCS coordinates to know where each pixel points on the sky. Without plate solving, it cannot determine which objects are in your field. Plate solving in Siril is quick and free — there's no reason not to do it.
 
 **Q: Does the script modify my original image?**
 A: No. The script reads your image for display purposes and creates a **new** file with the annotations. Your original FITS file is never modified.
+
+**Q: Does the script need an internet connection?**
+A: Yes. All catalog data comes from live VizieR and SIMBAD queries over the internet. Without a connection, the script cannot retrieve object data and annotation will fail.
 
 **Q: Can I annotate color (RGB) and mono images?**
 A: Yes. The script handles both RGB and single-channel (mono) images. Mono images are automatically converted to 3-channel for the annotated output.
@@ -686,6 +695,9 @@ A: Dark Nebulae are **disabled by default** to keep annotations clean. Enable th
 
 **Q: Why don't I see any Sharpless (HII region) objects?**
 A: HII Regions are also **disabled by default**. Enable the "HII Regions" checkbox. Sharpless objects are large-scale structures best seen on wide-field images.
+
+**Q: How does the script handle large mosaic images?**
+A: The script includes automatic display downscaling, DPI capping, and memory management to handle large mosaics. Very large images are downscaled internally for rendering to avoid excessive memory usage, while the output maintains appropriate quality for the selected DPI setting.
 
 **Q: Can I customize the colors?**
 A: Not through the GUI currently. The color scheme is defined in the script source code (`DEFAULT_COLORS` dictionary). Advanced users can edit the script to change colors.
@@ -719,6 +731,7 @@ This ensures compatibility with different Siril versions and plate-solving metho
 Part of the **Svenesis Siril Scripts** collection, which also includes:
 - Svenesis Blink Comparator
 - Svenesis Gradient Analyzer
+- Svenesis Image Advisor
 - Svenesis Multiple Histogram Viewer
 - Svenesis Script Security Scanner
 

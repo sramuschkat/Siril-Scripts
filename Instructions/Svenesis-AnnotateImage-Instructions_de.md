@@ -1,6 +1,6 @@
 # Svenesis Annotate Image — Benutzeranleitung
 
-**Version 1.0.0** | Siril-Python-Skript zur Beschriftung von Plate-Solved-Bildern
+**Version 1.1.0** | Siril-Python-Skript zur Beschriftung von Plate-Solved-Bildern
 
 > *Vergleichbar mit PixInsights AnnotateImage-Skript — aber kostenlos, quelloffen und eng in Siril integriert.*
 
@@ -32,7 +32,7 @@ Das **Svenesis Annotate Image**-Skript nimmt Ihr Plate-Solved-Astrofoto und erst
 
 Stellen Sie es sich als eine **Beschriftungsmaschine** für Ihre Astrofotos vor. Es kombiniert:
 
-- **Automatische Objekterkennung** — findet Galaxien, Nebel, Sternhaufen, Sterne und mehr in Ihrem Bildfeld mithilfe von 7 integrierten Katalogen
+- **Automatische Objekterkennung** — findet Galaxien, Nebel, Sternhaufen, Sterne und mehr in Ihrem Bildfeld durch parallele Abfrage von 5 Online-Datenquellen via VizieR und SIMBAD
 - **Darstellung in Publikationsqualität** — farbcodierte Markierungen, Ellipsen skaliert auf die tatsächliche Objektgröße und saubere Labelplatzierung mit Kollisionsvermeidung
 - **Umfangreiche Overlays** — Koordinatengitter, Infobox, Kompassrose und Farblegende
 - **Export mit einem Klick** — speichert beschriftete Bilder als PNG, TIFF oder JPEG mit konfigurierbarer DPI
@@ -81,6 +81,8 @@ Deep-Sky-Objekte (DSOs) sind alle Objekte jenseits unseres Sonnensystems. Sie ko
 | **Supernova-Überrest** | Die sich ausbreitenden Trümmer eines explodierten Sterns | M1 (Krebsnebel), NGC 6960 (Schleiernebel) |
 | **Dunkelnebel** | Eine undurchsichtige Staubwolke, die das Licht dahinterliegender Objekte blockiert | B33 (Pferdekopfnebel), B78 (Pfeifennebel) |
 | **HII-Region** | Ein großes Gebiet aus ionisiertem Wasserstoff — im Wesentlichen ein riesiger Emissionsnebel | Sh2-155 (Höhlennebel), Sh2-240 (Simeis 147) |
+| **Asterismus** | Ein Sternmuster, das kein echter Sternhaufen ist | Kleiderbügel, Kembles Kaskade |
+| **Quasar** | Ein quasistellares Objekt oder aktiver Galaxienkern | 3C 273, Markarian 421 |
 
 ### Was ist Helligkeit (Magnitude)?
 
@@ -106,7 +108,8 @@ Der Grenzhelligkeitsregler in Annotate Image steuert die schwächsten Objekte, d
 | **PyQt6** | 6.x | Wird automatisch vom Skript installiert |
 | **matplotlib** | 3.x | Wird automatisch vom Skript installiert |
 | **astropy** | Beliebig aktuell | Wird automatisch vom Skript installiert |
-| **astroquery** | Beliebig | *Optional* — nur für SIMBAD-Online-Abfragen benötigt |
+| **astroquery** | Beliebig aktuell | Wird automatisch vom Skript installiert — erforderlich für alle Katalogabfragen |
+| **Internetverbindung** | — | Erforderlich für die Live-Abfragen von VizieR und SIMBAD |
 
 ### Installation
 
@@ -117,12 +120,7 @@ Der Grenzhelligkeitsregler in Annotate Image steuert die schwächsten Objekte, d
    - **Windows:** `%APPDATA%\Siril\scripts\`
 3. Starten Sie Siril neu. Das Skript erscheint unter **Verarbeitung → Skripte**.
 
-Das Skript installiert fehlende Python-Abhängigkeiten (`numpy`, `PyQt6`, `matplotlib`, `astropy`) automatisch beim ersten Start.
-
-**Für SIMBAD-Online-Abfragen** (optional) installieren Sie astroquery manuell:
-```
-pip install astroquery
-```
+Das Skript installiert fehlende Python-Abhängigkeiten (`numpy`, `PyQt6`, `matplotlib`, `astropy`, `astroquery`) automatisch beim ersten Start.
 
 ---
 
@@ -170,8 +168,8 @@ Klicken Sie auf **„Annotate Image"** (oder drücken Sie **F5**).
 
 Das Skript wird:
 1. Das Bild und die WCS-Daten aus Siril laden
-2. Alle integrierten Kataloge nach Objekten in Ihrem Bildfeld durchsuchen
-3. Optional SIMBAD nach zusätzlichen Online-Objekten abfragen
+2. Alle Online-Kataloge parallel nach Objekten in Ihrem Bildfeld abfragen (VizieR und SIMBAD werden gleichzeitig abgefragt)
+3. Ergebnisse über alle Kataloge hinweg deduplizieren
 4. Labelkollisionen auflösen, damit sich Beschriftungen nicht überlappen
 5. Das beschriftete Bild mit allen ausgewählten Overlays rendern
 6. Die Ausgabedatei im Arbeitsverzeichnis von Siril speichern
@@ -194,8 +192,8 @@ Das Fenster ist in zwei Hauptbereiche unterteilt:
 
 Die linke Seite (360px breit) enthält alle Konfigurationsoptionen, organisiert in aufklappbaren Abschnitten:
 
-- **Objekte beschriften:** Objekttyp-Kontrollkästchen mit farbcodierten Labels, SIMBAD-Schalter, Alle auswählen / Alle abwählen
-- **Anzeige:** Schriftgröße, Markierungsgröße, Grenzwert für Helligkeit (alle mit Schiebereglern), plus Kontrollkästchen für Ellipsen, Helligkeitslabels, Typlabels, gebräuchliche Namen und Farbcodierung nach Typ
+- **Objekte beschriften:** Objekttyp-Kontrollkästchen mit farbcodierten Labels im Zwei-Spalten-Layout. Die linke Spalte enthält häufige Typen, die standardmäßig EIN sind (Galaxien, Nebel, Planetarische Nebel, Offene Sternhaufen, Kugelsternhaufen, Sterne). Die rechte Spalte enthält spezialisierte Typen, die standardmäßig AUS sind (Reflexionsnebel, Supernova-Überreste, Dunkelnebel, HII-Regionen, Asterismen, Quasare). Alle auswählen / Alle abwählen-Schaltflächen am unteren Rand.
+- **Anzeige:** Schriftgröße, Markierungsgröße, Grenzwert für Helligkeit (alle mit Schiebereglern). Kontrollkästchen im Zwei-Spalten-Layout unter den Schiebereglern für Ellipsen, Helligkeitslabels, Typlabels, gebräuchliche Namen und Farbcodierung nach Typ.
 - **Extras:** Koordinatengitter, Infobox, Kompass, Farblegende, Verbindungslinien
 - **Ausgabe:** Formatauswahl (PNG/TIFF/JPEG), DPI-Schieberegler (72–300), Basisdateiname
 - **Aktionen:** „Annotate Image"-Schaltfläche, Fortschrittsbalken, Statusanzeige
@@ -235,44 +233,45 @@ Unter den Registerkarten:
 
 ## 6. Die Kataloge im Überblick
 
-Das Skript enthält **7 integrierte Kataloge** mit über 1.500 Objekten, plus eine optionale Online-Abfrage:
+Das Skript fragt **5 Online-Datenquellen** parallel über Live-VizieR- und SIMBAD-Abfragen ab. Es gibt keine eingebetteten Kataloge — alle Objektdaten kommen zum Zeitpunkt der Beschriftung aus dem Internet.
 
-| Katalog | Objekte | Inhalt |
-|---------|---------|--------|
-| **Messier** | 110 | Der klassische Messier-Katalog — die bekanntesten Deep-Sky-Objekte, sichtbar von der Nordhalbkugel |
-| **NGC Bright** | ~250 | Helle Objekte aus dem New General Catalogue — Galaxien, Nebel, Sternhaufen über Messier hinaus |
-| **IC Bright** | ~40 | Helle Objekte aus dem Index Catalogue — Ergänzung zum NGC |
-| **Caldwell** | ~110 | Patrick Moores Caldwell-Katalog — interessante DSOs, die nicht in der Messier-Liste enthalten sind |
-| **Sharpless** | ~312 | Sharpless HII-Regionen — ionisierte Wasserstoff-Emissionskomplexe, am besten für Weitfeld-Milchstraßenbilder |
-| **Barnard** | ~30 | Barnard-Dunkelnebel — undurchsichtige Staubwolken (mit LDN-Querverweisen) |
-| **Named Stars** | ~300 | IAU-benannte und Bayer-bezeichnete Sterne bis ca. Magnitude ~5,5 — Abdeckung des gesamten Himmels zur Feldidentifikation |
-| **SIMBAD** (online) | Variabel | Fragt die astronomische Datenbank SIMBAD nach zusätzlichen Objekten ab, die nicht in den integrierten Katalogen enthalten sind |
+| Datenquelle | Katalog-ID | Inhalt |
+|-------------|-----------|--------|
+| **VizieR VII/118** | NGC 2000.0 | NGC-, IC- und Messier-Objekte — die wichtigsten Deep-Sky-Kataloge für Galaxien, Nebel und Sternhaufen |
+| **VizieR VII/20** | Sharpless (1959) | HII-Regionen — ionisierte Wasserstoff-Emissionskomplexe, am besten für Weitfeld-Milchstraßenbilder |
+| **VizieR VII/220A** | Barnard (1927) | Dunkelnebel — undurchsichtige Staubwolken, die Hintergrundlicht blockieren |
+| **VizieR V/50** | Yale Bright Star Catalogue (BSC) | Benannte helle Sterne zur Feldidentifikation |
+| **SIMBAD** | TAP-Abfrage | UGC-, Abell-, Arp-, Hickson-, Markarian-, vdB-, PGC-, MCG-Objekte, plus Auflösung gebräuchlicher Namen für alle Objekte |
 
 ### Wie die Kataloge funktionieren
 
-Alle integrierten Kataloge werden **immer durchsucht** — die Objekttyp-Kontrollkästchen steuern, *welche Arten* von Objekten angezeigt werden, nicht welche Kataloge durchsucht werden. Wenn Sie beispielsweise nur „Galaxien" aktivieren, durchsucht das Skript alle 7 Kataloge, zeigt aber nur Galaxien-Typ-Objekte aus allen Katalogen an.
+Alle 5 Datenquellen werden **immer parallel** über einen ThreadPoolExecutor abgefragt — die Objekttyp-Kontrollkästchen steuern, *welche Arten* von Objekten angezeigt werden, nicht welche Kataloge durchsucht werden. Wenn Sie beispielsweise nur „Galaxien" aktivieren, fragt das Skript alle 5 Quellen ab, zeigt aber nur Galaxien-Typ-Objekte aus allen Quellen an.
 
 Das bedeutet:
-- **M31** stammt aus dem Messier-Katalog als Galaxie
-- **NGC 7000** stammt aus dem NGC-Katalog als Emissionsnebel
-- **Sh2-240** stammt aus dem Sharpless-Katalog als HII-Region
-- **B33** stammt aus dem Barnard-Katalog als Dunkelnebel
-- **Vega** stammt aus dem Named Stars-Katalog
+- **M31** stammt aus VizieR NGC 2000.0 als Galaxie
+- **NGC 7000** stammt aus VizieR NGC 2000.0 als Emissionsnebel
+- **Sh2-240** stammt aus VizieR Sharpless als HII-Region
+- **B33** stammt aus VizieR Barnard als Dunkelnebel
+- **Vega** stammt aus dem Yale BSC
+- **UGC 12345** stammt aus SIMBAD
 
 ### Deduplizierung
 
-Objekte, die in mehreren Katalogen vorkommen (z. B. M42 ist auch NGC 1976), werden automatisch dedupliziert. Der erste Katalog, der ein Objekt liefert, hat Vorrang — Messier-Bezeichnungen haben also Priorität vor NGC, und NGC hat Priorität vor IC.
+Objekte, die in mehreren Datenquellen vorkommen (z. B. M42 ist auch NGC 1976), werden automatisch nach Name und räumlicher Nähe dedupliziert. Wenn sich zwei Ergebnisse auf dasselbe Objekt beziehen, hat die bekanntere Bezeichnung Vorrang — Messier-Bezeichnungen haben also Priorität vor NGC, und NGC hat Priorität vor IC.
 
-### SIMBAD Online
+### SIMBAD
 
-Wenn aktiviert, fragt das Skript die astronomische Datenbank **SIMBAD** über das Internet nach Objekten ab, die nicht in den integrierten Katalogen gefunden wurden. Dies kann finden:
+SIMBAD wird **immer automatisch** zusammen mit den VizieR-Katalogen abgefragt. Es liefert:
 
 - Schwache Galaxien (UGC-, MCG-, PGC-Kataloge)
 - Abell-Galaxienhaufen
-- Obskure NGC/IC-Objekte unterhalb der Helligkeitsgrenze des integrierten Katalogs
-- Zusätzliche Nebel und Sternhaufen
+- Arp-Galaxien und Hickson Kompaktgruppen
+- Markarian-Galaxien
+- vdB-Reflexionsnebel
+- Auflösung gebräuchlicher Namen für alle Objekte
+- Zusätzliche NGC/IC-Objekte, die nicht in der VizieR VII/118-Auswahl enthalten sind
 
-**Voraussetzungen:** Internetverbindung und das Python-Paket `astroquery`. Störeinträge aus Durchmusterungskatalogen (SDSS, 2MASS, WISE usw.) werden automatisch herausgefiltert.
+**Voraussetzungen:** Internetverbindung und das Python-Paket `astroquery`. Störeinträge aus Durchmusterungskatalogen (SDSS, 2MASS, WISE, FAUST, IRAS usw.) werden automatisch herausgefiltert.
 
 ---
 
@@ -291,13 +290,15 @@ Jeder Objekttyp hat eine eigene Farbe zur einfachen Identifikation:
 | **Magenta** | Supernova-Überreste | Explosionstrümmer | M1 (Krebs), Schleiernebel, Simeis 147 |
 | **Grau** | Dunkelnebel | Undurchsichtige Staubwolken | B33 (Pferdekopf), B78 (Pfeife) |
 | **Rot-Rosa** | HII-Regionen | Sharpless ionisierte Wasserstoffregionen | Herznebel, Seelennebel, Barnards Schleife |
-| **Weiß** | Benannte Sterne | IAU-benannte und Bayer-Sterne bis ~Mag. 5,5 | Vega, Deneb, Polaris, Beteigeuze |
+| **Hellblau** | Asterismen | Sternmuster, keine echten Sternhaufen | Kleiderbügel, Kembles Kaskade |
+| **Violett** | Quasare | QSOs und AGN | 3C 273, Markarian 421 |
+| **Weiß** | Benannte Sterne | Helle Sterne aus Yale BSC und SIMBAD | Vega, Deneb, Polaris, Beteigeuze |
 
 ### Standardeinstellungen
 
-Standardmäßig sind folgende Typen **aktiviert**: Galaxien, Emissionsnebel, Reflexionsnebel, Planetarische Nebel, Offene Sternhaufen, Kugelsternhaufen, Supernova-Überreste, Benannte Sterne.
+Standardmäßig sind die Typen der **linken Spalte aktiviert** (EIN): Galaxien, Emissionsnebel, Planetarische Nebel, Offene Sternhaufen, Kugelsternhaufen, Benannte Sterne.
 
-Standardmäßig sind folgende Typen **deaktiviert**: Dunkelnebel, HII-Regionen. (Diese können bei Weitfeldbildern viele Beschriftungen erzeugen; aktivieren Sie sie, wenn es relevant ist.)
+Standardmäßig sind die Typen der **rechten Spalte deaktiviert** (AUS): Reflexionsnebel, Supernova-Überreste, Dunkelnebel, HII-Regionen, Asterismen, Quasare. (Diese können bei Weitfeldbildern viele Beschriftungen erzeugen oder sind spezialisierte Typen; aktivieren Sie sie, wenn es relevant ist.)
 
 ### Grenzwert für Helligkeit
 
@@ -346,7 +347,7 @@ Wenn aktiviert, wird die Typbezeichnung angehängt:
 
 ### Gebräuchliche Namen anzeigen
 
-Wenn **aktiviert** (Standard): Zeigt populäre Namen an, wo verfügbar:
+Wenn **aktiviert** (Standard): Zeigt populäre Namen an, wo verfügbar. Gebräuchliche Namen werden über eine SIMBAD-TAP-Abfrage aufgelöst und gefiltert, um katalogähnliche Bezeichner (FAUST, IRAS, 2MASS, SDSS usw.) auszuschließen, sodass nur erkennbare Namen angezeigt werden:
 - `M31 (Andromeda Galaxy)` statt nur `M31`
 - `NGC 7000 (North America Nebula)`
 
@@ -483,12 +484,11 @@ Das beschriftete Bild wird im **Arbeitsverzeichnis von Siril** gespeichert — d
 1. Laden Sie das Plate-Solved-Bild
 2. Starten Sie Annotate Image
 3. Deaktivieren Sie alle Typen außer **Galaxien**
-4. Aktivieren Sie **SIMBAD online**, um schwächere Galaxien zu finden, die nicht in den integrierten Katalogen enthalten sind
-5. Erhöhen Sie den Grenzwert für Helligkeit auf 14–16
-6. Deaktivieren Sie gebräuchliche Namen für ein saubereres Erscheinungsbild (viele schwache Galaxien haben ohnehin keine gebräuchlichen Namen)
-7. Klicken Sie auf **Annotate Image**
+4. Erhöhen Sie den Grenzwert für Helligkeit auf 14–16
+5. Deaktivieren Sie gebräuchliche Namen für ein saubereres Erscheinungsbild (viele schwache Galaxien haben ohnehin keine gebräuchlichen Namen)
+6. Klicken Sie auf **Annotate Image**
 
-**Ergebnis:** Jede Galaxie im Feld ist mit ihrer Katalogbezeichnung beschriftet, einschließlich schwacher Hintergrundgalaxien, die SIMBAD entdeckt.
+**Ergebnis:** Jede Galaxie im Feld ist mit ihrer Katalogbezeichnung beschriftet, einschließlich schwacher Hintergrundgalaxien, die über SIMBAD entdeckt werden.
 
 ### Anwendungsfall 4: Beschriftetes Bild in Druckqualität
 
@@ -540,7 +540,7 @@ Das beschriftete Bild wird im **Arbeitsverzeichnis von Siril** gespeichert — d
 
 **Ablauf:**
 1. Laden Sie das Plate-Solved-Bild
-2. Aktivieren Sie alle Objekttypen einschließlich HII-Regionen und Dunkelnebel
+2. Aktivieren Sie alle Objekttypen einschließlich HII-Regionen, Dunkelnebel, Asterismen und Quasare
 3. Aktivieren Sie: Helligkeitslabels, Typlabels, gebräuchliche Namen
 4. Aktivieren Sie alle Extras: Gitter, Infobox, Kompass, Legende
 5. Setzen Sie die Schriftgröße auf 12 für gute Lesbarkeit
@@ -590,11 +590,9 @@ Der Zeitstempel im Dateinamen stellt sicher, dass Sie eine vorherige Ausgabe nie
 
 5. **Passen Sie die Schriftgröße an die beabsichtigte Anzeigegröße an.** Für Bilder, die im Vollbildmodus auf einem Monitor betrachtet werden, sind 10 pt ausreichend. Für Bilder, die als Miniaturansichten in sozialen Medien betrachtet werden, erhöhen Sie auf 14–16 pt.
 
-6. **Verwenden Sie SIMBAD sparsam.** SIMBAD kann Hunderte von Objekten finden, was die Beschriftung überladen kann. Es ist am nützlichsten für galaxienreiche Felder, in denen die integrierten Kataloge nicht tief genug gehen.
+6. **Der Grenzwert für Helligkeit ist Ihre mächtigste Steuerung.** Senken Sie ihn, um Unordnung zu reduzieren; erhöhen Sie ihn, um versteckte Objekte zu finden. Dies ist der effektivste Weg, um die Dichte Ihrer Beschriftung zu steuern. Experimentieren Sie mit verschiedenen Werten, um den optimalen Wert für Ihr Bild zu finden.
 
 7. **Dunkelnebel und HII-Regionen eignen sich am besten für Weitfeldbilder.** Bei Bildern mit engem Bildfeld (kleinem FOV) erstrecken sich diese großen Strukturen oft über die Bildränder hinaus und erzeugen Beschriftungen für Objekte, die man nicht wirklich sehen kann.
-
-8. **Der Grenzwert für Helligkeit ist Ihre mächtigste Steuerung.** Senken Sie ihn, um Unordnung zu reduzieren; erhöhen Sie ihn, um versteckte Objekte zu finden. Experimentieren Sie mit verschiedenen Werten, um den optimalen Wert für Ihr Bild zu finden.
 
 ### Ausgabe
 
@@ -628,8 +626,7 @@ Der Zeitstempel im Dateinamen stellt sicher, dass Sie eine vorherige Ausgabe nie
 **Ursache:** Das Bildfeld enthält möglicherweise keine Katalogobjekte oberhalb des Helligkeitsgrenzwerts, oder der Grenzwert ist zu restriktiv.
 **Lösung:**
 - Erhöhen Sie den Grenzwert für Helligkeit (z. B. von 12 auf 15)
-- Aktivieren Sie zusätzliche Objekttypen (HII-Regionen, Dunkelnebel)
-- Aktivieren Sie SIMBAD online für eine tiefere Objektentdeckung
+- Aktivieren Sie zusätzliche Objekttypen (HII-Regionen, Dunkelnebel, Asterismen)
 - Überprüfen Sie die Protokoll-Registerkarte — sie zeigt genau, welche Kataloge durchsucht wurden und wie viele Objekte gefunden wurden
 
 ### Beschriftung ist zu überladen
@@ -644,8 +641,17 @@ Der Zeitstempel im Dateinamen stellt sicher, dass Sie eine vorherige Ausgabe nie
 
 ### SIMBAD-Abfrage schlägt fehl
 
-**Ursache:** Das Paket `astroquery` ist nicht installiert oder es besteht keine Internetverbindung.
-**Lösung:** Installieren Sie astroquery mit `pip install astroquery` im Terminal. Stellen Sie sicher, dass Sie Internetzugang haben.
+**Ursache:** SIMBAD wird immer automatisch abgefragt. Ein Fehler kann durch fehlende Internetverbindung, SIMBAD-Serverwartung oder einen Timeout verursacht werden.
+**Lösung:** Das Skript behandelt SIMBAD-Fehler elegant — es fällt auf reine VizieR-Ergebnisse zurück. Sie erhalten weiterhin Beschriftungen aus den NGC 2000.0-, Sharpless-, Barnard- und Yale BSC-Katalogen. Überprüfen Sie die Protokoll-Registerkarte für den spezifischen Fehler. Wenn SIMBAD vorübergehend nicht verfügbar ist, versuchen Sie es später erneut.
+
+### Beschriftung ist langsam
+
+**Ursache:** Alle 5 Datenquellen werden parallel über das Internet abgefragt. Weitfeldbilder können gekachelte Abfragen auslösen, um das gesamte Feld abzudecken.
+**Lösung:**
+- Dies ist normal für die erste Beschriftung eines bestimmten Feldes — nachfolgende Durchläufe profitieren von Caching
+- Weitfeld-Mosaike erfordern mehr Abfragen, um die größere Himmelsfläche abzudecken
+- Überprüfen Sie Ihre Internetverbindung, wenn Abfragen einen Timeout haben
+- Die Protokoll-Registerkarte zeigt den Fortschritt jeder Katalogabfrage
 
 ### Ausgabedatei ist sehr groß
 
@@ -659,7 +665,7 @@ Der Zeitstempel im Dateinamen stellt sicher, dass Sie eine vorherige Ausgabe nie
 
 ### Labels überlappen sich trotz Kollisionsvermeidung
 
-**Ursache:** In sehr dichten Feldern (Galaxienhaufen, dichte Milchstraßenregionen) findet der 8-Positionen-Platzierungsalgorithmus möglicherweise nicht für jedes Label eine kollisionsfreie Position.
+**Ursache:** In sehr dichten Feldern (Galaxienhaufen, dichte Milchstraßenregionen) findet der 32-Kandidaten-Platzierungsalgorithmus mit Raumgitter-Bewertung möglicherweise nicht für jedes Label eine kollisionsfreie Position.
 **Lösung:** Reduzieren Sie die Anzahl der beschrifteten Objekte, indem Sie den Grenzwert für Helligkeit senken oder einige Objekttypen deaktivieren. Die Kollisionsvermeidung funktioniert am besten mit weniger als ca. 50 Objekten.
 
 ---
@@ -667,13 +673,19 @@ Der Zeitstempel im Dateinamen stellt sicher, dass Sie eine vorherige Ausgabe nie
 ## 15. Häufige Fragen
 
 **F: Ersetzt dies PixInsights AnnotateImage-Skript?**
-A: Für die meisten Zwecke ja. Es bietet die gleiche Kernfunktionalität — Katalogobjekt-Beschriftung auf Plate-Solved-Bildern — mit zusätzlichen Funktionen wie einer grafischen Oberfläche, SIMBAD-Online-Abfragen und persistenten Einstellungen. PixInsights Skript unterstützt einige zusätzliche Katalogquellen, aber die 7 integrierten Kataloge von Annotate Image decken die überwiegende Mehrheit der interessanten Objekte ab.
+A: Für die meisten Zwecke ja. Es bietet die gleiche Kernfunktionalität — Katalogobjekt-Beschriftung auf Plate-Solved-Bildern — mit zusätzlichen Funktionen wie einer grafischen Oberfläche, Live-Online-Katalogabfragen und persistenten Einstellungen. PixInsights Skript unterstützt einige zusätzliche Katalogquellen, aber die 5 Online-Datenquellen von Annotate Image decken die überwiegende Mehrheit der interessanten Objekte ab.
 
 **F: Kann ich nicht Plate-Solved-Bilder beschriften?**
 A: Nein. Das Skript benötigt WCS-Koordinaten, um zu wissen, wohin jeder Pixel am Himmel zeigt. Ohne Plate Solving kann es nicht bestimmen, welche Objekte sich in Ihrem Feld befinden. Plate Solving in Siril ist schnell und kostenlos — es gibt keinen Grund, es nicht zu tun.
 
 **F: Verändert das Skript mein Originalbild?**
 A: Nein. Das Skript liest Ihr Bild zur Darstellung und erstellt eine **neue** Datei mit den Beschriftungen. Ihre originale FITS-Datei wird nie verändert.
+
+**F: Benötigt das Skript eine Internetverbindung?**
+A: Ja. Alle Katalogdaten stammen aus Live-VizieR- und SIMBAD-Abfragen über das Internet. Ohne Verbindung kann das Skript keine Objektdaten abrufen und die Beschriftung schlägt fehl.
+
+**F: Wie geht das Skript mit großen Mosaikbildern um?**
+A: Das Skript beinhaltet automatische Anzeige-Verkleinerung, DPI-Begrenzung und Speicherverwaltung für große Mosaike. Sehr große Bilder werden intern für das Rendering verkleinert, um übermäßigen Speicherverbrauch zu vermeiden, während die Ausgabe die angemessene Qualität für die gewählte DPI-Einstellung beibehält.
 
 **F: Kann ich Farb- (RGB) und Mono-Bilder beschriften?**
 A: Ja. Das Skript verarbeitet sowohl RGB- als auch Einzelkanal- (Mono-) Bilder. Mono-Bilder werden automatisch in 3-Kanal-Bilder für die beschriftete Ausgabe konvertiert.
@@ -719,6 +731,7 @@ Dies stellt die Kompatibilität mit verschiedenen Siril-Versionen und Plate-Solv
 Teil der **Svenesis Siril Scripts**-Sammlung, die auch umfasst:
 - Svenesis Blink Comparator
 - Svenesis Gradient Analyzer
+- Svenesis Image Advisor
 - Svenesis Multiple Histogram Viewer
 - Svenesis Script Security Scanner
 

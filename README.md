@@ -26,9 +26,9 @@ GPL-3.0-or-later
 
 ## Svenesis Annotate Image
 
-**File:** `Svenesis-AnnotateImage.py` (v1.0.0) — **[Detailed Instructions](Instructions/Svenesis-AnnotateImage-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-AnnotateImage-Instructions_de.md)**
+**File:** `Svenesis-AnnotateImage.py` (v1.1.0) — **[Detailed Instructions](Instructions/Svenesis-AnnotateImage-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-AnnotateImage-Instructions_de.md)**
 
-Renders catalog annotations (deep-sky objects, named stars, coordinate grid, compass, info box) onto a plate-solved image and exports it as a shareable PNG, TIFF, or JPEG. Inspired by PixInsight's AnnotateImage script. Unlike Siril's built-in overlay annotations, this script burns the annotations into an exportable image — ready to post on social media, forums, or include in observation reports.
+Renders catalog annotations (deep-sky objects, named stars, coordinate grid, compass, info box) onto a plate-solved image and exports it as a shareable PNG, TIFF, or JPEG. All object data comes from live online VizieR and SIMBAD queries — no hardcoded or embedded catalogs. Parallel queries via ThreadPoolExecutor keep annotation fast even with multiple catalog sources. Inspired by PixInsight's AnnotateImage script. Unlike Siril's built-in overlay annotations, this script burns the annotations into an exportable image — ready to post on social media, forums, or include in observation reports.
 
 ### Screenshots
 
@@ -40,7 +40,7 @@ Renders catalog annotations (deep-sky objects, named stars, coordinate grid, com
 
 #### Object selection by type
 
-Instead of choosing catalogs, you select **which types of objects** to annotate. All embedded catalogs are always searched — objects are filtered by your type selection:
+Instead of choosing catalogs, you select **which types of objects** to annotate. All online catalog sources are queried in parallel — objects are filtered by your type selection:
 
 | Color | Type | Examples |
 |-------|------|----------|
@@ -54,22 +54,20 @@ Instead of choosing catalogs, you select **which types of objects** to annotate.
 | Grey | Dark Nebulae | Horsehead (B33), Pipe, Snake, Coalsack |
 | Red-pink | HII Regions | Heart, Soul, Barnard's Loop, Cave Nebula |
 | White | Named Stars | ~275 IAU-named stars to mag ~5.5 |
+| Pale blue | Asterisms | Coathanger, Kemble's Cascade |
+| Violet | Quasars | QSOs and AGN from SIMBAD |
 
 Select All / Deselect All buttons for quick toggling.
 
-#### Embedded catalogs
+#### Online catalog sources
 
-- **Messier** — all 110 objects with common names
-- **NGC** — ~230 bright objects (popular astrophotography targets)
-- **IC** — ~40 bright Index Catalogue objects (Horsehead, Flaming Star, Pelican, Heart & Soul, Elephant's Trunk, etc.)
-- **Caldwell** — 109 objects complementing Messier (Eta Carinae, Centaurus A, Helix, Double Cluster, Veil, etc.)
-- **Sharpless** — ~60 HII emission regions (Simeis 147, Barnard's Loop, Tulip, Cave, etc.)
-- **Barnard** — ~30 dark nebulae + LDN entries (Horsehead, Pipe, Snake, Barnard's E, Boogeyman)
-- **Named Stars** — ~275 IAU-named and Bayer-designated stars with full-sky coverage to magnitude ~5.5
+- **VizieR VII/118 (NGC 2000.0)** — NGC, IC, and Messier objects
+- **VizieR VII/20 (Sharpless 1959)** — HII regions
+- **VizieR VII/220A (Barnard 1927)** — Dark nebulae
+- **VizieR V/50 (Yale BSC)** — Named bright stars
+- **SIMBAD** — Supplementary objects (UGC, Abell, Arp, Hickson, Markarian, vdB, PGC, MCG, etc.) plus common name resolution
 
-#### SIMBAD online query
-
-Optional online query to the SIMBAD astronomical database for objects not in the embedded catalogs (UGC, MCG, PGC, Abell, Arp, Markarian, etc.). Survey catalog junk (SDSS, 2MASS, GPM, Gaia, etc.) is automatically filtered out. Requires `astroquery` package and internet connection.
+All data from live online queries — no hardcoded object data. Survey catalog junk (SDSS, 2MASS, GPM, Gaia, etc.) is automatically filtered out. Requires `astroquery` package and internet connection.
 
 #### Annotation overlays
 
@@ -86,7 +84,7 @@ Optional online query to the SIMBAD astronomical database for objects not in the
 - Common names display (e.g. "M31 (Andromeda Galaxy)")
 - Optional magnitude and type labels
 - Color coding by object type (configurable)
-- Label collision avoidance (8-direction greedy algorithm)
+- Label collision avoidance (32-candidate greedy algorithm with spatial grid scoring)
 
 #### Output
 
@@ -116,13 +114,17 @@ Coordinate transforms use `siril.radec2pix()` for maximum compatibility.
 - **Log tab** with detailed diagnostic output
 - **Dark-themed PyQt6 GUI** matching Gradient Analyzer style
 - **Buy me a Coffee** support dialog
+- **Parallel catalog queries** via ThreadPoolExecutor
+- **Thread-safe siril coordinate access**
+- **Large mosaic support** (display downscaling, DPI capping, memory management)
+- **Common names from SIMBAD** with catalog-name filtering
+- **Two-column checkbox layout** for all option groups
 
 ### Requirements
 
 - Siril 1.4+ with Python script support
 - sirilpy (bundled with Siril)
-- numpy, PyQt6, matplotlib, astropy (installed automatically via `s.ensure_installed`)
-- Optional: astroquery (for SIMBAD online queries — `pip install astroquery`)
+- numpy, PyQt6, matplotlib, astropy, astroquery (installed automatically via `s.ensure_installed`)
 
 ### Usage
 
