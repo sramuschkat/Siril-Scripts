@@ -1,13 +1,14 @@
 """
 Svenesis Blink Comparator
-Script Version: 1.2.1
+Script Version: 1.2.4
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
 Contact and support: See repository README and Siril forum / scripts repository.
 
-This script reads the currently loaded sequence from Siril and plays it as
-a blink animation for rapid visual inspection. It helps identify:
+This script prompts for a folder of FITS files, builds a temporary Siril
+sequence from them (optionally registering), and plays it back as a blink
+animation for rapid visual inspection. It helps identify:
 - Satellite trails and airplane tracks
 - Passing clouds or haze
 - Bad frames (tracking errors, wind gusts)
@@ -18,25 +19,21 @@ a blink animation for rapid visual inspection. It helps identify:
 Features:
 - Animated playback with configurable speed (1-30 FPS)
 - Frame navigation (first/prev/next/last) and color-coded slider
-- Keyboard shortcuts (Space, arrows, Home/End, G/B, D, 1-9, Ctrl+Z)
-- Three display modes: Normal, Difference (vs. reference), Selected-only
-- Side-by-side comparison mode (current vs. reference frame)
-- Crossfade transition option for smooth blending
-- Linked or independent per-frame autostretch
+- Keyboard shortcuts (Space, arrows, Home/End, G/B, 1-9, Ctrl+Z)
+- Display modes: Normal, Only-included, Side-by-Side (vs. reference)
+- Globally-linked autostretch (shared median/MAD across all frames)
 - Frame marking: include/exclude with pending changes and batch apply
 - Auto-advance after marking for rapid frame selection
 - Batch reject by threshold (FWHM, Background, Roundness) or worst N%
 - Sortable statistics table (all frames with FWHM, BG, roundness, stars)
 - Statistics graph (FWHM, Background, Roundness over time)
 - Thumbnail filmstrip with lazy loading and color-coded borders
-- Per-frame histogram
 - Undo for frame markings (Ctrl+Z)
 - Export rejected frame list as text file
 - Session summary on close (frames viewed, rejected, FWHM improvement)
 - LRU frame cache with background preloading for smooth playback
 - Autostretch (Midtone Transfer Function) with global parameters
 - Zoom (scroll wheel) and pan (right-click drag)
-- ROI blink mode (select region, blink at 1:1 pixel scale)
 - Per-frame info display (FWHM, background, noise, exposure, date)
 - Dark themed PyQt6 GUI matching the Gradient Analyzer look and feel
 
@@ -48,6 +45,56 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.2.5 - Removed Difference display mode + Linked-stretch toggle
+      - Removed: `Difference (vs. reference)` radio button in Display Mode group.
+        The associated D keyboard shortcut, `_toggle_diff_mode` method, and the
+        in-place subtract/abs/scale/clip path in `FrameCache._load_and_stretch`
+        are all gone. Satellite/airplane artifacts are caught by playing the
+        sequence at 3-5 FPS in Normal mode — no separate mode needed.
+      - Removed: `Linked stretch (same for all frames)` checkbox and the
+        `_on_stretch_mode_changed` handler. Globally-linked autostretch is now
+        the only behavior — it's the sensible default (shows brightness
+        differences between frames, critical for cloud/haze detection).
+      - Changed: `FrameCache.get_frame(index)` signature simplified — no more
+        `difference` / `linked` parameters. Cache key is just the frame index.
+      - Changed: `linked_stretch` QSettings key is no longer read or written.
+      - Kept: reference-frame loading (still used by the Side-by-Side radio).
+
+1.2.4 - Folder-only workflow + UI cleanup + autostretch presets
+      - Changed: folder mode is now the only mode. At startup the script always prompts
+        for a folder of FITS files and builds a temporary `svenesis_blink` sequence
+        (`cd` + `convert` + optional `register -2pass`). The previous "use currently
+        loaded Siril sequence" path has been removed — it offered no real value over
+        building a fresh throwaway sequence.
+      - Changed: Apply writes `rejected_frames.txt` next to the source files and
+        optionally moves rejected FITS into a `rejected/` subfolder. The temp
+        sequence is always cleaned up on close.
+      - Added: autostretch preset dropdown in the zoom bar — Conservative / Default /
+        Aggressive / Linear. Switching presets invalidates the frame + thumbnail caches,
+        reloads visible thumbnails, and redraws the current frame. Choice is persisted
+        via QSettings across sessions.
+      - Changed: Display Options group removed from the right-side panel. `Overlay`
+        checkbox, autostretch preset dropdown, and thumbnail size slider now live
+        inline in the viewer zoom bar next to Copy (Ctrl+C).
+      - Removed: per-frame histogram widget (panel + `HistogramWidget` class +
+        `HISTOGRAM_SUBSAMPLE` constant + `render_histogram` calls). Little used and
+        redundant with the stats table / graph.
+      - Fixed: `seqfind` command replaced with `load_seq` (seqfind was not present in some
+        Siril builds, producing "Command not found" during sequence building and star
+        detection).
+      - Fixed: main window now raises + activates itself after construction (macOS needs
+        a 50 ms retry) so it comes to the foreground after sequence building.
+      - Removed: non-functional ROI feature (UI existed but playback integration was never
+        wired up — signal emitted, never connected; rect stored in widget coords, never used
+        to crop frames). All ROI code, buttons, state, signals, and help text removed.
+      - Fixed: zoom percentage label now updates live during scroll-wheel zoom via new
+        ImageCanvas.zoom_changed signal (previously only updated on frame change)
+      - Changed: "1:1" button renamed to "Fit-in-Window" to match actual behavior
+        (zoom=1.0 on pre-scaled pixmap is fit-to-window, not native pixel size)
+      - Changed: zoom label color #777 → white for better visibility
+      - Removed: redundant "Reset Zoom (Z)" button — Fit-in-Window button and Z shortcut
+        now share the single _fit_to_window() method
+      - Reordered: zoom toolbar — Zoom% / Fit-in-Window / Copy
 1.2.3 - Architecture-level performance pass
       - Optimized: single canvas.update() per frame (was up to 3 queued repaints)
         via defer_update parameter on set_image/set_side_by_side/set_overlay_text
@@ -110,11 +157,8 @@ CHANGELOG:
       - Statistics graph: FWHM, Background, Roundness plotted over all frames
       - Thumbnail filmstrip with lazy loading and color-coded borders
       - Color-coded frame slider (red ticks at excluded frames)
-      - ROI blink mode: select region, blink at 1:1 pixel scale
-      - Crossfade transition option for smooth frame blending
       - Side-by-side comparison mode (current vs. reference)
       - Linked vs. independent per-frame autostretch toggle
-      - Per-frame pixel histogram widget
       - Undo last marking (Ctrl+Z)
       - Session summary on close with FWHM statistics
       - Export rejected frame list as text file
@@ -130,6 +174,8 @@ from __future__ import annotations
 
 import sys
 import os
+import glob
+import shutil
 import logging
 import traceback
 import threading
@@ -162,6 +208,7 @@ from PyQt6.QtWidgets import (
     QDialog, QScrollArea, QProgressBar, QRadioButton, QButtonGroup,
     QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView,
     QComboBox, QFileDialog, QAbstractItemView, QMenu, QLineEdit,
+    QProgressDialog,
 )
 from PyQt6.QtCore import (
     Qt, QSettings, QUrl, QTimer, pyqtSignal, QObject, QRectF, QRect, QPoint,
@@ -171,7 +218,7 @@ from PyQt6.QtGui import (
     QKeySequence, QDesktopServices, QWheelEvent, QMouseEvent,
 )
 
-VERSION = "1.2.3"
+VERSION = "1.2.5"
 
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "BlinkComparator"
@@ -290,17 +337,33 @@ def mtf(midtone: float, x: np.ndarray | float) -> np.ndarray | float:
         return max(0.0, min(1.0, (midtone - 1) * x / denom))
 
 
+# Autostretch presets — user-selectable in Display Options
+AUTOSTRETCH_PRESETS: dict[str, dict | None] = {
+    "Conservative": {"shadows_clip": -3.5, "target_median": 0.20},
+    "Default":      {"shadows_clip": -2.8, "target_median": 0.25},
+    "Aggressive":   {"shadows_clip": -1.5, "target_median": 0.35},
+    "Linear":       None,  # Bypass MTF: just clip to [0,1] and scale to 255
+}
+DEFAULT_AUTOSTRETCH_PRESET = "Default"
+
+
 def autostretch(
     data: np.ndarray,
     shadows_clip: float = -2.8,
     target_median: float = 0.25,
     global_median: float | None = None,
     global_mad: float | None = None,
+    linear: bool = False,
 ) -> np.ndarray:
     """
     Midtone Transfer Function (MTF) Autostretch.
+    If linear=True, bypasses MTF and just clips to [0,1] + scales to 255.
     If global_median/global_mad are provided, uses those for consistent brightness.
     """
+    if linear:
+        out = np.clip(data, 0.0, 1.0) * 255.0
+        return out.astype(np.uint8)
+
     if global_median is not None and global_mad is not None:
         median = global_median
         mad = global_mad
@@ -311,7 +374,9 @@ def autostretch(
             step = flat.size // 500000
             flat = flat[::step]
         median = float(np.median(flat))
-        mad = float(np.median(np.abs(flat - median))) * 1.4826
+        # Raw MAD (no 1.4826 σ-conversion) — shadows_clip is expressed in units
+        # of MAD to match Siril/PixInsight STF convention.
+        mad = float(np.median(np.abs(flat - median)))
 
     shadow = max(0.0, median + shadows_clip * mad)
     highlight = 1.0
@@ -343,24 +408,35 @@ ZOOM_FACTOR = 1.15
 MAX_ZOOM = 20.0
 MIN_ZOOM = 0.1
 SLIDER_HANDLE_MARGIN = 7  # Approximate half-width of slider handle in pixels
-HISTOGRAM_SUBSAMPLE = 100000  # Max pixels for histogram rendering
 
 
 def frame_data_to_qimage(
     frame_data: np.ndarray,
     global_median: float | None = None,
     global_mad: float | None = None,
+    preset: str = DEFAULT_AUTOSTRETCH_PRESET,
 ) -> QImage | None:
     """Convert sirilpy frame data (float32, channels×H×W) to a stretched QImage.
 
     Handles RGB (3×H×W), single-channel (1×H×W), and 2D mono arrays.
-    Applies autostretch and flips from Siril's bottom-up orientation.
+    Applies autostretch (per `preset`) and flips from Siril's bottom-up orientation.
     Returns a QImage that owns its own pixel data (.copy()), or None on failure.
     """
+    params = AUTOSTRETCH_PRESETS.get(preset, AUTOSTRETCH_PRESETS[DEFAULT_AUTOSTRETCH_PRESET])
+    if params is None:
+        stretch_kwargs = {"linear": True}
+    else:
+        stretch_kwargs = {
+            "shadows_clip": params["shadows_clip"],
+            "target_median": params["target_median"],
+            "global_median": global_median,
+            "global_mad": global_mad,
+        }
+
     if frame_data.ndim == 3 and frame_data.shape[0] == 3:
-        r = autostretch(frame_data[0], global_median=global_median, global_mad=global_mad)
-        g = autostretch(frame_data[1], global_median=global_median, global_mad=global_mad)
-        b = autostretch(frame_data[2], global_median=global_median, global_mad=global_mad)
+        r = autostretch(frame_data[0], **stretch_kwargs)
+        g = autostretch(frame_data[1], **stretch_kwargs)
+        b = autostretch(frame_data[2], **stretch_kwargs)
         h, w = r.shape
         # Stack RGB + alpha in one call, flip, ensure C-contiguous for QImage
         alpha = np.full((h, w), 255, dtype=np.uint8)
@@ -368,12 +444,12 @@ def frame_data_to_qimage(
         rgbx = np.ascontiguousarray(rgbx[::-1])
         return QImage(rgbx.data, w, h, w * 4, QImage.Format.Format_RGBX8888).copy()
     elif frame_data.ndim == 3 and frame_data.shape[0] == 1:
-        mono = autostretch(frame_data[0], global_median=global_median, global_mad=global_mad)
+        mono = autostretch(frame_data[0], **stretch_kwargs)
         mono = np.ascontiguousarray(mono[::-1])
         h, w = mono.shape
         return QImage(mono.data, w, h, w, QImage.Format.Format_Grayscale8).copy()
     elif frame_data.ndim == 2:
-        mono = autostretch(frame_data, global_median=global_median, global_mad=global_mad)
+        mono = autostretch(frame_data, **stretch_kwargs)
         mono = np.ascontiguousarray(mono[::-1])
         h, w = mono.shape
         return QImage(mono.data, w, h, w, QImage.Format.Format_Grayscale8).copy()
@@ -686,6 +762,7 @@ class FrameCache:
         max_frames: int = DEFAULT_CACHE_SIZE,
         display_width: int = 800,
         display_height: int = 600,
+        stretch_preset: str = DEFAULT_AUTOSTRETCH_PRESET,
     ):
         self.siril = siril_iface
         self.seq = seq
@@ -697,24 +774,74 @@ class FrameCache:
         self.global_median: float | None = None
         self.global_mad: float | None = None
         self.reference_data: np.ndarray | None = None
+        self.stretch_preset: str = stretch_preset
 
     def compute_global_stretch(self, sample_count: int = 10) -> None:
+        """Sample the sequence to derive a shared median/MAD for linked autostretch.
+
+        IMPORTANT: `autostretch()` operates on frame data normalized to [0, 1]
+        (see load_frame_data), so the returned global_median / global_mad MUST
+        also be in [0, 1]. Siril's `get_seq_stats` returns values in the image's
+        native range (0-65535 for uint16 FITS), so we detect the scale by
+        magnitude and normalize. If stats are unavailable, we fall back to
+        loading a few sample frames and computing directly from the normalized
+        pixel data.
+        """
         total = self.seq.number
         step = max(1, total // sample_count)
         indices = list(range(0, total, step))[:sample_count]
-        medians = []
-        mads = []
+        medians: list[float] = []
+        mads: list[float] = []
+
         for idx in indices:
             try:
                 stats = self.siril.get_seq_stats(idx, 0)
-                if stats is not None:
-                    medians.append(stats.median)
-                    mads.append(stats.avgDev if stats.avgDev > 0 else stats.sigma)
+                if stats is None:
+                    continue
+                med = float(stats.median)
+                # Prefer true MAD if sirilpy exposes it. Otherwise convert
+                # avgDev (= MAD × 1.2533 for Gaussian data) or sigma
+                # (= MAD × 1.4826 for Gaussian data) back to MAD so our
+                # shadows_clip stays in units of MAD (Siril/PI STF convention).
+                mad_val = float(getattr(stats, "mad", 0.0) or 0.0)
+                if mad_val <= 0:
+                    avg_dev = float(getattr(stats, "avgDev", 0.0) or 0.0)
+                    if avg_dev > 0:
+                        mad_val = avg_dev / 1.2533
+                    else:
+                        sigma = float(getattr(stats, "sigma", 0.0) or 0.0)
+                        if sigma > 0:
+                            mad_val = sigma / 1.4826
+                if mad_val <= 0:
+                    continue
+                # Normalize to [0, 1] if the values look like 16-bit ADU.
+                if med > 1.5 or mad_val > 1.5:
+                    med *= (1.0 / 65535.0)
+                    mad_val *= (1.0 / 65535.0)
+                medians.append(med)
+                mads.append(mad_val)
             except Exception:
                 pass
+
+        # Fallback: if the stats call returned nothing usable, sample a few
+        # frames directly and compute median/MAD from the normalized data.
+        if not medians:
+            for idx in indices[:3]:
+                data = load_frame_data(self.siril, idx)
+                if data is None:
+                    continue
+                flat = data.ravel()
+                if flat.size > 500000:
+                    flat = flat[::flat.size // 500000]
+                m = float(np.median(flat))
+                medians.append(m)
+                mads.append(float(np.median(np.abs(flat - m))))
+
         if medians:
             self.global_median = float(np.median(medians))
-            self.global_mad = float(np.median(mads)) * 1.4826 if mads else 0.001
+            # Raw MAD — matches the per-frame fallback and Siril/PI STF
+            # convention where shadows_clip is in units of MAD (not σ).
+            self.global_mad = float(np.median(mads)) if mads else 0.001
         else:
             self.global_median = None
             self.global_mad = None
@@ -725,44 +852,39 @@ class FrameCache:
             ref_idx = 0
         self.reference_data = load_frame_data(self.siril, ref_idx)
 
-    def get_frame(self, index: int, difference: bool = False, linked: bool = True) -> QImage | None:
-        """Get frame from cache or load from Siril. Thread-safe with double-check."""
-        cache_key = (index, difference, linked)
+    def get_frame(self, index: int) -> QImage | None:
+        """Get frame from cache or load from Siril. Thread-safe with double-check.
+
+        Always applies globally-linked autostretch (shared median/MAD across
+        the sequence) so brightness differences between frames are visible.
+        """
         with self.lock:
-            if cache_key in self.cache:
-                self.cache.move_to_end(cache_key)
-                return self.cache[cache_key]
+            if index in self.cache:
+                self.cache.move_to_end(index)
+                return self.cache[index]
             # Mark as loading to prevent duplicate loads from preload threads
-            self.cache[cache_key] = None  # Placeholder
-        qimg = self._load_and_stretch(index, difference, linked)
+            self.cache[index] = None  # Placeholder
+        qimg = self._load_and_stretch(index)
         with self.lock:
             if qimg is not None:
-                self.cache[cache_key] = qimg
-                self.cache.move_to_end(cache_key)
+                self.cache[index] = qimg
+                self.cache.move_to_end(index)
             else:
-                self.cache.pop(cache_key, None)
+                self.cache.pop(index, None)
             while len(self.cache) > self.max_frames:
                 self.cache.popitem(last=False)
         return qimg
 
-    def _load_and_stretch(self, index: int, difference: bool, linked: bool = True) -> QImage | None:
-        """Load frame from Siril, apply stretch, return scaled QImage."""
+    def _load_and_stretch(self, index: int) -> QImage | None:
+        """Load frame from Siril, apply linked autostretch, return scaled QImage."""
         frame_data = load_frame_data(self.siril, index)
         if frame_data is None:
             return None
 
-        if difference and self.reference_data is not None:
-            if frame_data.shape == self.reference_data.shape:
-                # In-place: subtract, abs, scale, clip — avoids 3 intermediate arrays
-                frame_data = np.subtract(frame_data, self.reference_data)
-                np.abs(frame_data, out=frame_data)
-                frame_data *= 5.0
-                np.clip(frame_data, 0, 1, out=frame_data)
-
-        g_med = self.global_median if linked else None
-        g_mad = self.global_mad if linked else None
-
-        qimg = frame_data_to_qimage(frame_data, g_med, g_mad)
+        qimg = frame_data_to_qimage(
+            frame_data, self.global_median, self.global_mad,
+            preset=self.stretch_preset,
+        )
         if qimg is None:
             return None
 
@@ -776,16 +898,15 @@ class FrameCache:
         with self.lock:
             self.cache.clear()
 
-    def preload_range(self, start: int, count: int, difference: bool = False, linked: bool = True) -> None:
+    def preload_range(self, start: int, count: int) -> None:
         total = self.seq.number
         for i in range(start, min(start + count, total)):
             if i < 0:
                 continue
-            cache_key = (i, difference, linked)
             with self.lock:
-                if cache_key in self.cache:
+                if i in self.cache:
                     continue
-            self.get_frame(i, difference, linked)
+            self.get_frame(i)
 
 
 # Shared thread pool for preloading (1 worker — avoids flooding Siril's socket)
@@ -800,14 +921,20 @@ class ThumbnailCache:
     """Separate LRU cache for small frame thumbnails."""
 
     def __init__(self, siril_iface, seq, global_median=None, global_mad=None,
-                 max_items: int = THUMBNAIL_CACHE_SIZE):
+                 max_items: int = THUMBNAIL_CACHE_SIZE,
+                 stretch_preset: str = DEFAULT_AUTOSTRETCH_PRESET):
         self.siril = siril_iface
         self.seq = seq
         self.global_median = global_median
         self.global_mad = global_mad
         self.max_items = max_items
+        self.stretch_preset = stretch_preset
         self.cache: OrderedDict[int, QPixmap] = OrderedDict()
         self.lock = threading.Lock()
+
+    def invalidate(self) -> None:
+        with self.lock:
+            self.cache.clear()
 
     def get_thumbnail(self, index: int) -> QPixmap | None:
         """Get thumbnail from cache or load. Thread-safe with double-check."""
@@ -833,7 +960,8 @@ class ThumbnailCache:
         data = load_frame_data(self.siril, index)
         if data is None:
             return None
-        qimg = frame_data_to_qimage(data, self.global_median, self.global_mad)
+        qimg = frame_data_to_qimage(data, self.global_median, self.global_mad,
+                                    preset=self.stretch_preset)
         if qimg is None:
             return None
         qimg = qimg.scaled(
@@ -901,6 +1029,29 @@ class FrameMarker:
 
     def get_pending_count(self) -> int:
         return len(self.changes)
+
+    def commit(self) -> None:
+        """Bake pending changes into the baseline — pending count becomes 0.
+
+        Called after Apply Rejections so the user isn't prompted again on
+        close about the same marks they already exported.
+        """
+        if not self.changes:
+            return
+        for idx, incl in self.changes.items():
+            self.original[idx] = incl
+        self.changes.clear()
+        self._excluded_cache = None
+
+    def reset_all(self) -> None:
+        """Force every frame back to 'included' — clears both the Siril-derived
+        baseline and any pending changes. After this call, pending count is 0
+        and get_excluded_indices() returns an empty set.
+        """
+        for i in range(self.total):
+            self.original[i] = True
+        self.changes.clear()
+        self._excluded_cache = None
 
     def get_newly_excluded_count(self) -> int:
         return sum(1 for v in self.changes.values() if not v)
@@ -1162,6 +1313,7 @@ class ScatterPlotWidget(_MplWidgetBase):
         self._current_marker = None  # matplotlib artist for current frame star
         self._ax = None  # axes reference for lightweight updates
         self._frame_to_coord: dict[int, tuple[float, float]] = {}  # frame_idx → (x, y)
+        self._excluded_set: set[int] = set()  # to skip yellow-star on excluded frames
 
     def render(self, frame_stats: FrameStatistics, marker: FrameMarker,
                x_metric: str = "fwhm", y_metric: str = "roundness",
@@ -1174,6 +1326,7 @@ class ScatterPlotWidget(_MplWidgetBase):
         ax.set_facecolor("#1e1e1e")
 
         excluded = marker.get_excluded_indices()
+        self._excluded_set = set(excluded)
         rows = frame_stats.get_all_rows()
 
         incl_x, incl_y, incl_idx = [], [], []
@@ -1205,10 +1358,11 @@ class ScatterPlotWidget(_MplWidgetBase):
         self._y_range = (min(all_y), max(all_y)) if all_y else (0.0, 1.0)
 
         if incl_x:
-            ax.scatter(incl_x, incl_y, color="#88aaff", s=30, alpha=0.7, label="Included", zorder=3)
+            ax.scatter(incl_x, incl_y, color="#55cc55", s=30, alpha=0.8,
+                       label="Good", zorder=3)
         if excl_x:
-            ax.scatter(excl_x, excl_y, color="#dd4444", s=30, alpha=0.5, marker="x",
-                       label="Excluded", zorder=2)
+            ax.scatter(excl_x, excl_y, color="#dd4444", s=30, alpha=0.7, marker="x",
+                       label="Bad", zorder=2)
         # Build frame→coordinate map for lightweight current-marker updates
         self._frame_to_coord = {}
         for row in rows:
@@ -1217,12 +1371,13 @@ class ScatterPlotWidget(_MplWidgetBase):
             if xv > 0 and yv > 0:
                 self._frame_to_coord[row["frame_idx"]] = (xv, yv)
 
-        # Plot current frame marker
+        # Plot current frame marker — yellow star always on top of Good (green)
+        # and Bad (red) points.
         self._current_marker = None
         if cur_x is not None:
             self._current_marker = ax.scatter(
-                [cur_x], [cur_y], color="#ff4444", s=100, marker="*",
-                edgecolors="#ff6666", linewidths=1.5, label="Current", zorder=5)
+                [cur_x], [cur_y], color="#ffd700", s=200, marker="*",
+                edgecolors="#000000", linewidths=1.4, label="Current", zorder=10)
 
         self._ax = ax
 
@@ -1249,14 +1404,16 @@ class ScatterPlotWidget(_MplWidgetBase):
         """Lightweight update: move the current-frame star marker without full re-render."""
         if self._ax is None or self._canvas is None:
             return
-        coord = self._frame_to_coord.get(frame_index)
         if self._current_marker is not None:
             self._current_marker.remove()
             self._current_marker = None
+        # Yellow star always drawn for the current frame (over either a green
+        # "good" point or a red "bad" X), at the highest zorder.
+        coord = self._frame_to_coord.get(frame_index)
         if coord is not None:
             self._current_marker = self._ax.scatter(
-                [coord[0]], [coord[1]], color="#ff4444", s=100, marker="*",
-                edgecolors="#ff6666", linewidths=1.5, zorder=5)
+                [coord[0]], [coord[1]], color="#ffd700", s=200, marker="*",
+                edgecolors="#000000", linewidths=1.4, zorder=10)
         try:
             self._canvas.draw_idle()
         except Exception:
@@ -1807,61 +1964,17 @@ class ThumbnailFilmstrip(QWidget):
 
 
 # ------------------------------------------------------------------------------
-# PER-FRAME HISTOGRAM WIDGET
-# ------------------------------------------------------------------------------
-
-class HistogramWidget(_MplWidgetBase):
-    """Small per-frame pixel histogram."""
-
-    def __init__(self, parent=None):
-        super().__init__("Histogram", parent)
-        self.setMinimumSize(300, 100)
-        self.setMaximumHeight(140)
-
-    def render_histogram(self, cache: FrameCache, frame_index: int,
-                         linked: bool = True) -> None:
-        """Render histogram for a frame. Loads data via shared load_frame_data() helper."""
-        if not self._mpl_available:
-            return
-        try:
-            data = load_frame_data(cache.siril, frame_index)
-            if data is None:
-                return
-            # Use channel 0 (or mono)
-            ch = data[0] if data.ndim == 3 else data
-            # Subsample: take every Nth pixel for speed
-            ch_flat = ch.ravel()
-            if ch_flat.size > HISTOGRAM_SUBSAMPLE:
-                ch_flat = ch_flat[::ch_flat.size // HISTOGRAM_SUBSAMPLE]
-
-            fig = self._Figure(figsize=(4, 1.5), facecolor="#1e1e1e")
-            ax = fig.add_subplot(111)
-            ax.set_facecolor("#1e1e1e")
-            ax.hist(ch_flat, bins=200, color="#88aaff", alpha=0.8, edgecolor="none")
-            ax.set_xlim(0, max(0.01, float(np.percentile(ch_flat, 99.5))))
-            ax.tick_params(colors="#aaaaaa", labelsize=6)
-            ax.set_yticks([])
-            for spine in ax.spines.values():
-                spine.set_edgecolor("#555555")
-            fig.tight_layout(pad=0.3)
-            self._replace_canvas(fig)
-        except (SirilError, OSError, ValueError, TypeError, RuntimeError) as exc:
-            log.warning("Failed to render histogram for frame %d: %s", frame_index, exc)
-
-
-# ------------------------------------------------------------------------------
 # ZOOMABLE IMAGE WIDGET
 # ------------------------------------------------------------------------------
 
 class ImageCanvas(QWidget):
-    """Widget that displays a QImage with zoom, pan, ROI, side-by-side, and crossfade."""
-    roi_selected = pyqtSignal(QRect)
+    """Widget that displays a QImage with zoom, pan, and side-by-side."""
+    zoom_changed = pyqtSignal(float)
 
     # Pre-allocated colors to avoid per-frame QColor construction from strings
     _CLR_BG = QColor(26, 26, 26)
     _CLR_GRAY = QColor(100, 100, 100)
     _CLR_ACCENT = QColor(136, 170, 255)       # #88aaff
-    _CLR_ROI_FILL = QColor(136, 170, 255, 30)
     _CLR_OVERLAY_BG = QColor(0, 0, 0, 180)
     _CLR_OVERLAY_FG = QColor(224, 224, 224)    # #e0e0e0
 
@@ -1885,16 +1998,6 @@ class ImageCanvas(QWidget):
         # Side-by-side mode
         self._side_by_side: bool = False
 
-        # Crossfade
-        self._crossfade_alpha: float = 1.0
-        self._crossfade_pixmap: QPixmap | None = None
-
-        # ROI mode
-        self._roi_mode: bool = False
-        self._roi_drawing: bool = False
-        self._roi_rect: QRect | None = None
-        self._roi_start: QPoint | None = None
-
         # Frame info overlay
         self._overlay_text: str = ""
         self._show_overlay: bool = True
@@ -1906,8 +2009,6 @@ class ImageCanvas(QWidget):
             self._pixmap = None
         else:
             self._pixmap = QPixmap.fromImage(qimg)
-        self._crossfade_alpha = 1.0
-        self._crossfade_pixmap = None
         if not defer_update:
             self.update()
 
@@ -1924,14 +2025,6 @@ class ImageCanvas(QWidget):
         if not defer_update:
             self.update()
 
-    def start_crossfade(self, from_pixmap: QPixmap) -> None:
-        self._crossfade_pixmap = from_pixmap
-        self._crossfade_alpha = 0.0
-
-    def set_crossfade_alpha(self, alpha: float) -> None:
-        self._crossfade_alpha = alpha
-        self.update()
-
     def set_overlay_text(self, text: str, defer_update: bool = False) -> None:
         self._overlay_text = text
         if not defer_update:
@@ -1941,21 +2034,12 @@ class ImageCanvas(QWidget):
         self._show_overlay = show
         self.update()
 
-    def set_roi_mode(self, enabled: bool) -> None:
-        self._roi_mode = enabled
-        if not enabled:
-            self._roi_rect = None
-            self._roi_drawing = False
-        self.update()
-
-    def get_roi_rect(self) -> QRect | None:
-        return self._roi_rect
-
     def reset_view(self) -> None:
         self._zoom = 1.0
         self._pan_x = 0.0
         self._pan_y = 0.0
         self.update()
+        self.zoom_changed.emit(self._zoom)
 
     def _draw_pixmap(self, painter: QPainter, pixmap: QPixmap, offset_x: float = 0,
                      available_width: float | None = None) -> None:
@@ -1992,21 +2076,7 @@ class ImageCanvas(QWidget):
             painter.drawText(10, 20, "Current")
             painter.drawText(int(half_w) + 10, 20, "Reference")
         else:
-            # Crossfade
-            if self._crossfade_pixmap is not None and self._crossfade_alpha < 1.0:
-                painter.setOpacity(1.0 - self._crossfade_alpha)
-                self._draw_pixmap(painter, self._crossfade_pixmap)
-                painter.setOpacity(self._crossfade_alpha)
-                self._draw_pixmap(painter, self._pixmap)
-                painter.setOpacity(1.0)
-            else:
-                self._draw_pixmap(painter, self._pixmap)
-
-        # ROI overlay
-        if self._roi_rect is not None and not self._roi_rect.isNull():
-            painter.setPen(QPen(self._CLR_ACCENT, 2, Qt.PenStyle.DashLine))
-            painter.setBrush(self._CLR_ROI_FILL)
-            painter.drawRect(self._roi_rect)
+            self._draw_pixmap(painter, self._pixmap)
 
         # Frame info overlay
         if self._show_overlay and self._overlay_text and self._pixmap is not None:
@@ -2035,13 +2105,9 @@ class ImageCanvas(QWidget):
         elif delta < 0:
             self._zoom = max(self._zoom / ZOOM_FACTOR, MIN_ZOOM)
         self.update()
+        self.zoom_changed.emit(self._zoom)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        if self._roi_mode and event.button() == Qt.MouseButton.LeftButton:
-            self._roi_drawing = True
-            self._roi_start = event.position().toPoint()
-            self._roi_rect = QRect(self._roi_start, self._roi_start)
-            return
         if event.button() in (Qt.MouseButton.RightButton, Qt.MouseButton.MiddleButton):
             self._dragging = True
             self._drag_start_x = event.position().x()
@@ -2050,10 +2116,6 @@ class ImageCanvas(QWidget):
             self._drag_pan_start_y = self._pan_y
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if self._roi_drawing and self._roi_start is not None:
-            self._roi_rect = QRect(self._roi_start, event.position().toPoint()).normalized()
-            self.update()
-            return
         if self._dragging:
             dx = event.position().x() - self._drag_start_x
             dy = event.position().y() - self._drag_start_y
@@ -2062,11 +2124,6 @@ class ImageCanvas(QWidget):
             self.update()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        if self._roi_drawing and event.button() == Qt.MouseButton.LeftButton:
-            self._roi_drawing = False
-            if self._roi_rect is not None and self._roi_rect.width() > 10 and self._roi_rect.height() > 10:
-                self.roi_selected.emit(self._roi_rect)
-            return
         if event.button() in (Qt.MouseButton.RightButton, Qt.MouseButton.MiddleButton):
             self._dragging = False
 
@@ -2083,9 +2140,12 @@ class BlinkComparatorWindow(QMainWindow):
     Right panel: tabbed (viewer, statistics table, statistics graph) + filmstrip.
     """
 
-    def __init__(self, siril_iface=None):
+    def __init__(self, siril_iface=None, folder_mode_path: str = ""):
         super().__init__()
+        if not folder_mode_path:
+            raise ValueError("folder_mode_path is required — folder mode is the only mode.")
         self.siril = siril_iface or s.SirilInterface()
+        self._folder_mode_path: str = folder_mode_path
 
         if not self.siril.connected:
             self.siril.connect()
@@ -2121,11 +2181,6 @@ class BlinkComparatorWindow(QMainWindow):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._advance_frame)
 
-        # Crossfade timer
-        self._cf_timer = QTimer(self)
-        self._cf_timer.timeout.connect(self._crossfade_tick)
-        self._cf_steps = 0
-
         self.cache: FrameCache | None = None
         self.thumb_cache: ThumbnailCache | None = None
 
@@ -2135,11 +2190,19 @@ class BlinkComparatorWindow(QMainWindow):
         canvas_w = max(400, self.canvas.width())
         canvas_h = max(300, self.canvas.height())
 
+        # Seed the caches with whatever preset the user has selected in the
+        # zoom-bar dropdown (restored from QSettings in _load_settings). The
+        # currentTextChanged signal fires before _deferred_init runs, but the
+        # handler bails because the caches don't exist yet — so we pick it up
+        # here so the very first frame is rendered with the correct preset.
+        current_preset = self.combo_autostretch.currentText()
+
         self.cache = FrameCache(
             self.siril, self.seq,
             max_frames=DEFAULT_CACHE_SIZE,
             display_width=canvas_w,
             display_height=canvas_h,
+            stretch_preset=current_preset,
         )
 
         self.progress_bar.setVisible(True)
@@ -2204,6 +2267,7 @@ class BlinkComparatorWindow(QMainWindow):
             self.siril, self.seq,
             global_median=self.cache.global_median,
             global_mad=self.cache.global_mad,
+            stretch_preset=current_preset,
         )
 
         self.progress_bar.setFormat("Loading first frame...")
@@ -2308,9 +2372,9 @@ class BlinkComparatorWindow(QMainWindow):
         seqname = self.seq.seqname
         try:
             self.siril.log(f"[BlinkComparator] Reloading sequence '{seqname}' from disk...")
-            self.siril.cmd("seqfind", seqname)
+            self.siril.cmd("load_seq", seqname)
         except Exception as ex:
-            self.siril.log(f"[BlinkComparator] WARNING: seqfind failed: {ex}")
+            self.siril.log(f"[BlinkComparator] WARNING: load_seq failed: {ex}")
 
         # Now get the refreshed sequence object
         try:
@@ -2415,46 +2479,37 @@ class BlinkComparatorWindow(QMainWindow):
         self._build_batch_group(layout)
         self._build_approval_group(layout)
 
-        # Display options
-        opts_group = QGroupBox("Display Options")
-        opts_layout = QVBoxLayout(opts_group)
-
-        self.chk_overlay = QCheckBox("Show frame info overlay")
+        # Display Options widgets live in the zoom bar (see _build_right_panel)
+        self.chk_overlay = QCheckBox("Overlay")
         self.chk_overlay.setChecked(True)
         self.chk_overlay.setToolTip("Show frame number and FWHM burned into the image corner")
         _nofocus(self.chk_overlay)
         self.chk_overlay.stateChanged.connect(lambda s: self.canvas.set_show_overlay(s == Qt.CheckState.Checked.value))
-        opts_layout.addWidget(self.chk_overlay)
 
-        thumb_row = QHBoxLayout()
-        thumb_row.addWidget(QLabel("Thumb size:"))
+        self.combo_autostretch = QComboBox()
+        self.combo_autostretch.addItems(list(AUTOSTRETCH_PRESETS.keys()))
+        self.combo_autostretch.setCurrentText(DEFAULT_AUTOSTRETCH_PRESET)
+        self.combo_autostretch.setToolTip(
+            "Conservative: darker background, preserves dim detail.\n"
+            "Default: PixInsight-style STF (shadows_clip=-2.8, target=0.25).\n"
+            "Aggressive: brighter, higher contrast.\n"
+            "Linear: no stretch — raw data clipped to 0-255."
+        )
+        _nofocus(self.combo_autostretch)
+        self.combo_autostretch.currentTextChanged.connect(self._on_autostretch_preset_changed)
+
         self.slider_thumb_size = QSlider(Qt.Orientation.Horizontal)
         self.slider_thumb_size.setRange(40, 160)
         self.slider_thumb_size.setValue(THUMBNAIL_WIDTH)
+        self.slider_thumb_size.setFixedWidth(100)
+        self.slider_thumb_size.setToolTip("Thumbnail size (40–160 px)")
         _nofocus(self.slider_thumb_size)
         self.slider_thumb_size.valueChanged.connect(self._on_thumb_size_changed)
-        thumb_row.addWidget(self.slider_thumb_size)
-        opts_layout.addLayout(thumb_row)
-
-        layout.addWidget(opts_group)
-
-        # Per-frame histogram
-        hist_group = QGroupBox("Frame Histogram")
-        hist_layout = QVBoxLayout(hist_group)
-        self.histogram_widget = HistogramWidget()
-        hist_layout.addWidget(self.histogram_widget)
-        layout.addWidget(hist_group)
 
         layout.addStretch()
 
         # Export buttons
         export_row = QHBoxLayout()
-        btn_export = QPushButton("Export Rejected...")
-        _nofocus(btn_export)
-        btn_export.setToolTip("Save list of rejected frame indices as text file")
-        btn_export.clicked.connect(self._export_rejected_list)
-        export_row.addWidget(btn_export)
-
         btn_csv = QPushButton("Export CSV...")
         _nofocus(btn_csv)
         btn_csv.setToolTip("Export full statistics table as CSV")
@@ -2476,9 +2531,13 @@ class BlinkComparatorWindow(QMainWindow):
         btn_help = QPushButton("Help")
         _nofocus(btn_help)
         btn_help.clicked.connect(self._show_help_dialog)
-        btn_close = QPushButton("Close")
+        btn_close = QPushButton("Apply Rejections && Close")
         _nofocus(btn_close)
         btn_close.setObjectName("CloseButton")
+        btn_close.setToolTip(
+            "Apply any pending rejections (write rejected_frames.txt and "
+            "move rejected FITS into a 'rejected/' subfolder), then close."
+        )
         btn_close.clicked.connect(self.close)
         layout.addWidget(btn_coffee)
         layout.addWidget(btn_help)
@@ -2555,17 +2614,22 @@ class BlinkComparatorWindow(QMainWindow):
         speed_row.addWidget(self.speed_slider)
         g_layout.addLayout(speed_row)
 
+        loop_row = QHBoxLayout()
         self.chk_loop = QCheckBox("Loop playback")
         self.chk_loop.setChecked(True)
         self.chk_loop.setToolTip("Restart from first frame after reaching the last")
         _nofocus(self.chk_loop)
-        g_layout.addWidget(self.chk_loop)
+        loop_row.addWidget(self.chk_loop)
 
-        self.chk_crossfade = QCheckBox("Crossfade transition")
-        self.chk_crossfade.setChecked(False)
-        self.chk_crossfade.setToolTip("Smooth blend between frames instead of hard cut")
-        _nofocus(self.chk_crossfade)
-        g_layout.addWidget(self.chk_crossfade)
+        self.chk_only_included = QCheckBox("Only included frames")
+        self.chk_only_included.setChecked(False)
+        self.chk_only_included.setToolTip(
+            "During playback, skip frames marked as rejected."
+        )
+        _nofocus(self.chk_only_included)
+        loop_row.addWidget(self.chk_only_included)
+        loop_row.addStretch()
+        g_layout.addLayout(loop_row)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
@@ -2584,34 +2648,17 @@ class BlinkComparatorWindow(QMainWindow):
         self.radio_normal = QRadioButton("Normal")
         self.radio_normal.setChecked(True)
         self.radio_normal.setToolTip("Show each frame with autostretch.")
-        self.radio_diff = QRadioButton("Difference (vs. reference)")
-        self.radio_diff.setToolTip("Absolute difference to reference frame.")
-        self.radio_selected = QRadioButton("Only included frames")
-        self.radio_selected.setToolTip("Skip excluded frames during playback.")
         self.radio_sidebyside = QRadioButton("Side by Side (vs. reference)")
         self.radio_sidebyside.setToolTip("Current frame on left, reference on right.")
 
         self.mode_group.addButton(self.radio_normal, 0)
-        self.mode_group.addButton(self.radio_diff, 1)
-        self.mode_group.addButton(self.radio_selected, 2)
-        self.mode_group.addButton(self.radio_sidebyside, 3)
+        self.mode_group.addButton(self.radio_sidebyside, 1)
 
-        for radio in (self.radio_normal, self.radio_diff, self.radio_selected, self.radio_sidebyside):
+        for radio in (self.radio_normal, self.radio_sidebyside):
             _nofocus(radio)
             g_layout.addWidget(radio)
 
         self.mode_group.idToggled.connect(self._on_mode_changed)
-
-        # Linked stretch
-        self.chk_linked_stretch = QCheckBox("Linked stretch (same for all frames)")
-        self.chk_linked_stretch.setChecked(True)
-        self.chk_linked_stretch.setToolTip(
-            "ON: All frames use the same stretch parameters (shows brightness differences).\n"
-            "OFF: Each frame is stretched independently (shows details but hides brightness changes)."
-        )
-        _nofocus(self.chk_linked_stretch)
-        self.chk_linked_stretch.stateChanged.connect(self._on_stretch_mode_changed)
-        g_layout.addWidget(self.chk_linked_stretch)
 
         parent_layout.addWidget(group)
 
@@ -2635,6 +2682,15 @@ class BlinkComparatorWindow(QMainWindow):
         mark_row.addWidget(self.btn_exclude)
         g_layout.addLayout(mark_row)
 
+        self.btn_reset_all = QPushButton("Reset All Rejections")
+        self.btn_reset_all.setToolTip(
+            "Mark every frame as Included again — clears the Siril baseline "
+            "and all pending rejections. Cannot be undone."
+        )
+        _nofocus(self.btn_reset_all)
+        self.btn_reset_all.clicked.connect(self._reset_all_rejections)
+        g_layout.addWidget(self.btn_reset_all)
+
         self.chk_auto_advance = QCheckBox("Auto-advance after marking")
         self.chk_auto_advance.setChecked(True)
         self.chk_auto_advance.setToolTip("Automatically go to next frame after pressing G or B")
@@ -2645,14 +2701,6 @@ class BlinkComparatorWindow(QMainWindow):
         self.lbl_pending.setStyleSheet("color: #999; font-size: 9pt;")
         self.lbl_pending.setWordWrap(True)
         g_layout.addWidget(self.lbl_pending)
-
-        self.btn_apply = QPushButton("Apply Changes to Siril")
-        self.btn_apply.setObjectName("ApplyButton")
-        self.btn_apply.setToolTip("Send all pending changes to Siril.")
-        _nofocus(self.btn_apply)
-        self.btn_apply.setEnabled(False)
-        self.btn_apply.clicked.connect(self._apply_changes)
-        g_layout.addWidget(self.btn_apply)
 
         parent_layout.addWidget(group)
 
@@ -2695,38 +2743,20 @@ class BlinkComparatorWindow(QMainWindow):
         vt_layout.addWidget(self.lbl_frame_info)
 
         self.canvas = ImageCanvas()
+        self.canvas.zoom_changed.connect(self._on_canvas_zoom_changed)
         vt_layout.addWidget(self.canvas, 1)
 
         zoom_bar = QHBoxLayout()
-        self.lbl_zoom = QLabel("Zoom: Fit")
-        self.lbl_zoom.setStyleSheet("color: #777; font-size: 9pt;")
+        self.lbl_zoom = QLabel("Zoom: 100%")
+        self.lbl_zoom.setStyleSheet("color: #ffffff; font-size: 9pt;")
         zoom_bar.addWidget(self.lbl_zoom)
 
-        btn_reset_zoom = QPushButton("Reset Zoom (Z)")
-        btn_reset_zoom.setStyleSheet("padding: 3px 8px; font-size: 9pt;")
-        _nofocus(btn_reset_zoom)
-        btn_reset_zoom.clicked.connect(self._reset_zoom)
-        zoom_bar.addWidget(btn_reset_zoom)
-
-        self.btn_roi = QPushButton("Select ROI")
-        self.btn_roi.setStyleSheet("padding: 3px 8px; font-size: 9pt;")
-        self.btn_roi.setCheckable(True)
-        _nofocus(self.btn_roi)
-        self.btn_roi.toggled.connect(self._toggle_roi_mode)
-        zoom_bar.addWidget(self.btn_roi)
-
-        btn_clear_roi = QPushButton("Clear ROI")
-        btn_clear_roi.setStyleSheet("padding: 3px 8px; font-size: 9pt;")
-        _nofocus(btn_clear_roi)
-        btn_clear_roi.clicked.connect(self._clear_roi)
-        zoom_bar.addWidget(btn_clear_roi)
-
-        btn_zoom_1to1 = QPushButton("1:1")
-        btn_zoom_1to1.setStyleSheet("padding: 3px 8px; font-size: 9pt;")
-        btn_zoom_1to1.setToolTip("Zoom to 100% (1:1 pixel view)")
-        _nofocus(btn_zoom_1to1)
-        btn_zoom_1to1.clicked.connect(self._zoom_1to1)
-        zoom_bar.addWidget(btn_zoom_1to1)
+        btn_fit_window = QPushButton("Fit-in-Window")
+        btn_fit_window.setStyleSheet("padding: 3px 8px; font-size: 9pt;")
+        btn_fit_window.setToolTip("Fit image to window (Z)")
+        _nofocus(btn_fit_window)
+        btn_fit_window.clicked.connect(self._fit_to_window)
+        zoom_bar.addWidget(btn_fit_window)
 
         btn_copy = QPushButton("Copy (Ctrl+C)")
         btn_copy.setStyleSheet("padding: 3px 8px; font-size: 9pt;")
@@ -2734,6 +2764,21 @@ class BlinkComparatorWindow(QMainWindow):
         _nofocus(btn_copy)
         btn_copy.clicked.connect(self._copy_frame_to_clipboard)
         zoom_bar.addWidget(btn_copy)
+
+        # Display Options (moved from right-side panel)
+        _sep1 = QLabel("|")
+        _sep1.setStyleSheet("color: #555;")
+        zoom_bar.addWidget(_sep1)
+        zoom_bar.addWidget(self.chk_overlay)
+        zoom_bar.addSpacing(20)
+        _lbl_as = QLabel("Stretch:")
+        _lbl_as.setStyleSheet("color: #ffffff; font-size: 9pt;")
+        zoom_bar.addWidget(_lbl_as)
+        zoom_bar.addWidget(self.combo_autostretch)
+        _lbl_th = QLabel("Thumbs:")
+        _lbl_th.setStyleSheet("color: #ffffff; font-size: 9pt;")
+        zoom_bar.addWidget(_lbl_th)
+        zoom_bar.addWidget(self.slider_thumb_size)
 
         zoom_bar.addStretch()
 
@@ -2837,8 +2882,7 @@ class BlinkComparatorWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key.Key_End), self, self._go_last)
         QShortcut(QKeySequence(Qt.Key.Key_G), self, self._mark_include)
         QShortcut(QKeySequence(Qt.Key.Key_B), self, self._mark_exclude)
-        QShortcut(QKeySequence(Qt.Key.Key_D), self, self._toggle_diff_mode)
-        QShortcut(QKeySequence(Qt.Key.Key_Z), self, self._reset_zoom)
+        QShortcut(QKeySequence(Qt.Key.Key_Z), self, self._fit_to_window)
         QShortcut(QKeySequence(Qt.Key.Key_Escape), self, self.close)
         QShortcut(QKeySequence(Qt.Key.Key_Plus), self, self._speed_up)
         QShortcut(QKeySequence(Qt.Key.Key_Minus), self, self._speed_down)
@@ -2876,15 +2920,13 @@ class BlinkComparatorWindow(QMainWindow):
         self._update_frame_info(self.current_frame)
         self.stats_table.highlight_current(self.current_frame)
         self.stats_graph.update_current_line(self.current_frame)
-        linked = self.chk_linked_stretch.isChecked()
-        if self.cache is not None:
-            self.histogram_widget.render_histogram(self.cache, self.current_frame, linked)
+        self.scatter_plot.update_current_marker(self.current_frame)
 
     def _advance_frame(self) -> None:
         if not self.playing:
             return
         next_frame = self.current_frame + self.direction
-        only_included = self.radio_selected.isChecked()
+        only_included = self.chk_only_included.isChecked()
 
         if only_included:
             attempts = 0
@@ -2960,30 +3002,18 @@ class BlinkComparatorWindow(QMainWindow):
             return
 
         self._frames_viewed.add(index)
-        old_frame = self.current_frame
         self.current_frame = index
 
         self.frame_slider.blockSignals(True)
         self.frame_slider.setValue(index)
         self.frame_slider.blockSignals(False)
 
-        diff_mode = self.radio_diff.isChecked()
         sbs_mode = self.radio_sidebyside.isChecked()
-        linked = self.chk_linked_stretch.isChecked()
 
         if self.cache is not None:
             # Defer all canvas .update() calls — we'll do a single repaint at the end
-            if self.chk_crossfade.isChecked() and self.canvas._pixmap is not None and old_frame != index:
-                old_pixmap = self.canvas._pixmap
-                qimg = self.cache.get_frame(index, difference=diff_mode, linked=linked)
-                if qimg is not None:
-                    self.canvas.start_crossfade(old_pixmap)
-                    self.canvas.set_image(qimg, defer_update=True)
-                    self._cf_steps = 0
-                    self._cf_timer.start(50)
-            else:
-                qimg = self.cache.get_frame(index, difference=diff_mode, linked=linked)
-                self.canvas.set_image(qimg, defer_update=True)
+            qimg = self.cache.get_frame(index)
+            self.canvas.set_image(qimg, defer_update=True)
 
             # Side-by-side: load reference frame
             if sbs_mode:
@@ -2991,7 +3021,7 @@ class BlinkComparatorWindow(QMainWindow):
                 ref_idx = self.seq.reference_image
                 if ref_idx < 0 or ref_idx >= self.total_frames:
                     ref_idx = 0
-                ref_img = self.cache.get_frame(ref_idx, difference=False, linked=linked)
+                ref_img = self.cache.get_frame(ref_idx)
                 self.canvas.set_side_by_side_image(ref_img, defer_update=True)
             else:
                 self.canvas.set_side_by_side(False, defer_update=True)
@@ -3010,11 +3040,6 @@ class BlinkComparatorWindow(QMainWindow):
             self.stats_table.highlight_current(index)
             self.stats_graph.update_current_line(index)
             self.scatter_plot.update_current_marker(index)
-            if self.cache is not None:
-                self.histogram_widget.render_histogram(self.cache, index, linked)
-
-        zoom_pct = int(self.canvas._zoom * 100)
-        self.lbl_zoom.setText(f"Zoom: {zoom_pct}%")
 
     def _update_frame_info(self, index: int) -> None:
         incl = self.marker.is_included(index)
@@ -3049,17 +3074,6 @@ class BlinkComparatorWindow(QMainWindow):
         self.lbl_frame_info.setTextFormat(Qt.TextFormat.RichText)
 
     # ------------------------------------------------------------------
-    # CROSSFADE
-    # ------------------------------------------------------------------
-
-    def _crossfade_tick(self) -> None:
-        self._cf_steps += 1
-        alpha = min(1.0, self._cf_steps * 0.25)
-        self.canvas.set_crossfade_alpha(alpha)
-        if alpha >= 1.0:
-            self._cf_timer.stop()
-
-    # ------------------------------------------------------------------
     # DISPLAY MODES
     # ------------------------------------------------------------------
 
@@ -3070,17 +3084,24 @@ class BlinkComparatorWindow(QMainWindow):
             self.cache.invalidate()
         self._show_frame(self.current_frame)
 
-    def _toggle_diff_mode(self) -> None:
-        if self.radio_diff.isChecked():
-            self.radio_normal.setChecked(True)
-        else:
-            self.radio_diff.setChecked(True)
-
-    def _on_stretch_mode_changed(self) -> None:
-        if not hasattr(self, 'cache') or self.cache is None:
+    def _on_autostretch_preset_changed(self, preset: str) -> None:
+        if preset not in AUTOSTRETCH_PRESETS:
             return
-        self.cache.invalidate()
-        self._show_frame(self.current_frame)
+        # Signal may fire during __init__ before caches exist — bail safely.
+        cache = getattr(self, "cache", None)
+        if cache is not None:
+            cache.stretch_preset = preset
+            cache.invalidate()
+        thumb_cache = getattr(self, "thumb_cache", None)
+        if thumb_cache is not None:
+            thumb_cache.stretch_preset = preset
+            thumb_cache.invalidate()
+            if hasattr(self, "filmstrip"):
+                for lbl in self.filmstrip._labels:
+                    lbl.setPixmap(QPixmap())
+                QTimer.singleShot(50, self._load_visible_thumbnails)
+        if hasattr(self, "current_frame") and cache is not None:
+            self._show_frame(self.current_frame)
 
     # ------------------------------------------------------------------
     # FRAME MARKING
@@ -3098,6 +3119,51 @@ class BlinkComparatorWindow(QMainWindow):
         self.marker.mark_exclude(self.current_frame)
         self._after_marking(self.current_frame)
 
+    def _reset_all_rejections(self) -> None:
+        """Wipe baseline + pending exclusions so every frame is included again.
+
+        Cannot be undone — the undo stack is cleared too, since individual
+        per-frame entries no longer reflect a meaningful prior state.
+        """
+        n_excluded = len(self.marker.get_excluded_indices())
+        if n_excluded == 0 and self.marker.get_pending_count() == 0:
+            QMessageBox.information(
+                self, "Reset All Rejections",
+                "No frames are rejected — nothing to reset."
+            )
+            return
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Reset All Rejections")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(
+            f"This will mark every frame as Included again.\n\n"
+            f"\u2022 {n_excluded} currently excluded frame(s) will be re-included\n"
+            f"\u2022 All pending rejections are discarded\n"
+            f"\u2022 The undo history is cleared\n\n"
+            f"Files on disk are NOT modified. This cannot be undone.\n\n"
+            f"Continue?"
+        )
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel
+        )
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        if box.exec() != QMessageBox.StandardButton.Yes:
+            return
+
+        self.marker.reset_all()
+        self.undo_stack.clear()
+
+        # Refresh every UI surface that renders inclusion state.
+        self.stats_table.populate(self.frame_stats, self.marker)
+        for i in range(self.total_frames):
+            self.filmstrip.update_border(i, True)
+        self.frame_slider.set_exclusions(set(), self.total_frames)
+        self._update_marking_ui()
+        self._update_frame_info(self.current_frame)
+        self._refresh_statistics_graph()
+        self._refresh_scatter_plot()
+
     def _after_marking(self, frame_idx: int) -> None:
         incl = self.marker.is_included(frame_idx)
         self._update_marking_ui()
@@ -3105,6 +3171,8 @@ class BlinkComparatorWindow(QMainWindow):
         self.stats_table.update_frame_status(frame_idx, incl, self.marker)
         self.filmstrip.update_border(frame_idx, incl)
         self.frame_slider.set_exclusions(self.marker.get_excluded_indices(), self.total_frames)
+        # Keep scatter plot colors in sync — bads must always show as red.
+        self._refresh_scatter_plot()
 
         if self.chk_auto_advance.isChecked():
             self._go_next()
@@ -3141,7 +3209,6 @@ class BlinkComparatorWindow(QMainWindow):
         if n == 0:
             self.lbl_pending.setText("No pending changes")
             self.lbl_pending.setStyleSheet("color: #999; font-size: 9pt;")
-            self.btn_apply.setEnabled(False)
         else:
             excl = self.marker.get_newly_excluded_count()
             incl = self.marker.get_newly_included_count()
@@ -3152,26 +3219,95 @@ class BlinkComparatorWindow(QMainWindow):
                 parts.append(f"{incl} to include")
             self.lbl_pending.setText(f"Pending: {', '.join(parts)}")
             self.lbl_pending.setStyleSheet("color: #aaaa55; font-size: 9pt;")
-            self.btn_apply.setEnabled(True)
 
     def _apply_changes(self) -> None:
-        n = self.marker.get_pending_count()
-        if n == 0:
+        """Folder mode: temp sequence is throwaway; write rejected list + optionally move files."""
+        excluded = sorted(self.marker.get_excluded_indices())
+        if not excluded:
+            QMessageBox.information(
+                self, "Apply Rejections",
+                "No frames are marked as rejected — nothing to apply."
+            )
             return
-        reply = QMessageBox.question(
-            self, "Apply Changes",
-            f"Apply {n} pending change(s) to Siril?\n\n"
-            f"{self.marker.get_newly_excluded_count()} frame(s) will be excluded.\n"
-            f"{self.marker.get_newly_included_count()} frame(s) will be included.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+
+        # Exclude Siril's temp-sequence files from the source list
+        all_fits = _scan_fits_files(self._folder_mode_path)
+        source_files = [
+            f for f in all_fits
+            if not f.startswith(FOLDER_MODE_SEQNAME)
+        ]
+        if not source_files or len(source_files) < self.total_frames:
+            QMessageBox.warning(
+                self, "Source Files Missing",
+                f"Expected {self.total_frames} FITS files in the source folder "
+                f"but only found {len(source_files)}.\n"
+                f"Apply was aborted."
+            )
+            return
+
+        rejected_names = [source_files[i] for i in excluded if i < len(source_files)]
+
+        move_box = QMessageBox(self)
+        move_box.setWindowTitle("Apply Rejections")
+        move_box.setText(
+            f"{len(excluded)} frame(s) marked as rejected.\n\n"
+            f"This will write 'rejected_frames.txt' to:\n{self._folder_mode_path}\n\n"
+            "and move the rejected FITS files into a 'rejected/' subfolder.\n\n"
+            "Continue?"
         )
+        move_box.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel
+        )
+        move_box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        reply = move_box.exec()
         if reply != QMessageBox.StandardButton.Yes:
             return
+
+        # Write rejected_frames.txt
+        list_path = os.path.join(self._folder_mode_path, "rejected_frames.txt")
         try:
-            msg = self.marker.apply_to_siril(self.siril)
-            QMessageBox.information(self, "Changes Applied", f"Successfully applied: {msg}")
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to apply changes:\n{e}")
+            with open(list_path, "w") as f:
+                f.write("# Blink Comparator — Rejected Frames (folder mode)\n")
+                f.write(f"# Folder: {self._folder_mode_path}\n")
+                f.write(f"# Total frames: {self.total_frames}\n")
+                f.write(f"# Rejected: {len(rejected_names)}\n\n")
+                for name in rejected_names:
+                    f.write(f"{name}\n")
+        except OSError as e:
+            QMessageBox.warning(self, "Error", f"Failed to write {list_path}:\n{e}")
+            return
+
+        moved_count = 0
+        reject_dir = os.path.join(self._folder_mode_path, "rejected")
+        try:
+            os.makedirs(reject_dir, exist_ok=True)
+        except OSError as e:
+            QMessageBox.warning(self, "Error", f"Could not create 'rejected/' folder:\n{e}")
+            return
+        failed: list[str] = []
+        for name in rejected_names:
+            src = os.path.join(self._folder_mode_path, name)
+            dst = os.path.join(reject_dir, name)
+            try:
+                shutil.move(src, dst)
+                moved_count += 1
+            except OSError as e:
+                failed.append(f"{name}: {e}")
+        if failed:
+            QMessageBox.warning(
+                self, "Some Files Could Not Be Moved",
+                f"Moved {moved_count} of {len(rejected_names)}. Failures:\n"
+                + "\n".join(failed[:10])
+            )
+
+        summary = f"Wrote rejected_frames.txt with {len(rejected_names)} entries."
+        if moved_count > 0:
+            summary += f"\nMoved {moved_count} file(s) to 'rejected/' subfolder."
+        QMessageBox.information(self, "Rejections Applied", summary)
+
+        # Bake the applied marks into the baseline so the close-dialog does
+        # not prompt again about the same rejections.
+        self.marker.commit()
         self._update_marking_ui()
         self._update_frame_info(self.current_frame)
 
@@ -3204,29 +3340,14 @@ class BlinkComparatorWindow(QMainWindow):
         self._refresh_statistics_graph()
 
     # ------------------------------------------------------------------
-    # ROI
-    # ------------------------------------------------------------------
-
-    def _toggle_roi_mode(self, checked: bool) -> None:
-        self.canvas.set_roi_mode(checked)
-        if checked:
-            self.btn_roi.setText("Drawing ROI...")
-        else:
-            self.btn_roi.setText("Select ROI")
-
-    def _clear_roi(self) -> None:
-        self.canvas.set_roi_mode(False)
-        self.canvas._roi_rect = None
-        self.btn_roi.setChecked(False)
-        self.canvas.update()
-
-    # ------------------------------------------------------------------
     # ZOOM
     # ------------------------------------------------------------------
 
-    def _reset_zoom(self) -> None:
+    def _fit_to_window(self) -> None:
         self.canvas.reset_view()
-        self.lbl_zoom.setText("Zoom: Fit")
+
+    def _on_canvas_zoom_changed(self, zoom: float) -> None:
+        self.lbl_zoom.setText(f"Zoom: {int(zoom * 100)}%")
 
     # ------------------------------------------------------------------
     # STATISTICS GRAPH
@@ -3272,28 +3393,6 @@ class BlinkComparatorWindow(QMainWindow):
     # ------------------------------------------------------------------
     # EXPORT REJECTED LIST
     # ------------------------------------------------------------------
-
-    def _export_rejected_list(self) -> None:
-        excluded = sorted(self.marker.get_excluded_indices())
-        if not excluded:
-            QMessageBox.information(self, "Export", "No excluded frames to export.")
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export Rejected Frames", "rejected_frames.txt", "Text files (*.txt)"
-        )
-        if not path:
-            return
-        try:
-            with open(path, "w") as f:
-                f.write(f"# Blink Comparator — Rejected Frames\n")
-                f.write(f"# Sequence: {self.seq.seqname}\n")
-                f.write(f"# Total frames: {self.total_frames}\n")
-                f.write(f"# Rejected: {len(excluded)}\n\n")
-                for idx in excluded:
-                    f.write(f"{idx}\n")
-            QMessageBox.information(self, "Export", f"Saved {len(excluded)} rejected frame indices to:\n{path}")
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to save:\n{e}")
 
     # ------------------------------------------------------------------
     # CANVAS OVERLAY
@@ -3359,25 +3458,6 @@ class BlinkComparatorWindow(QMainWindow):
             target = self._pinned_frame
             self._pinned_frame = self.current_frame
             self._show_frame(target)
-
-    # ------------------------------------------------------------------
-    # 1:1 ZOOM
-    # ------------------------------------------------------------------
-
-    def _zoom_1to1(self) -> None:
-        """Set zoom so one image pixel = one display pixel (true 1:1 view)."""
-        if self.canvas._pixmap is not None:
-            # The canvas paints: display_size = pixmap_size * zoom
-            # For 1:1, we need zoom such that the pixmap draws at its native size.
-            # Since the canvas centers the image, zoom=1.0 means native pixmap size.
-            # The pixmap was already scaled to display_width during caching,
-            # so zoom=1.0 is effectively "fit" and we need the inverse ratio
-            # to get back to original image resolution.
-            self.canvas._zoom = 1.0
-            self.canvas._pan_x = 0.0
-            self.canvas._pan_y = 0.0
-            self.canvas.update()
-            self.lbl_zoom.setText("Zoom: 100%")
 
     # ------------------------------------------------------------------
     # COPY TO CLIPBOARD
@@ -3459,7 +3539,6 @@ class BlinkComparatorWindow(QMainWindow):
         self.progress_bar.setValue(0)
         QApplication.processEvents()
 
-        linked = self.chk_linked_stretch.isChecked()
         included_indices = [i for i in range(self.total_frames) if self.marker.is_included(i)]
         total = len(included_indices)
         if total == 0:
@@ -3472,7 +3551,7 @@ class BlinkComparatorWindow(QMainWindow):
         frames: list = []
 
         for n, i in enumerate(included_indices):
-            qimg = self.cache.get_frame(i, difference=False, linked=linked)
+            qimg = self.cache.get_frame(i)
             if qimg is None:
                 continue
             qimg_rgb = qimg.convertToFormat(QImage.Format.Format_RGBX8888)
@@ -3514,10 +3593,8 @@ class BlinkComparatorWindow(QMainWindow):
     def _start_preload(self, start: int, count: int) -> None:
         if self.cache is None:
             return
-        diff_mode = self.radio_diff.isChecked()
-        linked = self.chk_linked_stretch.isChecked()
         # Submit to shared pool — avoids spawning a new thread per frame advance
-        _preload_pool.submit(self.cache.preload_range, start, count, diff_mode, linked)
+        _preload_pool.submit(self.cache.preload_range, start, count)
 
     # ------------------------------------------------------------------
     # SETTINGS
@@ -3528,10 +3605,10 @@ class BlinkComparatorWindow(QMainWindow):
         self.spin_fps.setValue(int(st.value("fps", 3)))
         self.chk_loop.setChecked(st.value("loop", True, type=bool))
         self.chk_auto_advance.setChecked(st.value("auto_advance", True, type=bool))
-        self.chk_crossfade.setChecked(st.value("crossfade", False, type=bool))
-        self.chk_linked_stretch.setChecked(st.value("linked_stretch", True, type=bool))
         self.chk_overlay.setChecked(st.value("show_overlay", True, type=bool))
         self.slider_thumb_size.setValue(int(st.value("thumb_size", THUMBNAIL_WIDTH)))
+        self.combo_autostretch.setCurrentText(
+            st.value("autostretch_preset", DEFAULT_AUTOSTRETCH_PRESET, type=str))
         # Restore table sort
         sort_col = int(st.value("table_sort_col", 0))
         sort_order = int(st.value("table_sort_order", 0))
@@ -3543,10 +3620,9 @@ class BlinkComparatorWindow(QMainWindow):
         st.setValue("fps", self.spin_fps.value())
         st.setValue("loop", self.chk_loop.isChecked())
         st.setValue("auto_advance", self.chk_auto_advance.isChecked())
-        st.setValue("crossfade", self.chk_crossfade.isChecked())
-        st.setValue("linked_stretch", self.chk_linked_stretch.isChecked())
         st.setValue("show_overlay", self.chk_overlay.isChecked())
         st.setValue("thumb_size", self.slider_thumb_size.value())
+        st.setValue("autostretch_preset", self.combo_autostretch.currentText())
         # Save table sort
         header = self.stats_table.table.horizontalHeader()
         st.setValue("table_sort_col", header.sortIndicatorSection())
@@ -3573,22 +3649,16 @@ class BlinkComparatorWindow(QMainWindow):
                                      f"best {min(fwhm_vals):.2f}\", worst {max(fwhm_vals):.2f}\"")
 
         if n_pending > 0:
-            reply = QMessageBox.question(
-                self, "Unsaved Changes",
-                f"You have {n_pending} pending change(s).\nApply them before closing?\n\n"
-                + "\n".join(summary_parts),
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                try:
-                    self.marker.apply_to_siril(self.siril)
-                except Exception as e:
-                    QMessageBox.warning(self, "Error", f"Failed to apply changes:\n{e}")
-            elif reply == QMessageBox.StandardButton.Cancel:
+            # _apply_changes() has its own Yes/Cancel confirmation dialog with
+            # the full path + file-move details. On Yes it calls marker.commit()
+            # which clears the pending count; on Cancel the count is unchanged.
+            self._apply_changes()
+            if self.marker.get_pending_count() == n_pending:
+                # User cancelled inside _apply_changes → abort close so they
+                # can keep working (or explicitly discard marks).
                 event.ignore()
                 return
         else:
-            # Show session summary if user did work
             if n_viewed > 1:
                 QMessageBox.information(self, "Session Summary", "\n".join(summary_parts))
 
@@ -3596,6 +3666,27 @@ class BlinkComparatorWindow(QMainWindow):
             self.siril.log(f"[BlinkComparator] Session ended. {n_viewed} frames viewed, {n_excluded} excluded.")
         except (SirilError, OSError, RuntimeError):
             pass
+
+        # Ask Siril to release the sequence before we remove its files — otherwise
+        # Siril keeps file handles open (Windows) or stale cache state (all OSes).
+        try:
+            self.siril.cmd("close")
+        except (SirilError, OSError, RuntimeError) as ex:
+            try:
+                self.siril.log(f"[BlinkComparator] Siril 'close' returned: {ex}")
+            except Exception:
+                pass
+
+        try:
+            _cleanup_folder_sequence(self._folder_mode_path)
+            self.siril.log(
+                f"[BlinkComparator] Folder-mode temp sequence cleaned up in {self._folder_mode_path}"
+            )
+        except Exception as ex:
+            try:
+                self.siril.log(f"[BlinkComparator] Cleanup warning: {ex}")
+            except Exception:
+                pass
 
         super().closeEvent(event)
 
@@ -3723,12 +3814,16 @@ class BlinkComparatorWindow(QMainWindow):
             "<b style='color:#ffcc66;'>Quick Start \u2014 4 Steps</b><br>"
             "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
             " border:1px solid #3a5a7a;'>"
-            "<b>1.</b> Load a <b>registered sequence</b> in Siril.<br>"
-            "<b>2.</b> Run <b>Blink Comparator</b> from Processing \u2192 Scripts.<br>"
+            "<b>1.</b> Run <b>Blink Comparator</b> from Processing \u2192 Scripts "
+            "and pick a folder of FITS frames.<br>"
+            "<b>2.</b> Let it build the temp sequence \u2014 optionally tick "
+            "<i>Register frames for statistics</i> in the folder picker to get "
+            "FWHM / Roundness / Stars / Background data.<br>"
             "<b>3.</b> Go to the <b>Statistics Table</b> tab, sort by FWHM, "
             "and reject the worst frames with <b>B</b> (auto-advances).<br>"
-            "<b>4.</b> Click <b style='color:#88aaff;'>Apply Changes to Siril</b> "
-            "when done.</div><br>"
+            "<b>4.</b> Click <b style='color:#88aaff;'>Apply Rejections &amp; Close</b> "
+            "\u2014 this writes <code>rejected_frames.txt</code>, moves the rejected "
+            "FITS into a <code>rejected/</code> subfolder, and closes the window.</div><br>"
 
             "<b style='color:#ffcc66;'>Alternative: Data-Driven Batch Reject</b><br>"
             "<div style='background:#252525; padding:8px; border-radius:4px;'>"
@@ -3746,7 +3841,6 @@ class BlinkComparatorWindow(QMainWindow):
             "<tr><td style='padding:2px 8px;'><b>Home / End</b></td><td>First / Last frame</td></tr>"
             "<tr><td style='padding:2px 8px;'><b>G</b></td><td>Mark good (include)</td></tr>"
             "<tr><td style='padding:2px 8px;'><b>B</b></td><td>Mark bad (exclude)</td></tr>"
-            "<tr><td style='padding:2px 8px;'><b>D</b></td><td>Toggle difference mode</td></tr>"
             "<tr><td style='padding:2px 8px;'><b>Z</b></td><td>Reset zoom</td></tr>"
             "<tr><td style='padding:2px 8px;'><b>T</b></td><td>Pin / toggle A/B comparison</td></tr>"
             "<tr><td style='padding:2px 8px;'><b>Ctrl+Z</b></td><td>Undo (single or batch)</td></tr>"
@@ -3757,8 +3851,9 @@ class BlinkComparatorWindow(QMainWindow):
             "</table><br>"
 
             "<b style='color:#ffcc66;'>Settings</b><br>"
-            "All settings (FPS, loop, auto-advance, crossfade, linked stretch, "
-            "overlay, thumbnail size, table sort) are automatically saved between sessions."
+            "All settings (FPS, loop, auto-advance, overlay, thumbnail size, "
+            "autostretch preset, table sort) are automatically saved between "
+            "sessions."
         )
         tabs.addTab(te_start, "\U0001f680 Getting Started")
 
@@ -3798,9 +3893,9 @@ class BlinkComparatorWindow(QMainWindow):
             "<b style='color:#ffcc66;'>Scatter Plot</b><br>"
             "2D scatter of any two metrics (select X and Y with the dropdowns). "
             "Outlier frames are immediately visible as dots far from the main cluster.<br>"
-            "\u2022 <b>Blue dots</b> = included frames<br>"
-            "\u2022 <b>Red X</b> = excluded frames<br>"
-            "\u2022 <b>White star</b> = current frame<br>"
+            "\u2022 <span style='color:#55cc55;'><b>Green dots</b></span> = included frames<br>"
+            "\u2022 <span style='color:#dd4444;'><b>Red X</b></span> = excluded frames<br>"
+            "\u2022 <span style='color:#ffd700;'><b>Yellow star</b></span> = current frame (always on top)<br>"
             "\u2022 <b>Click a dot</b> to jump to that frame<br>"
             "Best combinations: <b>FWHM vs Roundness</b> (star quality), "
             "<b>FWHM vs Background</b> (clouds + seeing).<br><br>"
@@ -3809,7 +3904,7 @@ class BlinkComparatorWindow(QMainWindow):
             "Horizontal thumbnail strip at the bottom (always visible). "
             "Color-coded borders: green = included, red = excluded, blue = current. "
             "Click any thumbnail to jump. Thumbnails load lazily as you scroll. "
-            "Adjust size with the slider in Display Options."
+            "Adjust size with the <b>Thumbs</b> slider in the zoom bar above the viewer."
         )
         tabs.addTab(te_tabs, "\U0001f4ca Tabs")
 
@@ -3934,9 +4029,9 @@ class BlinkComparatorWindow(QMainWindow):
             "<div style='background:#252525; padding:8px; border-radius:4px;'>"
             "<b>What it is:</b> Shows <span style='color:#55aa55;'>Included</span> or "
             "<span style='color:#dd4444;'>Excluded</span> for each frame.<br>"
-            "<b>Note:</b> Changes are <b>local</b> until you click 'Apply Changes to "
-            "Siril'. The pending changes counter shows how many frames differ from "
-            "the Siril sequence status.</div><br>"
+            "<b>Note:</b> Marks are <b>local</b> until you click 'Apply Rejections'. "
+            "The pending counter shows how many frames are marked but not yet "
+            "exported.</div><br>"
 
             # ---- Star Detection ----
             "<b style='color:#ffcc66; font-size:12pt;'>"
@@ -4010,10 +4105,21 @@ class BlinkComparatorWindow(QMainWindow):
             "Batch operations (threshold reject, worst N%, approval expression, multi-select) "
             "undo the entire batch with a single Ctrl+Z.<br><br>"
 
-            "<b style='color:#ffcc66;'>Applying Changes</b><br>"
-            "All marks are <b>local</b> until you click 'Apply Changes to Siril'. "
-            "The pending count in the left panel shows how many changes are queued. "
-            "If you close with unsaved changes, you'll be asked whether to apply them."
+            "<b style='color:#ffcc66;'>Reset All Rejections</b><br>"
+            "Button in the <b>Frame Marking</b> group. Marks every frame as "
+            "Included again and clears the undo history \u2014 useful if you want "
+            "to start frame selection over without re-loading the folder. Files "
+            "on disk are not touched. This cannot be undone itself.<br><br>"
+
+            "<b style='color:#ffcc66;'>Applying Rejections</b><br>"
+            "All marks are <b>local</b> until you click "
+            "<b style='color:#88aaff;'>Apply Rejections &amp; Close</b> (or close "
+            "the window with the X button). That writes "
+            "<code>rejected_frames.txt</code> into the source folder and moves "
+            "the rejected FITS files into a <code>rejected/</code> subfolder, then "
+            "cleans up the temp sequence. The pending count in the left panel "
+            "shows how many marks are queued. You get a final Yes/Cancel "
+            "confirmation before anything touches the disk."
         )
         tabs.addTab(te_select, "\U0001f5d1\ufe0f Selection")
 
@@ -4026,46 +4132,58 @@ class BlinkComparatorWindow(QMainWindow):
             "\u2699\ufe0f Display Modes & Options</b><br><br>"
 
             "<b style='color:#ffcc66;'>Display Modes</b><br>"
-            "\u2022 <b>Normal</b> \u2014 Standard autostretch view. Use for general inspection.<br>"
-            "\u2022 <b>Difference</b> \u2014 Absolute difference between each frame and the "
-            "reference. Satellites, clouds, and tracking errors appear as bright spots "
-            "on a dark background. Toggle with <b>D</b> key.<br>"
-            "\u2022 <b>Only included</b> \u2014 Skips excluded frames during playback. "
-            "Use after marking to verify all bad frames are gone.<br>"
-            "\u2022 <b>Side by Side</b> \u2014 Current frame on the left, reference on the right. "
-            "Both zoom and pan together. Good for detailed comparison.<br><br>"
+            "Radio buttons in the left panel:<br>"
+            "\u2022 <b>Normal</b> \u2014 single-frame autostretched view. Default. Use for "
+            "general inspection and playback.<br>"
+            "\u2022 <b>Side by Side (vs. reference)</b> \u2014 current frame on the left, "
+            "the sequence reference frame on the right. Both zoom and pan together. "
+            "Good for detailed comparison against the sharpest/best frame (reference "
+            "is picked by Siril during <code>register -2pass</code>; falls back to "
+            "frame 0 if registration was skipped).<br><br>"
 
-            "<b style='color:#ffcc66;'>Linked Stretch</b><br>"
-            "\u2022 <b>ON (default):</b> All frames use the same stretch parameters "
-            "(computed from sample frames). Brightness differences between frames "
-            "are visible \u2014 important for detecting clouds and haze.<br>"
-            "\u2022 <b>OFF:</b> Each frame gets its own autostretch. Better for "
-            "comparing fine details, but hides brightness changes.<br><br>"
+            "<b style='color:#ffcc66;'>Playback Options</b><br>"
+            "In the <b>Playback</b> group in the left panel:<br>"
+            "\u2022 <b>Loop playback</b> \u2014 restart from frame 1 after reaching the end.<br>"
+            "\u2022 <b>Only included frames</b> \u2014 during playback, skip past "
+            "frames you have marked as rejected. Useful after a batch reject to "
+            "verify what's left. Manual \u2190 / \u2192 navigation still steps by 1 "
+            "so you can review excluded frames and undo if needed.<br><br>"
 
-            "<b style='color:#ffcc66;'>Crossfade Transition</b><br>"
-            "When enabled, frames blend smoothly instead of hard-cutting. "
-            "Makes subtle motion artifacts (comets, asteroids) easier to spot. "
-            "Adds slight playback overhead.<br><br>"
+            "<b style='color:#ffcc66;'>Autostretch Preset (Zoom Bar)</b><br>"
+            "Dropdown labelled <b>Stretch:</b> in the zoom bar above the viewer. "
+            "Choices:<br>"
+            "\u2022 <b>Conservative</b> \u2014 darker background, preserves dim detail "
+            "(shadows_clip \u2212 3.5 MAD, target 0.20).<br>"
+            "\u2022 <b>Default</b> \u2014 matches Siril/PixInsight STF defaults "
+            "(shadows_clip \u2212 2.8 MAD, target 0.25).<br>"
+            "\u2022 <b>Aggressive</b> \u2014 brighter, higher contrast "
+            "(shadows_clip \u2212 1.5 MAD, target 0.35).<br>"
+            "\u2022 <b>Linear</b> \u2014 no MTF stretch; raw data clipped to [0, 1].<br>"
+            "The selected preset is applied to every frame and every filmstrip "
+            "thumbnail, and persists between sessions.<br><br>"
 
-            "<b style='color:#ffcc66;'>Frame Info Overlay</b><br>"
-            "Shows frame number, FWHM, roundness, and quality weight in the "
-            "top-left corner of the image. Toggle in Display Options. "
-            "Useful during playback so you don't have to look away from the image.<br><br>"
+            "<b style='color:#ffcc66;'>Linked Autostretch</b><br>"
+            "All frames share the same median + MAD, sampled across the sequence "
+            "at startup. That means brightness differences between frames stay "
+            "visible \u2014 critical for spotting clouds, haze, and dew. There is "
+            "no toggle; this is the only autostretch mode.<br><br>"
 
-            "<b style='color:#ffcc66;'>Thumbnail Size</b><br>"
-            "Slider in Display Options (40\u2013160 px). Larger thumbnails = easier "
-            "to see, smaller = more frames visible at once.<br><br>"
+            "<b style='color:#ffcc66;'>Frame Info Overlay (Zoom Bar)</b><br>"
+            "Checkbox labelled <b>Overlay</b> in the zoom bar. When on, the frame "
+            "number, FWHM, roundness, and quality weight are burned into the "
+            "top-left corner of the image. Useful during playback so you don't "
+            "have to look away from the viewer.<br><br>"
+
+            "<b style='color:#ffcc66;'>Thumbnail Size (Zoom Bar)</b><br>"
+            "Slider labelled <b>Thumbs:</b> in the zoom bar (40\u2013160 px). "
+            "Larger = easier to see, smaller = more frames fit on screen.<br><br>"
 
             "<b style='color:#ffcc66;'>Zoom & Pan</b><br>"
-            "\u2022 <b>Scroll wheel:</b> Zoom in/out (0.1x to 20x)<br>"
-            "\u2022 <b>Right-click + drag:</b> Pan the zoomed image<br>"
-            "\u2022 <b>Z key:</b> Reset to fit-to-window<br>"
-            "\u2022 <b>1:1 button:</b> Show at 100% (native pixel size)<br><br>"
-
-            "<b style='color:#ffcc66;'>ROI Blink</b><br>"
-            "Click 'Select ROI' in the viewer bar, draw a rectangle on the image. "
-            "Only that region is displayed during playback \u2014 perfect for checking "
-            "star shapes in a specific corner. Click 'Clear ROI' to return to full frame."
+            "\u2022 <b>Scroll wheel:</b> zoom in/out (0.1\u00d7 to 20\u00d7)<br>"
+            "\u2022 <b>Right-click + drag:</b> pan the zoomed image<br>"
+            "\u2022 <b>Z key</b> or <b>Fit-in-Window button:</b> reset zoom to fit the viewer<br>"
+            "Both the main frame and the side-by-side reference share the same "
+            "zoom and pan state."
         )
         tabs.addTab(te_options, "\u2699\ufe0f Options")
 
@@ -4078,9 +4196,10 @@ class BlinkComparatorWindow(QMainWindow):
             "\U0001f50d What to Look For</b><br><br>"
 
             "<b style='color:#ff6644;'>Satellite Trails</b><br>"
-            "Bright streaks crossing the frame, usually diagonal. Best seen in "
-            "<b>Difference mode</b> (D key) where they appear as bright lines "
-            "on a dark background. Reject the affected frame.<br><br>"
+            "Bright streaks crossing the frame, usually diagonal. Play the "
+            "sequence at 3\u20135 FPS \u2014 trails flash in a single frame and "
+            "are easy to spot against the otherwise static star field. "
+            "Reject the affected frame.<br><br>"
 
             "<b style='color:#dd6644;'>Clouds & Haze</b><br>"
             "Overall brightness increase in affected frames. Check the "
@@ -4118,7 +4237,8 @@ class BlinkComparatorWindow(QMainWindow):
             "<b style='color:#88aaff;'>Tips</b><br>"
             "\u2022 Start with the <b>Statistics Table</b> \u2014 data is faster than visual inspection.<br>"
             "\u2022 Use <b>Batch reject</b> for systematic issues (FWHM > threshold).<br>"
-            "\u2022 Use <b>Difference mode</b> for visual artifacts (satellites, airplanes).<br>"
+            "\u2022 Play at 3\u20135 FPS to spot visual artifacts (satellites, airplanes) \u2014 "
+            "they flash in a single frame against the static star field.<br>"
             "\u2022 Check the <b>Scatter Plot</b> for outliers that single metrics might miss.<br>"
             "\u2022 Re-stack after rejecting frames \u2014 even removing 5% of bad subs "
             "can dramatically improve the final result."
@@ -4136,7 +4256,6 @@ class BlinkComparatorWindow(QMainWindow):
             "Web: www.svenesis.org\n"
             "GitHub: https://github.com/sramuschkat/Siril-Scripts\n\n"
             "EXPORT OPTIONS\n"
-            "  Export Rejected...   Save excluded frame indices as .txt\n"
             "  Export CSV...        Save full statistics table as .csv\n"
             "  Export GIF...        Save animated blink as .gif (480px, included frames)\n"
             "  Ctrl+C               Copy current frame image to clipboard\n\n"
@@ -4149,42 +4268,52 @@ class BlinkComparatorWindow(QMainWindow):
             "  Weight = mean of available factors (0-1 range).\n"
             "  Metrics with zero values are excluded from the computation.\n\n"
             "AUTOSTRETCH (Midtone Transfer Function)\n"
-            "  Replicates Siril/PixInsight's STF autostretch.\n"
-            "  Global parameters computed from 10 sample frames across the sequence.\n"
-            "  Linked mode: same stretch for all frames (shows brightness differences).\n"
-            "  Independent mode: per-frame statistics (shows details).\n\n"
-            "DIFFERENCE MODE\n"
-            "  abs(frame - reference) * 5.0, clipped to [0, 1].\n"
-            "  Reference = sequence reference frame (set in Siril's sequence tab).\n\n"
+            "  Matches Siril/PixInsight's STF autostretch.\n"
+            "  shadows = max(0, median + shadows_clip * MAD), highlight = 1.0\n"
+            "  midtone computed so target_median -> 0.25 in output\n"
+            "  Global (median, MAD) sampled from 10 frames across the sequence\n"
+            "  and shared by every frame and every thumbnail (linked mode).\n"
+            "  Presets: Conservative / Default / Aggressive / Linear.\n\n"
+            "WORKFLOW (folder mode)\n"
+            "  1. Pick a folder of FITS files at startup.\n"
+            "  2. Siril runs 'cd <folder>' + 'convert svenesis_blink -fitseq'\n"
+            "     and optionally 'register svenesis_blink -2pass'.\n"
+            "  3. Marks are kept locally (pending) until Apply.\n"
+            "  4. Apply writes rejected_frames.txt next to the source FITS and\n"
+            "     moves rejected files into a 'rejected/' subfolder.\n"
+            "  5. On close, siril.cmd('close') is called and the temp sequence\n"
+            "     files (svenesis_blink.seq, .fit, _conversion.txt, cache/) are\n"
+            "     deleted. Original FITS files are never modified.\n\n"
             "FRAME CACHE\n"
             "  LRU cache (80 frames default) with thread-safe double-check locking.\n"
-            "  Background preload threads load 5-10 frames ahead of playback.\n"
+            "  One shared background worker preloads frames around the current one.\n"
             "  Separate thumbnail cache (200 entries) for the filmstrip.\n\n"
             "SIRIL API CALLS\n"
             "  get_seq()               Load sequence metadata\n"
             "  get_seq_frame()         Load frame pixel data (with_pixels=True)\n"
             "  get_seq_regdata()       Registration data (FWHM, roundness, stars, BG)\n"
-            "  get_seq_stats()         Per-channel statistics (median, sigma)\n"
+            "  get_seq_stats()         Per-channel statistics (median, sigma, MAD)\n"
             "  get_seq_imgdata()       Frame metadata (date_obs, inclusion)\n"
-            "  set_seq_frame_incl()    Set frame inclusion status\n\n"
+            "  cmd('convert', ...)     Build the FITSEQ temp sequence\n"
+            "  cmd('register', ...)    Run -2pass star detection / registration\n"
+            "  cmd('close')            Release the sequence before cleanup\n\n"
             "REQUIREMENTS\n"
             "  Siril 1.4+ with Python script support\n"
             "  sirilpy (bundled), numpy, PyQt6, matplotlib\n"
             "  Optional: Pillow (for GIF export)\n\n"
             "KEYBOARD SHORTCUTS (FULL LIST)\n"
             "  Space       Play / Pause\n"
-            "  Left/Right  Previous / Next frame\n"
+            "  Left/Right  Previous / Next frame (steps by 1, ignores 'only-included')\n"
             "  Home/End    First / Last frame\n"
             "  G           Mark good (include)\n"
             "  B           Mark bad (exclude)\n"
-            "  D           Toggle difference mode\n"
-            "  Z           Reset zoom\n"
-            "  T           Pin / toggle A/B frame\n"
+            "  Z           Reset zoom (fit-to-window)\n"
+            "  T           Pin / toggle A/B frame comparison\n"
             "  Ctrl+Z      Undo last marking (single or batch)\n"
-            "  Ctrl+C      Copy frame to clipboard\n"
+            "  Ctrl+C      Copy current frame to clipboard\n"
             "  1-9         Set FPS directly\n"
-            "  +/-         Speed up / slow down\n"
-            "  Esc         Close\n"
+            "  + / -       Speed up / slow down\n"
+            "  Esc         Close (same as the Apply Rejections & Close button)\n"
         )
         tabs.addTab(te_ref, "\U0001f4d6 Reference")
 
@@ -4210,35 +4339,303 @@ class BlinkComparatorWindow(QMainWindow):
 
 
 # ==============================================================================
+# FOLDER MODE — build a temp sequence from loose FITS files
+# ==============================================================================
+
+FOLDER_MODE_SEQNAME = "svenesis_blink"
+FITS_EXTENSIONS = (".fit", ".fits", ".fts")
+
+
+def _scan_fits_files(folder: str) -> list[str]:
+    """Return sorted list of FITS filenames (basenames only) in folder, case-insensitive."""
+    found: list[str] = []
+    try:
+        for name in os.listdir(folder):
+            if name.lower().endswith(FITS_EXTENSIONS):
+                found.append(name)
+    except OSError:
+        return []
+    return sorted(found)
+
+
+def _show_welcome_dialog(parent=None) -> bool:
+    """Intro dialog explaining the workflow. Returns True if user wants to continue."""
+    dlg = QDialog(parent)
+    dlg.setWindowTitle(f"Blink Comparator v{VERSION}")
+    dlg.setMinimumWidth(680)
+    dlg.setStyleSheet(
+        "QDialog{background-color:#1e1e1e;color:#e0e0e0;}"
+        "QLabel{color:#e0e0e0;font-size:12pt;}"
+        "QPushButton{padding:10px 24px;font-weight:bold;font-size:11pt;border-radius:4px;}"
+    )
+    layout = QVBoxLayout(dlg)
+    layout.setContentsMargins(24, 20, 24, 20)
+    layout.setSpacing(14)
+
+    title = QLabel(
+        "<div style='text-align:center;'>"
+        "<span style='font-size:28pt;'>\U0001F31F</span><br>"
+        "<span style='font-size:20pt;font-weight:bold;color:#88aaff;'>"
+        "Welcome to Blink Comparator</span>"
+        "</div>"
+    )
+    title.setTextFormat(Qt.TextFormat.RichText)
+    title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    layout.addWidget(title)
+
+    body = QLabel(
+        "<div style='font-size:12pt;line-height:1.55;'>"
+        "This tool helps you inspect a folder of FITS frames as a blink "
+        "animation to quickly spot satellite trails, clouds, tracking errors, "
+        "focus drift and other bad frames."
+        "<br><br>"
+        "<b style='color:#FFDD00;'>What happens next:</b>"
+        "<ol style='margin-top:4px;'>"
+        "<li>Pick a folder containing your FITS files "
+        "(<code>.fit</code> / <code>.fits</code> / <code>.fts</code>).</li>"
+        "<li>Siril builds a temporary FITSEQ sequence "
+        f"(<code>{FOLDER_MODE_SEQNAME}</code>) from those files.</li>"
+        "<li>Optionally registers the frames to extract FWHM, roundness "
+        "and background statistics.</li>"
+        "<li>The viewer opens — play / step through frames, mark bad ones "
+        "with <b>B</b>, good ones with <b>G</b>, undo with <b>Ctrl+Z</b>.</li>"
+        "<li>Apply writes <code>rejected_frames.txt</code> and can move "
+        "rejected files into a <code>rejected/</code> subfolder.</li>"
+        "</ol>"
+        "<b style='color:#FFDD00;'>On close</b> the temp sequence, its "
+        "conversion log and the Siril <code>cache/</code> directory are "
+        "removed automatically — your original files are never modified "
+        "unless you explicitly say so."
+        "</div>"
+    )
+    body.setTextFormat(Qt.TextFormat.RichText)
+    body.setWordWrap(True)
+    layout.addWidget(body)
+
+    btn_row = QHBoxLayout()
+    btn_row.addStretch()
+    btn_cancel = QPushButton("Cancel")
+    btn_cancel.clicked.connect(dlg.reject)
+    btn_row.addWidget(btn_cancel)
+    btn_start = QPushButton("Select Folder \u2192")
+    btn_start.setStyleSheet(
+        "padding:8px 20px;font-weight:bold;border-radius:4px;"
+        "background-color:#285299;color:white;"
+    )
+    btn_start.setDefault(True)
+    btn_start.clicked.connect(dlg.accept)
+    btn_row.addWidget(btn_start)
+    layout.addLayout(btn_row)
+
+    return dlg.exec() == QDialog.DialogCode.Accepted
+
+
+def _prompt_load_folder(parent=None) -> tuple[str, bool] | None:
+    """Prompt for a folder of FITS files. Returns (folder_path, register_yes_no) or None if cancelled."""
+    if not _show_welcome_dialog(parent):
+        return None
+
+    folder = QFileDialog.getExistingDirectory(
+        parent,
+        "Blink Comparator — Select Folder of FITS Files"
+    )
+    if not folder:
+        return None
+
+    files = _scan_fits_files(folder)
+    if not files:
+        QMessageBox.warning(
+            parent, "No FITS Files Found",
+            f"No {', '.join(FITS_EXTENSIONS)} files were found in:\n{folder}"
+        )
+        return None
+
+    # Confirm + register checkbox
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("Load Folder")
+    dlg.setStyleSheet("QDialog{background-color:#2b2b2b;color:#cccccc;}"
+                      "QLabel{color:#cccccc;}"
+                      "QCheckBox{color:#cccccc;}")
+    layout = QVBoxLayout(dlg)
+    layout.addWidget(QLabel(
+        f"Found <b>{len(files)}</b> FITS file(s) in:<br>"
+        f"<code>{folder}</code><br><br>"
+        f"A temporary sequence named <code>{FOLDER_MODE_SEQNAME}</code> will be created."
+    ))
+    chk_register = QCheckBox("Register frames for statistics (FWHM, roundness, background)")
+    chk_register.setChecked(True)
+    chk_register.setToolTip(
+        "Runs 'register -2pass' so statistics table, graph, batch-reject, and quality\n"
+        "weights are available. May take several minutes on large sequences."
+    )
+    layout.addWidget(chk_register)
+
+    btn_row = QHBoxLayout()
+    btn_ok = QPushButton("Continue")
+    btn_ok.setStyleSheet("padding:6px 16px;background-color:#285299;color:white;font-weight:bold;")
+    btn_ok.clicked.connect(dlg.accept)
+    btn_cancel = QPushButton("Cancel")
+    btn_cancel.setStyleSheet("padding:6px 16px;")
+    btn_cancel.clicked.connect(dlg.reject)
+    btn_row.addStretch()
+    btn_row.addWidget(btn_cancel)
+    btn_row.addWidget(btn_ok)
+    layout.addLayout(btn_row)
+
+    if dlg.exec() != QDialog.DialogCode.Accepted:
+        return None
+
+    return folder, chk_register.isChecked()
+
+
+def _build_folder_sequence(siril, folder: str, do_register: bool, parent=None) -> bool:
+    """Run cd + convert (+ optional register). Returns True on success."""
+    progress = QProgressDialog("Preparing temporary sequence...", None, 0, 0, parent)
+    progress.setWindowTitle("Loading Folder")
+    progress.setWindowModality(Qt.WindowModality.WindowModal)
+    progress.setMinimumDuration(0)
+    progress.setCancelButton(None)
+    progress.setAutoClose(False)
+    progress.show()
+    QApplication.processEvents()
+
+    try:
+        progress.setLabelText("Changing directory in Siril...")
+        QApplication.processEvents()
+        siril.cmd("cd", folder)
+
+        progress.setLabelText(f"Converting FITS files to sequence '{FOLDER_MODE_SEQNAME}'...")
+        QApplication.processEvents()
+        siril.cmd("convert", FOLDER_MODE_SEQNAME, "-fitseq")
+
+        if do_register:
+            progress.setLabelText("Registering frames (may take several minutes)...")
+            QApplication.processEvents()
+            try:
+                siril.cmd("register", FOLDER_MODE_SEQNAME, "-2pass")
+            except Exception as ex:
+                try:
+                    siril.log(f"[BlinkComparator] Registration failed, continuing without stats: {ex}")
+                except Exception:
+                    pass
+                QMessageBox.warning(
+                    parent, "Registration Failed",
+                    f"register -2pass failed. Continuing without statistics.\n\n{ex}"
+                )
+
+        progress.setLabelText("Loading sequence...")
+        QApplication.processEvents()
+        # `convert` already leaves the new sequence active, but call load_seq to
+        # be explicit (and to refresh regdata if register was just run).
+        try:
+            siril.cmd("load_seq", FOLDER_MODE_SEQNAME)
+        except Exception as ex:
+            try:
+                siril.log(f"[BlinkComparator] load_seq warning (continuing): {ex}")
+            except Exception:
+                pass
+    except Exception as e:
+        progress.close()
+        QMessageBox.critical(
+            parent, "Conversion Failed",
+            f"Failed to build sequence from folder:\n{e}\n\n{traceback.format_exc()}"
+        )
+        return False
+    finally:
+        progress.close()
+
+    return True
+
+
+def _cleanup_folder_sequence(folder: str) -> None:
+    """Remove everything that was created by _build_folder_sequence:
+    the .seq files, the FITSEQ image files, the conversion log, and the
+    Siril thumbnail cache directory.
+    """
+    patterns = [
+        f"{FOLDER_MODE_SEQNAME}.seq",
+        f"r_{FOLDER_MODE_SEQNAME}.seq",
+        f"{FOLDER_MODE_SEQNAME}_*.fit",
+        f"{FOLDER_MODE_SEQNAME}_*.fits",
+        f"{FOLDER_MODE_SEQNAME}.fit",
+        f"{FOLDER_MODE_SEQNAME}.fits",
+        f"r_{FOLDER_MODE_SEQNAME}.fit",
+        f"r_{FOLDER_MODE_SEQNAME}.fits",
+        f"{FOLDER_MODE_SEQNAME}_conversion.txt",
+    ]
+    for pat in patterns:
+        for path in glob.glob(os.path.join(folder, pat)):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    # Siril writes a "cache" directory into the working folder for sequence
+    # thumbnails / computed data. Since folder mode creates a throwaway
+    # sequence, wipe the whole cache subfolder on close.
+    cache_dir = os.path.join(folder, "cache")
+    if os.path.isdir(cache_dir):
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
+
+# ==============================================================================
 # ENTRY POINT
 # ==============================================================================
 
 def main() -> int:
     app = QApplication(sys.argv)
-    try:
-        siril = s.SirilInterface()
-        win = BlinkComparatorWindow(siril)
+
+    def _launch(siril, folder_mode_path: str) -> int:
+        win = BlinkComparatorWindow(siril, folder_mode_path=folder_mode_path)
         win.showMaximized()
+
+        def _bring_to_front():
+            win.setWindowState(
+                (win.windowState() & ~Qt.WindowState.WindowMinimized)
+                | Qt.WindowState.WindowActive
+            )
+            win.raise_()
+            win.activateWindow()
+
+        _bring_to_front()
+        # On macOS the window sometimes settles behind Siril; retry once after
+        # the event loop has had a chance to process the show event.
+        QTimer.singleShot(50, _bring_to_front)
+
         try:
-            siril.log(f"Blink Comparator v{VERSION} loaded.")
+            siril.log(f"Blink Comparator v{VERSION} loaded from folder: {folder_mode_path}")
         except (SirilError, OSError, RuntimeError):
             pass
         return app.exec()
-    except (NoSequenceError, SirilConnectionError):
+
+    try:
+        siril = s.SirilInterface()
+        if not siril.connected:
+            siril.connect()
+
+        # Folder mode is the only mode — always prompt for a folder of FITS files
+        # and build a temporary sequence.
+        choice = _prompt_load_folder(None)
+        if choice is None:
+            return 0
+        folder, do_register = choice
+
+        if not _build_folder_sequence(siril, folder, do_register, None):
+            return 1
+
+        return _launch(siril, folder_mode_path=folder)
+
+    except SirilConnectionError:
         QMessageBox.warning(
-            None,
-            "No Sequence",
-            "No sequence is currently loaded in Siril, or Siril is not connected.\n"
-            "Please load a sequence first (Open \u2192 Open Sequence)\n"
-            "and ensure this script is run from Siril's script menu."
+            None, "Siril Not Connected",
+            "Could not connect to Siril.\n"
+            "Ensure this script is launched from Siril's script menu."
         )
         return 1
     except NoImageError:
         QMessageBox.warning(
-            None,
-            "No Image",
-            "No image or sequence is currently loaded in Siril.\n"
-            "Please load a sequence first."
+            None, "No Image",
+            "No image or sequence is currently loaded in Siril."
         )
         return 1
     except Exception as e:
