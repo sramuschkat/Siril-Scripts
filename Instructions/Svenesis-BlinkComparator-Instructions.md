@@ -1,6 +1,6 @@
 # Svenesis Blink Comparator — User Instructions
 
-**Version 1.2.3** | Siril Python Script for Frame Selection & Quality Analysis
+**Version 1.2.8** | Siril Python Script for Frame Selection & Quality Analysis
 
 > *Comparable to PixInsight's Blink + SubframeSelector — but free, open-source, and tightly integrated with Siril.*
 
@@ -14,16 +14,17 @@
 4. [Getting Started](#4-getting-started)
 5. [The User Interface](#5-the-user-interface)
 6. [Understanding the Metrics](#6-understanding-the-metrics)
-7. [Display Modes](#7-display-modes)
+7. [Display Modes & Autostretch Presets](#7-display-modes--autostretch-presets)
 8. [Frame Selection Methods](#8-frame-selection-methods)
 9. [The Undo System](#9-the-undo-system)
-10. [Applying Changes to Siril](#10-applying-changes-to-siril)
+10. [Applying Rejections (File Moves)](#10-applying-rejections-file-moves)
 11. [Export Options](#11-export-options)
 12. [Use Cases & Workflows](#12-use-cases--workflows)
 13. [Keyboard Shortcuts](#13-keyboard-shortcuts)
 14. [Tips & Best Practices](#14-tips--best-practices)
 15. [Troubleshooting](#15-troubleshooting)
 16. [FAQ](#16-faq)
+17. [Changes Since v1.2.3](#17-changes-since-v123)
 
 ---
 
@@ -35,9 +36,9 @@ Think of it as a **quality control inspector** for your subframes. It combines:
 
 - **Visual inspection** — watch your frames play like a movie to spot problems
 - **Statistical analysis** — see FWHM, roundness, star count, and background for every frame
-- **One-click frame rejection** — mark bad frames and tell Siril which to exclude from stacking
+- **One-click frame rejection** — mark bad frames; on close the script writes a `rejected_frames.txt` audit file and moves the rejected FITS into a `rejected/` subfolder next to your originals
 
-The result: a cleaner, sharper final stack because you removed the frames that would have dragged the quality down.
+The result: a cleaner, sharper final stack because you removed the frames that would have dragged the quality down — and because rejection is a simple file move, you can reverse any decision by dragging the file back out of `rejected/`.
 
 ---
 
@@ -122,99 +123,102 @@ The script automatically installs missing Python dependencies (`numpy`, `PyQt6`,
 
 ## 4. Getting Started
 
-### Step 1: Load a Registered Sequence
+Starting in v1.2.4, the Blink Comparator is **folder-based**: you point it at a directory of FITS files, and it builds its own temporary sequence. You never need to pre-register or pre-load anything in Siril.
 
-The script works on a **sequence** loaded in Siril — not a single image. You need at least 2 frames, but a real session typically has 50–500+.
-
-**If you already have a registered sequence:**
-1. Set the working directory to the folder containing your `.seq` file and `.fit` files.
-2. Siril automatically detects and shows the sequence in the Frame List at the bottom.
-
-**If you have raw FITS files that haven't been processed:**
-```
-# In the Siril console:
-cd /path/to/your/lights
-convert light -out=./process
-cd process
-register pp_light
-```
-This creates a registered sequence `r_pp_light_` that the Blink Comparator can work with.
-
-**If you used a preprocessing script (e.g., SeeStar):**
-Your script likely already created a registered sequence. Set the working directory to the output folder — Siril will detect the `.seq` file.
-
-### Step 2: Run the Script
+### Step 1: Run the Script
 
 Go to **Processing → Scripts → Svenesis Blink Comparator**.
 
-The script will:
-1. Load the sequence metadata (frame count, dimensions, channels)
-2. Load per-frame statistics (FWHM, roundness, background, stars, median, sigma)
-3. Open the main window with the first frame displayed
+A folder picker opens. Select the folder containing your FITS frames (`.fit`, `.fits`, `.fts` — extensions are matched case-insensitively, so `.FIT` / `.Fits` work too). Compressed FITS (`.fz`, `.gz`) are **not** supported — decompress first if needed. The script scans one directory level deep.
+
+### Step 2: Wait for Sequence Building
+
+Behind the scenes the script:
+
+1. Runs Siril's `cd <folder>` + `convert svenesis_blink -fitseq` to build a single-file FITSEQ temp sequence named `svenesis_blink.fits`.
+2. Loads the sequence (`load_seq svenesis_blink`).
+3. Probes frame metadata (dimensions, channels, count).
+4. Loads per-frame statistics (FWHM, roundness, background, stars, median, sigma) from Siril's registration data if present.
+
+A progress bar shows the stats-loading phase. The temp sequence is cleaned up automatically when you close the window.
 
 ### Step 3: Run Star Detection (If Needed)
 
 If the FWHM, Roundness, Stars, and Weight columns are empty, a **yellow banner** appears at the top:
 
-> ⚠️ No star detection data. Click to run star detection...
+> ⚠️ No star detection data. Click to run star detection…
 
-Click the banner. This runs Siril's `register <seq> -2pass` command, which detects stars in every frame and computes FWHM, roundness, background level, and star count. It takes a few seconds to a few minutes depending on the number of frames.
+Click the banner. This runs Siril's `register svenesis_blink -2pass` command, which detects stars in every frame and computes FWHM, roundness, background level, and star count. It takes a few seconds to a few minutes depending on the number of frames. The progress bar tracks through the detection and the follow-up stretch/reference rebind.
 
 **Note:** Median and Sigma are *always* available — they don't require star detection.
 
 ### Step 4: Inspect and Select
 
 Now you can:
-- **Play the animation** (Space) to visually spot problems
+
+- **Play the animation** (Space) at 3–5 FPS to visually spot problems — changing pixels (satellites, clouds) jump out to the eye
 - **Sort the Statistics Table** by FWHM (worst frames at top)
 - **Use Batch Reject** to remove the worst 10% automatically
 - **Mark individual frames** with G (good) or B (bad)
 
-### Step 5: Apply and Stack
+### Step 5: Apply and Close
 
-Click **Apply Changes to Siril** to send your frame selections. Then stack in Siril as usual — excluded frames will be skipped.
+Click **Apply Rejections && Close** (or press Esc — you'll be prompted whether to apply, discard, or cancel). The script:
+
+1. Creates a `rejected/` subfolder inside your source folder (if any frames are rejected).
+2. Moves each rejected FITS into `rejected/`.
+3. Writes `rejected_frames.txt` next to your originals, listing the names of the files that actually landed in `rejected/`.
+
+Original kept frames stay exactly where they were — nothing is rewritten, renamed, or modified. Re-run the script later on the same folder and the already-rejected files (now in `rejected/`) simply won't appear, because the scan only picks up the top level.
 
 ---
 
 ## 5. The User Interface
 
-The window is divided into several areas:
+The window is divided into three main areas.
 
 ### Left Panel (Control Panel)
 
-The left side (340px wide) contains all controls, organized in collapsible sections:
+The left side (340 px wide) contains all controls, organized into collapsible sections:
 
-- **Playback Controls:** Play/Pause, frame navigation, speed slider, loop toggle
-- **Display Mode:** Normal, Difference, Only Included, Side by Side
-- **Display Options:** Linked stretch, crossfade, frame overlay, thumbnail size, histogram
-- **Frame Selection:** Keep/Reject buttons, auto-advance, pending changes counter, Apply button
-- **Batch Selection:** Threshold filter, worst N%, approval expressions
-- **Export:** Rejected list, CSV, GIF, clipboard
+- **Playback:** Play/Pause, frame navigation, speed slider, loop toggle, "Only included frames" playback filter
+- **Display Mode:** Normal, Side by Side (vs. reference)
+- **Frame Marking:** Keep (G) / Reject (B) buttons, Reset All Rejections, auto-advance, pending-changes label
+- **Batch Selection:** Threshold filter + worst N% mode
+- **Approval Expression:** Multi-criteria AND filter
+- **Export CSV / Export GIF** at the bottom
+- **Buy me a Coffee · Help · Apply Rejections && Close**
 
 ### Right Panel (Tabbed Area)
 
-The main area has four tabs:
+The main area has four tabs.
 
 #### Viewer Tab
-The frame display canvas. Shows the current frame with autostretch applied.
-- **Scroll wheel** to zoom (0.1x to 20x)
+
+The frame display canvas. Shows the current frame with the chosen autostretch preset applied.
+
+- **Scroll wheel** to zoom (0.1× to 20×) — zoom percentage updates live in the toolbar
 - **Right-click drag** to pan
-- **Z** to reset zoom to fit-to-window
-- **1:1 button** for pixel-perfect zoom
-- **ROI mode:** Draw a rectangle to blink only that region
+- **Z** (or **Fit-in-Window** button) to return to the fit-to-window view
+- A toolbar below the canvas holds: live zoom readout, **Fit-in-Window**, **Copy (Ctrl+C)**, **Overlay** checkbox, **Stretch** preset dropdown, **Thumbs** (thumbnail size) slider, and a shortcut legend.
 
 #### Statistics Table Tab
+
 All frames listed in a sortable table with 10 columns:
+
 - Frame #, Weight, FWHM, Roundness, BG Level, Stars, Median, Sigma, Date, Status
 - **Click a column header** to sort (click again to reverse direction)
 - **Click a row** to jump to that frame in the Viewer
+- **Arrow keys** navigate rows
 - **Ctrl+click** or **Shift+click** to multi-select rows
-- **Right-click** selected rows → "Reject selected"
+- **Right-click** selected rows → "Reject N selected frame(s)"
 - Excluded rows have a red-tinted background
 - The current frame row is highlighted in blue
 
 #### Statistics Graph Tab
+
 Line charts showing metrics across all frames:
+
 - Toggleable: FWHM, Background, Roundness (checkboxes above the chart)
 - **Thin line** = raw per-frame values
 - **Bold line** = 7-frame running average (reveals trends)
@@ -223,23 +227,28 @@ Line charts showing metrics across all frames:
 - Great for spotting: focus drift (FWHM ramp), clouds (background spike), tracking degradation (roundness drop)
 
 #### Scatter Plot Tab
+
 2D scatter plot of any two metrics:
-- Select X and Y axes from dropdown menus
-- **Blue dots** = included frames
+
+- Select **X** and **Y** axes from dropdown menus (FWHM, Roundness, Background, Stars, Weight)
+- **Green dots** = included frames
 - **Red ✕** = excluded frames
-- **Red star** = current frame
+- **Yellow/gold star** = current frame (always on top)
 - **Click any dot** to jump to that frame
+- Axis-normalized click detection — both axes contribute equally to nearest-point selection, regardless of their numeric ranges
 - Best combinations: **FWHM vs Roundness** (star quality), **FWHM vs Background** (clouds + seeing)
 
 ### Bottom Bar (Filmstrip)
 
 A horizontal scrollable strip of frame thumbnails (always visible):
+
 - **Green border** = included
 - **Red border** = excluded
 - **Blue border** = current frame
 - Click any thumbnail to jump to that frame
-- Thumbnails load lazily as you scroll
-- Adjust size with the slider in Display Options (40–160px)
+- Thumbnails load lazily as you scroll (only the visible range is materialized)
+- Adjust size with the **Thumbs** slider in the viewer toolbar (40–160 px)
+- The thumbnail cache reuses the main frame cache's already-stretched display data — a frame that is already in the main cache no longer costs a second disk read when its thumbnail is built
 
 ---
 
@@ -300,9 +309,9 @@ A horizontal scrollable strip of frame thumbnails (always visible):
 **Formula:**
 ```
 w_fwhm  = 1 − (fwhm − min) / (max − min)        [lower FWHM = better]
-w_round = roundness                                [higher = better]
-w_bg    = 1 − (bg − min) / (max − min)            [lower BG = better]
-w_stars = sqrt(stars) / sqrt(max_stars)            [more = better]
+w_round = roundness                              [higher = better]
+w_bg    = 1 − (bg − min) / (max − min)          [lower BG = better]
+w_stars = sqrt(stars) / sqrt(max_stars)          [more = better]
 Weight  = mean of available factors
 ```
 
@@ -338,44 +347,41 @@ Weight  = mean of available factors
 
 ### Status
 
-Shows **Included** (green) or **Excluded** (red). Changes are local until you click "Apply Changes to Siril".
+Shows **Included** (green) or **Excluded** (red). Status changes stay local until you close the window with **Apply Rejections && Close** (see §10).
 
 ---
 
-## 7. Display Modes
+## 7. Display Modes & Autostretch Presets
 
 ### Normal Mode (Default)
 
-Standard autostretch view. Each frame is stretched using a Midtone Transfer Function (STF) that replicates Siril/PixInsight's autostretch algorithm. Good for general visual inspection.
+Single-frame autostretched view. Each frame is stretched using a Midtone Transfer Function (STF) that replicates Siril/PixInsight's autostretch algorithm, with a **globally linked** median/MAD — so brightness differences between frames stay visible. This is what makes cloudy frames or hazy frames jump out during playback.
 
-**Linked Stretch** (checkbox):
-- **ON:** Same stretch parameters for all frames. Brightness differences between frames become visible (clouds, background changes). Recommended for comparing frames.
-- **OFF:** Each frame gets its own optimal stretch. Shows the most detail in each frame individually, but frames may appear to flash bright/dark.
+Use **Normal mode at 3–5 FPS** for satellite/airplane/tracking hunting. Anything that *changes* between frames — a trail, a cloud patch moving through, a tracking jerk — is instantly obvious to the eye. There is no separate "Difference" mode in this version; playback in Normal mode delivers the same result without the overhead of per-frame subtraction.
 
-### Difference Mode (D key)
+### Side by Side (vs. reference) Mode
 
-Shows `|current_frame − reference_frame| × 5` — anything that changes between frames lights up as a bright spot on a dark background.
+Current frame on the left, reference frame (the first frame of the sequence) on the right, with synchronized zoom and pan. Useful for direct A/B comparison — especially for star shape changes or local artifacts you want to verify against a known-good baseline.
 
-**Best for detecting:**
-- Satellite trails (bright streak)
-- Moving objects (asteroids, aircraft)
-- Clouds (diffuse glow)
-- Tracking shifts
+### Autostretch Presets
 
-### Only Included Mode
+The **Stretch** dropdown in the viewer toolbar controls how each frame is mapped to display brightness. Four presets are available:
 
-Playback skips all excluded frames. Use this after marking to verify that the remaining frames look clean.
+| Preset | `shadows_clip` | `target_median` | Character |
+|--------|----------------|-----------------|-----------|
+| Conservative | −3.5 σ | 0.20 | Darker background, preserves dim detail |
+| **Default** | −2.8 σ | 0.25 | PixInsight-style STF, balanced |
+| Aggressive | −1.5 σ | 0.35 | Brighter, higher contrast |
+| Linear | — | — | No stretch — raw data clipped to 0–255 |
 
-### Side by Side Mode
+Changing the preset invalidates the frame cache + thumbnail cache, re-renders the current frame, and rebuilds visible thumbnails. Your choice is remembered across sessions via QSettings.
 
-Shows the current frame on the left and the reference frame on the right, with synchronized zoom and pan. Useful for direct A/B comparison.
+**Tip:** Use Conservative for nebulae (preserves faint structure), Default for generic inspection, Aggressive to hunt subtle brightness anomalies (clouds, haze), and Linear if you want to see what the sensor actually recorded without stretch artifacts.
 
 ### Additional Display Features
 
-- **Crossfade Transition:** Smooth 200ms blend between frames instead of a hard cut. Makes motion artifacts more visible.
-- **Frame Info Overlay:** Shows frame number, FWHM, roundness, and weight in the top-left corner. Toggleable.
+- **Frame Info Overlay:** Shows frame number, FWHM, roundness, and weight in the top-left corner. Toggleable via the **Overlay** checkbox in the viewer toolbar; overlay state is burned into the output of **Copy to clipboard** and **Export GIF**.
 - **A/B Toggle (T key):** Pin the current frame, then press T to flip between the pinned frame and whatever frame you navigate to.
-- **ROI Blink:** Click "Select ROI", draw a rectangle on the image, and the viewer zooms into that region. Perfect for checking star shapes in a specific corner.
 
 ---
 
@@ -388,7 +394,7 @@ The simplest approach — scrub through your sequence and mark each frame:
 1. Press **Space** to play, or use **←/→** to step frame by frame
 2. Press **B** when you see a bad frame (exclude)
 3. Press **G** to re-include a frame you previously excluded
-4. With **Auto-advance** enabled (default), the viewer jumps to the next frame after marking
+4. With **Auto-advance after marking** enabled (default), the viewer jumps to the next frame after marking
 
 **Best for:** Small sequences (< 100 frames), or reviewing individual frames flagged by other methods.
 
@@ -410,12 +416,12 @@ Automatically reject the bottom percentage of frames:
 
 1. Select **"Worst N%"** mode
 2. Choose a metric (FWHM, Background, Roundness, Weight)
-3. Set the percentage (e.g., 10%)
+3. Set the percentage (e.g., 10 %)
 4. Click **"Reject Matching"**
 
 For FWHM and Background, "worst" = highest value. For Roundness and Weight, "worst" = lowest value.
 
-**Example:** Reject worst 10% by Weight → removes the 9 lowest-quality frames from a 90-frame sequence.
+**Example:** Reject worst 10 % by Weight → removes the 9 lowest-quality frames from a 90-frame sequence.
 
 ### Method 4: Approval Expressions (Multi-Criteria)
 
@@ -443,7 +449,11 @@ For surgical removal of specific frames you've identified:
 2. **Ctrl+click** individual rows, or **Shift+click** for a range
 3. **Right-click** the selection → "Reject N selected frame(s)"
 
-**Best for:** Removing specific outliers you've identified in the scatter plot or graph.
+**Best for:** Removing specific outliers you've spotted in the scatter plot or graph.
+
+### Reset All Rejections
+
+The **Reset All Rejections** button in the Frame Marking group clears every exclusion — both the baseline (what Siril had at startup) and any pending marks — and marks every frame as Included again. Useful when you want to start the selection over. This action cannot be undone through Ctrl+Z.
 
 ---
 
@@ -452,31 +462,57 @@ For surgical removal of specific frames you've identified:
 Every marking action can be undone with **Ctrl+Z**:
 
 - **Single marks** (G/B on one frame) undo one at a time
-- **Batch operations** (threshold reject, worst N%, approval expression, multi-select) undo the **entire batch** with a single Ctrl+Z
+- **Batch operations** (threshold reject, worst N%, approval expression, multi-select) undo the **entire batch** with a single Ctrl+Z — you don't have to press Ctrl+Z N times
+- **Reset All Rejections** is *not* on the undo stack (it's a deliberate nuclear option)
 - Undo stack depth: 500 operations
 
-**Example:** You reject the worst 15% (13 frames). You realize that was too aggressive. One Ctrl+Z restores all 13 frames.
+**Example:** You reject the worst 15 % (13 frames). You realize that was too aggressive. One Ctrl+Z restores all 13 frames.
+
+Rapid Ctrl+Z hammering is debounced — the statistics graph, scatter plot, and filmstrip/slider repaint coalesce into a single refresh after ~150 ms, so the hotkey stays snappy even on long sequences.
 
 ---
 
-## 10. Applying Changes to Siril
+## 10. Applying Rejections (File Moves)
 
-All marks are **local** until you explicitly apply them:
+The Blink Comparator is **folder-based**: rejections are applied as actual file moves in your filesystem, not as metadata flags in a `.seq` file. This keeps the workflow transparent and fully reversible.
 
-1. The **"Pending: N changes"** counter in the left panel shows how many frames differ from Siril's current state
-2. Click **"Apply Changes to Siril"** to send all changes
-3. A confirmation dialog shows the exact changes that will be made
-4. Once applied, Siril's sequence is updated — excluded frames will be skipped during stacking
+### When Changes Are Applied
 
-**If you close the window with unsaved changes,** a dialog asks whether to apply or discard them.
+Marks stay local until you close the window. Closing via:
+
+- **"Apply Rejections && Close"** button, or
+- **Esc** / window-close with pending rejections → Yes/No/Cancel dialog asking whether to apply.
+
+### What Happens When You Apply
+
+A confirmation dialog shows the rejection count and the target folder path, then:
+
+1. A `rejected/` subfolder is created inside your source folder (if it doesn't already exist).
+2. Each rejected FITS file is **moved** (not copied) into `rejected/`. The file naming is preserved — no renaming.
+3. A text file `rejected_frames.txt` is written next to your originals. It contains a header (sequence name, timestamp, count) and one filename per line, listing only the files that actually landed in `rejected/`.
+4. The script reports moved vs. failed counts in the Siril log.
+
+### Partial Failures
+
+If some moves fail (OS file lock, permissions, disk full), the script:
+
+- Commits only the frames whose moves succeeded (they drop from the pending list).
+- Leaves the failed frames in the pending set — so the close-confirm dialog still mentions them on the next close attempt.
+- Lists only the actually-moved files in `rejected_frames.txt`.
+
+This means a partial failure never leaves your filesystem in a lying state — the audit file always matches what's physically in `rejected/`.
+
+### Undoing a Rejection After Close
+
+The workflow is reversible because it's just file moves. To restore a rejected frame, drag the file out of `rejected/` back into the source folder. Delete or ignore the `rejected_frames.txt` audit file as you prefer.
+
+### Original Frames Are Never Modified
+
+Kept frames stay exactly where they were. The script never rewrites headers, never re-saves, never touches the original bytes.
 
 ---
 
 ## 11. Export Options
-
-### Export Rejected Frame List (.txt)
-
-Saves a text file listing all excluded frame indices. Includes a header with sequence name, total frames, and rejection count.
 
 ### Export Statistics CSV (.csv)
 
@@ -488,16 +524,18 @@ Useful for external analysis in spreadsheets, Python notebooks, or other tools.
 ### Export Animated GIF (.gif)
 
 Creates an animated GIF of the blink animation:
+
 - Only included frames (excluded frames are skipped)
-- Scaled to 480px maximum dimension
-- Uses the current playback speed (FPS)
+- Scaled to 480 px maximum dimension
+- Uses the current playback speed (FPS) and autostretch preset
+- Respects the Overlay checkbox — frame-info badges are burned into the GIF if the overlay is visible
 - Requires the Pillow library (`pip install Pillow`)
 
 Great for sharing on forums, social media, or observation reports.
 
 ### Copy Frame to Clipboard (Ctrl+C)
 
-Copies the current frame (as displayed, with stretch applied) to the system clipboard. Paste directly into a forum post, image editor, or presentation.
+Copies the current frame (as displayed, with stretch and overlay applied) to the system clipboard. In **Side by Side** mode the full composite view is grabbed, not just the left raw pixmap. Paste directly into a forum post, image editor, or presentation.
 
 ---
 
@@ -508,13 +546,12 @@ Copies the current frame (as displayed, with stretch applied) to the system clip
 **Scenario:** You just finished an imaging session with 120 subframes and want a quick quality check before stacking.
 
 **Workflow:**
-1. Load the registered sequence in Siril
-2. Run the Blink Comparator
-3. Run star detection if needed (click the yellow banner)
-4. Go to the **Statistics Table** tab, sort by **FWHM descending** — the worst frames are now at the top
-5. Click **"Reject worst 10%"** by FWHM
-6. Review the **Statistics Graph** — check for any remaining outliers
-7. Apply changes → stack in Siril
+1. Run the Blink Comparator → pick the folder with your FITS files
+2. Run star detection if needed (click the yellow banner)
+3. Go to the **Statistics Table** tab, sort by **FWHM descending** — the worst frames are now at the top
+4. Click **"Reject worst 10 %"** by FWHM
+5. Review the **Statistics Graph** — check for any remaining outliers
+6. **Apply Rejections && Close** → stack in Siril (the `rejected/` subfolder is excluded from any subsequent `convert` / stacking step because it's one level below your lights folder)
 
 **Time:** ~5 minutes for 120 frames.
 
@@ -523,12 +560,12 @@ Copies the current frame (as displayed, with stretch applied) to the system clip
 **Scenario:** Clouds rolled through during your session. Some frames are partially clouded.
 
 **Workflow:**
-1. Open the Blink Comparator
+1. Open the Blink Comparator and pick the folder
 2. Go to the **Statistics Graph** tab, enable **Background** checkbox
 3. Look for spikes — these are the cloudy frames
 4. Use **Batch Reject**: Background > [threshold from the spike level]
 5. Also check **Stars** — cloudy frames have fewer detected stars
-6. Verify with **Difference Mode** (D key) — cloud patches glow bright
+6. Verify by playing at 3–5 FPS in Normal mode — cloud patches wobble visibly against the static starfield
 
 ### Use Case 3: Tracking Problem Diagnosis
 
@@ -539,7 +576,7 @@ Copies the current frame (as displayed, with stretch applied) to the system clip
 2. Go to the **Statistics Graph**, enable **Roundness**
 3. Look for dips — these are frames with tracking errors
 4. Use **Approval Expression**: `Roundness > 0.75`
-5. "Reject Non-Matching" removes all frames with elongated stars
+5. **Reject Non-Matching** removes all frames with elongated stars
 6. Check the **Scatter Plot** (FWHM vs Roundness) — outlier frames are far from the cluster
 7. Click outlier dots to inspect individual frames
 8. If tracking errors are concentrated in a time range, you may have a periodic error in your mount
@@ -553,7 +590,7 @@ Copies the current frame (as displayed, with stretch applied) to the system clip
 2. **Statistics Graph** → FWHM shows an upward ramp
 3. The **running average** (bold line) clearly shows the trend
 4. Use **Batch Reject**: FWHM > [your threshold, e.g., 4.5]
-5. Or use **"Reject worst 20%"** by FWHM — this removes the end-of-session frames automatically
+5. Or use **"Reject worst 20 %"** by FWHM — this removes the end-of-session frames automatically
 6. Consider: in future sessions, use an autofocuser or refocus every 30 minutes
 
 ### Use Case 5: Satellite Trail Hunting
@@ -562,11 +599,11 @@ Copies the current frame (as displayed, with stretch applied) to the system clip
 
 **Workflow:**
 1. Open the Blink Comparator
-2. Press **D** for **Difference Mode** — satellites appear as bright streaks against a dark background
-3. Press **Space** to play at 3–5 FPS — trails flash visibly
-4. When you spot one, press **B** to exclude that frame
+2. Stay in **Normal** mode
+3. Press **Space** to play at 3–5 FPS — satellite trails flash visibly from frame to frame because the stars are stationary while the trail pixel positions change
+4. When you spot a trail, press **B** to exclude that frame
 5. Continue playing to catch all trails
-6. Difference mode makes trails **much** more visible than normal mode
+6. Optionally switch to the **Aggressive** autostretch preset to make faint trails pop more
 
 ### Use Case 6: Data-Driven Selection (PI SubframeSelector Replacement)
 
@@ -575,7 +612,7 @@ Copies the current frame (as displayed, with stretch applied) to the system clip
 **Workflow:**
 1. Run star detection to populate all metrics
 2. Go to **Statistics Table**, sort by **Weight** ascending (worst frames first)
-3. Review the bottom 10–20% — do they look visibly worse?
+3. Review the bottom 10–20 % — do they look visibly worse?
 4. Set up an **Approval Expression**:
    ```
    FWHM < 4.0 AND Roundness > 0.75 AND Background < 0.012 AND Stars > 40
@@ -584,32 +621,29 @@ Copies the current frame (as displayed, with stretch applied) to the system clip
 6. Click "Reject Non-Matching"
 7. Verify in the **Scatter Plot** (FWHM vs Roundness) — the remaining cluster should be tight
 8. **Export CSV** for your records
-9. Apply changes → stack
+9. Apply Rejections && Close
 
 ### Use Case 7: Before vs. After Comparison
 
 **Scenario:** You want to verify that your frame selection actually improved the remaining set.
 
 **Workflow:**
-1. After marking frames, note the **session summary** statistics (mean FWHM, included count)
-2. Switch to **"Only Included"** display mode
+1. After marking frames, note the **session summary** numbers (mean FWHM, included count) shown in the close dialog
+2. Check the **"Only included frames"** checkbox in Playback and hit Space
 3. Play — verify the animation looks smooth with no flashing or artifacts
 4. Check the **Statistics Graph** — the red dots (excluded) should be at the spikes
 5. The remaining blue line should be more consistent
 6. **Export GIF** of the clean sequence for your imaging log
 
-### Use Case 8: Corner Star Shape Inspection
+### Use Case 8: Second-Pass Reselection
 
-**Scenario:** You suspect optical tilt or coma in one corner and want to check across all frames.
+**Scenario:** You ran the Blink Comparator once, applied rejections, and later want to reconsider some of the moves.
 
 **Workflow:**
-1. Click **"Select ROI"** in the display options
-2. Draw a rectangle over the problematic corner
-3. Click **1:1** zoom for pixel-perfect view
-4. Play the animation — star shapes in that corner blink through rapidly
-5. Frames where corner stars are worse than usual may have had flexure or tilt changes
-6. Mark those frames with B
-7. Click "Clear ROI" to return to full-frame view
+1. Open your source folder in Finder / Explorer and drag frames from `rejected/` back into the main folder.
+2. Delete the old `rejected_frames.txt` (or leave it — the next run overwrites it).
+3. Re-run the Blink Comparator on the same folder. It picks up only the top-level files (the ones in `rejected/` stay in `rejected/`).
+4. Make fresh selections and **Apply Rejections && Close** — a new `rejected_frames.txt` is written, and newly-rejected frames are moved into `rejected/` alongside the ones you decided to leave there.
 
 ---
 
@@ -628,6 +662,8 @@ Copies the current frame (as displayed, with stretch applied) to the system clip
 | `+` | Speed up (increment FPS) |
 | `-` | Slow down (decrement FPS) |
 
+`1`–`9` are dispatched through `QMainWindow.keyPressEvent` (not `QShortcut`), so when a spinbox or line-edit has keyboard focus the digits are delivered to the widget as usual and the FPS preset is suppressed — multi-digit entry in threshold spinboxes works normally. `Ctrl+Z` / `Ctrl+C` fire everywhere.
+
 ### Frame Marking
 
 | Key | Action |
@@ -640,8 +676,7 @@ Copies the current frame (as displayed, with stretch applied) to the system clip
 
 | Key | Action |
 |-----|--------|
-| `D` | Toggle Difference mode |
-| `Z` | Reset zoom to fit-to-window |
+| `Z` | Fit-in-window (reset zoom) |
 | `T` | Pin current frame / toggle A/B comparison |
 | `Ctrl+C` | Copy current frame to clipboard |
 
@@ -649,7 +684,7 @@ Copies the current frame (as displayed, with stretch applied) to the system clip
 
 | Key | Action |
 |-----|--------|
-| `Esc` | Close window |
+| `Esc` | Close window (with apply/discard/cancel prompt if changes are pending) |
 
 ---
 
@@ -665,52 +700,64 @@ Copies the current frame (as displayed, with stretch applied) to the system clip
 
 4. **Check the Scatter Plot.** FWHM vs Roundness is the single most informative combination. The main cluster represents your "normal" frames. Outliers far from the cluster are your rejection candidates.
 
-5. **Always use Difference Mode for satellites.** They're sometimes invisible in Normal mode but glow like neon signs in Difference mode.
+5. **Blink in Normal mode at 3–5 FPS for satellite hunting.** Changing pixels jump out to the eye — you don't need a dedicated "Difference" mode.
+
+### Autostretch Presets
+
+6. **Default is usually fine.** Conservative is good when the background has faint nebulosity you want to preserve while scanning for defects. Aggressive makes cloudy frames stand out. Linear is for when you want to see what the sensor actually recorded.
 
 ### Performance Tips
 
-6. **First run is slow, subsequent runs are fast.** The script caches statistics and thumbnails. Navigating frames is instant once cached.
+7. **First run on a folder is slow, subsequent runs are fast.** The script caches statistics and thumbnails. Navigating frames is instant once cached.
 
-7. **Large sequences (500+ frames):** The statistics loading may take a minute. Be patient — it only happens once per session.
+8. **Large sequences (500+ frames):** The statistics loading may take a minute. Be patient — it only happens once per session. Star detection scales roughly with frame count.
 
-8. **Playback speed:** If playback stutters at high FPS, lower the speed. The frame cache preloads ahead, but very high FPS on large frames can outrun the cache.
+9. **Playback speed:** If playback stutters at high FPS, lower the speed. The frame cache preloads ahead with a playback-aware lookahead (`max(10, fps × 2)`), but very high FPS on very large frames can outrun the single preload thread.
 
-### Siril Integration
+### Folder Hygiene
 
-9. **Always register first.** The Blink Comparator works on any sequence, but it works best on registered (aligned) sequences. Difference mode and side-by-side mode require alignment to be meaningful.
+10. **Keep your lights folder clean.** Delete old `rejected/` subfolders or `rejected_frames.txt` files you no longer need. The Blink Comparator only scans one directory level, but your stacking script may not be so careful.
 
-10. **Star detection is separate from registration.** Your preprocessing script may register the sequence without computing per-frame FWHM. That's why the "Run Star Detection" banner appears. Clicking it is safe — it doesn't modify your files.
-
-11. **Changes are non-destructive.** "Apply Changes" only sets the include/exclude flag in the .seq file. Your FITS files are never modified or deleted.
+11. **The temp sequence is ephemeral.** `svenesis_blink.fits` + `.seq` are always cleaned up on close. If a previous run crashed and left them behind, the next launch detects that and runs a `close` + cleanup before `convert`.
 
 ---
 
 ## 15. Troubleshooting
 
-### "No sequence loaded" error
+### Folder picker shows no FITS files
 
-**Cause:** No sequence is active in Siril.
-**Fix:** Set the working directory to the folder containing your `.seq` file and `.fit` files. Siril should detect the sequence automatically.
+**Cause:** You pointed at a folder that contains no `.fit/.fits/.fts` files at the top level (the script does not recurse deeper, and compressed `.fz/.gz` FITS are not recognized).
+**Fix:** Navigate into the actual lights folder. If your files live in `session/lights/night1/`, pick `night1/`, not `session/`. If your frames are fpack- or gzip-compressed, decompress them first (e.g. `funpack *.fz` or `gunzip *.gz`).
+
+### "destination already exists" during sequence building
+
+**Cause:** A previous run crashed without cleaning up the temp sequence.
+**Fix:** The script now runs `close` + cleanup before `convert`, so simply re-running should work. If you see this manually, delete `svenesis_blink.fits` and `svenesis_blink.seq` from the folder and relaunch.
 
 ### FWHM / Roundness / Stars columns are empty
 
 **Cause:** Star detection hasn't been run on this sequence.
-**Fix:** Click the yellow "Run Star Detection" banner. This runs `register <seq> -2pass` which computes all star metrics without creating new files.
+**Fix:** Click the yellow "Run Star Detection" banner. This runs `register svenesis_blink -2pass` which computes all star metrics without creating new files.
 
 ### Star detection ran but columns are still empty
 
-**Cause:** For RGB images, Siril stores registration data on the green channel (channel 1). Older versions of the script may have only checked channel 0.
-**Fix:** Update to the latest version of the script. It scans all channels.
+**Cause:** Registration wrote data to a channel the script didn't probe (rare — the script now probes all channels and reuses the result).
+**Fix:** Update to the latest version of the script. It auto-detects the channel on frame 0 and reuses it for the whole sequence.
+
+### Progress bar freezes during star detection
+
+**Cause:** The post-register rebind (compute global stretch → load reference frame) used to run silently on the main thread. In v1.2.8 those phases advance the progress bar through 30 % → 50 % with `processEvents()` pumping.
+**Fix:** Update to v1.2.8 or newer. If the bar still appears stuck on very large sequences, give it a minute — each phase can legitimately take several seconds per thousand frames.
+
+### 1–9 digits change playback speed instead of going into a threshold spinbox
+
+**Cause (pre-1.2.8):** The 1–9 FPS presets were registered as window-scope `QShortcut`s, which consumed digit keystrokes before they could reach a focused child widget.
+**Fix:** Update to v1.2.8. The presets now live in `keyPressEvent` and only fire when no child widget absorbs the key.
 
 ### Font warning: "Sans-serif"
 
-**Message:** `qt.qpa.fonts: Populating font family aliases took 121 ms. Replace uses of missing font family "Sans-serif"...`
+**Message:** `qt.qpa.fonts: Populating font family aliases took 121 ms. Replace uses of missing font family "Sans-serif"…`
 **Impact:** Cosmetic only, no effect on functionality.
-
-### Script crashes on close with SortOrder error
-
-**Message:** `TypeError: int() argument must be a string... not 'SortOrder'`
-**Fix:** Update to the latest version (fixed in v1.2.3+).
 
 ### GIF export fails
 
@@ -725,33 +772,58 @@ Copies the current frame (as displayed, with stretch applied) to the system clip
 - The cache holds 80 frames by default — sufficient for most sequences
 - Close other memory-intensive applications
 
+### Script crashes with "'BlinkComparatorWindow' object has no attribute 'cache'"
+
+**Cause:** A signal-ordering bug in earlier 1.2.x builds where the display-mode radios emitted `idToggled` before the cache was constructed.
+**Fix:** Fixed in v1.2.8. Update to the current release.
+
 ---
 
 ## 16. FAQ
 
 **Q: Does this replace PixInsight's Blink + SubframeSelector?**
-A: For visual inspection and basic frame selection, yes — it actually offers more visualization features than PI Blink (difference mode, side-by-side, A/B toggle, ROI blink, crossfade, filmstrip). For the statistical side, it covers most of SubframeSelector's features (sortable table, batch reject, approval expressions, scatter plot) but PI has SNR and the proprietary PSFSignalWeight metric that we don't replicate.
+A: For visual inspection and data-driven frame selection, yes — you get a sortable statistics table, batch thresholds, approval expressions, scatter plot, statistics graph with running average, and a thumbnail filmstrip. What you trade is PI's SNR / PSFSignalWeight proprietary metrics, and there's no dedicated "Difference" mode (Normal-mode playback at 3–5 FPS covers the same ground).
 
-**Q: Can I use this on unregistered sequences?**
-A: Yes, but Difference mode and Side-by-Side mode won't be useful because the frames aren't aligned. Visual blinking in Normal mode still works.
+**Q: Do I need to pre-register my sequence?**
+A: No — the script builds its own temporary FITSEQ sequence via `convert -fitseq` from whatever you point it at. If you want FWHM/Roundness/Stars metrics you click the "Run Star Detection" banner, which runs `register -2pass` in place.
 
-**Q: Does "Apply Changes" modify my FITS files?**
-A: No. It only updates the include/exclude flag in the `.seq` file. Your FITS files are never touched.
+**Q: Where are my rejected frames?**
+A: On close, they are physically moved into a `rejected/` subfolder next to your source files. A plain-text `rejected_frames.txt` audit file is also written alongside the originals. To un-reject, drag the file out of `rejected/` back into the source folder.
+
+**Q: Does "Apply Rejections" modify my FITS files?**
+A: No. Kept frames are not touched at all. Rejected frames are *moved* (not rewritten, not renamed) into a `rejected/` subfolder — reversible at any time.
 
 **Q: How much does rejecting frames improve the stack?**
-A: It depends on your data. Removing 5–10% of the worst frames often improves the stack noticeably — sharper stars, lower noise in the background. Removing more than 20–30% usually means diminishing returns (you're losing more signal than you're gaining in quality).
+A: It depends on your data. Removing 5–10 % of the worst frames often improves the stack noticeably — sharper stars, lower noise in the background. Removing more than 20–30 % usually means diminishing returns (you're losing more signal than you're gaining in quality).
 
-**Q: What's the difference between "Linked" and "Independent" stretch?**
-A: **Linked** uses the same stretch for all frames — brightness differences between frames are visible (good for spotting clouds). **Independent** optimizes each frame separately — you see the most detail in each frame, but the animation may appear to flash.
+**Q: What happened to the Difference display mode?**
+A: Removed in v1.2.5. In practice, playing the sequence at 3–5 FPS in Normal mode with globally-linked autostretch catches the same artifacts (satellites, clouds, tracking jumps) because the eye latches onto whatever is changing. The Difference mode's per-frame subtract + absolute + scale + clip path was paying for work that playback already does visually.
+
+**Q: What happened to the Linked / Independent stretch toggle?**
+A: Removed in v1.2.5. Globally-linked autostretch is now the only mode — it's the sensible default for a blink comparator because it preserves the brightness differences that make cloudy frames visible. If you want different stretch flavors, use the autostretch preset dropdown (Conservative / Default / Aggressive / Linear).
 
 **Q: Can I re-include frames I've excluded?**
-A: Yes. Press **G** on an excluded frame to re-include it. Or use **Ctrl+Z** to undo the last marking operation.
+A: Yes. Press **G** on an excluded frame to re-include it. Or use **Ctrl+Z** to undo the last marking operation (single or batch). After close, just drag the file out of `rejected/` in your file manager.
 
 **Q: Why is the Weight column showing 0 for all frames?**
 A: Weight requires FWHM, Roundness, Background, and Stars data. If star detection hasn't been run, all inputs are 0, so the weight is 0. Run star detection first.
 
 **Q: Can I use this for planetary imaging?**
 A: The tool is designed for deep-sky subframe selection. Planetary imaging (lucky imaging) uses different quality metrics and typically processes thousands of very short exposures. Tools like AutoStakkert or Planetary System Stacker are better suited for planetary work.
+
+---
+
+## 17. Changes Since v1.2.3
+
+The last officially published release was **v1.2.3**. Everything below summarizes what changed between that baseline and the current **v1.2.8** — short bullets only; the script's `CHANGELOG` block has the one-liners per release.
+
+- **v1.2.4 — Folder-only workflow.** The script now always prompts for a folder of FITS files and builds its own temporary `svenesis_blink` sequence. Rejected frames move to a `rejected/` subfolder with a `rejected_frames.txt` audit file. Added an autostretch preset dropdown (Conservative / Default / Aggressive / Linear). Removed: ROI feature, per-frame histogram widget, and the "use currently loaded sequence" path.
+- **v1.2.5 — Simplified display modes.** Removed the Difference display mode and the `D` shortcut — playing at 3–5 FPS in Normal mode catches the same artifacts. Removed the Linked-stretch toggle; globally-linked autostretch is now the only mode.
+- **v1.2.6 — Performance pass.** Thumbnails reuse the main frame cache's already-stretched image, `mtf()` runs in-place, RGB autostretch is a single pass, and preload pacing follows FPS.
+- **v1.2.7 — Marking responsiveness.** Rapid G/B marking coalesces slider / scatter / graph refreshes through a single 150 ms timer; filmstrip and table skip no-op styling work. Also: `mtf()` kwarg crash fix and stale-temp-sequence recovery on restart.
+- **v1.2.8 — Cross-platform polish & stability.** UTF-8 for `rejected_frames.txt` and CSV export (fixes Windows non-ASCII paths). 1–9 FPS presets moved to `keyPressEvent` so focused spinboxes accept digits natively. Folder paths with spaces are now quoted in Siril commands. Apply moves files first, then writes an audit list of only what actually moved. Star detection rebinds caches/stats and advances the progress bar through post-register phases. View-state (filter, display mode, graph metrics, scatter axes) persists across sessions.
+
+Upgrading from **v1.2.3** in practice: point the script at your FITS folder (instead of loading a sequence in Siril first), and expect the rejection flow to produce a `rejected/` subfolder and `rejected_frames.txt` rather than toggling Siril's in-sequence inclusion flags.
 
 ---
 
@@ -765,6 +837,7 @@ A: The tool is designed for deep-sky subframe selection. Planetary imaging (luck
 Part of the **Svenesis Siril Scripts** collection, which also includes:
 - Svenesis Gradient Analyzer
 - Svenesis Annotate Image
+- Svenesis Image Advisor
 - Svenesis Multiple Histogram Viewer
 - Svenesis Script Security Scanner
 

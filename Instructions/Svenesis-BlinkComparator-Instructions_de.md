@@ -1,6 +1,6 @@
 # Svenesis Blink Comparator — Benutzeranleitung
 
-**Version 1.2.3** | Siril Python-Skript zur Bildauswahl & Qualitätsanalyse
+**Version 1.2.8** | Siril Python-Skript zur Bildauswahl & Qualitätsanalyse
 
 > *Vergleichbar mit PixInsight's Blink + SubframeSelector — aber kostenlos, quelloffen und eng in Siril integriert.*
 
@@ -14,30 +14,31 @@
 4. [Erste Schritte](#4-erste-schritte)
 5. [Die Benutzeroberfläche](#5-die-benutzeroberfläche)
 6. [Die Messwerte verstehen](#6-die-messwerte-verstehen)
-7. [Anzeigemodi](#7-anzeigemodi)
+7. [Anzeigemodi & Autostretch-Presets](#7-anzeigemodi--autostretch-presets)
 8. [Methoden zur Bildauswahl](#8-methoden-zur-bildauswahl)
 9. [Das Rückgängig-System](#9-das-rückgängig-system)
-10. [Änderungen an Siril übertragen](#10-änderungen-an-siril-übertragen)
+10. [Verwerfen anwenden (Datei-Verschiebung)](#10-verwerfen-anwenden-datei-verschiebung)
 11. [Exportoptionen](#11-exportoptionen)
 12. [Anwendungsfälle & Arbeitsabläufe](#12-anwendungsfälle--arbeitsabläufe)
 13. [Tastaturkürzel](#13-tastaturkürzel)
 14. [Tipps & Empfehlungen](#14-tipps--empfehlungen)
 15. [Fehlerbehebung](#15-fehlerbehebung)
 16. [Häufige Fragen](#16-häufige-fragen)
+17. [Änderungen seit v1.2.3](#17-änderungen-seit-v123)
 
 ---
 
 ## 1. Was ist der Blink Comparator?
 
-Der **Svenesis Blink Comparator** ist ein Siril Python-Skript, das alle Bilder einer Astrofotografie-Sequenz schnell hintereinander abspielt („blinkt"), damit Sie diese visuell prüfen, fehlerhafte Bilder erkennen und vor dem Stacken aussortieren können.
+Der **Svenesis Blink Comparator** ist ein Siril-Python-Skript, das alle Bilder einer Astrofotografie-Sequenz schnell animiert („blinkt"), damit du sie visuell inspizieren, schlechte Bilder erkennen und sie vor dem Stacken verwerfen kannst.
 
-Stellen Sie ihn sich als **Qualitätskontrolleur** für Ihre Einzelbilder vor. Er kombiniert:
+Stell dir das Tool als **Qualitätskontroll-Inspektor** für deine Einzelbilder vor. Es kombiniert:
 
-- **Visuelle Prüfung** — betrachten Sie Ihre Bilder wie einen Film, um Probleme zu erkennen
-- **Statistische Analyse** — sehen Sie FWHM, Rundheit, Sternanzahl und Hintergrund für jedes Bild
-- **Bildaussortierung per Mausklick** — markieren Sie fehlerhafte Bilder und teilen Sie Siril mit, welche vom Stacken ausgeschlossen werden sollen
+- **Visuelle Inspektion** — deine Bilder laufen wie ein Film ab, Probleme springen ins Auge
+- **Statistische Analyse** — FWHM, Rundheit, Sternanzahl und Hintergrund für jedes Bild
+- **Verwerfen per Klick** — markiere schlechte Bilder; beim Schließen schreibt das Skript eine `rejected_frames.txt`-Audit-Datei und verschiebt die verworfenen FITS in einen Unterordner `rejected/` neben deinen Originalen
 
-Das Ergebnis: ein saubereres, schärferes Endergebnis, weil die Bilder entfernt wurden, die die Qualität herabgezogen hätten.
+Das Ergebnis: ein saubereres, schärferes Endbild, weil du die Bilder entfernt hast, die die Qualität heruntergezogen hätten — und weil das Verwerfen nur eine einfache Dateiverschiebung ist, kannst du jede Entscheidung rückgängig machen, indem du die Datei einfach aus `rejected/` zurückziehst.
 
 ---
 
@@ -45,52 +46,52 @@ Das Ergebnis: ein saubereres, schärferes Endergebnis, weil die Bilder entfernt 
 
 ### Warum müssen wir Bilder auswählen?
 
-Wenn Sie den Nachthimmel fotografieren, nehmen Sie viele einzelne Belichtungen auf (sogenannte „Subframes" oder „Subs"). Diese werden ausgerichtet und zu einem Endbild gestackt. Aber nicht jedes Einzelbild ist gleich gut. Während einer typischen Aufnahmesession können verschiedene Dinge schiefgehen:
+Beim Fotografieren des Nachthimmels machst du viele Einzelaufnahmen (sogenannte „Subframes" oder „Subs"). Diese werden ausgerichtet und zu einem finalen Bild gestackt. Aber nicht jedes Subframe ist gleich gut. Während einer typischen Session kann einiges schiefgehen:
 
 | Problem | Was passiert | Wie es aussieht |
 |---------|-------------|-----------------|
-| **Wolken** | Dünne Wolken ziehen durch Ihr Bildfeld | Hintergrund wird heller, Sterne verblassen |
-| **Satellitenspuren** | Ein Satellit kreuzt Ihr Bild | Heller Streifen quer über das Bild |
-| **Nachführfehler** | Ihre Montierung ruckelt | Sterne werden zu länglichen Strichen |
-| **Fokusdrift** | Temperaturänderungen verschieben den Fokus | Sterne blähen sich auf und werden unscharf |
-| **Windböen** | Wind erschüttert Ihr Teleskop | Sterne werden für einige Bilder aufgebläht |
-| **Flugzeuglichter** | Ein Flugzeug blinkt durch | Heller blinkender Fleck |
-| **Tau / Frost** | Feuchtigkeit bildet sich auf der Optik | Sterne zeigen Halos, Hintergrund steigt, Sternanzahl sinkt |
+| **Wolken** | Dünne Wolken ziehen durch dein Bildfeld | Hintergrund wird heller, Sterne verblassen |
+| **Satellitenspuren** | Ein Satellit kreuzt dein Bild | Heller Streifen über das Bild |
+| **Tracking-Fehler** | Deine Montierung hat einen Aussetzer | Sterne werden zu länglichen Linien |
+| **Fokusdrift** | Temperaturänderungen verschieben den Fokus | Sterne werden aufgedunsen und unscharf |
+| **Windböen** | Wind schüttelt dein Teleskop | Sterne sind für einige Bilder aufgedunsen |
+| **Flugzeuglichter** | Ein Flugzeug blinkt durch | Heller blinkender Punkt |
+| **Tau / Frost** | Feuchtigkeit bildet sich auf der Optik | Sterne bekommen Halos, Hintergrund steigt, Sternzahl fällt |
 
-Wenn Sie diese fehlerhaften Bilder in Ihren Stack einbeziehen, **verschlechtern** sie Ihr Endergebnis: unschärfere Sterne, höheres Rauschen, Nachführartefakte. Bereits das Entfernen von 5–10 % der schlechtesten Bilder kann Ihr Ergebnis dramatisch verbessern.
+Wenn du diese schlechten Bilder in deinen Stack aufnimmst, **verschlechtern** sie dein Endergebnis: unschärfere Sterne, höheres Rauschen, Spurenartefakte. Schon 5–10 % der schlechtesten Bilder zu entfernen kann das Ergebnis spürbar verbessern.
 
 ### Was ist „Blinken"?
 
-Ein **Blink Comparator** ist eine astronomische Technik aus den 1920er Jahren (so wurde Pluto entdeckt!). Man wechselt schnell zwischen Bildern hin und her, sodass alles, was sich ändert — ein sich bewegendes Objekt, eine Helligkeitsänderung, eine Fokusverschiebung — dem menschlichen Auge sofort auffällt.
+Ein **Blink Comparator** ist eine Astronomie-Technik aus den 1920ern (so wurde Pluto entdeckt!). Du wechselst schnell zwischen Bildern, damit alles, was sich ändert — ein bewegtes Objekt, eine Helligkeitsänderung, eine Fokusverschiebung — dem menschlichen Auge sofort auffällt.
 
-In der Astrofotografie macht das Blinken durch Ihre Einzelbilder Probleme **offensichtlich**, die Sie beim Betrachten einzelner Bilder nie bemerken würden.
+In der Astrofotografie macht das Blinken durch deine Subframes Probleme **offensichtlich**, die du in einem einzelnen Bild nie bemerken würdest.
 
 ### Was ist FWHM?
 
-**FWHM** (Full Width at Half Maximum) misst die Sternschärfe in Pixeln. Stellen Sie sich einen Stern als Glockenkurve der Helligkeit vor — FWHM ist die Breite dieser Glocke auf halber Höhe ihres Maximums.
+**FWHM** (Full Width at Half Maximum, Halbwertsbreite) misst die Sternschärfe in Pixeln. Stell dir einen Stern als Glockenkurve der Helligkeit vor — FWHM ist die Breite dieser Glocke auf halber Höhe.
 
-- **Niedrigerer FWHM = schärfere Sterne** (gut)
-- **Höherer FWHM = aufgeblähte Sterne** (schlecht — Fokus-, Seeing- oder Nachführprobleme)
-- Typischer Bereich: 2–6 Pixel je nach Ausrüstung und Bedingungen
+- **Niedrige FWHM = scharfe Sterne** (gut)
+- **Hohe FWHM = aufgedunsene Sterne** (schlecht — Fokus, Seeing oder Tracking)
+- Typischer Bereich: 2–6 Pixel, je nach Setup und Bedingungen
 
 ### Was ist Rundheit?
 
-**Rundheit** misst, wie kreisförmig Ihre Sterne sind, auf einer Skala von 0 bis 1:
+**Rundheit** misst, wie kreisförmig deine Sterne sind, auf einer Skala von 0 bis 1:
 
 - **1,0 = perfekter Kreis** (ideal)
-- **0,0 = eine Linie** (starke Nachführfehler)
-- Über 0,75 ist generell gut
-- Unter 0,6 deutet meist auf Nachführ- oder Windprobleme hin
+- **0,0 = eine Linie** (starkes Trailing)
+- Über 0,75 ist allgemein gut
+- Unter 0,6 deutet meist auf Tracking- oder Windprobleme hin
 
-Verwandt mit der **Exzentrizität** (in PixInsight verwendet): `eccentricity ≈ 1 − roundness`.
+Verwandt mit **Exzentrizität** (in PixInsight): `Exzentrizität ≈ 1 − Rundheit`.
 
 ### Was ist der Hintergrundpegel?
 
-Der **Hintergrundpegel** ist die mittlere Helligkeit des Himmels in Ihrem Bild. Er sollte über alle Bilder hinweg konsistent sein.
+Der **Hintergrundpegel** ist die mittlere Helligkeit des Himmels in deinem Bild. Er sollte über alle Bilder hinweg konstant sein.
 
-- **Spitze nach oben** = Wolken, Lichtverschmutzung, Flugzeug, Mond
-- **Ansteigender Trend** = Morgendämmerung naht, Wolken verdichten sich
-- **Konstant** = gute Aufnahmebedingungen
+- **Ausreißer nach oben** = Wolken, Lichtverschmutzung, Flugzeug, Mond
+- **Ansteigender Trend** = Morgendämmerung, zunehmende Wolken
+- **Konstant** = gute Bedingungen
 
 ---
 
@@ -98,148 +99,156 @@ Der **Hintergrundpegel** ist die mittlere Helligkeit des Himmels in Ihrem Bild. 
 
 ### Anforderungen
 
-| Komponente | Mindestversion | Hinweise |
-|------------|---------------|----------|
-| **Siril** | 1.4.0+ | Python-Skriptunterstützung muss aktiviert sein |
-| **sirilpy** | Mitgeliefert | Im Lieferumfang von Siril 1.4+ enthalten |
-| **numpy** | Beliebig aktuell | Wird vom Skript automatisch installiert |
-| **PyQt6** | 6.x | Wird vom Skript automatisch installiert |
-| **matplotlib** | 3.x | Wird vom Skript automatisch installiert |
-| **Pillow** | Beliebig | *Optional* — wird nur für den GIF-Export benötigt |
+| Komponente | Mindestversion | Hinweis |
+|-----------|----------------|---------|
+| **Siril** | 1.4.0+ | Muss Python-Skript-Unterstützung aktiviert haben |
+| **sirilpy** | Gebündelt | Kommt mit Siril 1.4+ |
+| **numpy** | aktuelle Version | Wird automatisch installiert |
+| **PyQt6** | 6.x | Wird automatisch installiert |
+| **matplotlib** | 3.x | Wird automatisch installiert |
+| **Pillow** | beliebig | *Optional* — nur für GIF-Export |
 
 ### Installation
 
-1. Laden Sie `Svenesis-BlinkComparator.py` vom [GitHub-Repository](https://github.com/sramuschkat/Siril-Scripts) herunter.
-2. Legen Sie die Datei in Ihr Siril-Skriptverzeichnis:
+1. Lade `Svenesis-BlinkComparator.py` aus dem [GitHub-Repository](https://github.com/sramuschkat/Siril-Scripts) herunter.
+2. Lege es in das Siril-Scripts-Verzeichnis:
    - **macOS:** `~/Library/Application Support/org.siril.Siril/siril/scripts/`
    - **Linux:** `~/.local/share/siril/scripts/`
    - **Windows:** `%APPDATA%\Siril\scripts\`
-3. Starten Sie Siril neu. Das Skript erscheint unter **Verarbeitung → Skripte**.
+3. Starte Siril neu. Das Skript erscheint unter **Processing → Scripts**.
 
-Das Skript installiert fehlende Python-Abhängigkeiten (`numpy`, `PyQt6`, `matplotlib`) automatisch beim ersten Start.
+Das Skript installiert fehlende Abhängigkeiten (`numpy`, `PyQt6`, `matplotlib`) beim ersten Start automatisch.
 
 ---
 
 ## 4. Erste Schritte
 
-### Schritt 1: Eine registrierte Sequenz laden
+Seit v1.2.4 arbeitet der Blink Comparator **ordnerbasiert**: Du zeigst ihm ein Verzeichnis mit FITS-Dateien, und er baut sich daraus seine eigene temporäre Sequenz. Du musst in Siril nichts vorher registrieren oder laden.
 
-Das Skript arbeitet mit einer in Siril geladenen **Sequenz** — nicht mit einem einzelnen Bild. Sie benötigen mindestens 2 Bilder, aber eine echte Aufnahmesession hat typischerweise 50–500+.
+### Schritt 1: Skript starten
 
-**Wenn Sie bereits eine registrierte Sequenz haben:**
-1. Setzen Sie das Arbeitsverzeichnis auf den Ordner, der Ihre `.seq`-Datei und `.fit`-Dateien enthält.
-2. Siril erkennt automatisch die Sequenz und zeigt sie in der Bildliste unten an.
+Gehe zu **Processing → Scripts → Svenesis Blink Comparator**.
 
-**Wenn Sie unverarbeitete FITS-Dateien haben:**
-```
-# In der Siril-Konsole:
-cd /path/to/your/lights
-convert light -out=./process
-cd process
-register pp_light
-```
-Dies erstellt eine registrierte Sequenz `r_pp_light_`, mit der der Blink Comparator arbeiten kann.
+Ein Ordner-Auswahldialog öffnet sich. Wähle den Ordner mit deinen FITS-Bildern (`.fit`, `.fits`, `.fts` — die Endungen werden ohne Berücksichtigung der Groß-/Kleinschreibung erkannt, also funktionieren auch `.FIT` / `.Fits`). Komprimierte FITS (`.fz`, `.gz`) werden **nicht** unterstützt — vorher dekomprimieren. Das Skript durchsucht nur eine Verzeichnisebene.
 
-**Wenn Sie ein Vorverarbeitungsskript verwendet haben (z. B. SeeStar):**
-Ihr Skript hat wahrscheinlich bereits eine registrierte Sequenz erstellt. Setzen Sie das Arbeitsverzeichnis auf den Ausgabeordner — Siril erkennt die `.seq`-Datei automatisch.
+### Schritt 2: Sequenzaufbau abwarten
 
-### Schritt 2: Das Skript ausführen
+Im Hintergrund führt das Skript folgendes aus:
 
-Gehen Sie zu **Verarbeitung → Skripte → Svenesis Blink Comparator**.
+1. `cd <ordner>` + `convert svenesis_blink -fitseq` baut eine einzelne FITSEQ-Datei namens `svenesis_blink.fits`.
+2. `load_seq svenesis_blink` lädt die Sequenz.
+3. Bildmetadaten werden geprüft (Abmessungen, Kanäle, Anzahl).
+4. Statistiken pro Bild (FWHM, Rundheit, Hintergrund, Sterne, Median, Sigma) werden aus Sirils Registrierungsdaten geladen, falls vorhanden.
 
-Das Skript wird:
-1. Die Sequenz-Metadaten laden (Bildanzahl, Dimensionen, Kanäle)
-2. Die Statistiken pro Bild laden (FWHM, Rundheit, Hintergrund, Sterne, Median, Sigma)
-3. Das Hauptfenster mit dem ersten Bild öffnen
+Ein Fortschrittsbalken zeigt die Statistik-Ladephase. Die Temp-Sequenz wird beim Schließen des Fensters automatisch aufgeräumt.
 
-### Schritt 3: Sternerkennung ausführen (falls nötig)
+### Schritt 3: Sterndetektion ausführen (falls nötig)
 
-Wenn die Spalten FWHM, Rundheit, Sterne und Gewicht leer sind, erscheint ein **gelbes Banner** oben:
+Falls FWHM, Rundheit, Sterne und Gewicht leer sind, erscheint oben ein **gelber Banner**:
 
-> ⚠️ Keine Sternerkennungsdaten. Klicken Sie, um die Sternerkennung auszuführen...
+> ⚠️ Keine Sterndetektionsdaten. Klicke, um Sterndetektion zu starten…
 
-Klicken Sie auf das Banner. Dies führt Sirils Befehl `register <seq> -2pass` aus, der in jedem Bild Sterne erkennt und FWHM, Rundheit, Hintergrundpegel und Sternanzahl berechnet. Je nach Bildanzahl dauert dies einige Sekunden bis wenige Minuten.
+Klicke auf den Banner. Dies führt `register svenesis_blink -2pass` aus, erkennt Sterne in jedem Bild und berechnet FWHM, Rundheit, Hintergrundpegel und Sternanzahl. Dauert je nach Bildanzahl einige Sekunden bis Minuten. Der Fortschrittsbalken begleitet die Detektion und den anschließenden Stretch-/Referenz-Rebind.
 
-**Hinweis:** Median und Sigma sind *immer* verfügbar — sie erfordern keine Sternerkennung.
+**Hinweis:** Median und Sigma sind *immer* verfügbar — sie benötigen keine Sterndetektion.
 
-### Schritt 4: Prüfen und auswählen
+### Schritt 4: Inspizieren und auswählen
 
-Jetzt können Sie:
-- **Die Animation abspielen** (Space), um Probleme visuell zu erkennen
-- **Die Statistiktabelle sortieren** nach FWHM (schlechteste Bilder oben)
-- **Stapel-Aussortierung verwenden**, um die schlechtesten 10 % automatisch zu entfernen
+Jetzt kannst du:
+
+- **Die Animation abspielen** (Leertaste) mit 3–5 FPS, um Probleme visuell zu erkennen — was sich ändert (Satelliten, Wolken) springt dem Auge sofort ins Gesicht
+- **Die Statistiktabelle nach FWHM sortieren** (schlechteste Bilder oben)
+- **Batch-Verwerfen** die schlechtesten 10 % automatisch entfernen
 - **Einzelne Bilder markieren** mit G (gut) oder B (schlecht)
 
-### Schritt 5: Anwenden und Stacken
+### Schritt 5: Anwenden und schließen
 
-Klicken Sie auf **Änderungen an Siril übertragen**, um Ihre Bildauswahl zu senden. Stacken Sie dann wie gewohnt in Siril — ausgeschlossene Bilder werden übersprungen.
+Klicke auf **Verwerfen übernehmen && Schließen** (oder drücke Esc — du wirst gefragt, ob anwenden, verwerfen oder abbrechen). Das Skript:
+
+1. Erstellt einen Unterordner `rejected/` innerhalb deines Quellordners (falls Verwerfen anstehen).
+2. **Verschiebt** jede verworfene FITS in `rejected/` (die Dateinamen bleiben unverändert).
+3. Schreibt `rejected_frames.txt` neben deine Originale mit einem Header (Sequenzname, Zeitstempel, Anzahl) und einer Datei pro Zeile — nur die Dateien, die tatsächlich in `rejected/` gelandet sind.
+
+Behaltene Bilder bleiben exakt dort, wo sie waren — nichts wird umgeschrieben, umbenannt oder modifiziert. Wenn du das Skript später auf demselben Ordner erneut ausführst, tauchen bereits verworfene Dateien nicht mehr auf, weil der Scan nur die oberste Ebene erfasst.
 
 ---
 
 ## 5. Die Benutzeroberfläche
 
-Das Fenster ist in mehrere Bereiche unterteilt:
+Das Fenster ist in drei Hauptbereiche unterteilt.
 
 ### Linkes Panel (Steuerungsbereich)
 
-Die linke Seite (340px breit) enthält alle Steuerungselemente, organisiert in aufklappbaren Abschnitten:
+Die linke Seite (340 px breit) enthält alle Bedienelemente in Gruppen:
 
-- **Wiedergabesteuerung:** Abspielen/Pause, Bildnavigation, Geschwindigkeitsregler, Schleifenmodus
-- **Anzeigemodus:** Normal, Differenz, Nur eingeschlossene, Nebeneinander
-- **Anzeigeoptionen:** Verknüpfte Streckung, Überblendung, Bild-Overlay, Vorschaubildgröße, Histogramm
-- **Bildauswahl:** Behalten/Aussortieren-Schaltflächen, automatisches Weiterschalten, Zähler ausstehender Änderungen, Übernehmen-Schaltfläche
-- **Stapelauswahl:** Schwellenwertfilter, schlechteste N %, Freigabeausdrücke
-- **Export:** Ausschlussliste, CSV, GIF, Zwischenablage
+- **Wiedergabe:** Play/Pause, Bildnavigation, Geschwindigkeits-Slider, Loop-Schalter, „Nur eingeschlossene Bilder"-Filter
+- **Anzeigemodus:** Normal, Nebeneinander (vs. Referenz)
+- **Bildmarkierung:** Behalten (G) / Verwerfen (B), Alle Verwerfen zurücksetzen, Auto-Weiter, Anzeige ausstehender Änderungen
+- **Batch-Auswahl:** Schwellwert-Filter + Schlechteste N %-Modus
+- **Freigabeausdruck:** Mehrkriterien-UND-Filter
+- **CSV exportieren / GIF exportieren** am unteren Ende
+- **Buy me a Coffee · Hilfe · Verwerfen übernehmen && Schließen**
 
-### Rechtes Panel (Tab-Bereich)
+### Rechtes Panel (Reiterbereich)
 
-Der Hauptbereich hat vier Tabs:
+Der Hauptbereich hat vier Reiter.
 
-#### Betrachter-Tab
-Die Bildanzeigefläche. Zeigt das aktuelle Bild mit angewandter Autostreckung.
-- **Scrollrad** zum Zoomen (0,1x bis 20x)
-- **Rechtsklick-Ziehen** zum Schwenken
-- **Z** zum Zurücksetzen des Zooms auf Fensterpassung
-- **1:1-Schaltfläche** für pixelgenauen Zoom
-- **ROI-Modus:** Zeichnen Sie ein Rechteck, um nur diesen Bereich zu blinken
+#### Viewer-Reiter
 
-#### Statistiktabelle-Tab
+Die Bild-Anzeigefläche. Zeigt das aktuelle Bild mit dem gewählten Autostretch-Preset.
+
+- **Scrollrad** zum Zoomen (0,1× bis 20×) — die Zoom-Prozentanzeige in der Werkzeugleiste aktualisiert sich live
+- **Rechtsklick-Ziehen** zum Verschieben
+- **Z** (oder **Fit-in-Window**-Knopf) für Ansicht einpassen
+- Eine Werkzeugleiste unter der Leinwand enthält: Zoom-Anzeige, **Fit-in-Window**, **Kopieren (Strg+C)**, **Overlay**-Checkbox, **Stretch**-Preset-Auswahl, **Thumbs** (Thumbnail-Größe)-Slider und eine Shortcut-Legende.
+
+#### Statistiktabellen-Reiter
+
 Alle Bilder in einer sortierbaren Tabelle mit 10 Spalten:
-- Bild-Nr., Gewicht, FWHM, Rundheit, Hintergrundpegel, Sterne, Median, Sigma, Datum, Status
-- **Klick auf Spaltenüberschrift** zum Sortieren (erneuter Klick kehrt die Richtung um)
-- **Klick auf eine Zeile** springt zu diesem Bild im Betrachter
-- **Ctrl+Klick** oder **Shift+Klick** zur Mehrfachauswahl von Zeilen
-- **Rechtsklick** auf ausgewählte Zeilen → „Ausgewählte aussortieren"
-- Ausgeschlossene Zeilen haben einen rot getönten Hintergrund
-- Die aktuelle Bildzeile ist blau hervorgehoben
 
-#### Statistikdiagramm-Tab
-Liniendiagramme, die Messwerte über alle Bilder zeigen:
-- Umschaltbar: FWHM, Hintergrund, Rundheit (Kontrollkästchen über dem Diagramm)
-- **Dünne Linie** = unbearbeitete Werte pro Bild
-- **Fette Linie** = gleitender Durchschnitt über 7 Bilder (zeigt Trends)
+- Bild #, Gewicht, FWHM, Rundheit, BG-Level, Sterne, Median, Sigma, Datum, Status
+- **Spaltenkopf klicken** zum Sortieren (erneut klicken kehrt Reihenfolge um)
+- **Zeile klicken** springt im Viewer zu diesem Bild
+- **Pfeiltasten** navigieren die Zeilen
+- **Strg+Klick** oder **Umschalt+Klick** für Mehrfachauswahl
+- **Rechtsklick** auf markierte Zeilen → „N ausgewählte Bild(er) verwerfen"
+- Ausgeschlossene Zeilen haben einen rötlichen Hintergrund
+- Das aktuelle Bild ist blau hervorgehoben
+
+#### Statistikgraph-Reiter
+
+Liniengraphen für Kennzahlen über alle Bilder hinweg:
+
+- Umschaltbar: FWHM, Hintergrund, Rundheit (Checkboxen über dem Diagramm)
+- **Dünne Linie** = Rohwerte pro Bild
+- **Dicke Linie** = 7-Bild-Gleitmittel (zeigt Trends)
 - **Rote Punkte** = ausgeschlossene Bilder
-- **Weiße gestrichelte Linie** = Position des aktuellen Bildes
-- Ideal zum Erkennen von: Fokusdrift (FWHM-Anstieg), Wolken (Hintergrundspitze), Nachführverschlechterung (Rundheitsabfall)
+- **Weiße gestrichelte Linie** = aktuelle Bildposition
+- Ideal zum Erkennen von: Fokusdrift (FWHM-Rampe), Wolken (Hintergrund-Spike), Tracking-Degradation (Rundheitsabfall)
 
-#### Streudiagramm-Tab
-2D-Streudiagramm zweier beliebiger Messwerte:
-- X- und Y-Achse über Dropdown-Menüs auswählen
-- **Blaue Punkte** = eingeschlossene Bilder
+#### Scatterplot-Reiter
+
+2D-Punktdiagramm zweier Kennzahlen:
+
+- X- und Y-Achse per Dropdown auswählbar (FWHM, Rundheit, Hintergrund, Sterne, Gewicht)
+- **Grüne Punkte** = eingeschlossene Bilder
 - **Rotes ✕** = ausgeschlossene Bilder
-- **Roter Stern** = aktuelles Bild
-- **Klick auf einen Punkt** springt zu diesem Bild
-- Beste Kombinationen: **FWHM vs. Rundheit** (Sternqualität), **FWHM vs. Hintergrund** (Wolken + Seeing)
+- **Gelber/goldener Stern** = aktuelles Bild (immer im Vordergrund)
+- **Punkt klicken** springt zu diesem Bild
+- Achsen-normalisierte Klick-Erkennung — beide Achsen tragen gleich zur Nähe-Berechnung bei, unabhängig von ihren Zahlenbereichen
+- Beste Kombinationen: **FWHM vs Rundheit** (Sternqualität), **FWHM vs Hintergrund** (Wolken + Seeing)
 
-### Untere Leiste (Filmstreifen)
+### Unterer Bereich (Filmstreifen)
 
-Ein horizontal scrollbarer Streifen mit Bildvorschauen (immer sichtbar):
+Ein horizontal scrollbarer Streifen mit Bildminiaturen (immer sichtbar):
+
 - **Grüner Rand** = eingeschlossen
 - **Roter Rand** = ausgeschlossen
 - **Blauer Rand** = aktuelles Bild
-- Klick auf eine Vorschau springt zu diesem Bild
-- Vorschauen werden verzögert geladen, wenn Sie scrollen
-- Größe über den Schieberegler in den Anzeigeoptionen anpassbar (40–160px)
+- Klicke auf eine Miniatur, um zu diesem Bild zu springen
+- Miniaturen werden beim Scrollen bedarfsgesteuert geladen
+- Größe über den **Thumbs**-Slider in der Viewer-Werkzeugleiste einstellbar (40–160 px)
+- Der Miniatur-Cache verwendet die bereits gestretchten Anzeigedaten aus dem Haupt-Cache wieder — ein Bild, das bereits im Haupt-Cache liegt, verursacht für seine Miniatur keinen zweiten Festplatten-Zugriff
 
 ---
 
@@ -249,82 +258,82 @@ Ein horizontal scrollbarer Streifen mit Bildvorschauen (immer sichtbar):
 
 | Aspekt | Details |
 |--------|---------|
-| **Was** | Sterndurchmesser bei halber Maximalhelligkeit, in Pixeln |
+| **Was** | Sterndurchmesser auf halber Spitzenhelligkeit, in Pixeln |
 | **Quelle** | Siril-Registrierungsdaten (`get_seq_regdata`) |
 | **Gute Werte** | Niedriger ist besser. Typisch: 2–6 px |
-| **Erfordert** | Sternerkennung muss durchgeführt worden sein |
+| **Benötigt** | Sterndetektion muss gelaufen sein |
 
-**Interpretation:** Plötzlicher Anstieg = Fokusdrift, Wind oder schlechtes Seeing. Allmählicher Anstieg = thermische Fokusverschiebung. Einzelne Spitze = Windstoß.
+**Interpretation:** Plötzlicher Anstieg = Fokusdrift, Wind oder schlechtes Seeing. Langsamer Anstieg = thermische Fokusverschiebung. Einzelner Spike = Windböe.
 
 ### Rundheit
 
 | Aspekt | Details |
 |--------|---------|
-| **Was** | Kreisförmigkeit der Sterne, 0 (Linie) bis 1 (perfekter Kreis) |
+| **Was** | Sternkreisform, 0 (Linie) bis 1 (perfekter Kreis) |
 | **Quelle** | Siril-Registrierungsdaten |
 | **Gute Werte** | Über 0,75. Unter 0,6 = Probleme |
-| **Erfordert** | Sternerkennung muss durchgeführt worden sein |
+| **Benötigt** | Sterndetektion muss gelaufen sein |
 
-**Interpretation:** Niedrige Rundheit = Nachführfehler, Wind oder optische Verkippung. Gruppe von Bildern mit niedriger Rundheit = Montierungsruckler oder Windstoß.
+**Interpretation:** Niedrige Rundheit = Tracking-Fehler, Wind oder optischer Tilt. Gruppe niedriger Werte = Montierungs-Hiccup oder Wind-Burst.
 
-### Hintergrundpegel (BG Level)
+### Hintergrundpegel (BG-Level)
 
 | Aspekt | Details |
 |--------|---------|
-| **Was** | Mittlere Himmelshelligkeit, normalisiert auf [0, 1] |
-| **Quelle** | Registrierungsdaten (`background_lvl`) oder `stats.median` als Rückfalloption |
-| **Gute Werte** | Konstant über alle Bilder |
-| **Erfordert** | Immer verfügbar (Rückfalloption nutzt Basisstatistiken) |
+| **Was** | Mediane Himmelshelligkeit, normalisiert auf [0, 1] |
+| **Quelle** | Registrierungsdaten (`background_lvl`) oder `stats.median` als Fallback |
+| **Gute Werte** | Konstant über Bilder hinweg |
+| **Benötigt** | Immer verfügbar (Fallback nutzt Basisstatistik) |
 
-**Interpretation:** Spitze = Wolken, Flugzeug oder Mond. Ansteigender Trend = Morgendämmerung oder zunehmende Lichtverschmutzung.
+**Interpretation:** Spike = Wolken, Flugzeug oder Mond. Anstieg = Dämmerung oder zunehmende Lichtverschmutzung.
 
 ### Sterne (Sternanzahl)
 
 | Aspekt | Details |
 |--------|---------|
-| **Was** | Anzahl der im Bild erkannten Sterne |
+| **Was** | Anzahl erkannter Sterne im Bild |
 | **Quelle** | Siril-Registrierungsdaten (`number_of_stars`) |
-| **Gute Werte** | Konstante Anzahl; höher ist generell besser |
-| **Erfordert** | Sternerkennung muss durchgeführt worden sein |
+| **Gute Werte** | Konstante Anzahl; höher ist meist besser |
+| **Benötigt** | Sterndetektion muss gelaufen sein |
 
-**Interpretation:** Plötzlicher Abfall = Wolken, Tau oder starke Defokussierung. Allmählicher Rückgang = dünne Wolken oder steigende Luftfeuchtigkeit.
+**Interpretation:** Plötzlicher Abfall = Wolken, Tau oder starker Defokus. Langsame Abnahme = dünne Wolken oder steigende Luftfeuchtigkeit.
 
-### Gewicht (Zusammengesetzter Qualitätswert)
+### Gewicht (Zusammengesetzter Qualitätsscore)
 
 | Aspekt | Details |
 |--------|---------|
-| **Was** | Einzelner Qualitätswert von 0 (schlechtester) bis 1 (bester) |
-| **Quelle** | Vom Skript berechnet aus FWHM, Rundheit, Hintergrund, Sternen |
-| **Erfordert** | Mindestens einige der obigen Messwerte müssen verfügbar sein |
+| **Was** | Einzelner Qualitätsscore von 0 (schlechtester) bis 1 (bester) |
+| **Quelle** | Vom Skript aus FWHM, Rundheit, Hintergrund, Sternen berechnet |
+| **Benötigt** | Mindestens einige der obigen Kennzahlen |
 
 **Formel:**
 ```
-w_fwhm  = 1 − (fwhm − min) / (max − min)        [niedrigerer FWHM = besser]
-w_round = roundness                                [höher = besser]
-w_bg    = 1 − (bg − min) / (max − min)            [niedrigerer BG = besser]
-w_stars = sqrt(stars) / sqrt(max_stars)            [mehr = besser]
-Weight  = mean of available factors
+w_fwhm  = 1 − (fwhm − min) / (max − min)        [niedrigere FWHM = besser]
+w_round = roundness                              [höher = besser]
+w_bg    = 1 − (bg − min) / (max − min)          [niedriger BG = besser]
+w_stars = sqrt(stars) / sqrt(max_stars)          [mehr = besser]
+Gewicht = Mittelwert der verfügbaren Faktoren
 ```
 
-**Interpretation:** Nach Gewicht aufsteigend sortieren, um die schlechtesten Bilder zuerst zu sehen. „Schlechteste N % aussortieren" mit Gewicht verwenden, um die qualitativ niedrigsten Einzelbilder zu entfernen.
+**Interpretation:** Sortiere aufsteigend nach Gewicht, um schlechteste Bilder oben zu sehen. Nutze „Schlechteste N % verwerfen" mit Gewicht, um die qualitativ niedrigsten Subframes auszusortieren.
 
 ### Median
 
 | Aspekt | Details |
 |--------|---------|
-| **Was** | Medianpixelwert des gesamten Bildes, normalisiert auf [0, 1] |
-| **Quelle** | Siril-Kanalstatistiken (`get_seq_stats`) |
-| **Immer verfügbar** | Ja — keine Sternerkennung erforderlich |
+| **Was** | Median-Pixelwert des gesamten Bildes, normalisiert auf [0, 1] |
+| **Quelle** | Siril-Statistik pro Kanal (`get_seq_stats`) |
+| **Immer verfügbar** | Ja — keine Sterndetektion nötig |
 
-**Interpretation:** Nahezu identisch mit dem Hintergrundpegel bei Astroaufnahmen, bei denen der Himmel dominiert. Nützlich als universelle Rückfallmetrik.
+**Interpretation:** Nahezu identisch zum Hintergrundpegel bei himmelsdominierten Astrofotos. Nützlich als universelle Fallback-Kennzahl.
 
 ### Sigma (σ)
 
 | Aspekt | Details |
 |--------|---------|
-| **Was** | Standardabweichung der Pixelwerte — misst die Streuung |
-| **Quelle** | Siril-Kanalstatistiken |
-| **Immer verfügbar** | Ja — keine Sternerkennung erforderlich |
+| **Was** | Standardabweichung der Pixelwerte — misst Streuung |
+| **Quelle** | Siril-Statistik pro Kanal |
+| **Immer verfügbar** | Ja — keine Sterndetektion nötig |
 
 **Interpretation:** Hohes Sigma + hoher Hintergrund = Rauschen durch Wolken (schlecht). Hohes Sigma + niedriger Hintergrund = echtes Deep-Sky-Signal (gut).
 
@@ -332,284 +341,309 @@ Weight  = mean of available factors
 
 | Aspekt | Details |
 |--------|---------|
-| **Was** | Beobachtungszeitstempel aus dem FITS-Header (`DATE-OBS`) |
-| **Quelle** | FITS-Metadaten über `get_seq_imgdata` |
+| **Was** | Beobachtungszeitstempel aus FITS-Header (`DATE-OBS`) |
+| **Quelle** | FITS-Metadaten via `get_seq_imgdata` |
 | **Hinweis** | Nicht alle Kameras schreiben dieses Feld (z. B. SeeStar S50) |
 
 ### Status
 
-Zeigt **Eingeschlossen** (grün) oder **Ausgeschlossen** (rot). Änderungen sind lokal, bis Sie „Änderungen an Siril übertragen" klicken.
+Zeigt **Eingeschlossen** (grün) oder **Ausgeschlossen** (rot). Statusänderungen bleiben lokal, bis du das Fenster über **Verwerfen übernehmen && Schließen** schließt (siehe §10).
 
 ---
 
-## 7. Anzeigemodi
+## 7. Anzeigemodi & Autostretch-Presets
 
-### Normalmodus (Standard)
+### Normal-Modus (Standard)
 
-Standard-Autostreckungsansicht. Jedes Bild wird mit einer Mittelton-Transferfunktion (STF) gestreckt, die den Autostreckungsalgorithmus von Siril/PixInsight nachbildet. Gut für die allgemeine visuelle Prüfung.
+Einzelbild-Autostretch-Ansicht. Jedes Bild wird mit einer Midtone-Transfer-Funktion (STF) gestretcht, die Siril/PixInsights Autostretch-Algorithmus nachbildet — mit **global verknüpftem** Median/MAD, sodass Helligkeitsunterschiede zwischen Bildern sichtbar bleiben. Genau das lässt bewölkte oder diesige Bilder während der Wiedergabe ins Auge springen.
 
-**Verknüpfte Streckung** (Kontrollkästchen):
-- **AN:** Gleiche Streckungsparameter für alle Bilder. Helligkeitsunterschiede zwischen Bildern werden sichtbar (Wolken, Hintergrundänderungen). Empfohlen zum Vergleichen von Bildern.
-- **AUS:** Jedes Bild erhält seine eigene optimale Streckung. Zeigt die meisten Details in jedem einzelnen Bild, aber Bilder können hell/dunkel zu flackern scheinen.
+Nutze **Normal-Modus bei 3–5 FPS** für die Jagd auf Satelliten, Flugzeuge und Tracking-Fehler. Alles, was sich *ändert* — eine Spur, eine wandernde Wolke, ein Tracking-Ruck — ist für das Auge sofort offensichtlich. Einen separaten „Difference"-Modus gibt es in dieser Version nicht mehr; die Wiedergabe im Normal-Modus liefert dasselbe Ergebnis ohne den Overhead der pro-Bild-Subtraktion.
 
-### Differenzmodus (D-Taste)
+### Nebeneinander (vs. Referenz)-Modus
 
-Zeigt `|aktuelles_Bild − Referenzbild| × 5` — alles, was sich zwischen Bildern ändert, leuchtet als heller Fleck auf dunklem Hintergrund auf.
+Aktuelles Bild links, Referenzbild (das erste Bild der Sequenz) rechts, mit synchronisiertem Zoom und Pan. Nützlich für direkten A/B-Vergleich — insbesondere für Sternformänderungen oder lokale Artefakte, die du gegen eine bekannte gute Referenz prüfen willst.
 
-**Am besten geeignet zum Erkennen von:**
-- Satellitenspuren (heller Streifen)
-- Sich bewegenden Objekten (Asteroiden, Flugzeuge)
-- Wolken (diffuses Leuchten)
-- Nachführversatz
+### Autostretch-Presets
 
-### Nur-Eingeschlossene-Modus
+Das **Stretch**-Dropdown in der Viewer-Werkzeugleiste steuert, wie jedes Bild auf Anzeigehelligkeit abgebildet wird. Vier Presets stehen zur Verfügung:
 
-Die Wiedergabe überspringt alle ausgeschlossenen Bilder. Verwenden Sie diesen Modus nach dem Markieren, um zu überprüfen, ob die verbleibenden Bilder sauber aussehen.
+| Preset | `shadows_clip` | `target_median` | Charakter |
+|--------|----------------|-----------------|-----------|
+| Conservative | −3,5 σ | 0,20 | Dunklerer Hintergrund, bewahrt schwache Details |
+| **Default** | −2,8 σ | 0,25 | PixInsight-Style STF, ausgewogen |
+| Aggressive | −1,5 σ | 0,35 | Heller, höherer Kontrast |
+| Linear | — | — | Kein Stretch — Rohdaten auf 0–255 beschnitten |
 
-### Nebeneinander-Modus
+Wechsel des Presets invalidiert den Bild- und Miniatur-Cache, rendert das aktuelle Bild neu und baut sichtbare Miniaturen wieder auf. Deine Wahl wird per QSettings über Sessions hinweg gespeichert.
 
-Zeigt das aktuelle Bild links und das Referenzbild rechts, mit synchronisiertem Zoom und Schwenken. Nützlich für direkten A/B-Vergleich.
+**Tipp:** Conservative für Nebel (bewahrt schwache Strukturen), Default für generische Inspektion, Aggressive zum Aufspüren subtiler Helligkeitsanomalien (Wolken, Dunst) und Linear, wenn du sehen willst, was der Sensor tatsächlich aufgezeichnet hat, ohne Stretch-Artefakte.
 
-### Zusätzliche Anzeigefunktionen
+### Weitere Anzeigefunktionen
 
-- **Überblendung:** Sanfte 200ms-Überblendung zwischen Bildern statt hartem Schnitt. Macht Bewegungsartefakte besser sichtbar.
-- **Bild-Info-Overlay:** Zeigt Bildnummer, FWHM, Rundheit und Gewicht in der oberen linken Ecke. Ein-/ausschaltbar.
-- **A/B-Umschalter (T-Taste):** Pinnen Sie das aktuelle Bild an, dann drücken Sie T, um zwischen dem angepinnten Bild und dem jeweiligen Navigationsbild hin und her zu wechseln.
-- **ROI-Blinken:** Klicken Sie auf „ROI auswählen", zeichnen Sie ein Rechteck auf dem Bild, und der Betrachter zoomt in diesen Bereich. Perfekt zur Überprüfung von Sternformen in einer bestimmten Ecke.
+- **Bild-Info-Overlay:** Zeigt Bildnummer, FWHM, Rundheit und Gewicht in der oberen linken Ecke an. Über die **Overlay**-Checkbox in der Viewer-Werkzeugleiste umschaltbar; der Overlay-Zustand wird in die Ausgabe von **Kopieren in Zwischenablage** und **GIF-Export** eingebrannt.
+- **A/B-Umschaltung (Taste T):** Fixiere das aktuelle Bild, drücke dann T, um zwischen dem fixierten Bild und dem aktuell navigierten zu wechseln.
 
 ---
 
 ## 8. Methoden zur Bildauswahl
 
-### Methode 1: Manuelles Markieren (G / B-Tasten)
+### Methode 1: Manuelle Markierung (G / B-Tasten)
 
-Der einfachste Ansatz — scrollen Sie durch Ihre Sequenz und markieren Sie jedes Bild:
+Der einfachste Ansatz — scrolle durch deine Sequenz und markiere jedes Bild:
 
-1. Drücken Sie **Space** zum Abspielen oder verwenden Sie **←/→** zum schrittweisen Vor- und Zurückgehen
-2. Drücken Sie **B**, wenn Sie ein schlechtes Bild sehen (ausschließen)
-3. Drücken Sie **G**, um ein zuvor ausgeschlossenes Bild wieder einzuschließen
-4. Bei aktiviertem **automatischen Weiterschalten** (Standard) springt der Betrachter nach dem Markieren zum nächsten Bild
+1. Drücke **Leertaste** zum Abspielen, oder nutze **←/→** für Einzelbild-Navigation
+2. Drücke **B**, wenn du ein schlechtes Bild siehst (ausschließen)
+3. Drücke **G**, um ein zuvor ausgeschlossenes Bild wieder einzuschließen
+4. Mit **Auto-Weiter nach Markierung** (Standard) springt der Viewer nach Markierung zum nächsten Bild
 
-**Am besten geeignet für:** Kleine Sequenzen (< 100 Bilder) oder die Überprüfung einzelner Bilder, die durch andere Methoden markiert wurden.
+**Am besten für:** Kleine Sequenzen (< 100 Bilder) oder Einzelbildprüfung von Kandidaten aus anderen Methoden.
 
-### Methode 2: Stapel-Aussortierung nach Schwellenwert
+### Methode 2: Batch-Verwerfen per Schwellwert
 
-Alle Bilder aussortieren, die einen bestimmten Messwert überschreiten:
+Verwirf alle Bilder, die einen bestimmten Kennzahl-Wert überschreiten:
 
-1. Wählen Sie im Abschnitt **Stapelauswahl** einen Messwert (FWHM, Hintergrund, Rundheit)
-2. Wählen Sie einen Operator (>, <, >=, <=)
-3. Geben Sie einen Schwellenwert ein
-4. Die **Vorschau** zeigt, wie viele Bilder betroffen sind
-5. Klicken Sie auf **„Übereinstimmende aussortieren"**
+1. Wähle im Bereich **Batch-Auswahl** eine Kennzahl (FWHM, Hintergrund, Rundheit)
+2. Wähle einen Operator (>, <, >=, <=)
+3. Gib einen Schwellwert ein
+4. Die **Vorschau** zeigt, wie viele Bilder passen
+5. Klicke **„Passende verwerfen"**
 
-**Beispiel:** Alle Bilder mit FWHM > 4,5 aussortieren → entfernt alle Bilder mit aufgeblähten Sternen.
+**Beispiel:** Alle Bilder mit FWHM > 4,5 verwerfen → entfernt alle aufgedunsenen.
 
-### Methode 3: Schlechteste N % aussortieren
+### Methode 3: Schlechteste N % verwerfen
 
-Automatisch den unteren Prozentsatz der Bilder aussortieren:
+Verwirf automatisch den untersten Prozentsatz:
 
-1. Wählen Sie den Modus **„Schlechteste N %"**
-2. Wählen Sie einen Messwert (FWHM, Hintergrund, Rundheit, Gewicht)
-3. Legen Sie den Prozentsatz fest (z. B. 10 %)
-4. Klicken Sie auf **„Übereinstimmende aussortieren"**
+1. Wähle **„Schlechteste N %"**-Modus
+2. Wähle eine Kennzahl (FWHM, Hintergrund, Rundheit, Gewicht)
+3. Setze den Prozentsatz (z. B. 10 %)
+4. Klicke **„Passende verwerfen"**
 
-Für FWHM und Hintergrund bedeutet „schlechteste" = höchster Wert. Für Rundheit und Gewicht bedeutet „schlechteste" = niedrigster Wert.
+Für FWHM und Hintergrund bedeutet „schlechteste" = höchste Werte. Für Rundheit und Gewicht = niedrigste.
 
-**Beispiel:** Schlechteste 10 % nach Gewicht aussortieren → entfernt die 9 qualitativ niedrigsten Bilder aus einer 90-Bilder-Sequenz.
+**Beispiel:** Schlechteste 10 % nach Gewicht verwerfen → entfernt die 9 niedrigsten Bilder aus 90.
 
-### Methode 4: Freigabeausdrücke (Mehrfachkriterien)
+### Methode 4: Freigabeausdrücke (Mehrkriterien)
 
-Definieren Sie mehrere Bedingungen, die gute Bilder gleichzeitig erfüllen müssen:
+Definiere mehrere Bedingungen, die gute Bilder gleichzeitig erfüllen müssen:
 
-1. Klicken Sie auf **„+ Bedingung hinzufügen"**
-2. Wählen Sie Messwert, Operator und Wert für jede Bedingung
-3. Fügen Sie bei Bedarf weitere Bedingungen hinzu (UND-Logik)
-4. Die Vorschau zeigt, wie viele Bilder durchfallen
-5. Klicken Sie auf **„Nicht-Übereinstimmende aussortieren"**, um alle Bilder auszuschließen, die eine Bedingung nicht erfüllen
+1. Klicke **„+ Bedingung hinzufügen"**
+2. Wähle Kennzahl, Operator und Wert pro Bedingung
+3. Füge weitere Bedingungen hinzu (UND-Logik)
+4. Die Vorschau zeigt, wie viele Bilder scheitern
+5. Klicke **„Nicht-passende verwerfen"**, um alle Bilder auszuschließen, die eine Bedingung verletzen
 
 **Beispiel:**
 ```
-FWHM < 4.5  AND  Roundness > 0.7  AND  Stars > 50
+FWHM < 4,5  UND  Rundheit > 0,7  UND  Sterne > 50
 ```
-Dies behält nur Bilder mit scharfen, runden Sternen und guter Sternanzahl.
+Das behält nur Bilder mit scharfen, runden Sternen und guter Sternzahl.
 
-**Vergleichbar mit** den Freigabeausdrücken von PixInsight's SubframeSelector.
+**Vergleichbar mit** PixInsights SubframeSelector-Freigabeausdrücken.
 
 ### Methode 5: Mehrfachauswahl in der Tabelle
 
-Für die gezielte Entfernung bestimmter identifizierter Bilder:
+Für chirurgische Entfernung identifizierter Einzelbilder:
 
-1. Wechseln Sie zum Tab **Statistiktabelle**
-2. **Ctrl+Klick** auf einzelne Zeilen oder **Shift+Klick** für einen Bereich
-3. **Rechtsklick** auf die Auswahl → „N ausgewählte Bild(er) aussortieren"
+1. Wechsle in den **Statistiktabellen**-Reiter
+2. **Strg+Klick** für Einzelzeilen, **Umschalt+Klick** für Bereich
+3. **Rechtsklick** auf die Auswahl → „N ausgewählte Bild(er) verwerfen"
 
-**Am besten geeignet für:** Das Entfernen bestimmter Ausreißer, die Sie im Streudiagramm oder Diagramm identifiziert haben.
+**Am besten für:** Einzelne Ausreißer, die du im Scatterplot oder Graphen entdeckt hast.
+
+### Alle Verwerfen zurücksetzen
+
+Der Knopf **Alle Verwerfen zurücksetzen** in der Bildmarkierungs-Gruppe löscht jeden Ausschluss — sowohl die Baseline (was Siril beim Start hatte) als auch alle ausstehenden Markierungen — und markiert jedes Bild wieder als eingeschlossen. Nützlich, wenn du die Auswahl komplett neu starten willst. Diese Aktion ist nicht über Strg+Z rückgängig machbar.
 
 ---
 
 ## 9. Das Rückgängig-System
 
-Jede Markierungsaktion kann mit **Ctrl+Z** rückgängig gemacht werden:
+Jede Markierungsaktion kann mit **Strg+Z** rückgängig gemacht werden:
 
-- **Einzelne Markierungen** (G/B auf einem Bild) werden einzeln rückgängig gemacht
-- **Stapeloperationen** (Schwellenwert-Aussortierung, schlechteste N %, Freigabeausdruck, Mehrfachauswahl) werden **komplett** mit einem einzigen Ctrl+Z rückgängig gemacht
-- Tiefe des Rückgängig-Stapels: 500 Operationen
+- **Einzelmarkierungen** (G/B auf einem Bild) werden einzeln rückgängig gemacht
+- **Batch-Operationen** (Schwellwert, schlechteste N %, Freigabeausdruck, Mehrfachauswahl) werden mit einem einzigen Strg+Z als **gesamte Batch** zurückgenommen — du musst nicht N-mal drücken
+- **Alle Verwerfen zurücksetzen** ist *nicht* auf dem Undo-Stack (bewusst als nukleare Option gedacht)
+- Undo-Stack-Tiefe: 500 Operationen
 
-**Beispiel:** Sie sortieren die schlechtesten 15 % aus (13 Bilder). Sie bemerken, dass das zu aggressiv war. Ein Ctrl+Z stellt alle 13 Bilder wieder her.
+**Beispiel:** Du verwirfst die schlechtesten 15 % (13 Bilder). Zu aggressiv. Ein Strg+Z stellt alle 13 wieder her.
+
+Schnelles Strg+Z-Hämmern wird entprellt — Statistikgraph, Scatterplot und Filmstreifen/Slider bündeln sich zu einem einzigen Refresh nach ~150 ms, damit das Hotkey auch bei langen Sequenzen flüssig bleibt.
 
 ---
 
-## 10. Änderungen an Siril übertragen
+## 10. Verwerfen anwenden (Datei-Verschiebung)
 
-Alle Markierungen sind **lokal**, bis Sie sie explizit übernehmen:
+Der Blink Comparator ist **ordnerbasiert**: Verwerfen werden als tatsächliche Dateiverschiebungen im Dateisystem angewendet, nicht als Metadaten-Flags in einer `.seq`-Datei. Das hält den Workflow transparent und vollständig rückgängig machbar.
 
-1. Der Zähler **„Ausstehend: N Änderungen"** im linken Panel zeigt, wie viele Bilder vom aktuellen Zustand in Siril abweichen
-2. Klicken Sie auf **„Änderungen an Siril übertragen"**, um alle Änderungen zu senden
-3. Ein Bestätigungsdialog zeigt die genauen Änderungen, die vorgenommen werden
-4. Nach dem Übernehmen wird Sirils Sequenz aktualisiert — ausgeschlossene Bilder werden beim Stacken übersprungen
+### Wann Änderungen angewendet werden
 
-**Wenn Sie das Fenster mit nicht gespeicherten Änderungen schließen,** fragt ein Dialog, ob die Änderungen übernommen oder verworfen werden sollen.
+Markierungen bleiben lokal, bis du das Fenster schließt. Schließen über:
+
+- **„Verwerfen übernehmen && Schließen"**-Knopf, oder
+- **Esc** / Fenster schließen mit ausstehenden Markierungen → Ja/Nein/Abbrechen-Dialog, ob angewendet werden soll.
+
+### Was beim Anwenden passiert
+
+Ein Bestätigungsdialog zeigt die Anzahl und den Zielpfad, dann:
+
+1. Ein Unterordner `rejected/` wird in deinem Quellordner angelegt (falls nicht vorhanden).
+2. Jede verworfene FITS wird in `rejected/` **verschoben** (nicht kopiert). Dateinamen bleiben unverändert — kein Umbenennen.
+3. Eine Textdatei `rejected_frames.txt` wird neben deine Originale geschrieben. Sie enthält einen Header (Sequenzname, Zeitstempel, Anzahl) und eine Datei pro Zeile — aufgeführt sind nur die Dateien, die tatsächlich in `rejected/` gelandet sind.
+4. Das Skript meldet verschobene vs. fehlgeschlagene Anzahl im Siril-Log.
+
+### Teilweise Fehler
+
+Falls einige Verschiebungen scheitern (OS-Dateisperre, Rechte, voller Datenträger), tut das Skript folgendes:
+
+- Es committet nur die Bilder, deren Verschiebung erfolgreich war (sie fallen aus der Pending-Liste).
+- Gescheiterte Bilder bleiben in der Pending-Menge — der Close-Confirm-Dialog weist beim nächsten Schließversuch erneut darauf hin.
+- In `rejected_frames.txt` stehen nur die tatsächlich verschobenen Dateien.
+
+So lässt ein teilweiser Fehler dein Dateisystem nie in einem inkonsistenten Zustand — die Audit-Datei spiegelt immer exakt wider, was physisch in `rejected/` ist.
+
+### Ein Verwerfen nach dem Schließen rückgängig machen
+
+Weil es nur Dateiverschiebungen sind, ist der Workflow reversibel. Ziehe einfach die Datei aus `rejected/` zurück in den Quellordner. Die Audit-Datei `rejected_frames.txt` kannst du löschen oder ignorieren — sie wird beim nächsten Lauf sowieso überschrieben.
+
+### Originale werden nie verändert
+
+Behaltene Bilder werden überhaupt nicht angefasst. Das Skript schreibt keine Header, speichert nicht erneut, berührt die Originalbytes nie.
 
 ---
 
 ## 11. Exportoptionen
 
-### Ausgeschlossene Bilder exportieren (.txt)
+### Statistik-CSV exportieren (.csv)
 
-Speichert eine Textdatei mit allen ausgeschlossenen Bildindizes. Enthält einen Header mit Sequenzname, Gesamtbildanzahl und Aussortierungsanzahl.
-
-### Statistiken als CSV exportieren (.csv)
-
-Exportiert die vollständige Statistiktabelle als CSV-Datei mit den Spalten:
+Exportiert die vollständige Statistiktabelle als CSV mit Spalten:
 `Frame, Weight, FWHM, Roundness, Background, Stars, Median, Sigma, Date, Included`
 
-Nützlich für externe Analysen in Tabellenkalkulationen, Python-Notebooks oder anderen Werkzeugen.
+Nützlich für externe Analyse in Tabellenkalkulationen, Python-Notebooks oder anderen Tools.
 
 ### Animiertes GIF exportieren (.gif)
 
-Erstellt ein animiertes GIF der Blinkanimation:
-- Nur eingeschlossene Bilder (ausgeschlossene Bilder werden übersprungen)
-- Skaliert auf maximal 480px Abmessung
-- Verwendet die aktuelle Wiedergabegeschwindigkeit (FPS)
-- Erfordert die Pillow-Bibliothek (`pip install Pillow`)
+Erstellt ein animiertes GIF der Blink-Animation:
+
+- Nur eingeschlossene Bilder (ausgeschlossene werden übersprungen)
+- Skaliert auf maximal 480 px
+- Nutzt aktuelle Wiedergabegeschwindigkeit (FPS) und Autostretch-Preset
+- Respektiert die Overlay-Checkbox — Bild-Info-Badges werden ins GIF eingebrannt, wenn sichtbar
+- Benötigt Pillow (`pip install Pillow`)
 
 Ideal zum Teilen in Foren, sozialen Medien oder Beobachtungsberichten.
 
-### Bild in Zwischenablage kopieren (Ctrl+C)
+### Bild in Zwischenablage kopieren (Strg+C)
 
-Kopiert das aktuelle Bild (wie angezeigt, mit angewandter Streckung) in die Systemzwischenablage. Direkt in einen Forenbeitrag, Bildbearbeitungsprogramm oder eine Präsentation einfügbar.
+Kopiert das aktuelle Bild (wie angezeigt, mit Stretch und Overlay) in die Zwischenablage. Im **Nebeneinander**-Modus wird die vollständige Kompositansicht erfasst, nicht nur das linke rohe Pixmap. Direkt in einen Forenbeitrag, Bildeditor oder eine Präsentation einfügen.
 
 ---
 
 ## 12. Anwendungsfälle & Arbeitsabläufe
 
-### Anwendungsfall 1: Schnelle Sitzungsprüfung (5 Minuten)
+### Anwendungsfall 1: Schnelle Session-Prüfung (5 Minuten)
 
-**Szenario:** Sie haben gerade eine Aufnahmesession mit 120 Einzelbildern beendet und möchten eine schnelle Qualitätsprüfung vor dem Stacken.
+**Szenario:** Du hast gerade eine Session mit 120 Subframes abgeschlossen und willst vor dem Stacken eine schnelle Qualitätsprüfung.
 
-**Arbeitsablauf:**
-1. Laden Sie die registrierte Sequenz in Siril
-2. Starten Sie den Blink Comparator
-3. Führen Sie bei Bedarf die Sternerkennung aus (klicken Sie auf das gelbe Banner)
-4. Wechseln Sie zum Tab **Statistiktabelle**, sortieren Sie nach **FWHM absteigend** — die schlechtesten Bilder stehen nun oben
-5. Klicken Sie auf **„Schlechteste 10 % aussortieren"** nach FWHM
-6. Überprüfen Sie das **Statistikdiagramm** — suchen Sie nach verbliebenen Ausreißern
-7. Änderungen übernehmen → in Siril stacken
+**Ablauf:**
+1. Blink Comparator starten → Ordner mit den FITS wählen
+2. Sterndetektion ausführen, falls nötig (gelber Banner)
+3. In den **Statistiktabellen**-Reiter, absteigend nach **FWHM** sortieren — schlechteste oben
+4. **„Schlechteste 10 % verwerfen"** nach FWHM klicken
+5. **Statistikgraph** prüfen — noch verbleibende Ausreißer?
+6. **Verwerfen übernehmen && Schließen** → in Siril stacken (der `rejected/`-Unterordner bleibt von jedem nachfolgenden `convert`/Stacking-Schritt ausgeschlossen, weil er eine Ebene unter deinem Lights-Ordner liegt)
 
-**Zeitaufwand:** ~5 Minuten für 120 Bilder.
+**Zeit:** ~5 Minuten für 120 Bilder.
 
-### Anwendungsfall 2: Von Wolken betroffene Sitzung
+### Anwendungsfall 2: Wolkenbeeinflusste Session
 
-**Szenario:** Während Ihrer Sitzung zogen Wolken durch. Einige Bilder sind teilweise bewölkt.
+**Szenario:** Wolken zogen während deiner Session durch. Einige Bilder sind teilweise bewölkt.
 
-**Arbeitsablauf:**
-1. Öffnen Sie den Blink Comparator
-2. Wechseln Sie zum Tab **Statistikdiagramm**, aktivieren Sie das Kontrollkästchen **Hintergrund**
-3. Suchen Sie nach Spitzen — das sind die bewölkten Bilder
-4. Verwenden Sie **Stapel-Aussortierung**: Hintergrund > [Schwellenwert aus dem Spitzenpegel]
-5. Prüfen Sie auch **Sterne** — bewölkte Bilder haben weniger erkannte Sterne
-6. Überprüfen Sie im **Differenzmodus** (D-Taste) — Wolkenflecken leuchten hell auf
+**Ablauf:**
+1. Blink Comparator öffnen und Ordner wählen
+2. **Statistikgraph**-Reiter, Checkbox **Hintergrund** aktivieren
+3. Nach Spikes suchen — das sind die bewölkten Bilder
+4. **Batch-Verwerfen**: Hintergrund > [Schwellwert aus dem Spike]
+5. Auch **Sterne** prüfen — bewölkte Bilder haben weniger erkannte Sterne
+6. Bei 3–5 FPS im Normal-Modus prüfen — Wolkenflecken wackeln sichtbar gegen das statische Sternfeld
 
-### Anwendungsfall 3: Diagnose von Nachführproblemen
+### Anwendungsfall 3: Tracking-Problem-Diagnose
 
-**Szenario:** Einige Bilder zeigen längliche Sterne. Sie möchten diese finden und entfernen und verstehen, wann das Problem aufgetreten ist.
+**Szenario:** Einige Bilder zeigen längliche Sterne. Du willst sie finden, entfernen und verstehen, wann das Problem auftrat.
 
-**Arbeitsablauf:**
-1. Öffnen Sie den Blink Comparator
-2. Gehen Sie zum **Statistikdiagramm**, aktivieren Sie **Rundheit**
-3. Suchen Sie nach Einbrüchen — das sind Bilder mit Nachführfehlern
-4. Verwenden Sie einen **Freigabeausdruck**: `Roundness > 0.75`
-5. „Nicht-Übereinstimmende aussortieren" entfernt alle Bilder mit länglichen Sternen
-6. Prüfen Sie das **Streudiagramm** (FWHM vs. Rundheit) — Ausreißer-Bilder liegen weit vom Cluster entfernt
-7. Klicken Sie auf Ausreißer-Punkte, um einzelne Bilder zu untersuchen
-8. Wenn sich die Nachführfehler in einem Zeitraum häufen, haben Sie möglicherweise einen periodischen Fehler in Ihrer Montierung
+**Ablauf:**
+1. Blink Comparator öffnen
+2. **Statistikgraph**, **Rundheit** aktivieren
+3. Dips suchen — das sind Bilder mit Tracking-Fehlern
+4. **Freigabeausdruck**: `Rundheit > 0,75`
+5. **Nicht-passende verwerfen** entfernt alle Bilder mit länglichen Sternen
+6. **Scatterplot** (FWHM vs Rundheit) prüfen — Ausreißer sind weit vom Cluster entfernt
+7. Ausreißer-Punkte klicken, um Einzelbilder zu inspizieren
+8. Konzentrieren sich Tracking-Fehler auf einen Zeitraum? → Periodischer Fehler deiner Montierung
 
-### Anwendungsfall 4: Sitzung mit Fokusdrift
+### Anwendungsfall 4: Fokusdrift-Session
 
-**Szenario:** Ihr FWHM beginnt gut, steigt aber im Laufe der Sitzung allmählich an, da die Temperatur sinkt und sich der Fokus verschiebt.
+**Szenario:** Deine FWHM beginnt gut, steigt aber während der Session an, weil die Temperatur fällt und sich der Fokus verschiebt.
 
-**Arbeitsablauf:**
-1. Öffnen Sie den Blink Comparator
-2. **Statistikdiagramm** → FWHM zeigt einen ansteigenden Verlauf
-3. Der **gleitende Durchschnitt** (fette Linie) zeigt den Trend deutlich
-4. Verwenden Sie **Stapel-Aussortierung**: FWHM > [Ihr Schwellenwert, z. B. 4,5]
-5. Oder verwenden Sie **„Schlechteste 20 % aussortieren"** nach FWHM — dies entfernt automatisch die Bilder vom Ende der Sitzung
-6. Tipp: Verwenden Sie in zukünftigen Sitzungen einen Autofokussierer oder fokussieren Sie alle 30 Minuten nach
+**Ablauf:**
+1. Blink Comparator öffnen
+2. **Statistikgraph** → FWHM zeigt eine Aufwärtsrampe
+3. Der **Gleitmittelwert** (dicke Linie) zeigt den Trend klar
+4. **Batch-Verwerfen**: FWHM > [dein Schwellwert, z. B. 4,5]
+5. Oder **„Schlechteste 20 % verwerfen"** nach FWHM — entfernt automatisch die End-of-Session-Bilder
+6. Für zukünftige Sessions: Autofocuser oder alle 30 Minuten refokussieren
 
-### Anwendungsfall 5: Satellitenspuren-Suche
+### Anwendungsfall 5: Satelliten-Jagd
 
-**Szenario:** Sie fotografieren nahe des Himmelsäquators, wo Satellitenspuren häufig sind.
+**Szenario:** Du fotografierst nahe dem Himmelsäquator, wo Satellitenspuren häufig sind.
 
-**Arbeitsablauf:**
-1. Öffnen Sie den Blink Comparator
-2. Drücken Sie **D** für den **Differenzmodus** — Satelliten erscheinen als helle Streifen vor dunklem Hintergrund
-3. Drücken Sie **Space** zum Abspielen mit 3–5 FPS — Spuren blitzen sichtbar auf
-4. Wenn Sie eine entdecken, drücken Sie **B**, um dieses Bild auszuschließen
-5. Spielen Sie weiter ab, um alle Spuren zu finden
-6. Der Differenzmodus macht Spuren **viel** sichtbarer als der Normalmodus
+**Ablauf:**
+1. Blink Comparator öffnen
+2. Im **Normal**-Modus bleiben
+3. **Leertaste** zum Abspielen bei 3–5 FPS — Satellitenspuren blinken sichtbar von Bild zu Bild auf, weil die Sterne stationär bleiben, die Spurenpixel aber wandern
+4. Wenn du eine Spur siehst, **B** drücken, um das Bild auszuschließen
+5. Weiterspielen, um alle Spuren zu erwischen
+6. Optional zum **Aggressive**-Autostretch-Preset wechseln, damit schwache Spuren deutlicher hervortreten
 
-### Anwendungsfall 6: Datengestützte Auswahl (Ersatz für PI SubframeSelector)
+### Anwendungsfall 6: Datengetriebene Auswahl (PI-SubframeSelector-Ersatz)
 
-**Szenario:** Sie möchten einen quantitativen, PixInsight-artigen Auswahlprozess basierend auf mehreren Kriterien.
+**Szenario:** Du willst einen quantitativen, PixInsight-artigen Auswahlprozess basierend auf mehreren Kriterien.
 
-**Arbeitsablauf:**
-1. Führen Sie die Sternerkennung aus, um alle Messwerte zu befüllen
-2. Gehen Sie zur **Statistiktabelle**, sortieren Sie nach **Gewicht aufsteigend** (schlechteste Bilder zuerst)
-3. Überprüfen Sie die unteren 10–20 % — sehen sie sichtbar schlechter aus?
-4. Richten Sie einen **Freigabeausdruck** ein:
+**Ablauf:**
+1. Sterndetektion ausführen, um alle Kennzahlen zu füllen
+2. **Statistiktabelle**, aufsteigend nach **Gewicht** sortieren (schlechteste oben)
+3. Die untersten 10–20 % prüfen — sehen sie wirklich schlechter aus?
+4. **Freigabeausdruck** aufsetzen:
    ```
-   FWHM < 4.0 AND Roundness > 0.75 AND Background < 0.012 AND Stars > 40
+   FWHM < 4,0 UND Rundheit > 0,75 UND Hintergrund < 0,012 UND Sterne > 40
    ```
-5. Die Vorschau zeigt, dass N Bilder aussortiert würden
-6. Klicken Sie auf „Nicht-Übereinstimmende aussortieren"
-7. Überprüfen Sie im **Streudiagramm** (FWHM vs. Rundheit) — der verbleibende Cluster sollte kompakt sein
-8. **CSV exportieren** für Ihre Aufzeichnungen
-9. Änderungen übernehmen → stacken
+5. Vorschau zeigt, dass N Bilder verworfen würden
+6. „Nicht-passende verwerfen" klicken
+7. Im **Scatterplot** (FWHM vs Rundheit) prüfen — verbleibendes Cluster sollte eng sein
+8. **CSV exportieren** fürs Archiv
+9. Verwerfen übernehmen && Schließen
 
 ### Anwendungsfall 7: Vorher-Nachher-Vergleich
 
-**Szenario:** Sie möchten überprüfen, ob Ihre Bildauswahl die verbleibende Menge tatsächlich verbessert hat.
+**Szenario:** Du willst prüfen, ob deine Bildauswahl tatsächlich den verbleibenden Satz verbessert hat.
 
-**Arbeitsablauf:**
-1. Notieren Sie nach dem Markieren der Bilder die **Sitzungszusammenfassungs-Statistiken** (mittlerer FWHM, Anzahl eingeschlossener Bilder)
-2. Wechseln Sie zum Anzeigemodus **„Nur eingeschlossene"**
-3. Abspielen — überprüfen Sie, dass die Animation flüssig aussieht, ohne Flackern oder Artefakte
-4. Prüfen Sie das **Statistikdiagramm** — die roten Punkte (ausgeschlossen) sollten an den Spitzen liegen
-5. Die verbleibende blaue Linie sollte gleichmäßiger verlaufen
-6. **GIF exportieren** der sauberen Sequenz für Ihr Aufnahmeprotokoll
+**Ablauf:**
+1. Nach dem Markieren die **Session-Zusammenfassung** im Close-Dialog notieren (mittlere FWHM, Anzahl)
+2. **„Nur eingeschlossene Bilder"**-Checkbox in der Wiedergabe aktivieren und Leertaste drücken
+3. Abspielen — die Animation sollte glatt laufen, ohne Blinken oder Artefakte
+4. **Statistikgraph** prüfen — die roten Punkte (ausgeschlossen) sollten auf den Spikes liegen
+5. Die verbleibende blaue Linie sollte gleichmäßiger sein
+6. **GIF exportieren** der sauberen Sequenz fürs Beobachtungslog
 
-### Anwendungsfall 8: Sternformprüfung in den Ecken
+### Anwendungsfall 8: Zweiter Durchgang / Neuauswahl
 
-**Szenario:** Sie vermuten optische Verkippung oder Koma in einer Ecke und möchten dies über alle Bilder prüfen.
+**Szenario:** Du hast den Blink Comparator einmal laufen lassen, Verwerfen angewendet und willst später einige Entscheidungen überdenken.
 
-**Arbeitsablauf:**
-1. Klicken Sie auf **„ROI auswählen"** in den Anzeigeoptionen
-2. Zeichnen Sie ein Rechteck über die problematische Ecke
-3. Klicken Sie auf **1:1** Zoom für pixelgenaue Ansicht
-4. Spielen Sie die Animation ab — Sternformen in dieser Ecke blinken schnell durch
-5. Bilder, in denen die Ecksterne schlechter als üblich sind, könnten Biegungs- oder Kippungsänderungen aufweisen
-6. Markieren Sie diese Bilder mit B
-7. Klicken Sie auf „ROI löschen", um zur Vollbildansicht zurückzukehren
+**Ablauf:**
+1. Quellordner im Finder/Explorer öffnen und Bilder aus `rejected/` zurück in den Hauptordner ziehen.
+2. Alte `rejected_frames.txt` löschen (oder belassen — der nächste Lauf überschreibt sie).
+3. Blink Comparator auf demselben Ordner erneut starten. Er nimmt nur die oberste Ebene auf (die in `rejected/` bleiben dort).
+4. Neue Auswahlen treffen und **Verwerfen übernehmen && Schließen** — eine neue `rejected_frames.txt` wird geschrieben, neu verworfene Bilder werden in `rejected/` verschoben, neben die, die du dort belassen hast.
 
 ---
 
@@ -619,14 +653,16 @@ Kopiert das aktuelle Bild (wie angezeigt, mit angewandter Streckung) in die Syst
 
 | Taste | Aktion |
 |-------|--------|
-| `Space` | Abspielen / Pause |
+| `Leertaste` | Play / Pause |
 | `←` | Vorheriges Bild |
 | `→` | Nächstes Bild |
-| `Home` | Erstes Bild |
-| `End` | Letztes Bild |
-| `1`–`9` | FPS direkt einstellen |
-| `+` | Beschleunigen (FPS erhöhen) |
-| `-` | Verlangsamen (FPS verringern) |
+| `Pos1` | Erstes Bild |
+| `Ende` | Letztes Bild |
+| `1`–`9` | FPS direkt setzen |
+| `+` | Schneller (FPS erhöhen) |
+| `-` | Langsamer (FPS verringern) |
+
+`1`–`9` werden über `QMainWindow.keyPressEvent` verteilt (nicht über `QShortcut`), sodass Ziffern bei fokussierter Spinbox oder LineEdit wie gewohnt ins Widget gelangen und das FPS-Preset unterdrückt wird — mehrstellige Eingaben in Schwellwert-Spinboxen funktionieren normal. `Strg+Z` / `Strg+C` feuern überall.
 
 ### Bildmarkierung
 
@@ -634,128 +670,164 @@ Kopiert das aktuelle Bild (wie angezeigt, mit angewandter Streckung) in die Syst
 |-------|--------|
 | `G` | Als gut markieren (einschließen) |
 | `B` | Als schlecht markieren (ausschließen) |
-| `Ctrl+Z` | Letzte Markierung rückgängig machen (einzeln oder Stapel) |
+| `Strg+Z` | Letzte Markierung rückgängig (einzeln oder Batch) |
 
 ### Anzeige
 
 | Taste | Aktion |
 |-------|--------|
-| `D` | Differenzmodus umschalten |
-| `Z` | Zoom auf Fensterpassung zurücksetzen |
-| `T` | Aktuelles Bild anpinnen / A/B-Vergleich umschalten |
-| `Ctrl+C` | Aktuelles Bild in die Zwischenablage kopieren |
+| `Z` | Fit-in-Window (Zoom zurücksetzen) |
+| `T` | Aktuelles Bild fixieren / A/B-Vergleich umschalten |
+| `Strg+C` | Aktuelles Bild in Zwischenablage kopieren |
 
 ### Sonstiges
 
 | Taste | Aktion |
 |-------|--------|
-| `Esc` | Fenster schließen |
+| `Esc` | Fenster schließen (mit Anwenden/Verwerfen/Abbrechen-Dialog bei ausstehenden Änderungen) |
 
 ---
 
 ## 14. Tipps & Empfehlungen
 
-### Allgemeiner Arbeitsablauf
+### Allgemeiner Ablauf
 
-1. **Beginnen Sie mit Daten, dann prüfen Sie visuell.** Sortieren Sie zuerst nach FWHM oder Gewicht, um fehlerhafte Bilder numerisch zu identifizieren. Wechseln Sie dann zum Betrachter, um zu bestätigen, dass sie tatsächlich schlecht aussehen.
+1. **Mit Daten beginnen, dann visuell verifizieren.** Sortiere zuerst nach FWHM oder Gewicht, um schlechte Bilder numerisch zu identifizieren. Dann in den Viewer wechseln und bestätigen, dass sie wirklich schlecht aussehen.
 
-2. **Sortieren Sie nicht zu viel aus.** Mehr Bilder = weniger Rauschen im Stack. Sortieren Sie nur Bilder aus, die eindeutig fehlerhaft sind. Ein Bild mit FWHM 4,2, wenn Ihr bestes 3,0 hat, trägt immer noch Signal bei — erwägen Sie, es zu behalten, es sei denn, es ist ein Ausreißer.
+2. **Nicht überverwerfen.** Mehr Bilder = weniger Rauschen im Stack. Verwirf nur Bilder, die klar defekt sind. Ein Bild mit FWHM 4,2, wenn dein bestes 3,0 hat, trägt immer noch Signal bei — behalte es, wenn es kein Ausreißer ist.
 
-3. **Nutzen Sie den gleitenden Durchschnitt.** Im Statistikdiagramm zeigt die fette Trendlinie Muster (Fokusdrift, Wolken), die in der verrauschten Rohdatenlinie unsichtbar sind.
+3. **Nutze das Gleitmittel.** Im Statistikgraph offenbart die dicke Trendlinie Muster (Fokusdrift, Wolken), die in der verrauschten Rohdatenlinie unsichtbar sind.
 
-4. **Prüfen Sie das Streudiagramm.** FWHM vs. Rundheit ist die informativste Einzelkombination. Der Hauptcluster repräsentiert Ihre „normalen" Bilder. Ausreißer weit vom Cluster entfernt sind Ihre Aussortierungskandidaten.
+4. **Prüfe den Scatterplot.** FWHM vs Rundheit ist die einzelne informativste Kombination. Das Haupt-Cluster repräsentiert deine „normalen" Bilder. Ausreißer weit vom Cluster sind deine Verwerfens-Kandidaten.
 
-5. **Verwenden Sie immer den Differenzmodus für Satelliten.** Sie sind manchmal im Normalmodus unsichtbar, leuchten aber im Differenzmodus wie Neonreklamen.
+5. **Blinken im Normal-Modus bei 3–5 FPS für Satelliten-Jagd.** Wechselnde Pixel springen dem Auge ins Gesicht — einen dedizierten „Difference"-Modus brauchst du nicht.
 
-### Leistungstipps
+### Autostretch-Presets
 
-6. **Der erste Durchlauf ist langsam, nachfolgende sind schnell.** Das Skript speichert Statistiken und Vorschauen im Cache. Die Navigation zwischen Bildern ist nach dem Caching sofort.
+6. **Default ist meist fein.** Conservative ist gut, wenn der Hintergrund schwache Nebel enthält, die du beim Defekt-Scan erhalten willst. Aggressive lässt bewölkte Bilder hervortreten. Linear zeigt, was der Sensor tatsächlich aufgezeichnet hat.
 
-7. **Große Sequenzen (500+ Bilder):** Das Laden der Statistiken kann eine Minute dauern. Haben Sie Geduld — es passiert nur einmal pro Sitzung.
+### Performance-Tipps
 
-8. **Wiedergabegeschwindigkeit:** Wenn die Wiedergabe bei hohen FPS ruckelt, reduzieren Sie die Geschwindigkeit. Der Bild-Cache lädt voraus, aber sehr hohe FPS bei großen Bildern können den Cache überholen.
+7. **Erster Lauf auf einem Ordner ist langsam, folgende Läufe sind schnell.** Das Skript cached Statistiken und Miniaturen. Bildnavigation ist nach dem Caching sofort.
 
-### Siril-Integration
+8. **Große Sequenzen (500+ Bilder):** Das Laden der Statistiken kann eine Minute dauern. Geduld — es passiert nur einmal pro Session. Sterndetektion skaliert etwa mit der Bildanzahl.
 
-9. **Immer zuerst registrieren.** Der Blink Comparator funktioniert mit jeder Sequenz, aber am besten mit registrierten (ausgerichteten) Sequenzen. Der Differenzmodus und der Nebeneinander-Modus erfordern eine Ausrichtung, um aussagekräftig zu sein.
+9. **Wiedergabegeschwindigkeit:** Wenn die Wiedergabe bei hoher FPS stottert, Geschwindigkeit senken. Der Bild-Cache lädt im Voraus mit wiedergabe-aware Lookahead (`max(10, FPS × 2)`), aber sehr hohe FPS auf sehr großen Bildern können den einen Preload-Thread überrennen.
 
-10. **Sternerkennung ist unabhängig von der Registrierung.** Ihr Vorverarbeitungsskript kann die Sequenz registrieren, ohne den FWHM pro Bild zu berechnen. Deshalb erscheint das Banner „Sternerkennung ausführen". Das Anklicken ist sicher — es verändert Ihre Dateien nicht.
+### Ordnerhygiene
 
-11. **Änderungen sind nicht-destruktiv.** „Änderungen übernehmen" setzt nur das Ein-/Ausschlussflag in der .seq-Datei. Ihre FITS-Dateien werden niemals verändert oder gelöscht.
+10. **Halte deinen Lights-Ordner sauber.** Lösche alte `rejected/`-Unterordner oder `rejected_frames.txt`-Dateien, die du nicht mehr brauchst. Der Blink Comparator scannt nur eine Verzeichnisebene, aber dein Stacking-Skript ist vielleicht weniger vorsichtig.
+
+11. **Die Temp-Sequenz ist flüchtig.** `svenesis_blink.fits` + `.seq` werden beim Schließen immer aufgeräumt. Falls ein früherer Lauf abgestürzt ist und sie hinterlassen hat, erkennt das der nächste Start und führt `close` + Cleanup vor `convert` aus.
 
 ---
 
 ## 15. Fehlerbehebung
 
-### Fehler „Keine Sequenz geladen"
+### Ordner-Auswahl zeigt keine FITS-Dateien
 
-**Ursache:** Keine Sequenz ist in Siril aktiv.
-**Lösung:** Setzen Sie das Arbeitsverzeichnis auf den Ordner, der Ihre `.seq`-Datei und `.fit`-Dateien enthält. Siril sollte die Sequenz automatisch erkennen.
+**Ursache:** Du hast auf einen Ordner gezeigt, der keine `.fit/.fits/.fts`-Dateien auf oberster Ebene enthält (das Skript geht nicht tiefer, und komprimierte `.fz/.gz`-FITS werden nicht erkannt).
+**Lösung:** In den tatsächlichen Lights-Ordner navigieren. Liegen deine Dateien in `session/lights/night1/`, wähle `night1/`, nicht `session/`. Sind die Frames fpack- oder gzip-komprimiert, vorher dekomprimieren (z. B. `funpack *.fz` oder `gunzip *.gz`).
+
+### „destination already exists" beim Sequenzaufbau
+
+**Ursache:** Ein früherer Lauf ist abgestürzt, ohne die Temp-Sequenz aufzuräumen.
+**Lösung:** Das Skript führt jetzt `close` + Cleanup vor `convert` aus, also sollte einfach erneutes Ausführen klappen. Falls der Fehler manuell erscheint, `svenesis_blink.fits` und `svenesis_blink.seq` aus dem Ordner löschen und neu starten.
 
 ### FWHM / Rundheit / Sterne-Spalten sind leer
 
-**Ursache:** Die Sternerkennung wurde für diese Sequenz nicht ausgeführt.
-**Lösung:** Klicken Sie auf das gelbe Banner „Sternerkennung ausführen". Dies führt `register <seq> -2pass` aus, das alle Sternmetriken berechnet, ohne neue Dateien zu erstellen.
+**Ursache:** Auf dieser Sequenz wurde keine Sterndetektion gestartet.
+**Lösung:** Auf den gelben „Sterndetektion starten"-Banner klicken. Das führt `register svenesis_blink -2pass` aus, das alle Sternkennzahlen berechnet, ohne neue Dateien zu erzeugen.
 
-### Sternerkennung wurde ausgeführt, aber Spalten sind weiterhin leer
+### Sterndetektion gelaufen, aber Spalten bleiben leer
 
-**Ursache:** Bei RGB-Bildern speichert Siril die Registrierungsdaten im grünen Kanal (Kanal 1). Ältere Versionen des Skripts haben möglicherweise nur Kanal 0 geprüft.
-**Lösung:** Aktualisieren Sie auf die neueste Version des Skripts. Es durchsucht alle Kanäle.
+**Ursache:** Die Registrierung schrieb Daten in einen Kanal, den das Skript nicht prüfte (selten — das Skript prüft jetzt alle Kanäle und verwendet das Ergebnis wieder).
+**Lösung:** Auf die neueste Skriptversion aktualisieren. Sie erkennt den Kanal auf Bild 0 automatisch und verwendet ihn für die gesamte Sequenz.
+
+### Fortschrittsbalken friert während der Sterndetektion ein
+
+**Ursache:** Der Post-Register-Rebind (globalen Stretch berechnen → Referenzbild laden) lief früher still auf dem Haupt-Thread. In v1.2.8 rücken diese Phasen den Fortschrittsbalken durch 30 % → 50 % mit `processEvents()`-Pumping voran.
+**Lösung:** Auf v1.2.8 oder neuer aktualisieren. Wenn der Balken bei sehr großen Sequenzen trotzdem zu stehen scheint, eine Minute warten — jede Phase kann pro tausend Bildern legitim einige Sekunden brauchen.
+
+### 1–9-Ziffern ändern Wiedergabegeschwindigkeit statt in eine Schwellwert-Spinbox zu gehen
+
+**Ursache (vor 1.2.8):** Die 1–9-FPS-Presets waren als window-scope `QShortcut`s registriert, die Ziffern verschlangen, bevor sie das fokussierte Kind-Widget erreichen konnten.
+**Lösung:** Auf v1.2.8 aktualisieren. Die Presets leben nun in `keyPressEvent` und feuern nur, wenn kein Kind-Widget die Taste absorbiert.
 
 ### Schriftart-Warnung: „Sans-serif"
 
-**Meldung:** `qt.qpa.fonts: Populating font family aliases took 121 ms. Replace uses of missing font family "Sans-serif"...`
-**Auswirkung:** Nur kosmetisch, keine Auswirkung auf die Funktionalität.
-
-### Skript stürzt beim Schließen mit SortOrder-Fehler ab
-
-**Meldung:** `TypeError: int() argument must be a string... not 'SortOrder'`
-**Lösung:** Aktualisieren Sie auf die neueste Version (behoben in v1.2.3+).
+**Meldung:** `qt.qpa.fonts: Populating font family aliases took 121 ms. Replace uses of missing font family "Sans-serif"…`
+**Auswirkung:** Nur kosmetisch, keine Funktionsbeeinträchtigung.
 
 ### GIF-Export schlägt fehl
 
-**Ursache:** Die Pillow-Bibliothek ist nicht installiert.
-**Lösung:** Im Terminal: `pip install Pillow` (oder Installation über Sirils Python-Umgebung).
+**Ursache:** Pillow ist nicht installiert.
+**Lösung:** Im Terminal: `pip install Pillow` (oder über Sirils Python-Umgebung installieren).
 
-### Wiedergabe ist langsam / ruckelt
+### Wiedergabe ist langsam / stottert
 
-**Ursache:** Große Bildabmessungen oder unzureichender Arbeitsspeicher für den Bild-Cache.
+**Ursache:** Große Bildabmessungen oder zu wenig Speicher für den Bild-Cache.
 **Lösung:**
-- Reduzieren Sie die Wiedergabegeschwindigkeit (verwenden Sie 3–5 FPS statt 30)
-- Der Cache hält standardmäßig 80 Bilder — ausreichend für die meisten Sequenzen
-- Schließen Sie andere speicherintensive Anwendungen
+- Wiedergabegeschwindigkeit senken (3–5 FPS statt 30)
+- Der Cache hält standardmäßig 80 Bilder — reicht für die meisten Sequenzen
+- Andere speicherhungrige Anwendungen schließen
+
+### Skript stürzt mit „'BlinkComparatorWindow' object has no attribute 'cache'" ab
+
+**Ursache:** Signal-Reihenfolgen-Bug in früheren 1.2.x-Builds, bei dem die Anzeigemodus-Radios `idToggled` vor dem Cache-Aufbau emittierten.
+**Lösung:** Behoben in v1.2.8. Auf aktuelle Version aktualisieren.
 
 ---
 
 ## 16. Häufige Fragen
 
-**F: Ersetzt dies PixInsight's Blink + SubframeSelector?**
-A: Für visuelle Prüfung und grundlegende Bildauswahl ja — es bietet tatsächlich mehr Visualisierungsfunktionen als PI Blink (Differenzmodus, Nebeneinander, A/B-Umschalter, ROI-Blinken, Überblendung, Filmstreifen). Auf der statistischen Seite deckt es die meisten Funktionen von SubframeSelector ab (sortierbare Tabelle, Stapel-Aussortierung, Freigabeausdrücke, Streudiagramm), aber PI hat SNR und die proprietäre PSFSignalWeight-Metrik, die wir nicht nachbilden.
+**F: Ersetzt das PixInsights Blink + SubframeSelector?**
+A: Für visuelle Inspektion und datengetriebene Bildauswahl ja — du bekommst eine sortierbare Statistiktabelle, Batch-Schwellwerte, Freigabeausdrücke, Scatterplot, Statistikgraph mit Gleitmittel und einen Miniatur-Filmstreifen. Was fehlt: PIs SNR/PSFSignalWeight-Proprietärmetriken und ein dedizierter „Difference"-Modus (Normal-Modus-Wiedergabe bei 3–5 FPS deckt dasselbe ab).
 
-**F: Kann ich dies auf nicht-registrierten Sequenzen verwenden?**
-A: Ja, aber der Differenzmodus und der Nebeneinander-Modus sind dann nicht sinnvoll, da die Bilder nicht ausgerichtet sind. Visuelles Blinken im Normalmodus funktioniert weiterhin.
+**F: Muss ich meine Sequenz vorher registrieren?**
+A: Nein — das Skript baut sich über `convert -fitseq` seine eigene temporäre FITSEQ-Sequenz aus dem, worauf du es richtest. Willst du FWHM/Rundheit/Sterne-Kennzahlen, klickst du auf den „Sterndetektion starten"-Banner, der `register -2pass` ausführt.
 
-**F: Verändert „Änderungen übernehmen" meine FITS-Dateien?**
-A: Nein. Es aktualisiert nur das Ein-/Ausschlussflag in der `.seq`-Datei. Ihre FITS-Dateien werden niemals verändert.
+**F: Wo sind meine verworfenen Bilder?**
+A: Beim Schließen werden sie physisch in einen Unterordner `rejected/` neben deinen Quelldateien verschoben. Eine Klartext-`rejected_frames.txt`-Audit-Datei wird ebenfalls neben die Originale geschrieben. Um die Ablehnung rückgängig zu machen, die Datei aus `rejected/` zurück in den Quellordner ziehen.
 
-**F: Wie stark verbessert das Aussortieren von Bildern den Stack?**
-A: Das hängt von Ihren Daten ab. Das Entfernen von 5–10 % der schlechtesten Bilder verbessert den Stack oft merklich — schärfere Sterne, weniger Rauschen im Hintergrund. Das Entfernen von mehr als 20–30 % bringt meist abnehmende Erträge (Sie verlieren mehr Signal als Sie an Qualität gewinnen).
+**F: Modifiziert „Verwerfen übernehmen" meine FITS-Dateien?**
+A: Nein. Behaltene Bilder werden gar nicht angefasst. Verworfene Bilder werden in einen `rejected/`-Unterordner *verschoben* (nicht umgeschrieben, nicht umbenannt) — jederzeit reversibel.
 
-**F: Was ist der Unterschied zwischen „verknüpfter" und „unabhängiger" Streckung?**
-A: **Verknüpft** verwendet die gleiche Streckung für alle Bilder — Helligkeitsunterschiede zwischen Bildern werden sichtbar (gut zum Erkennen von Wolken). **Unabhängig** optimiert jedes Bild einzeln — Sie sehen die meisten Details in jedem Bild, aber die Animation kann zu flackern scheinen.
+**F: Wie stark verbessert das Verwerfen den Stack?**
+A: Hängt von deinen Daten ab. 5–10 % der schlechtesten zu entfernen verbessert den Stack meist spürbar — schärfere Sterne, weniger Hintergrund-Rauschen. Mehr als 20–30 % bringt oft abnehmenden Ertrag (du verlierst mehr Signal, als du an Qualität gewinnst).
+
+**F: Was ist aus dem Difference-Anzeigemodus geworden?**
+A: In v1.2.5 entfernt. Praktisch fängt die Wiedergabe bei 3–5 FPS im Normal-Modus mit global-verknüpftem Autostretch dieselben Artefakte (Satelliten, Wolken, Tracking-Sprünge) ein, weil das Auge an alles andockt, was sich ändert. Der Subtract-+-Absolute-+-Skalieren-+-Clip-Pfad des Difference-Modus bezahlte für Arbeit, die die Wiedergabe bereits visuell leistet.
+
+**F: Was ist aus dem Linked/Independent-Stretch-Umschalter geworden?**
+A: In v1.2.5 entfernt. Global-verknüpfter Autostretch ist jetzt der einzige Modus — sinnvoller Default für einen Blink Comparator, weil er die Helligkeitsunterschiede bewahrt, die bewölkte Bilder sichtbar machen. Für verschiedene Stretch-Geschmäcker gibt es das Autostretch-Preset-Dropdown (Conservative/Default/Aggressive/Linear).
 
 **F: Kann ich ausgeschlossene Bilder wieder einschließen?**
-A: Ja. Drücken Sie **G** auf einem ausgeschlossenen Bild, um es wieder einzuschließen. Oder verwenden Sie **Ctrl+Z**, um die letzte Markierungsoperation rückgängig zu machen.
+A: Ja. Drücke **G** auf einem ausgeschlossenen Bild. Oder nutze **Strg+Z**, um die letzte Markierung (einzeln oder Batch) rückgängig zu machen. Nach dem Schließen einfach die Datei im Dateimanager aus `rejected/` zurückziehen.
 
-**F: Warum zeigt die Gewicht-Spalte für alle Bilder 0 an?**
-A: Das Gewicht erfordert FWHM-, Rundheit-, Hintergrund- und Sterne-Daten. Wenn die Sternerkennung nicht durchgeführt wurde, sind alle Eingabewerte 0, also ist auch das Gewicht 0. Führen Sie zuerst die Sternerkennung aus.
+**F: Warum zeigt die Gewichtsspalte 0 für alle Bilder?**
+A: Gewicht braucht FWHM-, Rundheits-, Hintergrund- und Sterne-Daten. Wurde keine Sterndetektion ausgeführt, sind alle Eingaben 0, also ist das Gewicht 0. Erst Sterndetektion starten.
 
-**F: Kann ich dies für Planetenaufnahmen verwenden?**
-A: Das Werkzeug ist für die Deep-Sky-Bildauswahl konzipiert. Planetenaufnahmen (Lucky Imaging) verwenden andere Qualitätsmetriken und verarbeiten typischerweise Tausende sehr kurzer Belichtungen. Werkzeuge wie AutoStakkert oder Planetary System Stacker sind für Planetenaufnahmen besser geeignet.
+**F: Kann ich das für Planetenfotografie nutzen?**
+A: Das Tool ist für Deep-Sky-Subframe-Auswahl konzipiert. Planetenfotografie (Lucky Imaging) nutzt andere Qualitätsmetriken und verarbeitet typischerweise tausende sehr kurze Belichtungen. Tools wie AutoStakkert oder Planetary System Stacker sind für Planetenaufnahmen besser geeignet.
 
 ---
 
-## Danksagung
+## 17. Änderungen seit v1.2.3
+
+Die letzte offiziell veröffentlichte Version war **v1.2.3**. Die folgende Übersicht fasst kompakt zusammen, was sich von dort bis zur aktuellen **v1.2.8** geändert hat — Einzeiler pro Release stehen im `CHANGELOG`-Block des Skripts.
+
+- **v1.2.4 — Ordner-only-Workflow.** Das Skript fragt beim Start immer nach einem FITS-Ordner und baut sich daraus seine eigene temporäre `svenesis_blink`-Sequenz. Verworfene Bilder wandern in einen `rejected/`-Unterordner, begleitet von einer `rejected_frames.txt`-Audit-Datei. Neues Autostretch-Preset-Dropdown (Conservative / Default / Aggressive / Linear). Entfernt: ROI-Feature, Pro-Bild-Histogramm-Widget und der „aktuell geladene Sequenz"-Pfad.
+- **v1.2.5 — Reduzierte Anzeigemodi.** Difference-Modus und `D`-Shortcut entfernt — die Wiedergabe bei 3–5 FPS im Normal-Modus fängt dieselben Artefakte ein. Linked-Stretch-Toggle entfernt; global verknüpfter Autostretch ist jetzt der einzige Modus.
+- **v1.2.6 — Performance-Pass.** Thumbnails wiederverwenden das bereits gestreckte Bild des Haupt-Frame-Cache, `mtf()` läuft in-place, RGB-Autostretch ist ein einziger Durchlauf, und das Preload-Tempo richtet sich nach der FPS.
+- **v1.2.7 — Markier-Responsiveness.** Schnelles G/B-Markieren bündelt Slider-/Scatter-/Graph-Refreshes über einen einzigen 150-ms-Timer; Filmstrip und Tabelle überspringen No-Op-Styling-Aufrufe. Außerdem: Absturz-Fix bei `mtf()`-Kwarg und automatische Bereinigung einer stehengebliebenen Temp-Sequenz nach einem Absturz.
+- **v1.2.8 — Plattform-Politur & Stabilität.** UTF-8 für `rejected_frames.txt` und CSV-Export (behebt Windows-Pfade mit Nicht-ASCII-Zeichen). 1–9-FPS-Presets liegen jetzt in `keyPressEvent`, damit fokussierte Spinboxes Ziffern nativ entgegennehmen. Ordnerpfade mit Leerzeichen werden in Siril-Kommandos jetzt korrekt gequotet. Apply verschiebt die Dateien zuerst und schreibt die Audit-Liste erst danach — nur das, was wirklich bewegt wurde. Sterndetektion rebindet Caches/Stats und lässt den Fortschrittsbalken durch die Post-Register-Phasen laufen. View-State (Filter, Anzeigemodus, Graph-Metriken, Scatter-Achsen) wird jetzt sitzungsübergreifend gespeichert.
+
+Beim Upgrade von **v1.2.3** in der Praxis: Zeig dem Skript deinen FITS-Ordner (statt vorher eine Sequenz in Siril zu laden) und erwarte, dass der Verwerfen-Flow einen `rejected/`-Unterordner plus `rejected_frames.txt` erzeugt, anstatt Sirils Inclusion-Flags in der Sequenz zu togglen.
+
+---
+
+## Credits
 
 **Entwickelt von** Sven Ramuschkat
 **Website:** [www.svenesis.org](https://www.svenesis.org)
@@ -765,9 +837,10 @@ A: Das Werkzeug ist für die Deep-Sky-Bildauswahl konzipiert. Planetenaufnahmen 
 Teil der **Svenesis Siril Scripts**-Sammlung, die außerdem enthält:
 - Svenesis Gradient Analyzer
 - Svenesis Annotate Image
+- Svenesis Image Advisor
 - Svenesis Multiple Histogram Viewer
 - Svenesis Script Security Scanner
 
 ---
 
-*Wenn Sie dieses Werkzeug nützlich finden, unterstützen Sie die Entwicklung gerne über [Buy me a Coffee](https://buymeacoffee.com/svenesis).*
+*Wenn du dieses Tool nützlich findest, unterstütze gerne die Entwicklung via [Buy me a Coffee](https://buymeacoffee.com/svenesis).*

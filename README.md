@@ -16,7 +16,7 @@ GPL-3.0-or-later
 | Script | Description | Instructions |
 |--------|-------------|:------------:|
 | [Svenesis Annotate Image](#svenesis-annotate-image) | Annotate plate-solved images with catalog objects, coordinate grids, and export as PNG/TIFF/JPEG. | [Guide](Instructions/Svenesis-AnnotateImage-Instructions.md) · [DE](Instructions/Svenesis-AnnotateImage-Instructions_de.md) |
-| [Svenesis Blink Comparator](#svenesis-blink-comparator) | Animate sequences for rapid visual inspection and data-driven frame selection with statistics, scatter plots, and batch reject. | [Guide](Instructions/Svenesis-BlinkComparator-Instructions.md) · [DE](Instructions/Svenesis-BlinkComparator-Instructions_de.md) |
+| [Svenesis Blink Comparator](#svenesis-blink-comparator) | Animate a folder of FITS frames for rapid visual inspection and data-driven frame selection — statistics table, scatter plot, batch reject, file-based rejection workflow. | [Guide](Instructions/Svenesis-BlinkComparator-Instructions.md) · [DE](Instructions/Svenesis-BlinkComparator-Instructions_de.md) |
 | [Svenesis Gradient Analyzer](#svenesis-gradient-analyzer) | Analyze background gradients with heatmaps, diagnostics, and tool recommendations. | [Guide](Instructions/Svenesis-GradientAnalyzer-Instructions.md) · [DE](Instructions/Svenesis-GradientAnalyzer-Instructions_de.md) |
 | [Svenesis Image Advisor](#svenesis-image-advisor) | Analyze a stacked linear image and get a prioritized processing workflow with concrete Siril commands. | [Guide](Instructions/Svenesis-ImageAdvisor-Instructions.md) · [DE](Instructions/Svenesis-ImageAdvisor-Instructions_de.md) |
 | [Svenesis Multiple Histogram Viewer](#svenesis-multiple-histogram-viewer) | View linear and stretched images with RGB histograms, 3D surface plots, and detailed statistics. | [Guide](Instructions/Svenesis-MultipleHistogramViewer-Instructions.md) · [DE](Instructions/Svenesis-MultipleHistogramViewer-Instructions_de.md) |
@@ -139,9 +139,9 @@ Coordinate transforms use `siril.radec2pix()` for maximum compatibility.
 
 ## Svenesis Blink Comparator
 
-**File:** `Svenesis-BlinkComparator.py` (v1.2.3) — **[Detailed Instructions](Instructions/Svenesis-BlinkComparator-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-BlinkComparator-Instructions_de.md)**
+**File:** `Svenesis-BlinkComparator.py` (v1.2.8) — **[Detailed Instructions](Instructions/Svenesis-BlinkComparator-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-BlinkComparator-Instructions_de.md)**
 
-Animates the currently loaded sequence as a blink animation for rapid visual inspection and data-driven frame selection. Comparable to PixInsight's Blink + SubframeSelector — identify satellite trails, clouds, tracking errors, focus drift, and bad frames, then reject them with a single click. All changes are collected locally and only applied to Siril when you confirm.
+Picks a folder of FITS frames, builds a temporary `svenesis_blink` sequence in Siril, and animates it as a blink animation for rapid visual inspection and data-driven frame selection. Comparable to PixInsight's Blink + SubframeSelector — identify satellite trails, clouds, tracking errors, focus drift, and bad frames, then reject them with a single click. Rejections are collected locally and, on close, written as `rejected_frames.txt` next to your files (with the physical FITS moved into a `rejected/` subfolder). Your original frames are never modified.
 
 ### Screenshots
 
@@ -151,19 +151,32 @@ Animates the currently loaded sequence as a blink animation for rapid visual ins
 
 ### Features
 
+#### Folder-based workflow
+
+- At startup the script always prompts for a **folder of FITS files** (recurses one level) and builds a temporary `svenesis_blink` FITSEQ sequence via `convert -fitseq` (and optional `register -2pass` for star stats).
+- The temp sequence is automatically cleaned up when you close the window.
+- Rejections write a plain-text `rejected_frames.txt` audit file and move rejected FITS into a `rejected/` subfolder — reversible by simply dragging the files back.
+- Completely non-destructive: original frames are never overwritten.
+
 #### Animated playback
 
 - **Configurable speed** (1–30 FPS) with loop option and Play/Pause (Space key)
 - **Frame navigation:** First, Previous, Next, Last buttons + draggable color-coded slider
-- **Crossfade transition** option for smooth blending between frames
+- **Only included** filter (checkbox) to skip rejected frames during playback
 - **Color-coded slider:** Red tick marks at excluded frame positions for instant overview
 
-#### Four display modes
+#### Two display modes
 
-- **Normal:** Standard autostretch view for visual inspection.
-- **Difference:** Absolute difference vs. reference frame — satellites, clouds, and tracking errors become immediately visible as bright spots.
-- **Only included:** Skips excluded frames during playback — verify after marking.
-- **Side by Side:** Current frame on left, reference on right, synchronized zoom/pan.
+- **Normal:** Single-frame autostretched view. Default. Used for visual inspection, satellite/cloud hunting (play at 3–5 FPS — changing pixels jump out to the eye), and focus/tracking review.
+- **Side by Side (vs. reference):** Current frame on left, reference (first frame) on right, synchronized zoom/pan. For direct A/B comparison.
+
+#### Autostretch presets
+
+- **Conservative** — darker background, preserves dim detail.
+- **Default** — PixInsight-style STF (shadows_clip = -2.8, target median = 0.25).
+- **Aggressive** — brighter, higher contrast.
+- **Linear** — no stretch, raw data clipped to 0–255.
+- Switching presets invalidates caches and re-renders; the choice is persisted across sessions via QSettings. Autostretch is always *globally linked* — every frame uses the same median/MAD so brightness differences (clouds, haze) stay visible.
 
 #### Statistics table (sortable)
 
@@ -195,44 +208,44 @@ Animates the currently loaded sequence as a blink animation for rapid visual ins
 
 - **Manual marking:** G = include, B = exclude (with auto-advance to next frame)
 - **Batch reject by threshold:** Reject all frames where FWHM > 4.5 (or any metric/operator/value combination) with live preview count
-- **Reject worst N%:** Reject the worst 10% by FWHM, Background, or Roundness
+- **Reject worst N%:** Reject the worst 10% by FWHM, Background, Roundness, or Weight
 - **Approval expressions:** Multi-criteria AND filter (e.g., FWHM < 4.5 AND Roundness > 0.7 AND Stars > 50) — rejects frames that fail any condition
 - **Multi-select in table:** Ctrl+click or Shift+click rows, right-click → "Reject selected"
-- **Undo (Ctrl+Z):** Single undo for individual marks, grouped undo for batch operations (one Ctrl+Z undoes entire batch)
-- **Pending changes** shown in the left panel — only applied to Siril when you click "Apply Changes"
+- **Reset All Rejections:** One-click button to mark every frame as Included again (baseline + pending) — useful when you want to start the selection over
+- **Undo (Ctrl+Z):** Single undo for individual marks, grouped undo for batch operations (one Ctrl+Z undoes the entire batch)
+- **Pending changes** shown in the left panel — only committed on close via "Apply Rejections && Close"
 
 #### Thumbnail filmstrip
 
 - Horizontal scrollable strip with **color-coded borders:** green = included, red = excluded, blue = current
 - Click any thumbnail to jump to that frame
 - **Lazy loading:** Thumbnails loaded on demand as you scroll
-- **Adjustable size:** Slider in Display Options
+- **Adjustable size:** Slider in the viewer toolbar (40–160 px)
+- Thumbnail cache reuses the main frame cache's already-stretched display data to avoid redundant disk I/O
 
-#### Zoom, pan & ROI
+#### Zoom & pan
 
 - **Scroll wheel** zoom (0.1x–20x), **right-click drag** pan
-- **1:1 pixel zoom** button for precise star shape inspection
-- **ROI blink:** Draw a rectangle on the canvas, blink only that region — perfect for checking star shapes in corners
+- **Fit-in-Window** button (or `Z`) to return to full-frame view
+- Live zoom-percentage readout that updates during scroll-wheel zoom
 
 #### Frame info overlay
 
 - Frame number, FWHM, roundness, and quality weight **burned into the image corner** during playback
-- Toggleable in Display Options
+- Toggleable via the **Overlay** checkbox in the viewer toolbar
 
 #### Export
 
-- **Rejected frame list** (.txt) with sequence metadata
 - **Statistics CSV** (full table with all metrics + inclusion status)
-- **Animated GIF** of the blink animation (included frames, scaled to 480px)
-- **Copy to clipboard** (Ctrl+C) for quick forum posts
+- **Animated GIF** of the blink animation (included frames, scaled to 480 px)
+- **Copy to clipboard** (Ctrl+C) — captures the composite canvas (side-by-side layout + overlay, not just the raw pixmap)
 
 #### Other features
 
-- **Linked vs. independent stretch:** Toggle between consistent brightness (linked) and per-frame detail (independent)
-- **A/B frame toggle (T key):** Pin a frame, press T to toggle between pinned and current
-- **Per-frame histogram** widget in the left panel
+- **A/B frame toggle (T key):** Pin the current frame, press T to toggle between the pinned frame and the current one
 - **Session summary on close:** Frames viewed, excluded count, mean/best/worst FWHM
-- **Persistent settings:** FPS, loop, auto-advance, crossfade, linked stretch, overlay, thumbnail size, table sort column
+- **Persistent settings:** FPS, loop, auto-advance, overlay, autostretch preset, thumbnail size, display mode, table sort column, graph metric visibility
+- **Post-mark refresh debouncing:** Rapid G/B marking collapses slider-exclusions repaint, scatter-plot rebuild, and statistics-graph rebuild into a single coalesced 150 ms refresh — hotkeys stay snappy even on 2000-frame sequences
 - **Dark-themed PyQt6 GUI** matching Gradient Analyzer style
 - **Buy me a Coffee** support dialog
 
@@ -245,14 +258,15 @@ Animates the currently loaded sequence as a blink animation for rapid visual ins
 | `Home` / `End` | First / Last frame |
 | `G` | Mark frame as good (include) |
 | `B` | Mark frame as bad (exclude) |
-| `D` | Toggle difference mode |
-| `Z` | Reset zoom |
+| `Z` | Fit-in-window (reset zoom) |
 | `T` | Pin / toggle A/B frame comparison |
 | `Ctrl+Z` | Undo last marking (single or batch) |
 | `Ctrl+C` | Copy current frame to clipboard |
 | `1`–`9` | Set playback speed (FPS) |
 | `+` / `-` | Speed up / slow down |
-| `Esc` | Close |
+| `Esc` | Close (with "apply / discard / cancel" prompt if changes are pending) |
+
+1–9 are handled through `keyPressEvent` instead of `QShortcut`, so digits typed into focused spinboxes/line-edits still reach the widget for multi-digit entry.
 
 ### Requirements
 
@@ -263,13 +277,23 @@ Animates the currently loaded sequence as a blink animation for rapid visual ins
 
 ### Usage
 
-1. Load a **registered sequence** in Siril (the sequence must be loaded, not just a single image).
-2. Run **Svenesis Blink Comparator** from Siril: **Processing → Scripts** (or your Scripts menu).
-3. The script loads all frame statistics automatically. Use the **Statistics Table** tab to sort by FWHM and identify bad frames.
-4. Mark bad frames with **B** (auto-advances), or use **Batch Selection** / **Approval Expression** for bulk rejection.
-5. Review in the **Statistics Graph** and **Scatter Plot** tabs to verify your selection.
-6. Click **Apply Changes to Siril** to send frame inclusion/exclusion to Siril.
-7. Use **Export** buttons to save rejected frame list, statistics CSV, or animated GIF.
+1. Run **Svenesis Blink Comparator** from Siril: **Processing → Scripts** (or your Scripts menu).
+2. A folder picker opens — select a folder containing your FITS frames (registered or unregistered). The script builds a temporary `svenesis_blink` sequence and loads all frame statistics.
+3. If the FWHM / Roundness / Stars columns are empty, click the yellow **"Run Star Detection"** banner (runs `register -2pass` — non-destructive).
+4. Use the **Statistics Table** tab to sort by FWHM and identify bad frames, or play the sequence at 3–5 FPS in **Normal** mode and mark frames with **B** (auto-advances).
+5. Use **Batch Selection** (threshold / worst N%) or **Approval Expression** for bulk rejection.
+6. Review in the **Statistics Graph** and **Scatter Plot** tabs to verify your selection.
+7. Click **Apply Rejections && Close** — the script writes `rejected_frames.txt` next to your FITS files and moves rejected frames into a `rejected/` subfolder, then closes. Drag files out of `rejected/` to undo a decision after the fact.
+
+### Changes Since v1.2.3
+
+The last officially published release was v1.2.3. Summary of what has changed since then (see the script's `CHANGELOG` block for one-line bullets per release):
+
+- **v1.2.4 — Folder-only workflow.** The script now always prompts for a folder of FITS files and builds its own temp sequence. Rejected frames move to a `rejected/` subfolder alongside a `rejected_frames.txt` audit file. Added an autostretch preset dropdown (Conservative / Default / Aggressive / Linear). Removed the ROI feature, the per-frame histogram widget, and the "use currently loaded sequence" path.
+- **v1.2.5 — Simplified display modes.** Removed the Difference display mode and the `D` shortcut (playing at 3–5 FPS in Normal mode catches the same artifacts). Removed the Linked-stretch toggle — globally-linked autostretch is now the only mode.
+- **v1.2.6 — Performance pass.** Thumbnails reuse the main frame cache's already-stretched image, `mtf()` runs in-place, RGB autostretch is a single pass, and preload pacing follows FPS.
+- **v1.2.7 — Marking responsiveness.** Rapid G/B marking coalesces slider / scatter / graph refreshes through a single 150 ms timer; filmstrip and table skip no-op styling work.
+- **v1.2.8 — Cross-platform polish & stability.** UTF-8 for `rejected_frames.txt` and CSV export (fixes Windows non-ASCII paths). 1–9 FPS presets moved to `keyPressEvent` so focused spinboxes accept digits natively. Folder paths with spaces are now quoted in Siril commands. `Apply` moves files first, then writes an audit list of only what actually moved. Star detection rebinds caches/stats and advances the progress bar through post-register phases. View-state (filter, display mode, graph metrics, scatter axes) now persists across sessions.
 
 ---
 
