@@ -17,6 +17,7 @@ GPL-3.0-or-later
 |--------|-------------|:------------:|
 | [Svenesis Annotate Image](#svenesis-annotate-image) | Annotate plate-solved images with catalog objects, coordinate grids, and export as PNG/TIFF/JPEG. | [Guide](Instructions/Svenesis-AnnotateImage-Instructions.md) · [DE](Instructions/Svenesis-AnnotateImage-Instructions_de.md) |
 | [Svenesis Blink Comparator](#svenesis-blink-comparator) | Animate a folder of FITS frames for rapid visual inspection and data-driven frame selection — statistics table, scatter plot, batch reject, file-based rejection workflow. | [Guide](Instructions/Svenesis-BlinkComparator-Instructions.md) · [DE](Instructions/Svenesis-BlinkComparator-Instructions_de.md) |
+| [Svenesis CosmicDepth 3D](#svenesis-cosmicdepth-3d) | Render catalogued objects from a plate-solved image as a rotatable 3D scene — image plane with push-pin depth sticks, SIMBAD distances, log/linear/hybrid scaling, HTML/PNG/CSV export. | — |
 | [Svenesis Gradient Analyzer](#svenesis-gradient-analyzer) | Analyze background gradients with heatmaps, diagnostics, and tool recommendations. | [Guide](Instructions/Svenesis-GradientAnalyzer-Instructions.md) · [DE](Instructions/Svenesis-GradientAnalyzer-Instructions_de.md) |
 | [Svenesis Image Advisor](#svenesis-image-advisor) | Analyze a stacked linear image and get a prioritized processing workflow with concrete Siril commands. | [Guide](Instructions/Svenesis-ImageAdvisor-Instructions.md) · [DE](Instructions/Svenesis-ImageAdvisor-Instructions_de.md) |
 | [Svenesis Multiple Histogram Viewer](#svenesis-multiple-histogram-viewer) | View linear and stretched images with RGB histograms, 3D surface plots, and detailed statistics. | [Guide](Instructions/Svenesis-MultipleHistogramViewer-Instructions.md) · [DE](Instructions/Svenesis-MultipleHistogramViewer-Instructions_de.md) |
@@ -294,6 +295,93 @@ The last officially published release was v1.2.3. Summary of what has changed si
 - **v1.2.6 — Performance pass.** Thumbnails reuse the main frame cache's already-stretched image, `mtf()` runs in-place, RGB autostretch is a single pass, and preload pacing follows FPS.
 - **v1.2.7 — Marking responsiveness.** Rapid G/B marking coalesces slider / scatter / graph refreshes through a single 150 ms timer; filmstrip and table skip no-op styling work.
 - **v1.2.8 — Cross-platform polish & stability.** UTF-8 for `rejected_frames.txt` and CSV export (fixes Windows non-ASCII paths). 1–9 FPS presets moved to `keyPressEvent` so focused spinboxes accept digits natively. Folder paths with spaces are now quoted in Siril commands. `Apply` moves files first, then writes an audit list of only what actually moved. Star detection rebinds caches/stats and advances the progress bar through post-register phases. View-state (filter, display mode, graph metrics, scatter axes) now persists across sessions.
+
+---
+
+## Svenesis CosmicDepth 3D
+
+**File:** `Svenesis-CosmicDepth3D.py` (v1.0.0)
+
+Takes every catalogued object in your plate-solved image, resolves their distances from SIMBAD (mesDistance, redshift/Hubble law, type-median fallback) and renders them as a rotatable 3D scene. Your image sits as a flat "window" at the front; each object hovers at its actual distance behind the window on a push-pin depth stick that lands on the exact pixel of the feature in the sky plane. A foreground nebula at 1,344 ly and a background galaxy at 30 million ly finally look like what they are.
+
+### Features
+
+#### 3D scene layout
+
+- **Image plane** rendered as a flat, non-transparent rectangle at the front of the scene, with the same orientation as the Siril image (FITS row 0 at the bottom, pixel-X mirrored so the default camera angle reads left/right like Siril).
+- **Depth sticks** from each object marker straight back to its exact image pixel — the "push-pin through a window" view.
+- **Embedded rotatable view** via `QWebEngineView` + Plotly: drag to rotate, scroll to zoom, hover any marker for distance, uncertainty and source. Falls back to a static matplotlib PNG plus opening the interactive HTML in the browser if WebEngine is unavailable.
+- **Viewer-from-Earth perspective** — X = depth (scaled ly), Y = pixel-X (mirrored), Z = pixel-Y (direct). Axis proportions follow the image aspect so the scene box matches the frame.
+
+#### Scaling & view ranges
+
+- **Logarithmic** (default) — compresses nine orders of magnitude while keeping nearby structure visible. Recommended for most fields.
+- **Linear** — true proportional distances. Useful for star-only fields inside the Milky Way (galaxies disappear to the horizon).
+- **Hybrid** — linear up to 10,000 ly, log beyond. Realistic solar-neighbourhood spacing with extragalactic context preserved.
+- **View ranges:** **Cosmic** (everything) or **Galactic** (< 100,000 ly, i.e. inside the Milky Way only).
+
+#### Distance resolution
+
+- **Priority chain:** local JSON cache (90-day TTL) → SIMBAD `mesDistance` table → redshift × Hubble law (z < 0.5) → type-based median fallback (clearly labelled as *Type median*).
+- **Distance cache** in `~/.config/svenesis/cosmic_depth_cache.json` — a second render of the same field is near-instant.
+- **Clear Distance Cache** button to force a full re-query (useful after SIMBAD updates).
+
+#### Object selection by type
+
+Same colour-coded type system as Annotate Image:
+
+| Color | Type | Typical distance range |
+|-------|------|-----------------------|
+| Gold | Galaxies | 2 Mly – billions of ly |
+| Red | Emission Nebulae | 500 – 10,000 ly |
+| Light red | Reflection Nebulae | 400 – 1,500 ly |
+| Green | Planetary Nebulae | 1,000 – 10,000 ly |
+| Light blue | Open Clusters | 400 – 15,000 ly |
+| Orange | Globular Clusters | 10,000 – 100,000 ly |
+| Magenta | Supernova Remnants | 500 – 30,000 ly |
+| Grey | Dark Nebulae | 400 – 2,000 ly |
+| White | Named Stars | 10 – 5,000 ly |
+| Red-pink | HII Regions | 1,000 – 30,000 ly |
+| Pale blue | Asterisms | various |
+| Violet | Quasars | billions of ly |
+
+#### Performance
+
+- **Parallel SIMBAD tiling** — wide fields are split into ≤ 0.75° tiles and queried with up to 8 concurrent TAP requests.
+- **Cached `plotly.min.js`** — written once to your temp directory and referenced from each render, so refreshes reload only the (small) scene data rather than the ~3.5 MB Plotly bundle.
+- **Automatic WebEngine ABI repair** — if the installed `PyQt6-WebEngine` wheel doesn't match Siril's bundled `PyQt6` Qt version (symptom: `Symbol not found: _qt_version_tag_6_XX`), the script force-reinstalls the matching `MAJOR.MINOR.*` wheel on first run and retries the import.
+
+#### UI
+
+- **3D Map tab** — embedded rotatable Plotly scene (or matplotlib PNG fallback).
+- **Objects tab** — sortable `QTableWidget` with Name, Type, Mag, Distance (ly), ± uncertainty, Source. Click any column header to sort numerically; the Name column is compact and the Source column stretches.
+- **Log tab** — detailed diagnostic output (SIMBAD tile counts, cache hit rate, fallback reasons).
+- **Help dialog** — 4 tabs (Getting Started, Object Types, Scaling & Display, Exports & Performance) matching the Annotate Image help style.
+- **Dark-themed PyQt6 GUI** consistent with the rest of the suite.
+
+#### Export
+
+- **HTML** — standalone, fully interactive Plotly scene (CDN plotly.js, shareable).
+- **PNG** — static matplotlib snapshot (respects DPI setting).
+- **CSV** — full object table: name, type, RA/Dec, magnitude, size, distance, uncertainty, source, confidence, image pixel (x, y).
+
+All exports are written to Siril's working directory with a timestamp appended to the base filename.
+
+### Requirements
+
+- Siril 1.4+ with Python script support
+- sirilpy (bundled with Siril)
+- numpy, PyQt6, matplotlib, astropy, astroquery, plotly, PyQt6-WebEngine (installed automatically via `s.ensure_installed`; WebEngine version is pinned to match PyQt6)
+- Internet connection for the initial SIMBAD queries (subsequent renders use the local distance cache)
+
+### Usage
+
+1. Load an image in Siril and **plate-solve** it (Tools → Astrometry → Image Plate Solver).
+2. Run **Svenesis CosmicDepth 3D** from Siril: **Processing → Scripts** (or your Scripts menu).
+3. Select which **object types** to include (left-panel checkboxes), set the magnitude limit, and pick a **scaling mode** and **view range**.
+4. Click **Render 3D Map** (or press F5).
+5. Drag in the scene to rotate, scroll to zoom, hover markers for details. Toggle **Show image as sky plane** to switch between the pixel-mapped "window" layout and a pure abstract 3D map.
+6. Review the **Objects** tab for the full distance table; use **Export HTML / PNG / CSV** for sharing or archiving.
 
 ---
 
