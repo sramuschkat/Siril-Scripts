@@ -1,6 +1,6 @@
 """
 Svenesis CosmicDepth 3D
-Script Version: 1.0.0
+Script Version: 1.0.1
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -192,6 +192,97 @@ def _is_externally_managed_python() -> bool:
             return True
     return False
 
+
+def _pyqt6_minor_version() -> str | None:
+    """Return ``"6.10"``-style minor version of the running PyQt6, or None."""
+    try:
+        from PyQt6.QtCore import PYQT_VERSION_STR
+        parts = PYQT_VERSION_STR.split(".")
+        return ".".join(parts[:2]) if len(parts) >= 2 else PYQT_VERSION_STR
+    except Exception:
+        return None
+
+
+def _installed_webengine_minor() -> str | None:
+    """Return ``"6.11"``-style minor version of installed PyQt6-WebEngine.
+
+    Returns ``None`` if PyQt6-WebEngine is not installed (separate
+    condition from "installed but ABI-broken" — see
+    :func:`diagnose_webengine_state`).
+    """
+    try:
+        from importlib.metadata import version, PackageNotFoundError
+    except Exception:
+        return None
+    try:
+        v = version("PyQt6-WebEngine")
+    except PackageNotFoundError:
+        return None
+    except Exception:
+        return None
+    parts = v.split(".")
+    return ".".join(parts[:2]) if len(parts) >= 2 else v
+
+
+def diagnose_webengine_state() -> dict:
+    """Produce a structured diagnosis for the banner and repair dialog.
+
+    Keys:
+      * ``kind``: one of ``"ok"``, ``"missing"``, ``"abi_skew"``,
+        ``"unknown_failure"``.
+      * ``pyqt_minor``: e.g. ``"6.10"`` or ``None`` if PyQt6 itself can't
+        be queried (should never happen — the script already needs PyQt6).
+      * ``webengine_minor``: e.g. ``"6.11"`` or ``None`` if not installed.
+      * ``message``: a human-readable explanation for the banner header.
+
+    This is intentionally conservative: we only claim ``abi_skew`` when
+    we have *both* versions and they differ at the minor level. An error
+    containing ``_qt_version_tag`` also marks ``abi_skew`` even if
+    metadata lookups failed, because that string is diagnostic.
+    """
+    if HAS_WEBENGINE:
+        return {"kind": "ok", "pyqt_minor": _pyqt6_minor_version(),
+                "webengine_minor": _installed_webengine_minor(),
+                "message": "WebEngine loaded."}
+
+    pyqt_minor = _pyqt6_minor_version()
+    we_minor = _installed_webengine_minor()
+    err = WEBENGINE_ERROR or ""
+
+    if we_minor is None:
+        return {
+            "kind": "missing",
+            "pyqt_minor": pyqt_minor,
+            "webengine_minor": None,
+            "message": (
+                "PyQt6-WebEngine is not installed. "
+                "Click 'Install WebEngine' to fetch the matching wheel."
+            ),
+        }
+
+    if "_qt_version_tag" in err or (
+            pyqt_minor and we_minor and pyqt_minor != we_minor):
+        return {
+            "kind": "abi_skew",
+            "pyqt_minor": pyqt_minor,
+            "webengine_minor": we_minor,
+            "message": (
+                f"ABI mismatch: Siril's bundled PyQt6 is "
+                f"{pyqt_minor or '?'} but PyQt6-WebEngine is "
+                f"{we_minor or '?'}. A pinned reinstall aligns the versions."
+            ),
+        }
+
+    return {
+        "kind": "unknown_failure",
+        "pyqt_minor": pyqt_minor,
+        "webengine_minor": we_minor,
+        "message": (
+            "PyQt6-WebEngine is installed but failed to load. "
+            "A reinstall pinned to your PyQt6 version usually fixes it."
+        ),
+    }
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -218,7 +309,7 @@ except Exception:
 # Siril-log banner all render this constant — don't hard-code the version
 # anywhere else in this file.
 # ---------------------------------------------------------------------------
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 # Settings keys
 SETTINGS_ORG = "Svenesis"
@@ -1614,6 +1705,17 @@ class WebEngineRepairDialog(QDialog):
         blurb.setStyleSheet("color:#cccccc;font-size:10pt;")
         lay.addWidget(blurb)
 
+        # Friendly one-line diagnosis (PyQt6 X vs PyQt6-WebEngine Y,
+        # or "not installed") so the user sees *why* the repair is
+        # needed without parsing the raw import error.
+        _diag = diagnose_webengine_state()
+        diag_label = QLabel(_diag["message"])
+        diag_label.setWordWrap(True)
+        diag_label.setStyleSheet(
+            "color:#ffd27f;font-size:10pt;font-weight:bold;"
+            "background-color:#2a2410;padding:6px;border-radius:4px;")
+        lay.addWidget(diag_label)
+
         self._err_label = QLabel()
         self._err_label.setWordWrap(True)
         self._err_label.setStyleSheet(
@@ -1759,9 +1861,26 @@ class WebEngineRepairDialog(QDialog):
 
         if rc == 0:
             self._append(
-                "\nReinstall complete. Click 'Retry Import' to re-check "
-                "whether QWebEngineView loads.\n")
+                "\nReinstall complete. Re-checking WebEngine import "
+                "automatically...\n")
             self.btn_retry.setEnabled(True)
+            # Emphasise the Retry button as the obvious next action so
+            # that if the auto-retry can't (e.g. dialog got closed) the
+            # user's eye immediately lands on the right control.
+            self.btn_retry.setDefault(True)
+            self.btn_retry.setStyleSheet(
+                "QPushButton{background-color:#2d6a4f;color:#ffffff;"
+                "font-weight:bold;border:1px solid #52b788;"
+                "padding:6px 14px;border-radius:4px;}"
+                "QPushButton:hover{background-color:#40916c;}")
+            # Fire Retry Import automatically after pip exits cleanly.
+            # Previously users read "Reinstall complete. Click Retry
+            # Import..." and thought the tool was still broken (see
+            # docs). We still leave the button enabled as a manual
+            # fallback in case auto-retry races with some slower
+            # DLL-cache flush on Windows.
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(600, self._on_retry)
         else:
             self._append(
                 "\npip reported a failure. Common causes:\n"
@@ -1838,8 +1957,17 @@ class Preview3DWidget(QWidget):
         Replaces the previous behaviour where ``show_html`` silently
         returned — the user now sees *why* the interactive view isn't
         available and can choose to run the repair or not.
+
+        The banner adapts to the diagnosed state:
+          * ``missing``  → offer "Install WebEngine" (first-time setup);
+          * ``abi_skew`` → offer "Repair WebEngine", with a friendly
+            "PyQt6 X vs PyQt6-WebEngine Y" diagnosis instead of the raw
+            Windows DLL error;
+          * ``unknown_failure`` → generic repair button.
         """
         self._clear_children()
+        diag = diagnose_webengine_state()
+
         banner = QWidget()
         bl = QVBoxLayout(banner)
         bl.setContentsMargins(18, 18, 18, 18)
@@ -1853,14 +1981,56 @@ class Preview3DWidget(QWidget):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         bl.addWidget(title)
 
-        body = QLabel(
-            "<code>PyQt6-WebEngine</code> could not be loaded, so the "
-            "rotatable embedded view is disabled. The rendered scene "
-            "will open in your default browser instead.<br><br>"
-            "If this is an ABI mismatch (error mentions "
-            "<code>_qt_version_tag_6_XX</code>), click "
-            "<b>Repair WebEngine…</b> to run an opt-in pinned reinstall "
-            "with live pip output.")
+        # Diagnosis line (friendly, above the raw error) — this is the
+        # "plain-English" summary of what's wrong so users don't have to
+        # decode a Windows DLL message to understand the fix.
+        diag_label = QLabel(diag["message"])
+        diag_label.setWordWrap(True)
+        diag_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        diag_label.setStyleSheet(
+            "color:#ffd27f;font-size:10pt;font-weight:bold;border:0;")
+        bl.addWidget(diag_label)
+
+        if diag["kind"] == "missing":
+            body_text = (
+                "The embedded rotatable 3D view needs "
+                "<code>PyQt6-WebEngine</code>, which is a separate wheel "
+                "from the <code>PyQt6</code> core that Siril bundles "
+                "itself. Because Siril's bundled PyQt6 is pinned to "
+                f"version <code>{diag['pyqt_minor'] or '?'}</code> and "
+                "cannot be upgraded without breaking Siril, we will "
+                "install PyQt6-WebEngine pinned to the same minor "
+                "version so the Qt ABIs match."
+            )
+            button_text = "Install WebEngine\u2026"
+        elif diag["kind"] == "abi_skew":
+            body_text = (
+                "Siril ships with its own bundled <code>PyQt6</code> "
+                f"(version <code>{diag['pyqt_minor'] or '?'}</code>) "
+                "that cannot be upgraded without breaking Siril. A "
+                "separate <code>pip install PyQt6-WebEngine</code> has "
+                "pulled a newer wheel "
+                f"(version <code>{diag['webengine_minor'] or '?'}</code>), "
+                "and the two DLLs no longer speak the same ABI — that's "
+                "the <code>_qt_version_tag</code> / "
+                "<code>specified procedure could not be found</code> "
+                "error you're seeing.<br><br>"
+                "Click <b>Repair WebEngine…</b> to reinstall both "
+                "WebEngine wheels pinned to Siril's PyQt6 version "
+                f"(<code>{diag['pyqt_minor'] or '?'}.*</code>)."
+            )
+            button_text = "Repair WebEngine\u2026"
+        else:
+            body_text = (
+                "<code>PyQt6-WebEngine</code> could not be loaded, so "
+                "the rotatable embedded view is disabled. The rendered "
+                "scene will open in your default browser instead.<br><br>"
+                "Click <b>Repair WebEngine…</b> to run an opt-in pinned "
+                "reinstall with live pip output."
+            )
+            button_text = "Repair WebEngine\u2026"
+
+        body = QLabel(body_text)
         body.setTextFormat(Qt.TextFormat.RichText)
         body.setWordWrap(True)
         body.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1878,9 +2048,12 @@ class Preview3DWidget(QWidget):
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        btn = QPushButton("Repair WebEngine\u2026")
+        btn = QPushButton(button_text)
         btn.setObjectName("RenderButton")
         _nofocus(btn)
+        # Both kinds route through the same repair_requested signal —
+        # the dialog itself handles install-vs-repair via pip semantics
+        # (install + force-reinstall is idempotent).
         btn.clicked.connect(self.repair_requested.emit)
         btn_row.addWidget(btn)
         btn_row.addStretch()

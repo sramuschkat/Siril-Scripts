@@ -1,6 +1,6 @@
 # Svenesis CosmicDepth 3D — Benutzeranleitung
 
-**Version 1.0.0** | Siril-Python-Skript zur 3D-Tiefenvisualisierung plate-gelöster Bilder
+**Version 1.0.1** | Siril-Python-Skript zur 3D-Tiefenvisualisierung plate-gelöster Bilder
 
 > *Sehen Sie Ihr Bild nicht mehr als flaches 2D-Foto, sondern als Fenster in ein dreidimensionales Universum — jedes katalogisierte Objekt schwebt in seiner tatsächlichen Entfernung hinter der Himmelsebene, auf einem „Stecknadel-Stiel", der genau auf dem Pixel landet, an dem Sie es fotografiert haben.*
 

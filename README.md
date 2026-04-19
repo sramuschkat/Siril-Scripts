@@ -300,7 +300,7 @@ The last officially published release was v1.2.3. Summary of what has changed si
 
 ## Svenesis CosmicDepth 3D
 
-**File:** `Svenesis-CosmicDepth3D.py` (v1.0.0) — **[Detailed Instructions](Instructions/Svenesis-CosmicDepth3D-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-CosmicDepth3D-Instructions_de.md)**
+**File:** `Svenesis-CosmicDepth3D.py` (v1.0.1) — **[Detailed Instructions](Instructions/Svenesis-CosmicDepth3D-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-CosmicDepth3D-Instructions_de.md)**
 
 Takes every catalogued object in your plate-solved image, resolves their distances from SIMBAD (mesDistance, redshift/Hubble law, type-median fallback) and renders them as a rotatable 3D scene. Your image sits as a flat "window" at the front; each object hovers at its actual distance behind the window on a push-pin depth stick that lands on the exact pixel of the feature in the sky plane. A foreground nebula at 1,344 ly and a background galaxy at 30 million ly finally look like what they are.
 

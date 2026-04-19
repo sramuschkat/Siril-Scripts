@@ -1,6 +1,6 @@
 # Svenesis CosmicDepth 3D — User Instructions
 
-**Version 1.0.0** | Siril Python Script for 3D Depth Visualization of Plate-Solved Images
+**Version 1.0.1** | Siril Python Script for 3D Depth Visualization of Plate-Solved Images
 
 > *See your image not as a flat 2D frame but as a window onto a 3D universe — every catalogued object floats at its real distance behind the sky plane, on a push-pin stick that lands on the exact pixel where you photographed it.*
 
