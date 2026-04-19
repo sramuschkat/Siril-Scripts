@@ -17,7 +17,7 @@ GPL-3.0-or-later
 |--------|-------------|:------------:|
 | [Svenesis Annotate Image](#svenesis-annotate-image) | Annotate plate-solved images with catalog objects, coordinate grids, and export as PNG/TIFF/JPEG. | [Guide](Instructions/Svenesis-AnnotateImage-Instructions.md) · [DE](Instructions/Svenesis-AnnotateImage-Instructions_de.md) |
 | [Svenesis Blink Comparator](#svenesis-blink-comparator) | Animate a folder of FITS frames for rapid visual inspection and data-driven frame selection — statistics table, scatter plot, batch reject, file-based rejection workflow. | [Guide](Instructions/Svenesis-BlinkComparator-Instructions.md) · [DE](Instructions/Svenesis-BlinkComparator-Instructions_de.md) |
-| [Svenesis CosmicDepth 3D](#svenesis-cosmicdepth-3d) | Render catalogued objects from a plate-solved image as a rotatable 3D scene — image plane with push-pin depth sticks, SIMBAD distances, log/linear/hybrid scaling, HTML/PNG/CSV export. | — |
+| [Svenesis CosmicDepth 3D](#svenesis-cosmicdepth-3d) | Render catalogued objects from a plate-solved image as a rotatable 3D scene — image plane with push-pin depth sticks, SIMBAD distances, stretched-log/linear/hybrid scaling, HTML/PNG/CSV export. | [Guide](Instructions/Svenesis-CosmicDepth3D-Instructions.md) · [DE](Instructions/Svenesis-CosmicDepth3D-Instructions_de.md) |
 | [Svenesis Gradient Analyzer](#svenesis-gradient-analyzer) | Analyze background gradients with heatmaps, diagnostics, and tool recommendations. | [Guide](Instructions/Svenesis-GradientAnalyzer-Instructions.md) · [DE](Instructions/Svenesis-GradientAnalyzer-Instructions_de.md) |
 | [Svenesis Image Advisor](#svenesis-image-advisor) | Analyze a stacked linear image and get a prioritized processing workflow with concrete Siril commands. | [Guide](Instructions/Svenesis-ImageAdvisor-Instructions.md) · [DE](Instructions/Svenesis-ImageAdvisor-Instructions_de.md) |
 | [Svenesis Multiple Histogram Viewer](#svenesis-multiple-histogram-viewer) | View linear and stretched images with RGB histograms, 3D surface plots, and detailed statistics. | [Guide](Instructions/Svenesis-MultipleHistogramViewer-Instructions.md) · [DE](Instructions/Svenesis-MultipleHistogramViewer-Instructions_de.md) |
@@ -300,7 +300,7 @@ The last officially published release was v1.2.3. Summary of what has changed si
 
 ## Svenesis CosmicDepth 3D
 
-**File:** `Svenesis-CosmicDepth3D.py` (v1.0.0)
+**File:** `Svenesis-CosmicDepth3D.py` (v1.0.0) — **[Detailed Instructions](Instructions/Svenesis-CosmicDepth3D-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-CosmicDepth3D-Instructions_de.md)**
 
 Takes every catalogued object in your plate-solved image, resolves their distances from SIMBAD (mesDistance, redshift/Hubble law, type-median fallback) and renders them as a rotatable 3D scene. Your image sits as a flat "window" at the front; each object hovers at its actual distance behind the window on a push-pin depth stick that lands on the exact pixel of the feature in the sky plane. A foreground nebula at 1,344 ly and a background galaxy at 30 million ly finally look like what they are.
 
@@ -310,12 +310,12 @@ Takes every catalogued object in your plate-solved image, resolves their distanc
 
 - **Image plane** rendered as a flat, non-transparent rectangle at the front of the scene, with the same orientation as the Siril image (FITS row 0 at the bottom, pixel-X mirrored so the default camera angle reads left/right like Siril).
 - **Depth sticks** from each object marker straight back to its exact image pixel — the "push-pin through a window" view.
-- **Embedded rotatable view** via `QWebEngineView` + Plotly: drag to rotate, scroll to zoom, hover any marker for distance, uncertainty and source. Falls back to a static matplotlib PNG plus opening the interactive HTML in the browser if WebEngine is unavailable.
+- **Embedded rotatable view** via `QWebEngineView` + Plotly: drag to rotate, scroll to zoom, hover any marker for distance, uncertainty and source. Falls back to a static PNG plus opening the interactive HTML in the browser if WebEngine is unavailable.
 - **Viewer-from-Earth perspective** — X = depth (scaled ly), Y = pixel-X (mirrored), Z = pixel-Y (direct). Axis proportions follow the image aspect so the scene box matches the frame.
 
 #### Scaling & view ranges
 
-- **Logarithmic** (default) — compresses nine orders of magnitude while keeping nearby structure visible. Recommended for most fields.
+- **Stretched-log** (default) — piecewise-log distance axis: each decade below 100 M ly takes 1 unit, each decade beyond takes 3 units, so the far-galaxy tail gets ~3× more room on screen than a plain log would give it. Tick labels read in real light-years (1, 10, 100, 1k, …, 100M, 1B, 10B). Recommended for most fields.
 - **Linear** — true proportional distances. Useful for star-only fields inside the Milky Way (galaxies disappear to the horizon).
 - **Hybrid** — linear up to 10,000 ly, log beyond. Realistic solar-neighbourhood spacing with extragalactic context preserved.
 - **View ranges:** **Cosmic** (everything) or **Galactic** (< 100,000 ly, i.e. inside the Milky Way only).
@@ -347,22 +347,22 @@ Same colour-coded type system as Annotate Image:
 
 #### Performance
 
-- **Parallel SIMBAD tiling** — wide fields are split into ≤ 0.75° tiles and queried with up to 8 concurrent TAP requests.
+- **Parallel SIMBAD tiling** — wide fields are split into ≤ 0.75° tiles and queried with up to 8 concurrent TAP requests, with live per-tile progress feedback in the status bar.
 - **Cached `plotly.min.js`** — written once to your temp directory and referenced from each render, so refreshes reload only the (small) scene data rather than the ~3.5 MB Plotly bundle.
-- **Automatic WebEngine ABI repair** — if the installed `PyQt6-WebEngine` wheel doesn't match Siril's bundled `PyQt6` Qt version (symptom: `Symbol not found: _qt_version_tag_6_XX`), the script force-reinstalls the matching `MAJOR.MINOR.*` wheel on first run and retries the import.
+- **Opt-in WebEngine repair** — if the installed `PyQt6-WebEngine` wheel doesn't match Siril's bundled `PyQt6` Qt version (symptom: `Symbol not found: _qt_version_tag_6_XX`), the embedded view shows a red banner with a "Repair WebEngine…" button. Clicking it opens a dialog with the exact pip command, live stdout/stderr, and a Retry button. The repair is skipped automatically on PEP 668 / externally-managed Python interpreters; no silent force-reinstalls.
 
 #### UI
 
-- **3D Map tab** — embedded rotatable Plotly scene (or matplotlib PNG fallback).
-- **Objects tab** — sortable `QTableWidget` with Name, Type, Mag, Distance (ly), ± uncertainty, Source. Click any column header to sort numerically; the Name column is compact and the Source column stretches.
+- **3D Map tab** — embedded rotatable Plotly scene (or static PNG fallback with a banner if WebEngine is unavailable).
+- **Objects tab** — sortable `QTableWidget` with Name, Type, Mag, Distance (ly), ± uncertainty, Source. Click any column header to sort numerically; column widths and sort order persist between sessions.
 - **Log tab** — detailed diagnostic output (SIMBAD tile counts, cache hit rate, fallback reasons).
 - **Help dialog** — 4 tabs (Getting Started, Object Types, Scaling & Display, Exports & Performance) matching the Annotate Image help style.
 - **Dark-themed PyQt6 GUI** consistent with the rest of the suite.
 
 #### Export
 
-- **HTML** — standalone, fully interactive Plotly scene (CDN plotly.js, shareable).
-- **PNG** — static matplotlib snapshot (respects DPI setting).
+- **HTML** — standalone, fully interactive Plotly scene (shareable, opens in any browser).
+- **PNG** — high-resolution static export via Plotly + kaleido, captured from your current 3D camera angle and zoom so the saved image matches what you see on screen (including the stretched-log axis with ly labels). Falls back to a matplotlib snapshot if kaleido isn't installed.
 - **CSV** — full object table: name, type, RA/Dec, magnitude, size, distance, uncertainty, source, confidence, image pixel (x, y).
 
 All exports are written to Siril's working directory with a timestamp appended to the base filename.
@@ -371,7 +371,8 @@ All exports are written to Siril's working directory with a timestamp appended t
 
 - Siril 1.4+ with Python script support
 - sirilpy (bundled with Siril)
-- numpy, PyQt6, matplotlib, astropy, astroquery, plotly, PyQt6-WebEngine (installed automatically via `s.ensure_installed`; WebEngine version is pinned to match PyQt6)
+- numpy, PyQt6, matplotlib, astropy, astroquery, plotly, kaleido (installed automatically via `s.ensure_installed`)
+- PyQt6-WebEngine — probed at startup; if missing or ABI-mismatched the script offers an explicit in-app repair dialog and falls back to a static view + browser HTML in the meantime
 - Internet connection for the initial SIMBAD queries (subsequent renders use the local distance cache)
 
 ### Usage
@@ -381,7 +382,7 @@ All exports are written to Siril's working directory with a timestamp appended t
 3. Select which **object types** to include (left-panel checkboxes), set the magnitude limit, and pick a **scaling mode** and **view range**.
 4. Click **Render 3D Map** (or press F5).
 5. Drag in the scene to rotate, scroll to zoom, hover markers for details. Toggle **Show image as sky plane** to switch between the pixel-mapped "window" layout and a pure abstract 3D map.
-6. Review the **Objects** tab for the full distance table; use **Export HTML / PNG / CSV** for sharing or archiving.
+6. Review the **Objects** tab for the full distance table; use **Export HTML / PNG / CSV** for sharing or archiving. The PNG export captures your current camera angle, so rotate first to the view you want.
 
 ---
 

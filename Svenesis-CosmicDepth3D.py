@@ -1,6 +1,6 @@
 """
 Svenesis CosmicDepth 3D
-Script Version: 0.1.0
+Script Version: 1.0.0
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -44,7 +44,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis CosmicDepth 3D
-# Script Version: 0.1.0
+# Script Version: 1.0.0
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: processing
@@ -92,23 +92,29 @@ except ImportError:
         pass
 
 s.ensure_installed("numpy", "PyQt6", "matplotlib", "astropy", "astroquery",
-                   "plotly")
-# PyQt6-WebEngine is a separate wheel and is required to embed the
-# interactive (rotatable) Plotly view inside the window. Its ABI is
-# tied to the exact PyQt6/Qt version, so pin it to the version Siril
-# already has — otherwise pip pulls the newest wheel and the load
-# fails with "Symbol not found: _qt_version_tag_6_XX". If anything
-# here fails, fall back to opening the HTML in the system browser.
+                   "plotly", "kaleido")
+# PyQt6-WebEngine is a separate wheel required to embed the interactive
+# (rotatable) Plotly view inside the window. If it's not installed,
+# `s.ensure_installed` will fetch one — but only when it's missing, so
+# a previously installed (possibly ABI-mismatched) wheel is left
+# untouched and the user gets a chance to trigger the explicit
+# "Repair WebEngine…" UI below. Any failure here is non-fatal; the
+# script falls back to matplotlib + a browser window for the 3D view.
 try:
-    try:
-        from PyQt6.QtCore import PYQT_VERSION_STR
-        _parts = PYQT_VERSION_STR.split(".")
-        _minor = ".".join(_parts[:2]) if len(_parts) >= 2 else PYQT_VERSION_STR
-        s.ensure_installed(f"PyQt6-WebEngine=={_minor}.*")
-    except Exception:
-        s.ensure_installed("PyQt6-WebEngine")
+    from PyQt6.QtWebEngineWidgets import QWebEngineView as _probe  # noqa
+    del _probe
 except Exception:
-    pass
+    try:
+        try:
+            from PyQt6.QtCore import PYQT_VERSION_STR
+            _parts = PYQT_VERSION_STR.split(".")
+            _minor = (".".join(_parts[:2])
+                      if len(_parts) >= 2 else PYQT_VERSION_STR)
+            s.ensure_installed(f"PyQt6-WebEngine=={_minor}.*")
+        except Exception:
+            s.ensure_installed("PyQt6-WebEngine")
+    except Exception:
+        pass
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout,
@@ -119,7 +125,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QFileDialog, QGridLayout,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
 )
-from PyQt6.QtCore import Qt, QSettings, QUrl
+from PyQt6.QtCore import Qt, QSettings, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QShortcut, QKeySequence, QDesktopServices, QImageReader,
 )
@@ -131,17 +137,30 @@ QImageReader.setAllocationLimit(0)
 # the rotatable Plotly view in the user's default browser instead.
 #
 # ABI note: QtWebEngineWidgets must match PyQt6's Qt version exactly.
-# pip-installing PyQt6-WebEngine usually pulls the newest wheel
-# (e.g. Qt 6.11) while Siril's bundled PyQt6 is older, leading to
-# "Symbol not found: _qt_version_tag_6_XX" at import time. When we
-# detect that mismatch, force-reinstall PyQt6-WebEngine at the exact
-# PyQt6 version and retry the import once.
+# pip-installing PyQt6-WebEngine can pull a newer wheel (e.g. Qt 6.11)
+# while Siril's bundled PyQt6 is older, producing a "Symbol not found:
+# _qt_version_tag_6_XX" error at import time. When that happens we do
+# NOT silently force-reinstall — that surprised users and failed
+# silently behind proxies. Instead the UI offers an explicit
+# "Repair WebEngine…" button that runs a pinned reinstall with live
+# pip stdout/stderr, and refuses to run inside a PEP 668 / externally
+# managed Python interpreter. See WebEngineRepairDialog below.
 WEBENGINE_ERROR = ""
 QWebEngineView = None  # populated on successful import
 
 
 def _try_import_webengine() -> bool:
+    """Attempt to import ``QWebEngineView``; update module globals.
+
+    Also drops any half-loaded ``PyQt6.QtWebEngine*`` submodules first so
+    that a successful repair + retry inside the same process picks up the
+    freshly installed wheels instead of the cached stubs from the failed
+    first import.
+    """
     global WEBENGINE_ERROR, QWebEngineView
+    for _m in list(sys.modules):
+        if _m.startswith("PyQt6.QtWebEngine"):
+            del sys.modules[_m]
     try:
         from PyQt6.QtWebEngineWidgets import QWebEngineView as _QWEV
         QWebEngineView = _QWEV
@@ -153,31 +172,25 @@ def _try_import_webengine() -> bool:
 
 
 HAS_WEBENGINE = _try_import_webengine()
-if not HAS_WEBENGINE and "qt_version_tag" in WEBENGINE_ERROR:
-    try:
-        import subprocess
-        from PyQt6.QtCore import PYQT_VERSION_STR
-        # PyQt6 patch releases (e.g. 6.10.2) don't always have a matching
-        # WebEngine wheel — wheels exist at MAJOR.MINOR.0 only. Pin to the
-        # minor series with a wildcard so pip picks the closest match.
-        _parts = PYQT_VERSION_STR.split(".")
-        _minor = ".".join(_parts[:2]) if len(_parts) >= 2 else PYQT_VERSION_STR
-        _pin = f"{_minor}.*"
-        subprocess.check_call([
-            sys.executable, "-m", "pip", "install", "--quiet",
-            "--force-reinstall", "--no-deps",
-            f"PyQt6-WebEngine=={_pin}",
-            f"PyQt6-WebEngine-Qt6=={_pin}",
-        ])
-        # Drop any half-loaded PyQt6.QtWebEngine* modules so the retry
-        # reloads the freshly installed wheels.
-        for _m in list(sys.modules):
-            if _m.startswith("PyQt6.QtWebEngine"):
-                del sys.modules[_m]
-        HAS_WEBENGINE = _try_import_webengine()
-    except Exception as e:
-        WEBENGINE_ERROR = (f"{WEBENGINE_ERROR} | pip repair failed: "
-                           f"{type(e).__name__}: {e}")
+
+
+def _is_externally_managed_python() -> bool:
+    """True if the running interpreter is marked PEP 668 / externally managed.
+
+    Pip installs in this environment will fail (or worse, damage the
+    system Python), so we refuse to attempt the repair and tell the user
+    to fix it manually in a venv. Checks both ``stdlib`` and ``purelib``
+    for the marker to cover both Debian and downstream conventions.
+    """
+    import sysconfig
+    for key in ("stdlib", "purelib", "platlib"):
+        try:
+            p = sysconfig.get_path(key)
+        except Exception:
+            p = None
+        if p and os.path.isfile(os.path.join(p, "EXTERNALLY-MANAGED")):
+            return True
+    return False
 
 import matplotlib
 matplotlib.use("Agg")
@@ -199,6 +212,12 @@ try:
 except Exception:
     HAS_PLOTLY = False
 
+# ---------------------------------------------------------------------------
+# Single source of truth for the script version. The module-level docstring,
+# the "# Script Version:" metadata line at the top, the window label and the
+# Siril-log banner all render this constant — don't hard-code the version
+# anywhere else in this file.
+# ---------------------------------------------------------------------------
 VERSION = "1.0.0"
 
 # Settings keys
@@ -206,6 +225,178 @@ SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "CosmicDepth3D"
 
 LEFT_PANEL_WIDTH = 360
+
+
+# ---------------------------------------------------------------------------
+# Enums replace the legacy string keys that used to appear scattered through
+# config dicts ("log" / "linear" / "hybrid", "galactic" / "cosmic"). A typo
+# previously failed silently and fell back to linear; using enums pushes that
+# to a KeyError that surfaces during development. Both enums subclass `str`
+# so existing QSettings values (written as plain strings) still round-trip
+# and the enum values can be used directly in f-strings.
+# ---------------------------------------------------------------------------
+from enum import Enum
+
+
+class ScaleMode(str, Enum):
+    LINEAR = "linear"
+    LOG = "log"
+    HYBRID = "hybrid"
+
+    @classmethod
+    def parse(cls, value, default: "ScaleMode" = None) -> "ScaleMode":
+        if isinstance(value, cls):
+            return value
+        try:
+            return cls(str(value))
+        except Exception:
+            return default if default is not None else cls.LOG
+
+
+class DisplayMode(str, Enum):
+    GALACTIC = "galactic"
+    COSMIC = "cosmic"
+
+    @classmethod
+    def parse(cls, value, default: "DisplayMode" = None) -> "DisplayMode":
+        if isinstance(value, cls):
+            return value
+        try:
+            return cls(str(value))
+        except Exception:
+            return default if default is not None else cls.COSMIC
+
+
+# ---------------------------------------------------------------------------
+# Stretched-log axis.
+# A plain log axis gives every decade the same visual width. In our data the
+# interesting far-galaxy tail (≥ ~100 M ly) is where most objects cluster, so
+# it ends up cramped at the far end. These helpers implement a piecewise log:
+# decades below ``LOG_STRETCH_THRESHOLD_LY`` take 1 unit each, decades at/beyond
+# the threshold take ``LOG_STRETCH_FACTOR`` units each. Tick labels still read
+# in real light-years ("1", "10", …, "100M", "1B", "10B") — only the spacing
+# changes. Tune the two constants to reshape the axis without any UI churn.
+# ---------------------------------------------------------------------------
+import math as _math_for_log_stretch  # local alias so constants stay self-contained
+
+LOG_STRETCH_THRESHOLD_LY = 1.0e8  # 100 million ly — where "far galaxies" start
+LOG_STRETCH_FACTOR = 3.0           # each decade beyond threshold is this much wider
+
+
+def log_stretched_transform(dist_ly: float) -> float:
+    """Map a light-year distance to a stretched-log axis coordinate.
+
+    Below ``LOG_STRETCH_THRESHOLD_LY`` this is plain ``log10(d)`` (one unit
+    per decade). At and beyond the threshold each decade spans
+    ``LOG_STRETCH_FACTOR`` units, so 100 M → 1 B → 10 B get proportionally
+    more pixels on screen. Input is clamped to ≥ 1 ly so ``log10(0)`` can't
+    blow up.
+    """
+    d = max(float(dist_ly), 1.0)
+    t = LOG_STRETCH_THRESHOLD_LY
+    if d <= t:
+        return _math_for_log_stretch.log10(d)
+    return (_math_for_log_stretch.log10(t)
+            + LOG_STRETCH_FACTOR * _math_for_log_stretch.log10(d / t))
+
+
+def _fmt_ly_short(v_ly: float) -> str:
+    """Human-readable SI-style ly label: '1', '10', '100', '1k', '1M', '1B', …"""
+    v = float(v_ly)
+    if v < 1e3:
+        return f"{int(round(v))}"
+    if v < 1e6:
+        return f"{int(round(v / 1e3))}k"
+    if v < 1e9:
+        return f"{int(round(v / 1e6))}M"
+    if v < 1e12:
+        return f"{int(round(v / 1e9))}B"
+    return f"{int(round(v / 1e12))}T"
+
+
+def log_stretched_tick_positions(max_ly: float) -> tuple[list[float], list[str]]:
+    """Return ``(tickvals, ticktext)`` for a stretched-log axis.
+
+    ``tickvals`` are in transform-space (what ``log_stretched_transform``
+    returns, which matches what ``scale_distance(..., LOG)`` now returns).
+    Labels read in real light-years, one tick per decade from 1 ly up to the
+    next power of 10 above ``max_ly``.
+    """
+    upper = max(float(max_ly), 10.0)
+    top_exp = int(_math_for_log_stretch.ceil(_math_for_log_stretch.log10(upper)))
+    top_exp = max(top_exp, 1)
+    tickvals: list[float] = []
+    ticktext: list[str] = []
+    for exp in range(0, top_exp + 1):
+        val_ly = 10.0 ** exp
+        tickvals.append(log_stretched_transform(val_ly))
+        ticktext.append(_fmt_ly_short(val_ly))
+    return tickvals, ticktext
+
+
+# ---------------------------------------------------------------------------
+# Smart image-plane sample size.
+# The old code used a fixed 220×220 grid regardless of the source resolution:
+# oversampled on small previews (slow, no extra detail) and undersampled on
+# full-size stacks. This helper picks a grid based on the shorter image edge
+# and caps at ~400 so the QWebEngine surface trace stays responsive.
+# ---------------------------------------------------------------------------
+IMAGE_PLANE_SAMPLE_MIN = 96
+IMAGE_PLANE_SAMPLE_MAX = 400
+
+
+def smart_sample_size(img_width: int, img_height: int,
+                      sample_min: int = IMAGE_PLANE_SAMPLE_MIN,
+                      sample_max: int = IMAGE_PLANE_SAMPLE_MAX) -> int:
+    """Choose a square sample grid size proportional to the shorter edge.
+
+    Roughly one sample per 12 source pixels, clamped to
+    [``sample_min``, ``sample_max``]. For very elongated fields we still use
+    a square grid (the plane itself stretches via `aspectratio`).
+    """
+    short = max(1, min(int(img_width), int(img_height)))
+    # One sample per ~12 source pixels → a 2400-px short-edge image gets 200
+    # samples, a 6000-px image hits the 400 cap.
+    est = int(round(short / 12.0))
+    return max(sample_min, min(sample_max, est))
+
+
+# ---------------------------------------------------------------------------
+# Startup sweep of stale scene HTML files.
+# Each render writes a `scene_<pid>_<id>.html` next to the cached plotly.min.js.
+# The Preview3DWidget cleans up its own previous file, but if the process
+# crashes (or was force-killed) the file lingers forever. Sweep anything
+# older than a day on startup so the temp dir doesn't grow unbounded.
+# ---------------------------------------------------------------------------
+
+def _sweep_stale_scene_files(cache_dir: str,
+                             max_age_seconds: float = 24 * 3600) -> int:
+    try:
+        if not os.path.isdir(cache_dir):
+            return 0
+    except Exception:
+        return 0
+    now = 0.0
+    try:
+        now = float(datetime.datetime.now().timestamp())
+    except Exception:
+        return 0
+    removed = 0
+    try:
+        for name in os.listdir(cache_dir):
+            if not (name.startswith("scene_") and name.endswith(".html")):
+                continue
+            path = os.path.join(cache_dir, name)
+            try:
+                age = now - os.path.getmtime(path)
+                if age > max_age_seconds:
+                    os.remove(path)
+                    removed += 1
+            except Exception:
+                continue
+    except Exception:
+        return removed
+    return removed
 
 # Cache location + TTL
 CACHE_DIR = os.path.expanduser("~/.config/siril")
@@ -451,7 +642,7 @@ def pc_to_ly(value: float, unit: str) -> float:
 
 
 def query_simbad_distances_batch(
-    names: list[str], log_func=None,
+    names: list[str], log_func=None, progress_cb=None,
 ) -> dict[str, dict]:
     """
     Batch-query SIMBAD's 'mesDistance' table for a list of object names.
@@ -524,6 +715,12 @@ def query_simbad_distances_batch(
             if log_func:
                 log_func(f"SIMBAD distances: batch {batch_idx + 1} failed: {e}")
             continue
+        finally:
+            if progress_cb:
+                try:
+                    progress_cb(batch_idx + 1, len(batches))
+                except Exception:
+                    pass
 
     return result_map
 
@@ -584,7 +781,7 @@ def redshift_to_ly(z: float) -> float:
 
 def resolve_distances(
     objects: list[dict], cache: DistanceCache, use_online: bool,
-    log_func=None,
+    log_func=None, progress_cb=None,
 ) -> None:
     """
     Fill in dist_ly / dist_uncertainty_ly / dist_source / dist_confidence
@@ -621,7 +818,8 @@ def resolve_distances(
 
     if unresolved and use_online:
         # Pass 2: SIMBAD distances
-        dist_map = query_simbad_distances_batch(unresolved, log_func=log_func)
+        dist_map = query_simbad_distances_batch(
+            unresolved, log_func=log_func, progress_cb=progress_cb)
         still_unresolved: list[str] = []
         for obj in objects:
             if "dist_ly" in obj:
@@ -696,18 +894,63 @@ def radec_dist_to_xyz(ra_deg: float, dec_deg: float, dist_ly: float
     return x, y, z
 
 
-def scale_distance(dist_ly: float, mode: str) -> float:
-    """Scaled plot-distance (arbitrary units) for the given dist_ly."""
+def scale_distance(dist_ly: float, mode) -> float:
+    """Scene-space depth coordinate for the given distance in light-years.
+
+    ``mode`` accepts either a ``ScaleMode`` enum member or the matching
+    string value ("log" / "linear" / "hybrid"). Unknown values fall back
+    to log via ``ScaleMode.parse``.
+
+    Semantics per mode:
+
+    * **LOG** → returns the *stretched-log* transform of the distance
+      (see ``log_stretched_transform``). Below 100 M ly this equals
+      ``log10(d)`` (one unit per decade); above 100 M ly each decade
+      spans ``LOG_STRETCH_FACTOR`` units so the far-galaxy tail gets
+      more room on screen. The renderer uses a linear Plotly axis with
+      custom tickvals/ticktext (``log_stretched_tick_positions``) so
+      labels still read in real light-years.
+    * **LINEAR** → raw distance in light-years, clamped to ≥ 1 ly.
+    * **HYBRID** → compressed units: 0..20 across the inner 10 kly
+      (linear), 20..(20+log10(d/10 kly)·20) beyond that. Kept because
+      Plotly has no native hybrid-axis type; this stays with a linear
+      axis and the label explains it's compressed.
+    """
     d = max(dist_ly, 1.0)
-    if mode == "log":
-        # log10 mapped to 0..100 roughly across 1..1e10 ly
-        return math.log10(d) / math.log10(1e10) * 100.0
-    if mode == "hybrid":
+    m = ScaleMode.parse(mode, ScaleMode.LOG)
+    if m is ScaleMode.LOG:
+        # Stretched-log transform: plain log10 below 100 M ly, stretched
+        # decades above. The Plotly/matplotlib axes render as linear over
+        # the transformed value with custom tick labels in real ly.
+        return log_stretched_transform(d)
+    if m is ScaleMode.HYBRID:
         if d <= 10_000:
             return d / 10_000.0 * 20.0
         return 20.0 + math.log10(d / 10_000.0) * 20.0
-    # linear (capped so that cosmic fields don't explode the axis)
+    # Linear → raw ly; axis is linear.
     return d
+
+
+def compute_ref_depth(mode, max_depth: float) -> float:
+    """Choose where the image plane sits along X for a given scale mode.
+
+    The image plane is the 3D scene's "near" anchor — sticks extend from
+    the plane out to each object — so its X coordinate has to sit inside
+    the visible span without crowding the objects. On a log axis it must
+    be strictly positive (log10(0) = -∞).
+    """
+    m = ScaleMode.parse(mode, ScaleMode.LOG)
+    if m is ScaleMode.LOG:
+        # In LOG mode ``scale_distance`` now returns transform-space
+        # coordinates (see ``log_stretched_transform``); the image plane
+        # sits at the transform of 1 ly, which is 0.0 — the left edge of
+        # the axis, with every object to the right.
+        return 0.0
+    if m is ScaleMode.HYBRID:
+        return max(max_depth * 0.02, 0.05)
+    # Linear: keep a small fraction of the farthest object, enough to
+    # keep the plane visible without clipping the marker labels.
+    return max(max_depth * 0.02, 1.0)
 
 
 def angular_to_physical_size_ly(angular_arcmin: float, dist_ly: float) -> float:
@@ -727,7 +970,7 @@ def build_flat_image_plane(
     img_width: int,
     img_height: int,
     ref_depth: float,
-    sample: int = 220,
+    sample: int | None = None,
 ) -> tuple["np.ndarray", "np.ndarray", "np.ndarray",
            "np.ndarray", "np.ndarray"]:
     """
@@ -740,7 +983,14 @@ def build_flat_image_plane(
     (mirrored across Y) so the 3D view matches how Siril shows the
     image from the default Plotly camera angle. Object markers land at
     the exact pixel coordinates of their catalogued position.
+
+    ``sample`` defaults to :func:`smart_sample_size`, which scales the
+    grid with the shorter image edge (capped at
+    :data:`IMAGE_PLANE_SAMPLE_MAX`) so small images don't get wastefully
+    oversampled and huge ones don't overwhelm the WebEngine surface.
     """
+    if sample is None or sample <= 0:
+        sample = smart_sample_size(img_width, img_height)
     ys = np.linspace(0.0, img_width - 1, sample)
     zs = np.linspace(0.0, img_height - 1, sample)
     Y, Z = np.meshgrid(ys, zs)
@@ -876,8 +1126,9 @@ def build_plotly_figure(
     if not HAS_PLOTLY or not objects:
         return None
 
-    scale_mode = config.get("scale_mode", "log")
-    display_mode = config.get("display_mode", "cosmic")
+    scale_mode = ScaleMode.parse(config.get("scale_mode"), ScaleMode.LOG)
+    display_mode = DisplayMode.parse(config.get("display_mode"),
+                                     DisplayMode.COSMIC)
     color_by_type = config.get("color_by_type", True)
     wcs: WCS | None = config.get("wcs")
     img_w = int(config.get("img_width", 0))
@@ -893,7 +1144,7 @@ def build_plotly_figure(
         dist_ly = obj.get("dist_ly", 0.0)
         if dist_ly <= 0:
             continue
-        if display_mode == "galactic" and dist_ly > 100_000:
+        if display_mode is DisplayMode.GALACTIC and dist_ly > 100_000:
             continue
         if wcs is None or img_w == 0 or img_h == 0:
             continue
@@ -944,12 +1195,12 @@ def build_plotly_figure(
         name="Objects",
     )
 
-    if scale_mode == "linear":
-        depth_label = "Distance — ly (linear)"
-    elif scale_mode == "hybrid":
-        depth_label = "Distance — ly (hybrid log)"
+    if scale_mode is ScaleMode.LINEAR:
+        depth_label = "Distance (ly, linear)"
+    elif scale_mode is ScaleMode.HYBRID:
+        depth_label = "Distance (ly, hybrid log)"
     else:
-        depth_label = "Distance — log(ly)"
+        depth_label = "Distance (ly, log scale)"
 
     data_traces: list = []
 
@@ -1001,11 +1252,43 @@ def build_plotly_figure(
 
     data_traces.append(trace_points)
 
+    # In log mode we use a linear Plotly 3D axis over the stretched-log
+    # transform-space coordinates that ``scale_distance`` now returns,
+    # with custom tickvals/ticktext so labels still read in real ly
+    # (1, 10, 100, 1k, …, 100M, 1B, 10B). This gives us a non-uniform
+    # log: decades past LOG_STRETCH_THRESHOLD_LY are LOG_STRETCH_FACTOR×
+    # wider, so the far-galaxy tail isn't cramped at the right edge.
+    # Linear and hybrid keep a plain linear axis; hybrid's label notes
+    # it's compressed units.
+    xaxis_kwargs = dict(title=depth_label, gridcolor="#222",
+                        showbackground=False, color="#aaaaaa")
+    if scale_mode is ScaleMode.LOG:
+        # xs already hold stretched-log transform values; find the
+        # largest raw ly (inverse the transform) to size the ticks.
+        try:
+            max_x = max(xs) if xs else 0.0
+            # Reconstruct an approximate max_ly just for tick labelling:
+            # if xs stays within [0, log10(t)] it was plain log; above
+            # that we un-stretch.
+            t = LOG_STRETCH_THRESHOLD_LY
+            log_t = math.log10(t)
+            if max_x <= log_t:
+                max_ly = 10.0 ** max_x
+            else:
+                max_ly = t * (10.0 ** ((max_x - log_t) / LOG_STRETCH_FACTOR))
+            tickvals, ticktext = log_stretched_tick_positions(max_ly)
+            xaxis_kwargs["tickvals"] = tickvals
+            xaxis_kwargs["ticktext"] = ticktext
+            # Range: from transform(1 ly)=0 to just past the farthest
+            # object (0.5 transform-units ≈ one stretched decade/6).
+            hi = max(max_x, tickvals[-1] if tickvals else 1.0) + 0.5
+            xaxis_kwargs["range"] = [0.0, hi]
+        except Exception:
+            pass
     fig = go.Figure(data=data_traces)
     fig.update_layout(
         scene=dict(
-            xaxis=dict(title=depth_label, gridcolor="#222",
-                       showbackground=False, color="#aaaaaa"),
+            xaxis=xaxis_kwargs,
             yaxis=dict(title="Image X (pixels)", gridcolor="#222",
                        showbackground=False, color="#aaaaaa"),
             zaxis=dict(title="Image Y (pixels)", gridcolor="#222",
@@ -1033,13 +1316,28 @@ def build_plotly_figure(
     return fig
 
 
+def _mpl_axis_value(d_ly: float, mode) -> float:
+    """X coordinate for matplotlib's 3D axes given a distance in ly.
+
+    ``mpl_toolkits.mplot3d.Axes3D.set_xscale('log')`` is flaky/unsupported
+    across matplotlib versions, so we apply the stretched-log transform
+    ourselves in LOG mode (matching the Plotly path). Linear and hybrid
+    reuse ``scale_distance`` unchanged.
+    """
+    m = ScaleMode.parse(mode, ScaleMode.LOG)
+    if m is ScaleMode.LOG:
+        return log_stretched_transform(d_ly)
+    return scale_distance(d_ly, m)
+
+
 def render_matplotlib_3d(
     objects: list[dict], config: dict, out_path: str,
     image_plane: dict | None = None,
 ) -> str:
     """Matplotlib fallback renderer, same scene coords as the Plotly one."""
-    scale_mode = config.get("scale_mode", "log")
-    display_mode = config.get("display_mode", "cosmic")
+    scale_mode = ScaleMode.parse(config.get("scale_mode"), ScaleMode.LOG)
+    display_mode = DisplayMode.parse(config.get("display_mode"),
+                                     DisplayMode.COSMIC)
     color_by_type = config.get("color_by_type", True)
     wcs: WCS | None = config.get("wcs")
     img_w = int(config.get("img_width", 0))
@@ -1050,14 +1348,14 @@ def render_matplotlib_3d(
         dist_ly = obj.get("dist_ly", 0.0)
         if dist_ly <= 0:
             continue
-        if display_mode == "galactic" and dist_ly > 100_000:
+        if display_mode is DisplayMode.GALACTIC and dist_ly > 100_000:
             continue
         if wcs is None or img_w == 0 or img_h == 0:
             continue
         yz = _object_scene_xy(obj, wcs, img_w, img_h)
         if yz is None:
             continue
-        depth = scale_distance(dist_ly, scale_mode)
+        depth = _mpl_axis_value(dist_ly, scale_mode)
         xs.append(depth); ys.append(yz[0]); zs.append(yz[1])
         t = obj.get("type", "Other")
         colors.append(DEFAULT_COLORS.get(t, "#CCCCCC")
@@ -1073,6 +1371,11 @@ def render_matplotlib_3d(
     if image_plane is not None:
         try:
             rgb = image_plane["rgb"].astype(np.float32) / 255.0
+            # The image plane's X array and stored ref_depth are already
+            # in the renderer's axis space (raw ly for linear/hybrid,
+            # stretched-log transform-space for LOG — see
+            # ``compute_ref_depth`` and ``scale_distance``). No further
+            # transform is needed here.
             ax.plot_surface(
                 image_plane["X"], image_plane["Y"], image_plane["Z"],
                 facecolors=rgb, rstride=1, cstride=1,
@@ -1092,15 +1395,31 @@ def render_matplotlib_3d(
         for xi, yi, zi, n in zip(xs, ys, zs, names):
             ax.text(xi, yi, zi, f"  {n}", color="#dddddd", fontsize=7)
 
-    if scale_mode == "linear":
-        depth_label = "Distance — ly (linear)"
-    elif scale_mode == "hybrid":
-        depth_label = "Distance — ly (hybrid log)"
+    if scale_mode is ScaleMode.LINEAR:
+        depth_label = "Distance (ly, linear)"
+    elif scale_mode is ScaleMode.HYBRID:
+        depth_label = "Distance (ly, hybrid log)"
     else:
-        depth_label = "Distance — log(ly)"
+        depth_label = "Distance (ly, log scale)"
     ax.set_xlabel(depth_label, color="#aaaaaa")
     ax.set_ylabel("Image X (pixels)", color="#aaaaaa")
     ax.set_zlabel("Image Y (pixels)", color="#aaaaaa")
+    # LOG mode: paint the stretched-log ticks in real-ly labels so the
+    # matplotlib fallback axis matches the Plotly view.
+    if scale_mode is ScaleMode.LOG and xs:
+        try:
+            t = LOG_STRETCH_THRESHOLD_LY
+            log_t = math.log10(t)
+            max_x = max(xs)
+            if max_x <= log_t:
+                max_ly = 10.0 ** max_x
+            else:
+                max_ly = t * (10.0 ** ((max_x - log_t) / LOG_STRETCH_FACTOR))
+            tickvals, ticktext = log_stretched_tick_positions(max_ly)
+            ax.set_xticks(tickvals)
+            ax.set_xticklabels(ticktext)
+        except Exception:
+            pass
     try:
         ax.view_init(elev=18, azim=-60)
     except Exception:
@@ -1238,8 +1557,243 @@ def _plotly_cache_dir() -> str:
                 f.write(get_plotlyjs())
         except Exception:
             pass
+    # First time we resolve the cache dir in this process, clean out any
+    # scene HTML files left behind by prior (possibly crashed) runs.
+    try:
+        _sweep_stale_scene_files(d)
+    except Exception:
+        pass
     _PLOTLY_CACHE_DIR = d
     return d
+
+
+class WebEngineRepairDialog(QDialog):
+    """Explicit, opt-in repair flow for a broken PyQt6-WebEngine install.
+
+    Motivation: the previous implementation auto-ran
+    ``pip install --force-reinstall`` from inside the script on import.
+    That surprised users, failed silently behind proxies, and could
+    damage system-managed Python installs. This dialog:
+
+    * refuses to run inside a PEP 668 / externally-managed interpreter
+      and explains what to do instead;
+    * requires an explicit click on **Run Repair** to start pip;
+    * streams pip stdout/stderr line by line into a read-only console
+      widget (not just the final exception);
+    * exposes **Retry Import** once the subprocess exits so the user
+      can confirm success without restarting Siril.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Repair PyQt6-WebEngine")
+        self.setMinimumSize(680, 480)
+        self.setStyleSheet("QDialog{background-color:#1e1e1e;color:#e0e0e0}")
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 14, 14, 14)
+
+        header = QLabel(
+            "<b style='color:#88aaff;font-size:13pt;'>"
+            "Repair PyQt6-WebEngine</b>")
+        lay.addWidget(header)
+
+        blurb = QLabel(
+            "The interactive 3D view needs <code>PyQt6-WebEngine</code> "
+            "whose Qt ABI matches Siril's bundled PyQt6. "
+            "If you got a <code>Symbol not found: _qt_version_tag_6_XX</code> "
+            "error, a pinned reinstall usually fixes it.<br><br>"
+            "This will run <code>pip install --force-reinstall --no-deps</code> "
+            "for <code>PyQt6-WebEngine</code> and "
+            "<code>PyQt6-WebEngine-Qt6</code>, pinned to the minor version "
+            "of your PyQt6. Nothing runs until you click "
+            "<b>Run Repair</b>."
+        )
+        blurb.setWordWrap(True)
+        blurb.setTextFormat(Qt.TextFormat.RichText)
+        blurb.setStyleSheet("color:#cccccc;font-size:10pt;")
+        lay.addWidget(blurb)
+
+        self._err_label = QLabel()
+        self._err_label.setWordWrap(True)
+        self._err_label.setStyleSheet(
+            "background-color:#3a1e1e;color:#ffaaaa;"
+            "border:1px solid #884444;border-radius:4px;"
+            "padding:6px;font-family:monospace;font-size:9pt;")
+        self._err_label.setText(
+            f"Current import error:\n{WEBENGINE_ERROR or '(none)'}")
+        lay.addWidget(self._err_label)
+
+        # Where the pinned pip install will go.
+        self._cmd_label = QLabel()
+        self._cmd_label.setStyleSheet(
+            "color:#aaaaaa;font-family:monospace;font-size:9pt;"
+            "background-color:#252525;padding:6px;border-radius:4px;")
+        self._cmd_label.setText(self._format_planned_command())
+        self._cmd_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        lay.addWidget(self._cmd_label)
+
+        # Console: pip output live-streamed here.
+        self._console = QTextEdit()
+        self._console.setReadOnly(True)
+        self._console.setStyleSheet(
+            "background-color:#0a0a0a;color:#c8c8c8;"
+            "font-family:monospace;font-size:9pt;"
+            "border:1px solid #333;")
+        self._console.setPlaceholderText(
+            "pip output will appear here after you click Run Repair.")
+        lay.addWidget(self._console, 1)
+
+        btn_row = QHBoxLayout()
+        self.btn_run = QPushButton("Run Repair")
+        self.btn_run.setObjectName("RenderButton")
+        _nofocus(self.btn_run)
+        self.btn_run.clicked.connect(self._on_run)
+        btn_row.addWidget(self.btn_run)
+
+        self.btn_retry = QPushButton("Retry Import")
+        _nofocus(self.btn_retry)
+        self.btn_retry.setEnabled(False)
+        self.btn_retry.clicked.connect(self._on_retry)
+        btn_row.addWidget(self.btn_retry)
+
+        btn_row.addStretch()
+
+        self.btn_close = QPushButton("Close")
+        self.btn_close.setObjectName("CloseButton")
+        _nofocus(self.btn_close)
+        self.btn_close.clicked.connect(self.close)
+        btn_row.addWidget(self.btn_close)
+
+        lay.addLayout(btn_row)
+
+        self._retry_succeeded = False
+
+        # PEP 668 guard: skip entirely and tell the user what to do.
+        if _is_externally_managed_python():
+            self._append(
+                "[refused] This Python interpreter is marked "
+                "EXTERNALLY-MANAGED (PEP 668). pip will not run from "
+                "inside the script to avoid damaging your system "
+                "install.\n")
+            self._append(
+                "Fix options:\n"
+                f"  1. Create a virtualenv, activate it, then: "
+                f"pip install 'PyQt6-WebEngine=={self._pin_spec()}'\n"
+                "  2. Or use Siril's internal Python (usually "
+                "unaffected by PEP 668).\n"
+                "  3. Or pass --break-system-packages manually from a "
+                "terminal if you know what you're doing.\n"
+            )
+            self.btn_run.setEnabled(False)
+            self.btn_run.setToolTip(
+                "Refused: PEP 668 externally-managed interpreter")
+
+    @staticmethod
+    def _pin_spec() -> str:
+        """Minor-version wildcard matching the running PyQt6."""
+        try:
+            from PyQt6.QtCore import PYQT_VERSION_STR
+            parts = PYQT_VERSION_STR.split(".")
+            return ".".join(parts[:2]) + ".*" if len(parts) >= 2 else "*"
+        except Exception:
+            return "*"
+
+    def _format_planned_command(self) -> str:
+        pin = self._pin_spec()
+        return (
+            f"$ {sys.executable} -m pip install "
+            f"--force-reinstall --no-deps "
+            f"'PyQt6-WebEngine=={pin}' "
+            f"'PyQt6-WebEngine-Qt6=={pin}'"
+        )
+
+    def _append(self, text: str) -> None:
+        # QTextEdit.append adds a newline each call; use insertPlainText
+        # so partial pip lines don't double-space.
+        cursor = self._console.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        cursor.insertText(text)
+        self._console.setTextCursor(cursor)
+        self._console.ensureCursorVisible()
+        QApplication.processEvents()
+
+    def _on_run(self) -> None:
+        import subprocess
+        self.btn_run.setEnabled(False)
+        self.btn_retry.setEnabled(False)
+        self._console.clear()
+        pin = self._pin_spec()
+        cmd = [
+            sys.executable, "-m", "pip", "install",
+            "--force-reinstall", "--no-deps",
+            f"PyQt6-WebEngine=={pin}",
+            f"PyQt6-WebEngine-Qt6=={pin}",
+        ]
+        self._append(f"$ {' '.join(cmd)}\n")
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+                text=True,
+            )
+        except Exception as e:
+            self._append(f"\n[error] Could not launch pip: "
+                         f"{type(e).__name__}: {e}\n")
+            self.btn_run.setEnabled(True)
+            return
+
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                self._append(line)
+        except Exception as e:
+            self._append(f"\n[error] Failed to read pip output: "
+                         f"{type(e).__name__}: {e}\n")
+        rc = proc.wait()
+        self._append(f"\n[pip exited with status {rc}]\n")
+
+        if rc == 0:
+            self._append(
+                "\nReinstall complete. Click 'Retry Import' to re-check "
+                "whether QWebEngineView loads.\n")
+            self.btn_retry.setEnabled(True)
+        else:
+            self._append(
+                "\npip reported a failure. Common causes:\n"
+                "  - offline / proxy blocking pypi.org\n"
+                "  - no matching wheel for this Python/OS/arch\n"
+                "  - interpreter marked EXTERNALLY-MANAGED\n"
+                "You can re-run from a terminal with the exact command "
+                "above to see more context.\n")
+            self.btn_run.setEnabled(True)
+
+    def _on_retry(self) -> None:
+        global HAS_WEBENGINE
+        self._append("\nAttempting to import QWebEngineView...\n")
+        HAS_WEBENGINE = _try_import_webengine()
+        if HAS_WEBENGINE:
+            self._retry_succeeded = True
+            self._append("[ok] WebEngine import succeeded.\n")
+            self.btn_retry.setEnabled(False)
+            self.btn_run.setEnabled(False)
+            QMessageBox.information(
+                self, "Repair Succeeded",
+                "PyQt6-WebEngine is now loadable. "
+                "The next render will use the embedded 3D view.")
+            self.accept()
+        else:
+            self._append(f"[fail] Still failing: {WEBENGINE_ERROR}\n")
+            self.btn_retry.setEnabled(True)
+            self.btn_run.setEnabled(True)
+
+    @property
+    def repaired(self) -> bool:
+        return self._retry_succeeded
 
 
 class Preview3DWidget(QWidget):
@@ -1248,22 +1802,100 @@ class Preview3DWidget(QWidget):
     otherwise falls back to a static matplotlib PNG.
     """
 
+    # Signal emitted when the user clicks the in-pane "Repair WebEngine…"
+    # button in the error banner. The main window catches this and opens
+    # WebEngineRepairDialog; we keep the widget itself dialog-agnostic.
+    repair_requested = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
-        self._placeholder = QLabel(
+        self._view = None
+        self._png_label = None
+        self._banner = None
+        if HAS_WEBENGINE:
+            self._show_placeholder()
+        else:
+            self._show_webengine_banner()
+
+    def _show_placeholder(self) -> None:
+        self._clear_children()
+        placeholder = QLabel(
             "The 3D map will appear here after rendering.\n"
             "Press \u201cRender 3D Map\u201d (F5)."
         )
-        self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._placeholder.setStyleSheet(
+        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder.setStyleSheet(
             "color:#888888;font-size:11pt;border:1px dashed #555555;"
             "background-color:#0a0a0a;"
         )
-        self._layout.addWidget(self._placeholder)
-        self._view = None
-        self._png_label = None
+        self._layout.addWidget(placeholder)
+
+    def _show_webengine_banner(self) -> None:
+        """Show the explicit opt-in repair banner when WebEngine is missing.
+
+        Replaces the previous behaviour where ``show_html`` silently
+        returned — the user now sees *why* the interactive view isn't
+        available and can choose to run the repair or not.
+        """
+        self._clear_children()
+        banner = QWidget()
+        bl = QVBoxLayout(banner)
+        bl.setContentsMargins(18, 18, 18, 18)
+        bl.setSpacing(10)
+        banner.setStyleSheet(
+            "background-color:#0a0a0a;border:1px dashed #774444;")
+
+        title = QLabel("Interactive 3D view unavailable")
+        title.setStyleSheet(
+            "color:#ffaaaa;font-size:13pt;font-weight:bold;")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        bl.addWidget(title)
+
+        body = QLabel(
+            "<code>PyQt6-WebEngine</code> could not be loaded, so the "
+            "rotatable embedded view is disabled. The rendered scene "
+            "will open in your default browser instead.<br><br>"
+            "If this is an ABI mismatch (error mentions "
+            "<code>_qt_version_tag_6_XX</code>), click "
+            "<b>Repair WebEngine…</b> to run an opt-in pinned reinstall "
+            "with live pip output.")
+        body.setTextFormat(Qt.TextFormat.RichText)
+        body.setWordWrap(True)
+        body.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        body.setStyleSheet("color:#cccccc;font-size:10pt;border:0;")
+        bl.addWidget(body)
+
+        if WEBENGINE_ERROR:
+            err = QLabel(f"Error: {WEBENGINE_ERROR}")
+            err.setWordWrap(True)
+            err.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            err.setStyleSheet(
+                "color:#ff9999;font-family:monospace;font-size:9pt;"
+                "border:0;")
+            bl.addWidget(err)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn = QPushButton("Repair WebEngine\u2026")
+        btn.setObjectName("RenderButton")
+        _nofocus(btn)
+        btn.clicked.connect(self.repair_requested.emit)
+        btn_row.addWidget(btn)
+        btn_row.addStretch()
+        bl.addLayout(btn_row)
+
+        self._banner = banner
+        self._layout.addWidget(banner)
+
+    def refresh_webengine_state(self) -> None:
+        """Re-render the pane after a successful repair: drop the banner
+        and go back to the 'ready' placeholder."""
+        if HAS_WEBENGINE:
+            self._show_placeholder()
+        else:
+            self._show_webengine_banner()
 
     def _clear_children(self) -> None:
         while self._layout.count():
@@ -1274,9 +1906,14 @@ class Preview3DWidget(QWidget):
                 w.deleteLater()
         self._view = None
         self._png_label = None
+        self._banner = None
 
     def show_html(self, html_content: str) -> None:
         if not HAS_WEBENGINE:
+            # Don't silently swallow the call — surface the banner so
+            # the user can opt in to a repair. The calling site still
+            # writes a standalone HTML and opens it in the browser.
+            self._show_webengine_banner()
             return
         self._clear_children()
         self._view = QWebEngineView()
@@ -1784,6 +2421,8 @@ class CosmicDepth3DWindow(QMainWindow):
         self.tabs = QTabWidget()
 
         self.preview_widget = Preview3DWidget()
+        self.preview_widget.repair_requested.connect(
+            self._show_webengine_repair_dialog)
         self.tabs.addTab(self.preview_widget, "3D Map")
 
         self.objects_table = QTableWidget()
@@ -1800,12 +2439,19 @@ class CosmicDepth3DWindow(QMainWindow):
         self.objects_table.setSortingEnabled(True)
         self.objects_table.verticalHeader().setVisible(False)
         hdr = self.objects_table.horizontalHeader()
-        # Name/Type/Mag/Distance/± fit their content; Source stretches to
-        # fill any remaining space so the Name column stays compact.
-        for i in range(0, 5):
-            hdr.setSectionResizeMode(
-                i, QHeaderView.ResizeMode.ResizeToContents)
+        # Make every column user-resizable with sensible defaults. Source
+        # (last col) still stretches so the remaining space is absorbed
+        # there. Interactive mode is required for saved column widths to
+        # round-trip — ResizeToContents would clobber them on every render.
+        default_widths = [140, 70, 55, 95, 70]  # Name, Type, Mag, Dist, ±
+        for i, w in enumerate(default_widths):
+            hdr.setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
+            self.objects_table.setColumnWidth(i, w)
         hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        # Keep columns from being squeezed into unreadable slivers on
+        # narrow windows; Qt will honor setMinimumSectionSize regardless
+        # of the Stretch / Interactive resize mode.
+        hdr.setMinimumSectionSize(40)
         self.objects_table.setStyleSheet(
             "QTableWidget{background-color:#1e1e1e;color:#dddddd;"
             "gridline-color:#333333;alternate-background-color:#252525;"
@@ -1878,16 +2524,19 @@ class CosmicDepth3DWindow(QMainWindow):
             st.value("show_image_plane", True, type=bool))
         self.spin_dpi.setValue(int(st.value("dpi", 150)))
 
-        scale = st.value("scale_mode", "log")
-        if scale == "linear":
+        scale = ScaleMode.parse(st.value("scale_mode", ScaleMode.LOG.value),
+                                ScaleMode.LOG)
+        if scale is ScaleMode.LINEAR:
             self.radio_scale_linear.setChecked(True)
-        elif scale == "hybrid":
+        elif scale is ScaleMode.HYBRID:
             self.radio_scale_hybrid.setChecked(True)
         else:
             self.radio_scale_log.setChecked(True)
 
-        mode = st.value("display_mode", "cosmic")
-        if mode == "galactic":
+        mode = DisplayMode.parse(st.value("display_mode",
+                                          DisplayMode.COSMIC.value),
+                                 DisplayMode.COSMIC)
+        if mode is DisplayMode.GALACTIC:
             self.radio_mode_galactic.setChecked(True)
         else:
             self.radio_mode_cosmic.setChecked(True)
@@ -1904,22 +2553,34 @@ class CosmicDepth3DWindow(QMainWindow):
         st.setValue("show_image_plane",
                     self.chk_show_image_plane.isChecked())
         st.setValue("dpi", self.spin_dpi.value())
-        st.setValue("scale_mode", self._current_scale_mode())
-        st.setValue("display_mode", self._current_display_mode())
+        st.setValue("scale_mode", self._current_scale_mode().value)
+        st.setValue("display_mode", self._current_display_mode().value)
+        # Persist the Objects table layout: header state captures column
+        # order, widths and sort indicator in one opaque QByteArray.
+        try:
+            hdr = self.objects_table.horizontalHeader()
+            st.setValue("objects_table_header", hdr.saveState())
+            st.setValue("objects_table_sort_col",
+                        int(hdr.sortIndicatorSection()))
+            st.setValue("objects_table_sort_order",
+                        int(hdr.sortIndicatorOrder().value))
+        except Exception:
+            pass
 
     def closeEvent(self, event) -> None:
         self._save_settings()
         super().closeEvent(event)
 
-    def _current_scale_mode(self) -> str:
+    def _current_scale_mode(self) -> ScaleMode:
         if self.radio_scale_linear.isChecked():
-            return "linear"
+            return ScaleMode.LINEAR
         if self.radio_scale_hybrid.isChecked():
-            return "hybrid"
-        return "log"
+            return ScaleMode.HYBRID
+        return ScaleMode.LOG
 
-    def _current_display_mode(self) -> str:
-        return "galactic" if self.radio_mode_galactic.isChecked() else "cosmic"
+    def _current_display_mode(self) -> DisplayMode:
+        return (DisplayMode.GALACTIC if self.radio_mode_galactic.isChecked()
+                else DisplayMode.COSMIC)
 
     # ------------------------------------------------------------------
     # LOGGING
@@ -2147,7 +2808,8 @@ class CosmicDepth3DWindow(QMainWindow):
     # SIMBAD OBJECT QUERY
     # ------------------------------------------------------------------
 
-    def _query_simbad_objects(self, mag_limit: float
+    def _query_simbad_objects(self, mag_limit: float,
+                              progress_cb=None,
                               ) -> tuple[list[dict], float, float, float]:
         """
         Query SIMBAD for all catalog objects in the field of view.
@@ -2209,17 +2871,34 @@ class CosmicDepth3DWindow(QMainWindow):
                 return tile_simbad.query_region(qc, radius=q_radius)
 
             if len(tiles) == 1:
+                if progress_cb:
+                    progress_cb(0, 1)
                 r = _query_tile(tiles[0])
                 if r is not None and len(r) > 0:
                     all_results.append(r)
+                if progress_cb:
+                    progress_cb(1, 1)
             else:
+                # Stream tiles as they finish so the progress bar advances
+                # per-tile instead of jumping from 15% straight to 45%.
+                from concurrent.futures import as_completed
+                done = 0
+                total = len(tiles)
                 with ThreadPoolExecutor(
-                    max_workers=min(8, len(tiles)),
+                    max_workers=min(8, total),
                     thread_name_prefix="simbad_tile",
                 ) as pool:
-                    for r in pool.map(_query_tile, tiles):
+                    futures = [pool.submit(_query_tile, qc) for qc in tiles]
+                    for fut in as_completed(futures):
+                        try:
+                            r = fut.result()
+                        except Exception:
+                            r = None
                         if r is not None and len(r) > 0:
                             all_results.append(r)
+                        done += 1
+                        if progress_cb:
+                            progress_cb(done, total)
 
             if not all_results:
                 self._log("SIMBAD: no objects returned")
@@ -2387,8 +3066,20 @@ class CosmicDepth3DWindow(QMainWindow):
         self._log(f"Enabled types: {', '.join(sorted(enabled_types))}")
         self._log(f"Magnitude limit: {mag_limit:.1f}")
 
+        # Map tile progress into the 15%–40% slice of the overall bar so
+        # the user sees continuous movement while SIMBAD streams tiles.
+        _SIMBAD_LO, _SIMBAD_HI = 15, 40
+
+        def _simbad_progress(done: int, total: int) -> None:
+            if total <= 0:
+                return
+            frac = max(0.0, min(1.0, done / float(total)))
+            pct = int(round(_SIMBAD_LO + frac * (_SIMBAD_HI - _SIMBAD_LO)))
+            self._update_progress(
+                pct, f"SIMBAD tiles: {done}/{total}")
+
         objects, center_ra, center_dec, fov_radius = self._query_simbad_objects(
-            mag_limit,
+            mag_limit, progress_cb=_simbad_progress,
         )
         self._flush_log_buffer()
 
@@ -2414,10 +3105,22 @@ class CosmicDepth3DWindow(QMainWindow):
             obj["size_ly"] = 0.0  # updated after distance resolve
 
         # Resolve distances
-        self._update_progress(45, "Resolving distances (SIMBAD / cache)...")
+        self._update_progress(
+            _SIMBAD_HI, "Resolving distances (SIMBAD / cache)...")
+        _RESOLVE_LO, _RESOLVE_HI = _SIMBAD_HI, 70
+
+        def _resolve_progress(done: int, total: int) -> None:
+            if total <= 0:
+                return
+            frac = max(0.0, min(1.0, done / float(total)))
+            pct = int(round(_RESOLVE_LO + frac * (_RESOLVE_HI - _RESOLVE_LO)))
+            self._update_progress(
+                pct, f"Resolving distances: batch {done}/{total}")
+
         resolve_distances(objects, self._cache,
                           use_online=self.chk_use_online.isChecked(),
-                          log_func=self._log)
+                          log_func=self._log,
+                          progress_cb=_resolve_progress)
         self._flush_log_buffer()
         self.lbl_cache_info.setText(self._cache_info_text())
 
@@ -2463,21 +3166,21 @@ class CosmicDepth3DWindow(QMainWindow):
             ra_hms = f"RA={center_ra:.2f} DEC={center_dec:.2f}"
 
         title = (f"Svenesis CosmicDepth 3D — {len(objects)} objects, "
-                 f"{scale_mode} scale, {display_mode} view")
+                 f"{scale_mode.value} scale, {display_mode.value} view")
 
         config = {
-            "scale_mode": scale_mode,
-            "display_mode": display_mode,
+            "scale_mode": scale_mode.value,
+            "display_mode": display_mode.value,
             "color_by_type": self.chk_color_by_type.isChecked(),
             "dpi": self.spin_dpi.value(),
             "title": title,
         }
 
         # Scene dimensions for the window-style layout
-        scaled_ds = [scale_distance(o["dist_ly"], scale_mode)
+        scaled_ds = [scale_distance(o["dist_ly"], scale_mode.value)
                      for o in objects if o.get("dist_ly", 0) > 0]
         max_scaled = max(scaled_ds) if scaled_ds else 100.0
-        ref_depth = max(max_scaled * 0.02, 0.05)
+        ref_depth = compute_ref_depth(scale_mode, max_scaled)
 
         config["wcs"] = self._wcs
         config["img_width"] = self._img_width
@@ -2495,11 +3198,13 @@ class CosmicDepth3DWindow(QMainWindow):
             self._log("Sky plane: no objects with positive distance.")
         else:
             try:
+                sample_n = smart_sample_size(
+                    self._img_width, self._img_height)
                 X, Y, Z, lum, rgb = build_flat_image_plane(
                     self._image_data,
                     self._img_width, self._img_height,
                     ref_depth=ref_depth,
-                    sample=220,
+                    sample=sample_n,
                 )
                 image_plane = {
                     "X": X, "Y": Y, "Z": Z,
@@ -2510,6 +3215,7 @@ class CosmicDepth3DWindow(QMainWindow):
                 self._log(
                     f"Sky plane built: ref_depth={ref_depth:.3f}, "
                     f"pixel footprint {self._img_width}×{self._img_height}, "
+                    f"sample={sample_n}×{sample_n}, "
                     f"max_depth={max_scaled:.2f}."
                 )
             except Exception as e:
@@ -2553,8 +3259,9 @@ class CosmicDepth3DWindow(QMainWindow):
             # default browser so they still get the rotatable 3D scene.
             if WEBENGINE_ERROR:
                 self._log(f"WebEngine import failed: {WEBENGINE_ERROR}")
-                self._log("Tip: install PyQt6-WebEngine into the Python used "
-                          "by Siril to get the rotatable view embedded.")
+                self._log("Tip: click \u201cRepair WebEngine\u2026\u201d on "
+                          "the 3D Map pane to run an opt-in pinned "
+                          "reinstall with live pip output.")
             try:
                 self._log("WebEngine unavailable — using matplotlib preview.")
                 render_matplotlib_3d(objects, config, self._last_png_path,
@@ -2601,18 +3308,19 @@ class CosmicDepth3DWindow(QMainWindow):
             return
         scale_mode = self._current_scale_mode()
         display_mode = self._current_display_mode()
-        scaled_ds = [scale_distance(o["dist_ly"], scale_mode)
+        scaled_ds = [scale_distance(o["dist_ly"], scale_mode.value)
                      for o in self._last_objects if o.get("dist_ly", 0) > 0]
         max_scaled = max(scaled_ds) if scaled_ds else 100.0
-        ref_depth = max(max_scaled * 0.02, 0.05)
+        ref_depth = compute_ref_depth(scale_mode, max_scaled)
 
         config = {
-            "scale_mode": scale_mode,
-            "display_mode": display_mode,
+            "scale_mode": scale_mode.value,
+            "display_mode": display_mode.value,
             "color_by_type": self.chk_color_by_type.isChecked(),
             "dpi": self.spin_dpi.value(),
             "title": (f"Svenesis CosmicDepth 3D — {len(self._last_objects)} "
-                      f"objects, {scale_mode} scale, {display_mode} view"),
+                      f"objects, {scale_mode.value} scale, "
+                      f"{display_mode.value} view"),
             "wcs": self._wcs,
             "img_width": self._img_width,
             "img_height": self._img_height,
@@ -2621,18 +3329,22 @@ class CosmicDepth3DWindow(QMainWindow):
         image_plane = None
         if checked and self._image_data is not None and scaled_ds:
             try:
+                sample_n = smart_sample_size(
+                    self._img_width, self._img_height)
                 X, Y, Z, lum, rgb = build_flat_image_plane(
                     self._image_data,
                     self._img_width, self._img_height,
                     ref_depth=ref_depth,
-                    sample=220,
+                    sample=sample_n,
                 )
                 image_plane = {
                     "X": X, "Y": Y, "Z": Z,
                     "lum": lum, "rgb": rgb, "opacity": 1.0,
                     "ref_depth": ref_depth,
                 }
-                self._log(f"Sky plane toggled ON: ref_depth={ref_depth:.3f}.")
+                self._log(
+                    f"Sky plane toggled ON: ref_depth={ref_depth:.3f}, "
+                    f"sample={sample_n}×{sample_n}.")
             except Exception as e:
                 self._log(f"Image plane build failed: {e}")
         else:
@@ -2650,8 +3362,43 @@ class CosmicDepth3DWindow(QMainWindow):
             except Exception as e:
                 self._log(f"Plotly refresh failed: {e}")
 
+    def _restore_objects_table_layout(self) -> None:
+        """Restore the Objects table header state (column widths + sort).
+
+        Uses the opaque ``saveState``/``restoreState`` blob QHeaderView
+        produces. Falls back silently if nothing is stored or the saved
+        state can't be decoded (e.g. after a column-count change).
+        """
+        try:
+            st = self._settings
+            hdr = self.objects_table.horizontalHeader()
+            raw = st.value("objects_table_header")
+            restored = False
+            if raw is not None:
+                try:
+                    restored = bool(hdr.restoreState(raw))
+                except Exception:
+                    restored = False
+            # Fall back to the explicit sort-col / sort-order pair in case
+            # the opaque blob couldn't round-trip (Qt version skew).
+            if not restored:
+                try:
+                    col = int(st.value("objects_table_sort_col", -1))
+                    order_val = int(st.value("objects_table_sort_order", 0))
+                    if col >= 0 and col < self.objects_table.columnCount():
+                        order = (Qt.SortOrder.DescendingOrder
+                                 if order_val == Qt.SortOrder.DescendingOrder.value
+                                 else Qt.SortOrder.AscendingOrder)
+                        self.objects_table.sortItems(col, order)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def _populate_objects_tab(self, objects: list[dict]) -> None:
         tbl = self.objects_table
+        # Disable sorting while mutating rows so items land in the right
+        # columns; we re-enable it below and apply any persisted sort.
         tbl.setSortingEnabled(False)
         tbl.setRowCount(len(objects))
 
@@ -2681,6 +3428,12 @@ class CosmicDepth3DWindow(QMainWindow):
             tbl.setItem(row, 5, QTableWidgetItem(str(src)))
 
         tbl.setSortingEnabled(True)
+        # First population after a fresh launch: restore the last-used
+        # column widths / sort order. We guard with a flag so the user's
+        # in-session changes stick between subsequent renders.
+        if not getattr(self, "_objects_table_layout_restored", False):
+            self._restore_objects_table_layout()
+            self._objects_table_layout_restored = True
 
     # ------------------------------------------------------------------
     # EXPORT ACTIONS
@@ -2705,21 +3458,133 @@ class CosmicDepth3DWindow(QMainWindow):
             QMessageBox.warning(self, "Export Failed",
                                 f"Could not export HTML:\n{e}")
 
+    def _capture_current_camera(self) -> dict | None:
+        """Best-effort read of the current Plotly camera from the embedded
+        QWebEngineView.
+
+        Plotly mirrors user rotations back into ``gd.layout.scene.camera``
+        (eye / center / up), so a single JSON round-trip from the running
+        JavaScript gives us the view the user is actually looking at.
+        Runs a short local event loop with a 2-second safety timeout so a
+        broken view never hangs the export.
+        """
+        if not HAS_WEBENGINE:
+            return None
+        view = getattr(self.preview_widget, "_view", None)
+        if view is None:
+            return None
+        try:
+            from PyQt6.QtCore import QEventLoop, QTimer
+        except Exception:
+            return None
+        loop = QEventLoop()
+        holder: dict = {"raw": None}
+
+        def _got(raw):
+            holder["raw"] = raw
+            loop.quit()
+
+        js = (
+            "(function(){try{"
+            "var els=document.getElementsByClassName('plotly-graph-div');"
+            "if(!els||!els.length)return null;"
+            "var gd=els[0];"
+            "var scene=gd&&gd.layout?gd.layout.scene:null;"
+            "if(!scene||!scene.camera)return null;"
+            "return JSON.stringify(scene.camera);"
+            "}catch(e){return null;}})();"
+        )
+        try:
+            view.page().runJavaScript(js, _got)
+        except Exception:
+            return None
+        QTimer.singleShot(2000, loop.quit)
+        loop.exec()
+        raw = holder["raw"]
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except Exception:
+            return None
+
     def _on_export_png(self) -> None:
+        """Export the rendered 3D scene as a PNG.
+
+        Uses Plotly + kaleido for pixel-for-pixel parity with the embedded
+        WebEngine view (same axes, same ``aspectratio``, same camera —
+        including any rotation the user applied). Falls back to the
+        matplotlib renderer only if kaleido is missing or the Plotly
+        figure wasn't produced (e.g. plotly install broken).
+        """
         if not self._last_objects:
             return
+
+        # Prefer the live figure — that's what the 3D pane is showing.
+        fig = self._last_figure
+        dpi = max(50, int(self.spin_dpi.value()))
+        # Render at a generous base resolution and let kaleido's `scale`
+        # multiplier do the DPI upscaling without forcing huge pixel
+        # counts for the layout pass.
+        base_width, base_height = 1400, 1000
+        px_scale = max(1.0, dpi / 100.0)
+
+        if fig is not None:
+            # Clone so we don't permanently mutate the live figure's camera.
+            try:
+                import copy
+                export_fig = copy.deepcopy(fig)
+            except Exception:
+                export_fig = fig
+
+            cam = self._capture_current_camera()
+            if cam:
+                try:
+                    export_fig.update_layout(scene_camera=cam)
+                    self._log(
+                        f"Export camera captured from live view: "
+                        f"eye={cam.get('eye')}")
+                except Exception:
+                    pass
+
+            try:
+                pio.write_image(
+                    export_fig, self._last_png_path,
+                    format="png",
+                    width=base_width, height=base_height,
+                    scale=px_scale,
+                )
+                self._log(
+                    f"Exported PNG via Plotly/kaleido "
+                    f"({int(base_width * px_scale)}\u00d7"
+                    f"{int(base_height * px_scale)}): "
+                    f"{self._last_png_path}")
+                QMessageBox.information(
+                    self, "PNG Exported",
+                    f"Static 3D snapshot saved:\n{self._last_png_path}"
+                )
+                return
+            except Exception as e:
+                self._log(
+                    f"Plotly PNG export failed ({type(e).__name__}: {e}); "
+                    f"falling back to matplotlib. "
+                    f"If kaleido is missing, run: "
+                    f"pip install --upgrade kaleido")
+
+        # Matplotlib fallback — won't match the Plotly view exactly but
+        # still produces a usable snapshot when kaleido isn't available.
         try:
             scale_mode = self._current_scale_mode()
-            scaled_ds = [scale_distance(o["dist_ly"], scale_mode)
+            scaled_ds = [scale_distance(o["dist_ly"], scale_mode.value)
                          for o in self._last_objects
                          if o.get("dist_ly", 0) > 0]
             max_scaled = max(scaled_ds) if scaled_ds else 100.0
-            ref_depth = max(max_scaled * 0.02, 0.05)
+            ref_depth = compute_ref_depth(scale_mode, max_scaled)
             config = {
-                "scale_mode": scale_mode,
-                "display_mode": self._current_display_mode(),
+                "scale_mode": scale_mode.value,
+                "display_mode": self._current_display_mode().value,
                 "color_by_type": self.chk_color_by_type.isChecked(),
-                "dpi": self.spin_dpi.value(),
+                "dpi": dpi,
                 "title": (f"Svenesis CosmicDepth 3D — "
                           f"{len(self._last_objects)} objects"),
                 "wcs": self._wcs,
@@ -2727,12 +3592,18 @@ class CosmicDepth3DWindow(QMainWindow):
                 "img_height": self._img_height,
                 "ref_depth": ref_depth,
             }
-            render_matplotlib_3d(self._last_objects, config, self._last_png_path,
-                                 image_plane=getattr(self, "_last_image_plane", None))
-            self._log(f"Exported PNG: {self._last_png_path}")
+            render_matplotlib_3d(
+                self._last_objects, config, self._last_png_path,
+                image_plane=getattr(self, "_last_image_plane", None))
+            self._log(f"Exported PNG (matplotlib fallback): "
+                      f"{self._last_png_path}")
             QMessageBox.information(
                 self, "PNG Exported",
-                f"Static 3D snapshot saved:\n{self._last_png_path}"
+                f"Static 3D snapshot saved (matplotlib fallback):\n"
+                f"{self._last_png_path}\n\n"
+                f"Note: this image does not match the embedded 3D view "
+                f"pixel-for-pixel. Install kaleido for an exact copy "
+                f"(pip install --upgrade kaleido)."
             )
         except Exception as e:
             self._log(f"PNG export failed: {e}")
@@ -2786,6 +3657,26 @@ class CosmicDepth3DWindow(QMainWindow):
     def _on_open_html(self) -> None:
         if self._last_html_path and os.path.isfile(self._last_html_path):
             QDesktopServices.openUrl(QUrl.fromLocalFile(self._last_html_path))
+
+    # ------------------------------------------------------------------
+    # WEBENGINE REPAIR (explicit, opt-in)
+    # ------------------------------------------------------------------
+
+    def _show_webengine_repair_dialog(self) -> None:
+        """Open the opt-in WebEngine repair dialog.
+
+        Only called when the user clicks the in-pane banner button; we
+        never trigger this automatically. If the dialog reports a
+        successful repair on exit we refresh the preview pane so the
+        next render uses the embedded WebEngine view.
+        """
+        dlg = WebEngineRepairDialog(self)
+        dlg.exec()
+        if dlg.repaired:
+            self._log("PyQt6-WebEngine repaired successfully.")
+            self.preview_widget.refresh_webengine_state()
+        elif WEBENGINE_ERROR:
+            self._log(f"WebEngine still unavailable: {WEBENGINE_ERROR}")
 
     # ------------------------------------------------------------------
     # COFFEE DIALOG (matches AnnotateImage styling)
@@ -3064,16 +3955,21 @@ class CosmicDepth3DWindow(QMainWindow):
             "three scaling modes:</p>"
             "<table cellpadding='6' style='width:100%'>"
             "<tr><td style='width:140px'><b>Logarithmic</b></td>"
-            "<td>Recommended for most fields. Compresses huge distances "
-            "while keeping nearby structure visible.</td></tr>"
+            "<td>Recommended for most fields. The X axis is placed on a "
+            "<b>log-typed axis in real light-years</b> (tick labels show "
+            "1\u202Fly, 10\u202Fly, 100\u202Fly, 1\u202Fkly, &hellip;, "
+            "10\u202FGly) so near and distant objects are both legible. "
+            "Matplotlib PNG exports show the same data as "
+            "<code>log\u2081\u2080(ly)</code>.</td></tr>"
             "<tr><td><b>Linear</b></td>"
-            "<td>True proportional distances. Useful for star-only fields "
-            "inside the Milky Way \u2014 galaxies disappear to the "
-            "horizon.</td></tr>"
+            "<td>True proportional distances in light-years. Useful for "
+            "star-only fields inside the Milky Way \u2014 galaxies "
+            "disappear to the horizon.</td></tr>"
             "<tr><td><b>Hybrid</b></td>"
-            "<td>Linear up to 10,000 ly, logarithmic beyond. Realistic "
-            "spacing in the solar neighbourhood while still showing "
-            "extragalactic context.</td></tr>"
+            "<td>Compressed axis: linear up to 10,000\u202Fly, log beyond. "
+            "Keeps realistic spacing in the solar neighbourhood while "
+            "still showing extragalactic context. Axis units are "
+            "compressed (not raw ly).</td></tr>"
             "</table>"
             "<hr>"
             "<h3>View Ranges</h3>"
