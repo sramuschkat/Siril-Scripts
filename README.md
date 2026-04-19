@@ -181,7 +181,7 @@ Picks a folder of FITS frames, builds a temporary `svenesis_blink` sequence in S
 
 #### Statistics table (sortable)
 
-- All frames listed with **Weight, FWHM, Roundness, Background, Stars, Median, Sigma, Date, Status**
+- All frames listed with **Weight, FWHM, Roundness, Background, Stars, Date, Status**
 - Click any **column header to sort** — sort by FWHM to instantly find the worst frames
 - Click a **row to jump** to that frame in the viewer
 - **Multi-select** (Ctrl+click, Shift+click) → right-click → "Reject selected"

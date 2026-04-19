@@ -1,14 +1,14 @@
 """
 Svenesis Blink Comparator
-Script Version: 1.2.8
+Script Version: 1.3.4
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
 Contact and support: See repository README and Siril forum / scripts repository.
 
-This script prompts for a folder of FITS files, builds a temporary Siril
-sequence from them (optionally registering), and plays it back as a blink
-animation for rapid visual inspection. It helps identify:
+This script prompts for a folder of FITS files, analyses each file in place
+via Siril's Python API, and plays them back as a blink animation for rapid
+visual inspection. It helps identify:
 - Satellite trails and airplane tracks
 - Passing clouds or haze
 - Bad frames (tracking errors, wind gusts)
@@ -46,14 +46,78 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 CHANGELOG (condensed; last officially published release was v1.2.3):
 
-1.2.8 - Cross-platform polish, stability, and performance pass 3
-      - UTF-8 encoding for rejected_frames.txt and CSV export (fixes Windows non-ASCII paths).
-      - 1-9 FPS presets moved to keyPressEvent so focused spinboxes accept digits natively.
-      - Folder paths with spaces are now quoted in cd/register/load_seq commands.
-      - _apply_changes moves files first, then writes an audit list of only what actually moved.
-      - Star-detection rebinds caches/stats and advances the progress bar through post-register phases.
-      - Persists view-state (filter, display mode, graph metrics, scatter axes) across sessions.
-      - Numerous scatter / graph / filmstrip / table hardening and optimizations.
+1.3.4 - Rolls up 1.2.8 → 1.3.4 (workflow refactor + perf/UX passes)
+
+      Workflow / data sources
+      - Dropped the temp FITSEQ and `register -2pass`; every file is
+        analysed in place via `analyse_image_from_file()` and pixels stream
+        via `load_image_from_file()`. No temp files to clean up on close.
+      - Folder-only load prompt; mixed-folder auto-filter skips files whose
+        imagetype or dimensions don't match the reference (first LIGHT),
+        with a 3-channel guard so a stray RGB composite in a mono folder
+        gets dropped instead of breaking the load. Summary banner reports
+        the skip count + reason.
+      - RAW support (CR2/CR3/NEF/ARW/DNG + ~15 others via libraw).
+      - Batch selection grew a percentile mode ("keep best N% by metric"),
+        with lower-/higher-is-better labelled under each combo. Stars is a
+        selectable metric. "Worst N%" retired (percentile is a superset).
+      - Rejected frames move to `rejected/` with a `rejected_frames.txt`
+        audit; `_apply_changes` writes the audit from the set that actually
+        moved, not the requested set. Folder paths with spaces are quoted
+        in all Siril commands. UTF-8 for audit + CSV.
+
+      Display / correctness
+      - Globally-linked autostretch only (per-frame linked-stretch toggle
+        gone); main viewer uses Python MTF with shared median/MAD for
+        flicker-free blink playback. Thumbnails use Siril's C-side preview.
+      - Composite quality weight now matches Siril's `register`:
+        `(1/fwhm² − 1/fwhm_max²) · inv_denom`, mean-normalised to 1.0.
+      - Fixed "barcode" thumbnails on large FITS (≥6000 px wide). Root
+        cause: aliasing, not a race. A single-shot 14× downscale aliases
+        even with Qt's SmoothTransformation (2×2 bilinear averages 2 of
+        every 14 source pixels). `_quality_downscale()` iteratively halves
+        until within 2× of target, then hands off to Qt for the fractional
+        step. `_load_thumbnail` routes both scale sites through it.
+      - Autostretch preset dropdown (Conservative / Default / Aggressive /
+        Linear); sigma/median columns retired (not part of the per-file
+        API). Background column now shows bgnoise directly.
+
+      Performance
+      - `autostretch()` has a uint16 LUT fast path for 16-bit FITS —
+        precomputes the full stretch into a 65536-entry uint8 table and
+        applies it via one `lut[data]` indexed read (vs. ~11 full-frame
+        float32 passes). `load_frame_data()` keeps uint16 unchanged;
+        `compute_global_stretch()` normalises inline.
+      - `_quality_downscale()` halves in numpy (uint16 accumulator + `>>2`)
+        instead of iterating `QImage.scaled()`. Removes per-step QImage
+        allocations; unknown pixel formats fall back to the previous path.
+      - Unified thumbnail + main loader: thumbnails `peek()` FrameCache and
+        fall back to `get_frame()` on miss, so every frame is read +
+        stretched exactly once.
+      - Adaptive FrameCache depth (25% of RAM budget, clamped [40, 240],
+        falls back to 80 without psutil).
+      - `FrameMarker` excluded-set is now O(1) incremental on mark/commit/
+        reset instead of an O(N) rebuild on every mark.
+      - Scatter X/Y combos share a 0 ms coalescing timer (one Figure
+        rebuild per user interaction, not two).
+      - Reset-All Rejections wraps its per-frame loop in
+        `setUpdatesEnabled(False)` on the stats table.
+      - Filmstrip scroll kicks `_start_preload` at the visible range so
+        the worker stays ahead of the user; FPS-aware preload pacing.
+      - Module-level `_siril_io_lock` around every sirilpy RPC as a guard
+        against background threads racing on the socket; `load_frame_data`
+        always copies `frame.data` to sever sirilpy's C-buffer lifetime.
+
+      UI / UX
+      - Coalesced post-mark refresh (slider / scatter / graph) via a
+        single 150 ms timer so hammering G/B with auto-advance stops
+        rebuilding everything on every keypress.
+      - Persists view state (filter, display mode, graph metrics, scatter
+        axes) across sessions. 1-9 FPS presets work while spinboxes have
+        focus (moved to `keyPressEvent`). Canvas-centred progress overlay
+        during startup (stretch params, reference frame, stats, first
+        frame). Filmstrip / table skip no-op style/highlight work. Lots
+        of scatter / graph / filmstrip / table hardening.
 
 1.2.7 - Marking responsiveness
       - Coalesced post-mark refresh (slider / scatter / graph) via a single 150 ms timer.
@@ -126,7 +190,7 @@ from PyQt6.QtGui import (
     QKeySequence, QDesktopServices, QWheelEvent, QMouseEvent,
 )
 
-VERSION = "1.2.8"
+VERSION = "1.3.4"
 
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "BlinkComparator"
@@ -134,9 +198,121 @@ SETTINGS_APP = "BlinkComparator"
 LEFT_PANEL_WIDTH = 340
 
 DEFAULT_CACHE_SIZE = 80
+MIN_ADAPTIVE_CACHE = 40
+MAX_ADAPTIVE_CACHE = 240
+# Fraction of available RAM we're willing to spend on the frame cache.
+# Low enough that QImage display buffers + numpy autostretch scratch
+# memory + thumbnail cache still comfortably fit alongside it.
+CACHE_RAM_BUDGET_FRACTION = 0.25
 THUMBNAIL_WIDTH = 80
 THUMBNAIL_HEIGHT = 60
 THUMBNAIL_CACHE_SIZE = 200
+
+# Gate for the sirilpy C-side `load_image_from_file(preview=True, linked=True)`
+# thumbnail path. In 1.3.1 testing on larger FITS (3840×2160) the preview
+# buffer came back with a layout we couldn't reliably map to a QImage — some
+# thumbnails rendered as vertical "barcode" stripes instead of the star
+# field. Until we confirm a known-good shape/stride contract with sirilpy,
+# default to the slower-but-correct Python MTF path (same code the main
+# viewer uses). Flip to True once verified on a given sirilpy build.
+USE_SIRIL_PREVIEW_FOR_THUMBNAILS = False
+
+# Serialize every sirilpy call that reads pixel data / image metadata from
+# disk. Primary protection was the thumbnail loader vs. preload worker race
+# on large FITS that produced "barcode" thumbnails; the thumbnail loader
+# has since been rerouted through FrameCache so that specific race is gone.
+# The lock stays as defence-in-depth — sirilpy's socket protocol isn't
+# reentrant, and any future code path that calls `load_image_from_file` or
+# `analyse_image_from_file` off the main thread would re-open the race.
+# Held only during the C call, so Python-side stretching / scaling runs
+# concurrently without contention.
+_siril_io_lock = threading.Lock()
+
+
+def _compute_adaptive_cache_size(
+    width: int, height: int, channels: int
+) -> int:
+    """Pick a frame-cache size based on available RAM and frame dimensions.
+
+    A cached entry is the display-scaled QImage (roughly width*height*4 bytes
+    for RGBX / width*height for mono) plus a small overhead for the original
+    float32 buffer held during autostretch. We budget 25% of available RAM
+    and clamp to [MIN, MAX] so tiny systems still get a usable cache and
+    fat systems don't blow up with thousands of entries.
+
+    Falls back to DEFAULT_CACHE_SIZE if dimensions are bogus or psutil is
+    unavailable.
+    """
+    if width <= 0 or height <= 0:
+        return DEFAULT_CACHE_SIZE
+
+    try:
+        import psutil
+        avail_bytes = int(psutil.virtual_memory().available)
+    except Exception:
+        # psutil not installed; be conservative and assume 4 GiB headroom.
+        avail_bytes = 4 * 1024 * 1024 * 1024
+
+    ch = max(1, channels)
+    # Display buffer (uint8, RGBX or grayscale) + float32 working copy that
+    # the autostretch path briefly holds onto. ~5 bytes/pixel per channel
+    # is a safe upper bound.
+    bytes_per_frame = max(1, width * height * ch * 5)
+    budget = int(avail_bytes * CACHE_RAM_BUDGET_FRACTION)
+    size = budget // bytes_per_frame
+    return max(MIN_ADAPTIVE_CACHE, min(MAX_ADAPTIVE_CACHE, int(size)))
+
+
+def session_key_from_timestamp(ts) -> str:
+    """Return a YYYY-MM-DD session key from a timestamp, splitting on
+    noon local time so pre- and post-midnight frames of the same night
+    land in the same session (matches Blink_Browse_Filter_Sort's
+    convention, and what astrophotographers actually expect).
+
+    Accepts a unix int/float, a datetime.datetime, or an ISO-8601 string.
+    Falls back to "unknown-session" if the input is unparseable.
+
+    Currently exposed for future session-grouping features (sorting /
+    per-night reports). Intentionally stdlib-only — no pytz dependency.
+    """
+    import datetime as _dt
+    try:
+        from zoneinfo import ZoneInfo  # stdlib 3.9+
+    except Exception:  # pragma: no cover - very old python
+        ZoneInfo = None
+
+    dt = None
+    try:
+        if isinstance(ts, _dt.datetime):
+            dt = ts
+        elif isinstance(ts, (int, float)):
+            dt = _dt.datetime.fromtimestamp(float(ts))
+        elif isinstance(ts, str) and ts:
+            s = ts.strip()
+            # Normalise trailing 'Z' (UTC) to a parseable offset.
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            dt = _dt.datetime.fromisoformat(s)
+    except (ValueError, OSError, OverflowError):
+        return "unknown-session"
+
+    if dt is None:
+        return "unknown-session"
+
+    # If the timestamp is tz-aware (ISO-8601 usually is), convert to local
+    # wall-clock so the noon boundary matches the observer's night.
+    if dt.tzinfo is not None and ZoneInfo is not None:
+        try:
+            local = dt.astimezone()  # system local tz
+        except Exception:
+            local = dt
+    else:
+        local = dt
+
+    session_date = local.date()
+    if local.hour < 12:
+        session_date = session_date - _dt.timedelta(days=1)
+    return session_date.strftime("%Y-%m-%d")
 
 
 # ------------------------------------------------------------------------------
@@ -252,6 +428,32 @@ def mtf(midtone: float, x: np.ndarray | float, out: np.ndarray | None = None) ->
         return max(0.0, min(1.0, (midtone - 1) * x / denom))
 
 
+def _build_mtf_lut_u16(shadow_f: float, rng_f: float, midtone_f: float) -> np.ndarray:
+    """Build a 65536-entry uint8 LUT mapping uint16 pixel values through the
+    full autostretch pipeline (shadow clip → range scale → MTF → 8-bit quant).
+
+    shadow_f / rng_f / midtone_f are expressed in normalised [0, 1] space —
+    the same contract as the float32 autostretch path — so callers can feed
+    the same global_median / global_mad to either branch.
+
+    Cost: one pass over 65k floats (~1 ms); applied to the frame via a single
+    ``lut[data]`` indexed read, replacing the ~11 full-array numpy passes the
+    float32 path runs per frame. The LUT itself is 64 KB (uint8[65536]).
+    """
+    x = np.arange(65536, dtype=np.float32) * (1.0 / 65535.0)
+    x -= shadow_f
+    x *= (1.0 / rng_f)
+    np.clip(x, 0.0, 1.0, out=x)
+    mtf(midtone_f, x, out=x)
+    x *= 255.0
+    return x.astype(np.uint8)
+
+
+def _build_linear_lut_u16() -> np.ndarray:
+    """LUT for the Linear preset on uint16 input: top 8 bits of each sample."""
+    return (np.arange(65536, dtype=np.uint16) >> 8).astype(np.uint8)
+
+
 # Autostretch presets — user-selectable in Display Options
 AUTOSTRETCH_PRESETS: dict[str, dict | None] = {
     "Conservative": {"shadows_clip": -3.5, "target_median": 0.20},
@@ -274,8 +476,18 @@ def autostretch(
     Midtone Transfer Function (MTF) Autostretch.
     If linear=True, bypasses MTF and just clips to [0,1] + scales to 255.
     If global_median/global_mad are provided, uses those for consistent brightness.
+
+    Accepts uint16 *or* float32 input. For uint16 (the common path — 16-bit
+    FITS from sirilpy) the stretch is evaluated once on a 65536-entry LUT and
+    then applied via a single indexed read, replacing the multi-pass float32
+    pipeline. Global median/MAD are always expressed in normalised [0, 1]
+    space so the two dtype paths share stretch parameters.
     """
+    is_u16 = data.dtype == np.uint16
+
     if linear:
+        if is_u16:
+            return _build_linear_lut_u16()[data]
         out = np.clip(data, 0.0, 1.0) * 255.0
         return out.astype(np.uint8)
 
@@ -288,6 +500,10 @@ def autostretch(
         if flat.size > 500000:
             step = flat.size // 500000
             flat = flat[::step]
+        if is_u16:
+            # Normalise the subsample so median/MAD stay in [0, 1] space and
+            # remain comparable with floats supplied via globals.
+            flat = flat.astype(np.float32) * (1.0 / 65535.0)
         median = float(np.median(flat))
         # Raw MAD (no 1.4826 σ-conversion) — shadows_clip is expressed in units
         # of MAD to match Siril/PixInsight STF convention.
@@ -305,6 +521,13 @@ def autostretch(
     else:
         midtone = 0.5
 
+    if is_u16:
+        # Hot path for 16-bit FITS: precompute the full stretch on a 65k-entry
+        # LUT (one ~1 ms numpy pass over 64 KB), then apply it in one indexed
+        # read — replaces ~11 full-frame passes on a 6248×4176×3 buffer.
+        lut = _build_mtf_lut_u16(shadow, rng, float(midtone))
+        return lut[data]
+
     # Single allocation: subtract + scale + clip in one chain, reusing the buffer.
     # mtf(..., out=stretched) then runs in-place so no additional full-frame alloc.
     stretched = np.subtract(data, shadow, dtype=np.float32)
@@ -316,6 +539,145 @@ def autostretch(
 
 
 # ------------------------------------------------------------------------------
+# FILE SEQUENCE SHIM
+# ------------------------------------------------------------------------------
+
+class FileSequence:
+    """Minimal sequence shim backed by a list of on-disk FITS files.
+
+    Replaces the Siril-side FITSEQ sequence that older versions of this
+    script built via `convert -fitseq`. Exposes the same attributes the
+    rest of the code reads off a `get_seq()` result — .number, .nb_layers,
+    .reference_image, .seqname, .rx, .ry — so FrameCache / FrameMarker /
+    ThumbnailCache / FrameStatistics don't need to know the difference.
+
+    Pixel data is loaded per-file via `load_image_from_file()`, stats
+    come from `analyse_image_from_file()` — no FITSEQ, no register -2pass.
+    """
+
+    def __init__(
+        self,
+        folder: str,
+        paths: list[str],
+        width: int = 0,
+        height: int = 0,
+        channels: int = 1,
+        seqname: str = "",
+    ):
+        self.folder = folder
+        # Absolute paths in display order. The index passed around in the
+        # rest of the code is the position in this list.
+        self.paths: list[str] = list(paths)
+        self.number = len(self.paths)
+        self.nb_layers = channels
+        self.rx = width
+        self.ry = height
+        self.reference_image = 0
+        self.seqname = seqname or os.path.basename(os.path.normpath(folder))
+        # `imgparam` is probed by FrameMarker; by not providing it we fall
+        # through to the "default included" branch, which is correct for
+        # a fresh folder load — every file starts included.
+
+    def path_for(self, index: int) -> str | None:
+        if 0 <= index < len(self.paths):
+            return self.paths[index]
+        return None
+
+    def filename_for(self, index: int) -> str | None:
+        p = self.path_for(index)
+        return os.path.basename(p) if p else None
+
+
+def _analyse_file(siril_iface, path: str) -> dict | None:
+    """Run Siril's `analyse_image_from_file` on a single path and return
+    a flat dict of the stats we care about. Returns None on failure.
+
+    ImageAnalysis fields: bgnoise, channels, filter, fwhm, height,
+    imagetype, nbstars, roundness, timestamp, wfwhm, width.
+    """
+    try:
+        with _siril_io_lock:
+            info = siril_iface.analyse_image_from_file(path)
+    except Exception as exc:
+        log.debug("analyse_image_from_file failed for %s: %s", path, exc)
+        return None
+    if info is None:
+        return None
+    ts_raw = getattr(info, "timestamp", 0) or 0
+    date_obs = ""
+    if ts_raw:
+        try:
+            from datetime import datetime, timezone
+            # Siril reports a Unix-epoch timestamp. Format to ISO-8601 UTC
+            # (same shape DATE-OBS headers use) so the stats table renders
+            # cleanly and sorts chronologically as a string.
+            date_obs = datetime.fromtimestamp(
+                int(ts_raw), tz=timezone.utc
+            ).strftime("%Y-%m-%dT%H:%M:%S")
+        except (ValueError, OSError, OverflowError):
+            date_obs = str(ts_raw)
+    # imagetype comes back as a sirilpy enum or similar — normalize to an
+    # upper-case string so downstream filtering ("LIGHT" vs "DARK" etc.)
+    # doesn't have to care about the wrapper type.
+    itype_raw = getattr(info, "imagetype", "")
+    try:
+        itype = str(getattr(itype_raw, "name", itype_raw) or "").upper()
+    except Exception:
+        itype = ""
+    return {
+        "path": path,
+        "filename": os.path.basename(path),
+        "fwhm": float(getattr(info, "fwhm", 0.0) or 0.0),
+        "wfwhm": float(getattr(info, "wfwhm", 0.0) or 0.0),
+        "roundness": float(getattr(info, "roundness", 0.0) or 0.0),
+        "stars": int(getattr(info, "nbstars", 0) or 0),
+        "bgnoise": float(getattr(info, "bgnoise", 0.0) or 0.0),
+        "channels": int(getattr(info, "channels", 1) or 1),
+        "width": int(getattr(info, "width", 0) or 0),
+        "height": int(getattr(info, "height", 0) or 0),
+        "filter": str(getattr(info, "filter", "") or ""),
+        "imagetype": itype,
+        "timestamp": int(ts_raw),
+        "date_obs": date_obs,
+    }
+
+
+def _analyse_file_batch(
+    siril_iface,
+    paths: list[str],
+    progress_callback=None,
+) -> list[dict]:
+    """Analyse every path in order. Returns one dict per input path; entries
+    for which the RPC failed are filled with zeroed defaults so downstream
+    code can treat the list as dense.
+    """
+    results: list[dict] = []
+    for i, p in enumerate(paths):
+        row = _analyse_file(siril_iface, p)
+        if row is None:
+            row = {
+                "path": p,
+                "filename": os.path.basename(p),
+                "fwhm": 0.0,
+                "wfwhm": 0.0,
+                "roundness": 0.0,
+                "stars": 0,
+                "bgnoise": 0.0,
+                "channels": 1,
+                "width": 0,
+                "height": 0,
+                "filter": "",
+                "imagetype": "",
+                "timestamp": 0,
+                "date_obs": "",
+            }
+        results.append(row)
+        if progress_callback is not None and (i % 5 == 0 or i == len(paths) - 1):
+            progress_callback(i + 1, len(paths))
+    return results
+
+
+# ------------------------------------------------------------------------------
 # SHARED IMAGE CONVERSION HELPERS
 # ------------------------------------------------------------------------------
 
@@ -324,6 +686,116 @@ ZOOM_FACTOR = 1.15
 MAX_ZOOM = 20.0
 MIN_ZOOM = 0.1
 SLIDER_HANDLE_MARGIN = 7  # Approximate half-width of slider handle in pixels
+
+
+def _halve_u8_box(arr: np.ndarray) -> np.ndarray:
+    """2×2 box-filter downscale of a uint8 image array, in integer space.
+
+    Uses a uint16 accumulator + >>2 instead of `arr.mean()` so the kernel
+    stays in integer arithmetic (4× less memory than numpy's default
+    float64 promotion) and collapses to one SIMD-friendly pass. Accepts
+    (H, W) for grayscale or (H, W, C) for packed pixels; H and W must
+    both be even.
+    """
+    if arr.ndim == 2:
+        h, w = arr.shape
+        r = arr.astype(np.uint16).reshape(h // 2, 2, w // 2, 2)
+        return (r.sum(axis=(1, 3)) >> 2).astype(np.uint8)
+    h, w, c = arr.shape
+    r = arr.astype(np.uint16).reshape(h // 2, 2, w // 2, 2, c)
+    return (r.sum(axis=(1, 3)) >> 2).astype(np.uint8)
+
+
+def _qimage_to_numpy(img: QImage) -> tuple[np.ndarray, int] | None:
+    """Return a contiguous uint8 view of ``img`` plus its bytes-per-pixel.
+
+    Strips any row padding so the caller can reshape freely. Returns None
+    for formats we don't know how to unpack; the caller should fall back
+    to Qt's own `scaled()`.
+    """
+    fmt = img.format()
+    w, h = img.width(), img.height()
+    if w <= 0 or h <= 0:
+        return None
+    if fmt == QImage.Format.Format_Grayscale8:
+        bpp = 1
+        shape: tuple = (h, w)
+    elif fmt in (QImage.Format.Format_RGBX8888, QImage.Format.Format_RGBA8888):
+        bpp = 4
+        shape = (h, w, 4)
+    else:
+        return None
+    ptr = img.constBits()
+    ptr.setsize(img.sizeInBytes())
+    flat = np.frombuffer(ptr, dtype=np.uint8)
+    bpl = img.bytesPerLine()
+    row_bytes = w * bpp
+    if bpl != row_bytes:
+        flat = flat.reshape(h, bpl)[:, :row_bytes]
+    arr = np.ascontiguousarray(flat.reshape(shape))
+    return arr, bpp
+
+
+def _quality_downscale(img: QImage, target_w: int, target_h: int) -> QImage:
+    """Anti-aliased downscale to (target_w, target_h).
+
+    Qt's SmoothTransformation is only a 2×2 bilinear filter. On a single-shot
+    large downscale (e.g. 1120→80 ≈ 14×) it still samples 12 of every 14 source
+    pixels to zero, aliasing high-frequency star content into vertical
+    "barcode" stripes. We box-filter halve in numpy until within 2× of target,
+    then hand the small remainder to Qt's `scaled()` for the fractional final
+    step. Numpy halving is cheaper than iterating Qt's `scaled()` — a single
+    SIMD-friendly uint16 pass per step vs. per-step QImage allocation +
+    format-conversion overhead, which matters when building 1000+ thumbnails.
+    """
+    w, h = img.width(), img.height()
+    if w <= 0 or h <= 0:
+        return img
+    # Already close to target — Qt's single scaled() is fine and cheap.
+    if w < target_w * 4 or h < target_h * 4:
+        return img.scaled(
+            target_w, target_h,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+    unpacked = _qimage_to_numpy(img)
+    if unpacked is None:
+        # Unknown format — fall back to iterative Qt halving.
+        while w >= target_w * 4 and h >= target_h * 4:
+            w //= 2
+            h //= 2
+            img = img.scaled(
+                w, h,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        return img.scaled(
+            target_w, target_h,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+    arr, bpp = unpacked
+    # Iteratively halve in numpy. Crop to even dims each step so reshape is clean.
+    while arr.shape[1] >= target_w * 4 and arr.shape[0] >= target_h * 4:
+        h2 = arr.shape[0] - (arr.shape[0] & 1)
+        w2 = arr.shape[1] - (arr.shape[1] & 1)
+        arr = arr[:h2, :w2] if arr.ndim == 2 else arr[:h2, :w2, :]
+        arr = _halve_u8_box(arr)
+
+    hh, ww = arr.shape[0], arr.shape[1]
+    arr = np.ascontiguousarray(arr)
+    buf = arr.tobytes()
+    if bpp == 1:
+        halved = QImage(buf, ww, hh, ww, QImage.Format.Format_Grayscale8).copy()
+    else:
+        halved = QImage(buf, ww, hh, ww * 4, QImage.Format.Format_RGBX8888).copy()
+    return halved.scaled(
+        target_w, target_h,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
 
 
 def frame_data_to_qimage(
@@ -349,10 +821,28 @@ def frame_data_to_qimage(
             "global_mad": global_mad,
         }
 
-    # Vertical flip (Siril frames are bottom-up) is done via QImage.mirrored()
-    # rather than np.ascontiguousarray(arr[::-1]). mirrored() returns a new
-    # QImage that owns its buffer, so we also skip the subsequent .copy() —
-    # saves one full-frame memcpy on every display refresh.
+    # Siril frames are bottom-up; flip rows here in numpy (on the autostretched
+    # uint8 view) and feed QImage a `bytes` blob via .tobytes(). That forces
+    # PyQt6 to copy the buffer into the QImage's internal store immediately,
+    # so the QImage is independent of the (about-to-be-GC'd) numpy array.
+    #
+    # Earlier revisions relied on QImage.mirrored() producing an owning copy.
+    # In practice PyQt6 uses copy-on-write: .mirrored() + a later .scaled()
+    # would re-read the ORIGINAL buffer, which by then had been freed — the
+    # main viewer escaped this only because its QImage was retained alongside
+    # other state in FrameCache, but thumbnails (build → scale → discard in
+    # one shot) were reading stale memory and rendering "barcode" stripes.
+    # Lifetime discipline for QImage-from-bytes:
+    #   1. Hold the `bytes` object in a named local so it isn't a
+    #      mid-expression temporary that Python can GC before .copy()
+    #      finishes its detach. On large (≥6000 px wide) frames we
+    #      observed residual "barcode" thumbnails even after serialising
+    #      sirilpy I/O — the remaining corruption correlated with large
+    #      buffer .tobytes() temporaries being dropped while Qt was still
+    #      reading them during implicit-sharing detach.
+    #   2. `.copy()` on the returned QImage forces Qt to allocate its own
+    #      internal buffer, so the caller-visible QImage no longer shares
+    #      any memory with the Python `bytes` we allocated.
     if frame_data.ndim == 3 and frame_data.shape[0] == 3:
         # Vectorized RGB stretch: one autostretch() call on the whole (3,H,W)
         # array instead of three separate calls. Since the three channels share
@@ -362,40 +852,185 @@ def frame_data_to_qimage(
         rgb = autostretch(frame_data, **stretch_kwargs)  # (3, H, W) uint8
         _, h, w = rgb.shape
         alpha = np.full((h, w), 255, dtype=np.uint8)
-        rgbx = np.ascontiguousarray(np.stack((rgb[0], rgb[1], rgb[2], alpha), axis=-1))
-        qimg = QImage(rgbx.data, w, h, w * 4, QImage.Format.Format_RGBX8888)
-        return qimg.mirrored(False, True)
+        rgbx = np.stack((rgb[0], rgb[1], rgb[2], alpha), axis=-1)
+        rgbx = np.ascontiguousarray(rgbx[::-1, :, :])
+        buf = rgbx.tobytes()
+        img = QImage(buf, w, h, w * 4, QImage.Format.Format_RGBX8888)
+        out = img.copy()
+        return out
     elif frame_data.ndim == 3 and frame_data.shape[0] == 1:
-        mono = np.ascontiguousarray(autostretch(frame_data[0], **stretch_kwargs))
+        mono = autostretch(frame_data[0], **stretch_kwargs)
+        mono = np.ascontiguousarray(mono[::-1, :])
         h, w = mono.shape
-        qimg = QImage(mono.data, w, h, w, QImage.Format.Format_Grayscale8)
-        return qimg.mirrored(False, True)
+        buf = mono.tobytes()
+        img = QImage(buf, w, h, w, QImage.Format.Format_Grayscale8)
+        out = img.copy()
+        return out
     elif frame_data.ndim == 2:
-        mono = np.ascontiguousarray(autostretch(frame_data, **stretch_kwargs))
+        mono = autostretch(frame_data, **stretch_kwargs)
+        mono = np.ascontiguousarray(mono[::-1, :])
         h, w = mono.shape
-        qimg = QImage(mono.data, w, h, w, QImage.Format.Format_Grayscale8)
-        return qimg.mirrored(False, True)
+        buf = mono.tobytes()
+        img = QImage(buf, w, h, w, QImage.Format.Format_Grayscale8)
+        out = img.copy()
+        return out
     return None
 
 
-def load_frame_data(siril_iface, index: int) -> np.ndarray | None:
-    """Load a single frame's pixel data as float32 [0, 1] from Siril. Returns None on error."""
+def load_frame_preview_qimage(siril_iface, path: str | None) -> QImage | None:
+    """Fast-path thumbnail: get an 8-bit autostretched preview straight from Siril.
+
+    Uses `load_image_from_file(preview=True, linked=True)` which invokes
+    Siril's C-side autostretch and returns uint8 pixel data already. Skips
+    the Python MTF pass entirely — roughly an order of magnitude faster
+    than `load_frame_data` + `frame_data_to_qimage` for a single thumb.
+
+    Not suitable for the main viewer because Siril's preview is
+    per-frame-independent (no globally-linked median/MAD across frames),
+    which would cause brightness flicker during blink playback. Fine for
+    the filmstrip: thumbs are used for spatial navigation, not for
+    cross-frame brightness comparison.
+
+    Shape handling: sirilpy has been observed returning either
+    channels-first (3,H,W) for FITS-like data or channels-last (H,W,3)
+    for debayered RAW previews. We accept both, plus mono variants
+    (1,H,W), (H,W,1), and plain 2-D. An explicit .copy() is applied so
+    the returned QImage owns its pixel buffer and won't dangle when the
+    numpy source is GC'd after return.
+    """
+    if not path:
+        return None
     try:
-        frame = siril_iface.get_seq_frame(index, with_pixels=True)
+        with _siril_io_lock:
+            frame = siril_iface.load_image_from_file(
+                path, with_pixels=True, preview=True, linked=True
+            )
+    except (SirilError, OSError, ValueError, TypeError, RuntimeError) as exc:
+        log.debug("Preview load failed for %s: %s", path, exc)
+        return None
+    if frame is None or frame.data is None:
+        return None
+    data = frame.data
+    if data.dtype != np.uint8:
+        # Defensive: older sirilpy builds may still hand back uint16 even
+        # with preview=True. Scale down rather than fall over.
+        if np.issubdtype(data.dtype, np.integer):
+            data = (data >> 8).astype(np.uint8) if data.dtype == np.uint16 else data.astype(np.uint8)
+        else:
+            data = np.clip(data * 255.0, 0, 255).astype(np.uint8)
+
+    # Normalise to channels-last uint8 RGB(A) or 2-D mono, ALREADY flipped
+    # to top-down, ALREADY C-contiguous. Doing this in numpy (not via
+    # QImage.mirrored()) avoids a class of buffer-stride bugs where the
+    # QImage's bytesPerLine doesn't match the numpy array's real stride
+    # — that mismatch is the classic cause of the "barcode / repeating
+    # stripes" pattern on every thumbnail.
+    try:
+        buf, w, h, fmt = _preview_bytes_from_data(data)
+    except (ValueError, TypeError, MemoryError) as exc:
+        log.debug("Preview normalise failed for %s: %s", path, exc)
+        return None
+    if buf is None:
+        log.debug("Preview shape not handled for %s: %s",
+                  path, getattr(data, "shape", None))
+        return None
+
+    # QImage from a Python `bytes` object: PyQt6 copies the data into the
+    # QImage's internal store immediately, so the numpy array below can be
+    # GC'd safely and the QImage owns its pixels outright.
+    stride = w * (4 if fmt in (QImage.Format.Format_RGBX8888,
+                               QImage.Format.Format_RGBA8888) else 1)
+    qimg = QImage(buf, w, h, stride, fmt)
+    if qimg.isNull():
+        return None
+    return qimg.copy()
+
+
+def _preview_bytes_from_data(data):
+    """Flatten sirilpy preview data to (bytes, width, height, QImage.Format).
+
+    Handles every shape variant sirilpy has been seen to return — both
+    channels-first (3,H,W) / (1,H,W) and channels-last (H,W,3) / (H,W,4)
+    / (H,W,1), plus plain 2-D mono. Flips rows here (Siril frames are
+    bottom-up) rather than in Qt, and returns a freshly C-contiguous
+    bytes blob so QImage's bytesPerLine can be computed deterministically
+    from the channel count.
+
+    Returns (None, 0, 0, None) if the shape is not recognised.
+    """
+    if data.ndim == 3 and data.shape[0] == 3 and data.shape[-1] != 3:
+        # (3, H, W) — transpose to (H, W, 3) and append alpha
+        rgb = np.transpose(data, (1, 2, 0))
+        h, w, _ = rgb.shape
+        alpha = np.full((h, w, 1), 255, dtype=np.uint8)
+        rgbx = np.concatenate((rgb, alpha), axis=-1)
+        rgbx = np.ascontiguousarray(rgbx[::-1, :, :])
+        return rgbx.tobytes(), w, h, QImage.Format.Format_RGBX8888
+    if data.ndim == 3 and data.shape[-1] == 3:
+        h, w, _ = data.shape
+        alpha = np.full((h, w, 1), 255, dtype=np.uint8)
+        rgbx = np.concatenate((data, alpha), axis=-1)
+        rgbx = np.ascontiguousarray(rgbx[::-1, :, :])
+        return rgbx.tobytes(), w, h, QImage.Format.Format_RGBX8888
+    if data.ndim == 3 and data.shape[-1] == 4:
+        h, w, _ = data.shape
+        rgba = np.ascontiguousarray(data[::-1, :, :])
+        return rgba.tobytes(), w, h, QImage.Format.Format_RGBA8888
+    if data.ndim == 3 and data.shape[0] == 1:
+        mono = np.ascontiguousarray(data[0, ::-1, :])
+        h, w = mono.shape
+        return mono.tobytes(), w, h, QImage.Format.Format_Grayscale8
+    if data.ndim == 3 and data.shape[-1] == 1:
+        mono = np.ascontiguousarray(data[::-1, :, 0])
+        h, w = mono.shape
+        return mono.tobytes(), w, h, QImage.Format.Format_Grayscale8
+    if data.ndim == 2:
+        mono = np.ascontiguousarray(data[::-1, :])
+        h, w = mono.shape
+        return mono.tobytes(), w, h, QImage.Format.Format_Grayscale8
+    return None, 0, 0, None
+
+
+def load_frame_data(siril_iface, path: str | None) -> np.ndarray | None:
+    """Load a single frame's pixel data from a file path.
+
+    Returns uint16 for 16-bit integer sources (the common FITS case) and
+    float32 in [0, 1] for float sources. ``autostretch`` handles both dtypes;
+    keeping integer frames as uint16 lets the hot display path apply its
+    stretch via a 65k-entry LUT instead of an 11-pass float32 pipeline.
+    ``compute_global_stretch`` normalises inline when it sees uint16, so
+    the global_median / global_mad it publishes remain in [0, 1] space.
+
+    Uses Siril's `load_image_from_file` (does not touch the image currently
+    loaded in Siril). Returns None on error.
+    """
+    if not path:
+        return None
+    try:
+        with _siril_io_lock:
+            frame = siril_iface.load_image_from_file(path, with_pixels=True)
         if frame is None or frame.data is None:
             return None
-        data = frame.data
-        # Fast path: check dtype before scanning with max()
-        if np.issubdtype(data.dtype, np.integer):
-            # uint16 or similar integer data — always needs normalization
-            return data.astype(np.float32) * (1.0 / 65535.0)
-        data = data.astype(np.float32) if data.dtype != np.float32 else data
+        raw = frame.data
+        # Always materialise our own owning copy. sirilpy's `frame.data`
+        # wraps a C buffer whose lifetime is tied to the `frame` object,
+        # and the ownership contract with numpy is not documented strongly
+        # enough to trust across threads / subsequent calls. Without this
+        # copy, a later `load_image_from_file` call can reuse the same
+        # underlying memory while we still hold the pointer — giving us
+        # the right shape but partly-overwritten pixel data, which renders
+        # as vertical-stripe "barcode" thumbnails on large frames where
+        # the overlap window is largest.
+        if np.issubdtype(raw.dtype, np.integer):
+            # Keep native uint16 precision; autostretch has a LUT fast path.
+            return np.array(raw, dtype=np.uint16, copy=True)
+        data = np.array(raw, dtype=np.float32, copy=True)
         # Float data: sample a few pixels to detect [0, 65535] vs [0, 1] range
         if data.flat[0] > 1.5 or (data.size > 100 and data.flat[data.size // 2] > 1.5):
-            data = data * (1.0 / 65535.0)
+            data *= (1.0 / 65535.0)
         return data
     except (SirilError, OSError, ValueError, TypeError, RuntimeError) as exc:
-        log.debug("Failed to load frame %d data: %s", index, exc)
+        log.debug("Failed to load frame data from %s: %s", path, exc)
         return None
 
 
@@ -479,210 +1114,136 @@ class _MplWidgetBase(QWidget):
 # ------------------------------------------------------------------------------
 
 class FrameStatistics:
-    """Loads and stores per-frame stats from Siril for the entire sequence."""
+    """Per-frame stats sourced from `analyse_image_from_file` results.
 
-    COLUMNS = ["fwhm", "roundness", "background", "stars", "median", "sigma", "date_obs", "weight"]
+    The heavy lifting (star detection, FWHM/roundness, background noise)
+    runs once during load inside Siril's C code. This class just wraps
+    the resulting rows, adds a composite quality weight, and caches
+    numpy column views for the graph/scatter renderers.
+    """
+
+    COLUMNS = ["fwhm", "roundness", "background", "stars", "date_obs", "weight"]
 
     def __init__(self, siril_iface, seq):
         self.siril = siril_iface
         self.seq = seq
         self.total = seq.number
         self.data: list[dict] = []
-        # Siril stores regdata on ch1 (green) for RGB, ch0 for mono.
-        # We search all channels up to nb_layers to find the one with data.
-        self._nb_layers = getattr(seq, 'nb_layers', 1)
+        self._nb_layers = getattr(seq, "nb_layers", 1)
+        # Kept for API compatibility with callers that still check it — with
+        # `analyse_image_from_file` we always have regdata-equivalent fields
+        # populated as long as the analysis RPC succeeded on at least one frame.
+        self.has_regdata: bool = False
         # M1 (v1.2.8 audit-5): monotonic revision counter. Bumped by every
-        # mutation path (load_all, backfill_stats, invalidate_column_cache)
-        # so render-signature dedupe can detect data changes without relying
-        # on `id(self.data)` — which CPython reuses once the old list is GC'd
-        # and could produce false-positive cache hits after a full reload.
+        # mutation path so render-signature dedupe can detect data changes
+        # without relying on `id(self.data)` — which CPython reuses once
+        # the old list is GC'd and could produce false-positive cache hits.
         self.data_revision: int = 0
 
-    def load_all(self, progress_callback=None, skip_stats: bool = False) -> None:
-        """Load registration data, stats, and imgdata for all frames.
+    def load_all(
+        self,
+        progress_callback=None,
+        preloaded: list[dict] | None = None,
+        skip_stats: bool = False,  # kept for signature compatibility; ignored
+    ) -> None:
+        """Populate per-frame rows from ImageAnalysis.
 
-        When regdata is unavailable (sequence registered without star detection),
-        falls back to stats.median for background and stats.bgnoise for noise.
-        Sets self.has_regdata flag so the UI can offer to run seqfindstar.
+        If `preloaded` is provided (results of `_analyse_file_batch`), we
+        just wrap those into the internal row shape. Otherwise we call the
+        RPC once per path. The dict shape stays compatible with the old
+        implementation so downstream widgets (table, graph, scatter,
+        batch-reject) don't need to change.
 
-        Performance: probes the regdata channel once at frame 0 and caches it
-        (rather than re-searching all channels on every frame). Skips the
-        get_seq_stats RPC entirely when regdata already carries a usable
-        background + median — saves ~1 RPC per frame on registered sequences,
-        which is the dominant cost for long stacks.
+        Field mapping (ImageAnalysis → row):
+          fwhm        → fwhm
+          roundness   → roundness
+          nbstars     → stars
+          bgnoise     → bgnoise   + background (per-frame sky brightness proxy)
+          timestamp   → date_obs  (ISO-8601 UTC)
 
-        P3 (v1.2.8 audit-4): `skip_stats=True` skips the per-frame
-        get_seq_stats RPC (~1-2 s per 1000 frames). Median/Sigma/bgnoise
-        will be blank until `backfill_stats()` is called. Opt-in — the
-        default still populates all columns synchronously so the stats
-        table is fully rendered when load_all returns.
+        Median / Sigma columns were removed in v1.3.0 — Siril's per-image
+        analyse RPC doesn't return them. Background (from bgnoise) is the
+        replacement sky-brightness metric.
         """
+        del skip_stats  # no longer meaningful — analysis is always populated
         self.data = []
-        self.has_regdata = False  # Track whether any frame has registration data
+        self.has_regdata = False
 
-        # Probe once: Siril stores regdata on ch1 (green) for RGB, ch0 for mono.
-        # Scan channels at frame 0 to find the one with valid data, then use
-        # that channel for every subsequent frame (the layout doesn't vary).
-        reg_channel: int | None = None
-        for ch in range(self._nb_layers):
-            try:
-                probe = self.siril.get_seq_regdata(0, ch)
-                if probe is not None and getattr(probe, 'fwhm', 0) > 0:
-                    reg_channel = ch
-                    break
-            except Exception:
-                continue
+        if preloaded is not None and len(preloaded) == self.total:
+            rows_src = preloaded
+            analysed_inline = False
+        else:
+            rows_src = None
+            analysed_inline = True
 
         for i in range(self.total):
+            if rows_src is not None:
+                a = rows_src[i]
+            else:
+                a = _analyse_file(self.siril, self.seq.path_for(i)) or {}
+
+            fwhm = float(a.get("fwhm", 0.0) or 0.0)
+            roundness = float(a.get("roundness", 0.0) or 0.0)
+            stars = int(a.get("stars", 0) or 0)
+            bgnoise = float(a.get("bgnoise", 0.0) or 0.0)
+            # `analyse_image_from_file` gives us bgnoise but not median — use
+            # bgnoise as a proxy for "background level" so the column stays
+            # informative and the batch-reject threshold still functions.
+            background = bgnoise
+
             row = {
                 "frame_idx": i,
-                "fwhm": 0.0,
-                "roundness": 0.0,
-                "background": 0.0,
-                "stars": 0,
-                "median": 0.0,
-                "sigma": 0.0,
-                "bgnoise": 0.0,
-                "date_obs": "",
+                "fwhm": fwhm,
+                "wfwhm": 0.0,  # filled by _compute_weights (Siril-formula)
+                "roundness": roundness,
+                "background": background,
+                "stars": stars,
+                "bgnoise": bgnoise,
+                "date_obs": str(a.get("date_obs", "") or ""),
+                "filter": str(a.get("filter", "") or ""),
+                "filename": str(a.get("filename", "") or ""),
             }
 
-            reg = None
-            if reg_channel is not None:
-                try:
-                    reg = self.siril.get_seq_regdata(i, reg_channel)
-                except (SirilError, OSError, AttributeError, TypeError, ValueError) as exc:
-                    log.debug("Frame %d: regdata unavailable: %s", i, exc)
-                    reg = None
-
-            if reg is not None:
-                v = getattr(reg, 'fwhm', 0)
-                if v > 0:
-                    row["fwhm"] = float(v)
-                    self.has_regdata = True
-                v = getattr(reg, 'roundness', 0)
-                if v > 0:
-                    row["roundness"] = float(v)
-                v = getattr(reg, 'background_lvl', 0)
-                if v > 0:
-                    row["background"] = float(v)
-                v = getattr(reg, 'number_of_stars', 0)
-                if v > 0:
-                    row["stars"] = int(v)
-
-            # Always fetch get_seq_stats: regdata (fwhm/roundness/background_lvl/
-            # number_of_stars) does NOT contain median or sigma, so if we skip
-            # this call whenever regdata has background, the Median and Sigma
-            # columns in the stats table stay permanently empty. The RPC cost
-            # is paid once per frame at sequence-load time (not per playback
-            # tick), so correctness wins over the marginal I/O savings of
-            # the previous "need_stats" gate. [1.2.8 regression fix for 1.2.6]
-            if not skip_stats:
-                try:
-                    stats = self.siril.get_seq_stats(i, 0)
-                    if stats is not None:
-                        v = getattr(stats, 'median', 0)
-                        if v:
-                            row["median"] = float(v)
-                        v = getattr(stats, 'sigma', 0)
-                        if v > 0:
-                            row["sigma"] = float(v)
-                        v = getattr(stats, 'bgnoise', 0)
-                        if v > 0:
-                            row["bgnoise"] = float(v)
-                        # Fallback: use stats.median as background when regdata is missing
-                        if row["background"] == 0.0 and row["median"] > 0:
-                            row["background"] = row["median"]
-                except (SirilError, OSError, AttributeError, TypeError, ValueError) as exc:
-                    log.debug("Frame %d: stats unavailable: %s", i, exc)
-
-            # Date-observed: try imgdata.date_obs first (Siril's canonical
-            # attribute). Some sirilpy versions / Siril builds expose it as
-            # .date instead, and a few leave imgdata bare and only surface
-            # the timestamp on the frame header. Chain through all three so
-            # the column populates regardless of which shape Siril returned.
-            try:
-                imgdata = self.siril.get_seq_imgdata(i)
-                if imgdata is not None:
-                    v = (getattr(imgdata, 'date_obs', None)
-                         or getattr(imgdata, 'date', None)
-                         or getattr(imgdata, 'DATE-OBS', None)
-                         or getattr(imgdata, 'date-obs', None))
-                    if v:
-                        row["date_obs"] = str(v)
-            except (SirilError, OSError, AttributeError, TypeError, ValueError) as exc:
-                log.debug("Frame %d: imgdata unavailable: %s", i, exc)
-
-            # Last-ditch date fallback: peek at the frame's FITS header.
-            # Only fires if imgdata didn't yield one — keeps the hot path
-            # cheap for the common case.
-            if not row["date_obs"]:
-                try:
-                    frame = self.siril.get_seq_frame(i, with_pixels=False)
-                    if frame is not None:
-                        hdr = getattr(frame, 'header', None)
-                        if hdr is not None:
-                            # header may be a dict-like or a string blob
-                            if hasattr(hdr, 'get'):
-                                v = hdr.get('DATE-OBS') or hdr.get('DATE_OBS') or hdr.get('date_obs')
-                            else:
-                                v = None
-                            if v:
-                                row["date_obs"] = str(v)
-                except (SirilError, OSError, AttributeError, TypeError, ValueError) as exc:
-                    log.debug("Frame %d: header date lookup failed: %s", i, exc)
+            if fwhm > 0 or stars > 0 or roundness > 0:
+                self.has_regdata = True
 
             self.data.append(row)
 
-            if progress_callback and i % 5 == 0:
+            if analysed_inline and progress_callback and (i % 5 == 0 or i == self.total - 1):
                 progress_callback(i, self.total)
 
-        # Compute composite quality weights
         self._compute_weights()
-        # P1 (v1.2.8 audit-4): drop the np-column cache so the next graph/
-        # scatter render re-builds it from the fresh data.
         self.invalidate_column_cache()
+        self.data_revision += 1
 
     def backfill_stats(self, progress_callback=None) -> None:
-        """P3 (v1.2.8 audit-4): fill in Median/Sigma/bgnoise columns for
-        rows loaded with `skip_stats=True`. Safe to call from a background
-        thread — only mutates individual dict values, which is atomic under
-        the GIL. Callers should invoke `invalidate_column_cache()` after
-        and refresh the stats table/graph/scatter to pick up new values.
+        """No-op retained for API compatibility.
+
+        Previous versions ran a second `get_seq_stats` pass to fill
+        Median/Sigma columns after an initial skip_stats=True load. Those
+        columns were removed in v1.3.0 (analyse_image_from_file does not
+        return them), so nothing to do.
         """
-        if not self.data:
-            return
-        for i, row in enumerate(self.data):
-            # Skip if already populated (full load_all ran).
-            if row.get("median", 0) or row.get("sigma", 0):
-                continue
-            try:
-                stats = self.siril.get_seq_stats(i, 0)
-                if stats is None:
-                    continue
-                v = getattr(stats, "median", 0)
-                if v:
-                    row["median"] = float(v)
-                v = getattr(stats, "sigma", 0)
-                if v > 0:
-                    row["sigma"] = float(v)
-                v = getattr(stats, "bgnoise", 0)
-                if v > 0:
-                    row["bgnoise"] = float(v)
-                if row["background"] == 0.0 and row["median"] > 0:
-                    row["background"] = row["median"]
-            except (SirilError, OSError, AttributeError, TypeError, ValueError) as exc:
-                log.debug("Frame %d: backfill stats unavailable: %s", i, exc)
-            if progress_callback and i % 25 == 0:
-                progress_callback(i, self.total)
-        self.invalidate_column_cache()
+        del progress_callback
+        return
 
     def _compute_weights(self) -> None:
-        """Compute composite quality weight: (1/FWHM) * roundness * (1/background) * sqrt(stars)."""
-        # Normalize each metric to [0, 1] range, then combine
+        """Compute per-frame weighted FWHM (Siril-matching formula) and the
+        composite quality weight.
+
+        wFWHM uses the same non-linear curve Siril uses internally for stack
+        weighting: w = (1/fwhm² − 1/fwhm_max²) · inv_denom, then normalised
+        so the mean across valid frames is 1.0. This is more sensitive to
+        seeing variation than a linear min/max normalisation — frames with
+        noticeably worse FWHM get pushed down harder, matching what
+        `register`'s wfwhm reweighting would produce.
+
+        The composite `weight` column then averages: wfwhm-based FWHM score,
+        roundness, inverted background, and sqrt-normalised star count.
+        """
         fwhm_vals = [r["fwhm"] for r in self.data if r["fwhm"] > 0]
         bg_vals = [r["background"] for r in self.data if r["background"] > 0]
         star_vals = [r["stars"] for r in self.data if r["stars"] > 0]
-        rnd_vals = [r["roundness"] for r in self.data if r["roundness"] > 0]
 
         fwhm_min = min(fwhm_vals) if fwhm_vals else 1.0
         fwhm_max = max(fwhm_vals) if fwhm_vals else 1.0
@@ -690,20 +1251,52 @@ class FrameStatistics:
         bg_max = max(bg_vals) if bg_vals else 1.0
         star_max = max(star_vals) if star_vals else 1.0
 
+        # --- wFWHM pass (Siril internal formula) ------------------------
+        # Follows Blink_Browse_Filter_Sort.compute_wfwhm_weights, which in
+        # turn mirrors Siril's C code. Weights average to 1.0 across valid
+        # frames, so >1 = above average, <1 = below average.
+        if len(fwhm_vals) >= 2 and fwhm_max > fwhm_min:
+            inv_denom = 1.0 / (1.0 / (fwhm_min * fwhm_min)
+                               - 1.0 / (fwhm_max * fwhm_max))
+            inv_fwhm_max2 = 1.0 / (fwhm_max * fwhm_max)
+            raw: list[tuple[int, float]] = []
+            total = 0.0
+            for i, row in enumerate(self.data):
+                f = row["fwhm"]
+                if f > 0:
+                    w = (1.0 / (f * f) - inv_fwhm_max2) * inv_denom
+                    raw.append((i, w))
+                    total += w
+                else:
+                    row["wfwhm"] = 0.0
+            if total > 0 and raw:
+                norm = len(raw) / total
+                for i, w in raw:
+                    self.data[i]["wfwhm"] = w * norm
+            else:
+                for i, _ in raw:
+                    self.data[i]["wfwhm"] = 0.0
+        else:
+            # One-frame (or flat) set — assign neutral weight so composite
+            # weight still has a FWHM factor to average in.
+            for row in self.data:
+                row["wfwhm"] = 1.0 if row["fwhm"] > 0 else 0.0
+
+        # --- Composite weight -------------------------------------------
+        # wFWHM is normalised to mean=1.0; clamp to [0, 2] then divide by 2
+        # so the FWHM contribution stays in the same [0, 1] range as the
+        # other factors (roundness, inverted background, normalised stars).
         for row in self.data:
             w = 0.0
             n_factors = 0
-            if row["fwhm"] > 0 and fwhm_max > fwhm_min:
-                # Lower FWHM = better → invert
-                w_fwhm = 1.0 - (row["fwhm"] - fwhm_min) / (fwhm_max - fwhm_min)
-                w += w_fwhm
+            wfwhm = row.get("wfwhm", 0.0)
+            if row["fwhm"] > 0 and wfwhm > 0:
+                w += min(1.0, wfwhm * 0.5)
                 n_factors += 1
             if row["roundness"] > 0:
-                # Higher roundness = better (closer to 1.0)
                 w += row["roundness"]
                 n_factors += 1
             if row["background"] > 0 and bg_max > bg_min:
-                # Lower background = better → invert
                 w_bg = 1.0 - (row["background"] - bg_min) / (bg_max - bg_min)
                 w += w_bg
                 n_factors += 1
@@ -836,66 +1429,38 @@ class FrameCache:
         # the main window on close. Main window toggles this in closeEvent.
         self._closing: bool = False
 
-    def compute_global_stretch(self, sample_count: int = 10) -> None:
+    def compute_global_stretch(self, sample_count: int = 5) -> None:
         """Sample the sequence to derive a shared median/MAD for linked autostretch.
 
         IMPORTANT: `autostretch()` operates on frame data normalized to [0, 1]
         (see load_frame_data), so the returned global_median / global_mad MUST
-        also be in [0, 1]. Siril's `get_seq_stats` returns values in the image's
-        native range (0-65535 for uint16 FITS), so we detect the scale by
-        magnitude and normalize. If stats are unavailable, we fall back to
-        loading a few sample frames and computing directly from the normalized
-        pixel data.
+        also be in [0, 1]. We sample a handful of frames directly via
+        `load_image_from_file` and compute median/MAD on the normalized pixel
+        data — the old `get_seq_stats` fast path is gone along with the
+        sequence it sampled from.
         """
         total = self.seq.number
-        step = max(1, total // sample_count)
+        step = max(1, total // max(1, sample_count))
         indices = list(range(0, total, step))[:sample_count]
         medians: list[float] = []
         mads: list[float] = []
 
         for idx in indices:
-            try:
-                stats = self.siril.get_seq_stats(idx, 0)
-                if stats is None:
-                    continue
-                med = float(stats.median)
-                # Prefer true MAD if sirilpy exposes it. Otherwise convert
-                # avgDev (= MAD × 1.2533 for Gaussian data) or sigma
-                # (= MAD × 1.4826 for Gaussian data) back to MAD so our
-                # shadows_clip stays in units of MAD (Siril/PI STF convention).
-                mad_val = float(getattr(stats, "mad", 0.0) or 0.0)
-                if mad_val <= 0:
-                    avg_dev = float(getattr(stats, "avgDev", 0.0) or 0.0)
-                    if avg_dev > 0:
-                        mad_val = avg_dev / 1.2533
-                    else:
-                        sigma = float(getattr(stats, "sigma", 0.0) or 0.0)
-                        if sigma > 0:
-                            mad_val = sigma / 1.4826
-                if mad_val <= 0:
-                    continue
-                # Normalize to [0, 1] if the values look like 16-bit ADU.
-                if med > 1.5 or mad_val > 1.5:
-                    med *= (1.0 / 65535.0)
-                    mad_val *= (1.0 / 65535.0)
-                medians.append(med)
-                mads.append(mad_val)
-            except Exception:
-                pass
-
-        # Fallback: if the stats call returned nothing usable, sample a few
-        # frames directly and compute median/MAD from the normalized data.
-        if not medians:
-            for idx in indices[:3]:
-                data = load_frame_data(self.siril, idx)
-                if data is None:
-                    continue
-                flat = data.ravel()
-                if flat.size > 500000:
-                    flat = flat[::flat.size // 500000]
-                m = float(np.median(flat))
-                medians.append(m)
-                mads.append(float(np.median(np.abs(flat - m))))
+            path = self.seq.path_for(idx) if hasattr(self.seq, "path_for") else None
+            data = load_frame_data(self.siril, path)
+            if data is None:
+                continue
+            flat = data.ravel()
+            if flat.size > 500000:
+                flat = flat[::flat.size // 500000]
+            if flat.dtype == np.uint16:
+                # Match the float32 path's [0, 1] contract so global_median /
+                # global_mad are comparable across sources regardless of the
+                # per-frame load dtype.
+                flat = flat.astype(np.float32) * (1.0 / 65535.0)
+            m = float(np.median(flat))
+            medians.append(m)
+            mads.append(float(np.median(np.abs(flat - m))))
 
         # L3 (v1.2.8 audit-5): compute into locals then publish both fields
         # atomically under `self.lock`. Previously `self.global_median` was
@@ -923,7 +1488,8 @@ class FrameCache:
         # concurrent reader can never observe a half-populated reference_data
         # (load_frame_data can be slow and a preload worker checking
         # `self.reference_data is not None` should only see fully loaded data).
-        new_ref = load_frame_data(self.siril, ref_idx)
+        path = self.seq.path_for(ref_idx) if hasattr(self.seq, "path_for") else None
+        new_ref = load_frame_data(self.siril, path)
         with self.lock:
             self.reference_data = new_ref
 
@@ -970,7 +1536,8 @@ class FrameCache:
         callers that don't pass them fall back to the live attributes for
         backward compatibility.
         """
-        frame_data = load_frame_data(self.siril, index)
+        path = self.seq.path_for(index) if hasattr(self.seq, "path_for") else None
+        frame_data = load_frame_data(self.siril, path)
         if frame_data is None:
             return None
 
@@ -1103,28 +1670,48 @@ class ThumbnailCache:
         # visual difference vs. Smooth is imperceptible on natural astro frames,
         # but Fast skips the bilinear filter pass — ~3–4× faster scaling per
         # thumbnail, which matters when building 1000+ entries on load.
+        # Single loading path: always go through FrameCache. peek() first
+        # (cheap — just a dict lookup under the cache lock), and fall back
+        # to get_frame() on miss. get_frame() does the autostretch + scale
+        # to display size and caches the result, so the main viewer's
+        # subsequent visit is free. This eliminates the duplicate per-frame
+        # `load_image_from_file` + autostretch the thumbnail loader used to
+        # do in parallel with the preload worker — a win of ~50% on disk
+        # I/O and CPU for filmstrip scrolling, and the only way to keep the
+        # two paths from interleaving Siril socket reads on large frames.
         if self.frame_cache is not None:
             cached = self.frame_cache.peek(index)
+            if cached is None:
+                cached = self.frame_cache.get_frame(index)
             if cached is not None:
-                scaled = cached.scaled(
-                    THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.FastTransformation,
-                )
+                # Progressive-halving downscale. A single-shot SmoothTransformation
+                # from ~1120→80 (14×) still aliases because Qt's smooth filter
+                # is only 2×2 bilinear — at that ratio each output pixel averages
+                # just 2 of every 14 source pixels per axis, leaving column-
+                # correlated high-frequency star content as vertical "barcode"
+                # stripes. Halving keeps each step inside the 2×2 kernel's
+                # correct range so aliasing is eliminated end-to-end.
+                scaled = _quality_downscale(cached, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT)
                 return QPixmap.fromImage(scaled)
 
-        data = load_frame_data(self.siril, index)
-        if data is None:
-            return None
-        qimg = frame_data_to_qimage(data, self.global_median, self.global_mad,
-                                    preset=self.stretch_preset)
+        # Fallback — only reached when no FrameCache is wired up (shouldn't
+        # happen in the running app, but keeps the ThumbnailCache usable
+        # standalone for tests / scripted use).
+        path = self.seq.path_for(index) if hasattr(self.seq, "path_for") else None
+        qimg = None
+        if USE_SIRIL_PREVIEW_FOR_THUMBNAILS:
+            qimg = load_frame_preview_qimage(self.siril, path)
         if qimg is None:
-            return None
-        qimg = qimg.scaled(
-            THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.FastTransformation,
-        )
+            data = load_frame_data(self.siril, path)
+            if data is None:
+                return None
+            qimg = frame_data_to_qimage(
+                data, self.global_median, self.global_mad,
+                preset=self.stretch_preset,
+            )
+            if qimg is None:
+                return None
+        qimg = _quality_downscale(qimg, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT)
         return QPixmap.fromImage(qimg)
 
 
@@ -1144,7 +1731,6 @@ class FrameMarker:
         self.seq = seq
         self.total = seq.number
         self.original: dict[int, bool] = {}
-        self._excluded_cache: set[int] | None = None  # Lazy-invalidated excluded set
         for i in range(self.total):
             try:
                 imgdata = None
@@ -1159,6 +1745,14 @@ class FrameMarker:
             except Exception:
                 self.original[i] = True
         self.changes: dict[int, bool] = {}
+        # Always-valid excluded set, mutated incrementally by `mark_*`,
+        # `commit*`, and `reset_all`. Previous design invalidated this to
+        # `None` on every mark and the next reader paid an O(N) rebuild —
+        # noticeable during batch rejection over thousand-frame sequences.
+        # Mark ops now only touch one element here (O(1)).
+        self._excluded_cache: set[int] = {
+            i for i, v in self.original.items() if not v
+        }
 
     def is_included(self, index: int) -> bool:
         if index in self.changes:
@@ -1172,7 +1766,8 @@ class FrameMarker:
             self.changes.pop(index, None)
         else:
             self.changes[index] = True
-        self._excluded_cache = None  # Invalidate
+        # Every path above resolves to `is_included(index) == True`.
+        self._excluded_cache.discard(index)
 
     def mark_exclude(self, index: int) -> None:
         if not self.original.get(index, True) and index not in self.changes:
@@ -1181,7 +1776,8 @@ class FrameMarker:
             self.changes.pop(index, None)
         else:
             self.changes[index] = False
-        self._excluded_cache = None  # Invalidate
+        # Every path above resolves to `is_included(index) == False`.
+        self._excluded_cache.add(index)
 
     def get_pending_count(self) -> int:
         return len(self.changes)
@@ -1197,7 +1793,9 @@ class FrameMarker:
         for idx, incl in self.changes.items():
             self.original[idx] = incl
         self.changes.clear()
-        self._excluded_cache = None
+        # Effective include/exclude state is unchanged — commit only rewrites
+        # the baseline to match `is_included()` for each committed index —
+        # so `_excluded_cache` remains correct.
 
     def commit_subset(self, indices: set[int]) -> None:
         """L4 (v1.2.8 audit-5): bake only the listed indices into the
@@ -1215,7 +1813,7 @@ class FrameMarker:
             if idx in indices:
                 self.original[idx] = self.changes[idx]
                 del self.changes[idx]
-        self._excluded_cache = None
+        # Same invariant as `commit()`: effective state unchanged.
 
     def reset_all(self) -> None:
         """Force every frame back to 'included' — clears both the Siril-derived
@@ -1225,7 +1823,7 @@ class FrameMarker:
         for i in range(self.total):
             self.original[i] = True
         self.changes.clear()
-        self._excluded_cache = None
+        self._excluded_cache.clear()
 
     def get_newly_excluded_count(self) -> int:
         return sum(1 for v in self.changes.values() if not v)
@@ -1234,15 +1832,13 @@ class FrameMarker:
         return sum(1 for v in self.changes.values() if v)
 
     def get_excluded_indices(self) -> set[int]:
-        """Get all currently excluded frame indices (original + pending). Cached until next mark."""
-        if self._excluded_cache is not None:
-            return self._excluded_cache
-        excluded = set()
-        for i in range(self.total):
-            if not self.is_included(i):
-                excluded.add(i)
-        self._excluded_cache = excluded
-        return excluded
+        """All currently excluded frame indices (original + pending).
+
+        Shared internal instance — callers MUST NOT mutate. Maintained
+        incrementally by mark_include / mark_exclude / reset_all; no
+        per-call scan.
+        """
+        return self._excluded_cache
 
     # L2 (v1.2.8 audit-5): `apply_to_siril` (set_seq_frame_incl bulk path)
     # was removed. Folder mode is the only surviving flow and it writes
@@ -1260,7 +1856,7 @@ class StatisticsTableWidget(QWidget):
     frame_selected = pyqtSignal(int)
     reject_selected = pyqtSignal(list)  # Emitted when user right-clicks → reject selected
 
-    HEADERS = ["Frame", "Weight", "FWHM", "Round", "BG Level", "Stars", "Median", "Sigma", "Date", "Status"]
+    HEADERS = ["Frame", "Weight", "FWHM", "Round", "BG Level", "Stars", "Date", "Status"]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1355,20 +1951,6 @@ class StatisticsTableWidget(QWidget):
             self.table.setItem(r, col, item)
             col += 1
 
-            # Median
-            item = QTableWidgetItem()
-            item.setData(Qt.ItemDataRole.DisplayRole, round(row["median"], 4) if row["median"] > 0 else "")
-            item.setData(Qt.ItemDataRole.UserRole, idx)
-            self.table.setItem(r, col, item)
-            col += 1
-
-            # Sigma
-            item = QTableWidgetItem()
-            item.setData(Qt.ItemDataRole.DisplayRole, round(row["sigma"], 4) if row["sigma"] > 0 else "")
-            item.setData(Qt.ItemDataRole.UserRole, idx)
-            self.table.setItem(r, col, item)
-            col += 1
-
             # Date
             item = QTableWidgetItem(row.get("date_obs", ""))
             item.setData(Qt.ItemDataRole.UserRole, idx)
@@ -1445,6 +2027,15 @@ class StatisticsTableWidget(QWidget):
         if index == self._current_frame:
             bg = QColor("#203a5a")
         self._set_row_background(r, bg)
+
+    def set_updates_enabled(self, enabled: bool) -> None:
+        """Toggle paint-event suppression on the underlying QTableWidget.
+        Call in pairs around bulk ``update_frame_status`` loops — Qt still
+        re-lays-out per row on foreground/background changes even though
+        signals are blocked, so suppressing updates during a full sweep is
+        the only way to avoid N row-repaint passes on large sequences.
+        """
+        self.table.setUpdatesEnabled(enabled)
 
     def _on_cell_clicked(self, row: int, col: int) -> None:
         item = self.table.item(row, 0)
@@ -1582,7 +2173,7 @@ class ScatterPlotWidget(_MplWidgetBase):
         self._ax = ax
 
         labels = {"fwhm": "FWHM", "roundness": "Roundness", "background": "Background",
-                  "stars": "Stars", "weight": "Weight", "median": "Median", "sigma": "Sigma"}
+                  "stars": "Stars", "weight": "Weight"}
         ax.set_xlabel(labels.get(x_metric, x_metric), color="#cccccc", fontsize=10)
         ax.set_ylabel(labels.get(y_metric, y_metric), color="#cccccc", fontsize=10)
         ax.tick_params(colors="#aaaaaa", labelsize=8)
@@ -1733,7 +2324,7 @@ class ApprovalExpressionWidget(QWidget):
     reject_frames = pyqtSignal(list)
 
     METRICS = {"FWHM": "fwhm", "Roundness": "roundness", "Background": "background",
-               "Stars": "stars", "Weight": "weight", "Median": "median", "Sigma": "sigma"}
+               "Stars": "stars", "Weight": "weight"}
     OPS = {">": lambda a, b: a > b, "<": lambda a, b: a < b,
            ">=": lambda a, b: a >= b, "<=": lambda a, b: a <= b}
 
@@ -2029,8 +2620,30 @@ class StatisticsGraphWidget(_MplWidgetBase):
 # ------------------------------------------------------------------------------
 
 class BatchRejectWidget(QWidget):
-    """UI for threshold-based batch frame rejection."""
+    """UI for threshold-based and percentile-based batch frame rejection.
+
+    Two independent filters:
+
+    - Threshold: "reject frames where metric [op] value"
+      (absolute thresholds — e.g. "FWHM > 3.5").
+    - Percentile: "keep the best N% by metric, reject the rest"
+      (relative, direction baked into the metric — e.g. "keep best 80%
+      by roundness" means higher-is-better since roundness wants 1.0).
+
+    Both show a live preview of how many frames would be affected.
+    """
     reject_frames = pyqtSignal(list)
+
+    # Per-metric direction: True when higher is better (keep high values),
+    # False when lower is better. Used by both UI labels and percentile logic.
+    _HIGHER_IS_BETTER = {
+        "fwhm": False,
+        "background": False,
+        "roundness": True,
+        "stars": True,
+    }
+
+    _METRIC_CHOICES = ["FWHM", "Background", "Roundness", "Stars"]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2040,10 +2653,10 @@ class BatchRejectWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
-        # Threshold row
+        # --- Threshold filter row ---
         thresh_row = QHBoxLayout()
         self.combo_metric = QComboBox()
-        self.combo_metric.addItems(["FWHM", "Background", "Roundness"])
+        self.combo_metric.addItems(self._METRIC_CHOICES)
         _nofocus(self.combo_metric)
         thresh_row.addWidget(self.combo_metric)
 
@@ -2062,6 +2675,13 @@ class BatchRejectWidget(QWidget):
         thresh_row.addWidget(self.spin_value)
         layout.addLayout(thresh_row)
 
+        # Direction hint + preview count for the threshold filter.
+        self.lbl_threshold_hint = QLabel("")
+        self.lbl_threshold_hint.setStyleSheet(
+            "color: #888888; font-size: 8pt; font-style: italic;"
+        )
+        layout.addWidget(self.lbl_threshold_hint)
+
         self.lbl_preview = QLabel("")
         self.lbl_preview.setStyleSheet("color: #aaaa55; font-size: 8pt;")
         layout.addWidget(self.lbl_preview)
@@ -2072,42 +2692,66 @@ class BatchRejectWidget(QWidget):
         self.btn_apply_filter.clicked.connect(self._apply_filter)
         layout.addWidget(self.btn_apply_filter)
 
-        # Worst N%
-        worst_row = QHBoxLayout()
-        worst_row.addWidget(QLabel("Reject worst"))
-        self.spin_worst_pct = QSpinBox()
-        self.spin_worst_pct.setRange(1, 50)
-        self.spin_worst_pct.setValue(10)
-        self.spin_worst_pct.setSuffix("%")
-        self.spin_worst_pct.setFixedWidth(70)
-        _nofocus(self.spin_worst_pct)
-        worst_row.addWidget(self.spin_worst_pct)
-        worst_row.addWidget(QLabel("by"))
-        self.combo_worst_metric = QComboBox()
-        self.combo_worst_metric.addItems(["FWHM", "Background", "Roundness"])
-        _nofocus(self.combo_worst_metric)
-        worst_row.addWidget(self.combo_worst_metric)
-        layout.addLayout(worst_row)
+        # --- Percentile filter row ---
+        pct_row = QHBoxLayout()
+        pct_row.addWidget(QLabel("Keep best"))
+        self.spin_keep_pct = QSpinBox()
+        self.spin_keep_pct.setRange(10, 99)
+        self.spin_keep_pct.setValue(80)
+        self.spin_keep_pct.setSuffix("%")
+        self.spin_keep_pct.setFixedWidth(70)
+        _nofocus(self.spin_keep_pct)
+        pct_row.addWidget(self.spin_keep_pct)
+        pct_row.addWidget(QLabel("by"))
+        self.combo_pct_metric = QComboBox()
+        self.combo_pct_metric.addItems(self._METRIC_CHOICES)
+        _nofocus(self.combo_pct_metric)
+        pct_row.addWidget(self.combo_pct_metric)
+        layout.addLayout(pct_row)
 
-        self.btn_reject_worst = QPushButton("Reject Worst N%")
-        self.btn_reject_worst.setObjectName("ExcludeButton")
-        _nofocus(self.btn_reject_worst)
-        self.btn_reject_worst.clicked.connect(self._reject_worst_pct)
-        layout.addWidget(self.btn_reject_worst)
+        self.lbl_pct_hint = QLabel("")
+        self.lbl_pct_hint.setStyleSheet(
+            "color: #888888; font-size: 8pt; font-style: italic;"
+        )
+        layout.addWidget(self.lbl_pct_hint)
 
-        # Connect preview updates
+        self.lbl_pct_preview = QLabel("")
+        self.lbl_pct_preview.setStyleSheet("color: #aaaa55; font-size: 8pt;")
+        layout.addWidget(self.lbl_pct_preview)
+
+        self.btn_apply_percentile = QPushButton("Reject Non-Matching")
+        self.btn_apply_percentile.setObjectName("ExcludeButton")
+        _nofocus(self.btn_apply_percentile)
+        self.btn_apply_percentile.clicked.connect(self._apply_percentile)
+        layout.addWidget(self.btn_apply_percentile)
+
+        # Connect previews
         self.combo_metric.currentIndexChanged.connect(self._update_preview)
         self.combo_op.currentIndexChanged.connect(self._update_preview)
         self.spin_value.valueChanged.connect(self._update_preview)
+        self.combo_pct_metric.currentIndexChanged.connect(self._update_percentile_preview)
+        self.spin_keep_pct.valueChanged.connect(self._update_percentile_preview)
+
+        self._update_preview()
+        self._update_percentile_preview()
 
     def set_statistics(self, frame_stats: FrameStatistics, marker: FrameMarker) -> None:
         self._stats = frame_stats
         self._marker = marker
         self._update_preview()
+        self._update_percentile_preview()
 
     def _get_metric_key(self, combo: QComboBox) -> str:
         text = combo.currentText().lower()
-        return {"fwhm": "fwhm", "background": "background", "roundness": "roundness"}.get(text, "fwhm")
+        return {
+            "fwhm": "fwhm",
+            "background": "background",
+            "roundness": "roundness",
+            "stars": "stars",
+        }.get(text, "fwhm")
+
+    def _direction_text(self, key: str) -> str:
+        return "higher is better" if self._HIGHER_IS_BETTER.get(key, False) else "lower is better"
 
     def _get_matching_indices(self) -> list[int]:
         if self._stats is None:
@@ -2133,35 +2777,62 @@ class BatchRejectWidget(QWidget):
                 indices.append(row["frame_idx"])
         return indices
 
+    def _get_percentile_reject_indices(self) -> list[int]:
+        """Return the frame indices to reject to keep the best N% by metric.
+
+        Ties are broken by frame index so the result is deterministic. Frames
+        missing a value (metric ≤ 0) are always kept — we can't rank them.
+        """
+        if self._stats is None:
+            return []
+        key = self._get_metric_key(self.combo_pct_metric)
+        keep_pct = self.spin_keep_pct.value()
+        values = self._stats.get_column(key)
+        valid = [(values[i], i) for i in range(len(values)) if values[i] > 0]
+        if not valid:
+            return []
+
+        # Sort best → worst. For higher-is-better metrics (roundness, stars),
+        # best = highest value. For lower-is-better (FWHM, background), best
+        # = lowest value.
+        reverse = self._HIGHER_IS_BETTER.get(key, False)
+        valid.sort(key=lambda x: (x[0] if reverse else -x[0]), reverse=True)
+
+        n_keep = max(1, int(round(len(valid) * keep_pct / 100)))
+        reject = [idx for _, idx in valid[n_keep:]]
+        return reject
+
     def _update_preview(self) -> None:
+        key = self._get_metric_key(self.combo_metric)
+        self.lbl_threshold_hint.setText(f"{self.combo_metric.currentText()}: {self._direction_text(key)}")
         indices = self._get_matching_indices()
         if indices:
             self.lbl_preview.setText(f"{len(indices)} frame(s) match this filter")
         else:
             self.lbl_preview.setText("No frames match")
 
+    def _update_percentile_preview(self) -> None:
+        key = self._get_metric_key(self.combo_pct_metric)
+        self.lbl_pct_hint.setText(
+            f"{self.combo_pct_metric.currentText()}: {self._direction_text(key)}"
+        )
+        indices = self._get_percentile_reject_indices()
+        if indices:
+            total = len(self._stats.data) if self._stats else 0
+            kept = total - len(indices)
+            self.lbl_pct_preview.setText(
+                f"Would reject {len(indices)} frame(s), keep {kept}"
+            )
+        else:
+            self.lbl_pct_preview.setText("")
+
     def _apply_filter(self) -> None:
         indices = self._get_matching_indices()
         if indices:
             self.reject_frames.emit(indices)
 
-    def _reject_worst_pct(self) -> None:
-        if self._stats is None:
-            return
-        key = self._get_metric_key(self.combo_worst_metric)
-        pct = self.spin_worst_pct.value()
-        values = self._stats.get_column(key)
-        # Build (value, frame_idx) pairs with valid values
-        valid = [(values[i], i) for i in range(len(values)) if values[i] > 0]
-        if not valid:
-            return
-        # Sort: for FWHM and Background, worst = highest. For roundness, worst = lowest
-        if key == "roundness":
-            valid.sort(key=lambda x: x[0])  # lowest roundness = worst
-        else:
-            valid.sort(key=lambda x: x[0], reverse=True)  # highest FWHM/BG = worst
-        n_reject = max(1, int(len(valid) * pct / 100))
-        indices = [idx for _, idx in valid[:n_reject]]
+    def _apply_percentile(self) -> None:
+        indices = self._get_percentile_reject_indices()
         if indices:
             self.reject_frames.emit(indices)
 
@@ -2294,13 +2965,16 @@ class ThumbnailFilmstrip(QWidget):
 
     def set_thumbnail(self, index: int, pixmap: QPixmap) -> None:
         if 0 <= index < len(self._labels):
-            # Fast nearest-neighbor scaling for the filmstrip: 76x56 px final
-            # size makes bilinear filtering invisible while being noticeably
-            # cheaper per thumbnail assignment during scroll/preload.
+            # SmoothTransformation (bilinear) on the filmstrip scale too.
+            # This is a trivial 80→76 downscale so FastTransformation used
+            # to look fine, but nearest-neighbor on small output sizes
+            # compounds any aliasing already in the pixmap. Using smooth
+            # here costs microseconds per label and removes one more
+            # opportunity for visible stripe artifacts.
             self._labels[index].setPixmap(pixmap.scaled(
                 THUMBNAIL_WIDTH - 4, THUMBNAIL_HEIGHT - 4,
                 Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.FastTransformation,
+                Qt.TransformationMode.SmoothTransformation,
             ))
 
     def _apply_style(self, index: int, state: str, style: str) -> None:
@@ -2567,16 +3241,45 @@ class BlinkComparatorWindow(QMainWindow):
         if not self.siril.connected:
             self.siril.connect()
 
-        if not self.siril.is_sequence_loaded():
-            raise NoSequenceError("No sequence is currently loaded in Siril.")
+        # Folder mode: no Siril sequence. Scan the picked folder for FITS
+        # files, analyse every one up-front so we can filter out files that
+        # don't belong to the viewing sequence (calibration frames, frames
+        # with mismatched dimensions from a second camera, etc.), then wrap
+        # the kept list in a FileSequence.
+        filenames = _scan_fits_files(folder_mode_path)
+        if not filenames:
+            raise NoSequenceError(
+                f"No FITS files found in:\n{folder_mode_path}"
+            )
+        paths = [os.path.join(folder_mode_path, n) for n in filenames]
 
-        self.seq = self.siril.get_seq()
-        if self.seq is None:
-            raise NoSequenceError("No sequence is currently loaded in Siril.")
+        analysis_rows, filter_summary = self._analyse_and_filter_folder(paths)
+
+        if not analysis_rows:
+            raise NoSequenceError(
+                f"No frames in {folder_mode_path} match the reference "
+                "image type and dimensions. Point the tool at a folder of "
+                "light frames from a single camera/binning."
+            )
+
+        kept_paths = [r["path"] for r in analysis_rows]
+        ref_info = analysis_rows[0]
+        self._initial_analysis: list[dict] | None = analysis_rows
+        self._initial_analysis_ref: dict | None = ref_info
+        self._filter_summary: str = filter_summary
+
+        self.seq = FileSequence(
+            folder=folder_mode_path,
+            paths=kept_paths,
+            width=int(ref_info.get("width", 0) or 0),
+            height=int(ref_info.get("height", 0) or 0),
+            channels=int(ref_info.get("channels", 1) or 1),
+            seqname=os.path.basename(os.path.normpath(folder_mode_path)),
+        )
 
         self.total_frames = self.seq.number
         if self.total_frames < 1:
-            raise NoSequenceError("The loaded sequence contains no frames.")
+            raise NoSequenceError("The selected folder contains no FITS files.")
 
         self.current_frame: int = 0
         self.playing: bool = False
@@ -2660,9 +3363,26 @@ class BlinkComparatorWindow(QMainWindow):
         # here so the very first frame is rendered with the correct preset.
         current_preset = self.combo_autostretch.currentText()
 
+        # Adaptive cache sizing: on a 4-core laptop with 8 GiB free the
+        # default of 80 frames is fine, but on a workstation with 64 GiB
+        # free we can cache several hundred frames and keep the whole
+        # sequence in memory for instant scrub — while on a RPi we'd
+        # want far fewer. Sizing here once using the reference frame's
+        # dimensions so the rest of startup doesn't second-guess it.
+        cache_size = _compute_adaptive_cache_size(
+            self.seq.rx, self.seq.ry, self.seq.nb_layers
+        )
+        try:
+            self.siril.log(
+                f"[BlinkComparator] Adaptive frame cache: {cache_size} frames "
+                f"(~{self.seq.rx}x{self.seq.ry}x{self.seq.nb_layers})"
+            )
+        except (SirilError, OSError, RuntimeError):
+            pass
+
         self.cache = FrameCache(
             self.siril, self.seq,
-            max_frames=DEFAULT_CACHE_SIZE,
+            max_frames=cache_size,
             display_width=canvas_w,
             display_height=canvas_h,
             stretch_preset=current_preset,
@@ -2671,46 +3391,52 @@ class BlinkComparatorWindow(QMainWindow):
         self.progress_bar.setVisible(True)
         self.progress_bar.setFormat("Computing stretch parameters...")
         self.progress_bar.setValue(10)
+        self._show_canvas_status(
+            "<b style='color:#88aaff;'>Preparing sequence\u2026</b><br>"
+            "<span style='color:#aaaaaa; font-size:11pt;'>Computing stretch parameters</span>"
+        )
         QApplication.processEvents()
 
         self.cache.compute_global_stretch()
 
         self.progress_bar.setFormat("Loading reference frame...")
         self.progress_bar.setValue(20)
+        self._show_canvas_status(
+            "<b style='color:#88aaff;'>Preparing sequence\u2026</b><br>"
+            "<span style='color:#aaaaaa; font-size:11pt;'>Loading reference frame</span>"
+        )
         QApplication.processEvents()
 
         self.cache.load_reference_frame()
 
-        # Load frame statistics
-        self.progress_bar.setFormat("Loading frame statistics...")
-        self.progress_bar.setValue(30)
-        QApplication.processEvents()
+        # Analysis already ran up-front in __init__ (with the modal progress
+        # dialog) so the stats table / graph can populate from the cached
+        # rows without another ~N×RPC pass here.
+        analysis_rows = self._initial_analysis or []
 
         self.frame_stats = FrameStatistics(self.siril, self.seq)
+        self.frame_stats.load_all(preloaded=analysis_rows)
 
-        def stats_progress(i, total):
-            pct = 30 + int(40 * i / max(1, total))
-            self.progress_bar.setValue(pct)
-            self.progress_bar.setFormat(f"Loading stats... frame {i + 1}/{total}")
-            QApplication.processEvents()
-
-        self.frame_stats.load_all(progress_callback=stats_progress)
-
-        # Check if registration data (FWHM/stars) is available
+        # `analyse_image_from_file` always returns FWHM / roundness / stars
+        # when it succeeds, so the old "no regdata" banner is only shown if
+        # the RPC failed for every single frame (disconnect, corrupt files,
+        # etc.). That's a hard error worth flagging rather than offering a
+        # "run star detection" button — the analysis has already run.
         if not self.frame_stats.has_regdata:
             try:
                 self.siril.log(
-                    "[BlinkComparator] No star detection data found. "
-                    "Background column uses median from stats. "
-                    "FWHM/Stars/Roundness require running star detection."
+                    "[BlinkComparator] analyse_image_from_file returned no stars "
+                    "for any frame. Check that the FITS files are valid lights."
                 )
             except (SirilError, OSError, RuntimeError):
                 pass
-            self._show_no_regdata_banner()
 
         # Populate table and graph
         self.progress_bar.setFormat("Building statistics table...")
         self.progress_bar.setValue(75)
+        self._show_canvas_status(
+            "<b style='color:#88aaff;'>Building statistics table\u2026</b>"
+        )
         QApplication.processEvents()
 
         self.stats_table.populate(self.frame_stats, self.marker)
@@ -2719,6 +3445,9 @@ class BlinkComparatorWindow(QMainWindow):
 
         self.progress_bar.setFormat("Rendering statistics graph...")
         self.progress_bar.setValue(80)
+        self._show_canvas_status(
+            "<b style='color:#88aaff;'>Rendering statistics graph\u2026</b>"
+        )
         QApplication.processEvents()
 
         self._refresh_statistics_graph()
@@ -2736,6 +3465,9 @@ class BlinkComparatorWindow(QMainWindow):
 
         self.progress_bar.setFormat("Loading first frame...")
         self.progress_bar.setValue(90)
+        self._show_canvas_status(
+            "<b style='color:#88aaff;'>Loading first frame\u2026</b>"
+        )
         QApplication.processEvents()
 
         self._show_frame(0)
@@ -2745,6 +3477,7 @@ class BlinkComparatorWindow(QMainWindow):
 
         self.progress_bar.setValue(100)
         self.progress_bar.setFormat("Ready")
+        self._hide_canvas_status()
         QTimer.singleShot(1000, lambda: self.progress_bar.setVisible(False))
 
         self._start_preload(1, 10)
@@ -2757,6 +3490,16 @@ class BlinkComparatorWindow(QMainWindow):
         # to touch the cache. Any resizes that fired before this point
         # were swallowed by the _ready_for_display gate.
         self._ready_for_display = True
+
+        # Surface the folder filter summary banner if _analyse_and_filter_folder
+        # dropped anything in __init__. Kept visible for the session so the
+        # user remembers that some files in the source folder aren't in view.
+        summary = getattr(self, "_filter_summary", "") or ""
+        if summary and hasattr(self, "lbl_filter_summary"):
+            self.lbl_filter_summary.setText(
+                f"\u2139\ufe0f  Folder filter: {summary}"
+            )
+            self.lbl_filter_summary.show()
 
         # Log startup
         try:
@@ -2775,178 +3518,163 @@ class BlinkComparatorWindow(QMainWindow):
     # MISSING REGDATA HANDLING
     # ------------------------------------------------------------------
 
-    def _show_no_regdata_banner(self) -> None:
-        """Show a banner in the right panel offering to run star detection."""
-        self._regdata_banner = QWidget()
-        banner_layout = QHBoxLayout(self._regdata_banner)
-        banner_layout.setContentsMargins(8, 4, 8, 4)
+    def _analyse_and_filter_folder(
+        self, paths: list[str]
+    ) -> tuple[list[dict], str]:
+        """Analyse every FITS in `paths` with a modal progress dialog, then
+        drop anything whose `imagetype` doesn't match the reference or whose
+        dimensions differ from the reference. Returns (kept_rows, summary).
 
-        lbl = QLabel(
-            "\u26A0 No star detection data found. "
-            "FWHM, Roundness, and Stars columns are empty. "
-            "Background uses median from statistics."
+        Reference choice: the first LIGHT frame whose dimensions match the
+        majority LIGHT dimensions. If the folder has no LIGHT frames at all
+        (e.g. user pointed at a dark library on purpose), we fall back to
+        the first file's type + dimensions so the tool still works.
+        """
+        dlg = QProgressDialog(
+            "Analysing folder via Siril's analyse_image_from_file…",
+            "Cancel", 0, len(paths), None,
         )
-        lbl.setStyleSheet("color: #ffaa33; font-size: 9pt;")
-        lbl.setWordWrap(True)
-        banner_layout.addWidget(lbl, 1)
-
-        btn = QPushButton("Run Star Detection")
-        btn.setObjectName("ApplyButton")
-        btn.setToolTip(
-            "Runs Siril's 'register -2pass' to detect stars in all frames.\n"
-            "This computes FWHM, roundness, and star count for each frame.\n"
-            "May take a few minutes for large sequences."
-        )
-        _nofocus(btn)
-        btn.clicked.connect(self._run_star_detection)
-        banner_layout.addWidget(btn)
-
-        # Insert banner at top of right panel (above tabs)
-        right_layout = self.right_tabs.parent().layout()
-        if right_layout is not None:
-            right_layout.insertWidget(0, self._regdata_banner)
-
-    def _run_star_detection(self) -> None:
-        """Run register -2pass via Siril to compute FWHM/roundness/stars, then reload stats."""
-        reply = QMessageBox.question(
-            self, "Run Star Detection",
-            "This will run Siril's 'register -2pass' to detect stars in all frames.\n"
-            "This computes FWHM, roundness, background, and star count\n"
-            "without creating new output files.\n\n"
-            "It may take a few minutes for large sequences.\n\n"
-            "Proceed?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setFormat("Running star detection (register -2pass)...")
-        self.progress_bar.setValue(0)
+        dlg.setWindowTitle("Blink Comparator — Scanning folder")
+        dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.setValue(0)
+        dlg.show()
         QApplication.processEvents()
 
-        try:
-            self.siril.log("[BlinkComparator] Running register -2pass for star detection...")
-            # -2pass computes transforms (FWHM, roundness, stars) without generating output images.
-            # Quote the seqname: sirilpy joins args into a single command line
-            # and Siril's parser splits on unquoted whitespace. Folder mode
-            # uses a safe hard-coded name today, but this defends against any
-            # sequence whose name might contain spaces.
-            self.siril.cmd("register", f'"{self.seq.seqname}"', "-2pass")
-            self.siril.log("[BlinkComparator] Registration complete. Reloading statistics...")
-        except Exception as e:
-            QMessageBox.warning(self, "Star Detection Failed",
-                                f"register -2pass failed:\n{e}\n\n"
-                                f"Try running 'register {self.seq.seqname} -2pass' manually in the Siril console.")
-            self.progress_bar.setVisible(False)
-            return
+        cancelled = False
 
-        # Force Siril to reload the .seq file from disk (register -2pass writes
-        # regdata to the .seq file but doesn't update the in-memory sequence)
-        seqname = self.seq.seqname
-        try:
-            self.siril.log(f"[BlinkComparator] Reloading sequence '{seqname}' from disk...")
-            self.siril.cmd("load_seq", f'"{seqname}"')
-        except Exception as ex:
-            self.siril.log(f"[BlinkComparator] WARNING: load_seq failed: {ex}")
+        def on_progress(done, total):
+            nonlocal cancelled
+            if dlg.wasCanceled():
+                cancelled = True
+                return
+            dlg.setValue(done)
+            dlg.setLabelText(
+                f"Analysing folder…  {done} / {total}\n\n"
+                "FWHM, roundness, star count, dimensions, image type"
+            )
+            QApplication.processEvents()
 
-        # Now get the refreshed sequence object
         try:
-            self.seq = self.siril.get_seq()
-            self.siril.log(f"[BlinkComparator] Sequence reloaded: {self.seq.seqname}, "
-                           f"{self.seq.number} frames, layers={self.seq.nb_layers}")
-        except Exception as ex:
-            self.siril.log(f"[BlinkComparator] WARNING: get_seq() failed after register: {ex}")
+            rows = _analyse_file_batch(
+                self.siril, paths, progress_callback=on_progress
+            )
+        finally:
+            dlg.close()
 
-        # H1 (v1.2.8 audit-4): rebind every consumer that cached the old seq
-        # object. Without this, FrameCache.seq / ThumbnailCache.seq /
-        # FrameMarker.seq continue to reference the pre-register sequence —
-        # silently wrong counts, orientations, and reference_image after a
-        # mid-session star-detection run. Also invalidate image caches and
-        # reload reference_data because rx/ry/reference_image may have moved.
-        if self.cache is not None:
-            self.cache.seq = self.seq
-            self.cache.invalidate()
-            # M2 (v1.2.8 audit-5): stretch + reference reload each take a few
-            # seconds on large mono rigs / slow disks. The rebind runs on the
-            # main thread (must — the cache is not thread-safe against paint
-            # events), so without progress feedback the window looks frozen.
-            # Drive the progress bar through 30%→50% and pump the event loop
-            # around each blocking call so the bar actually repaints.
-            self.progress_bar.setFormat("Computing stretch parameters...")
-            self.progress_bar.setValue(30)
-            QApplication.processEvents()
+        if cancelled:
+            raise NoSequenceError("Folder scan cancelled by user.")
+
+        # Pick a reference: first LIGHT if any, else first row. Then anchor
+        # dimensions to that reference so a folder with a rogue dimension
+        # (e.g. one guide-camera frame mixed in) still loads the lights.
+        light_rows = [r for r in rows if r.get("imagetype", "") == "LIGHT"]
+        ref_row = light_rows[0] if light_rows else (rows[0] if rows else None)
+        if ref_row is None:
+            return [], ""
+
+        ref_type = ref_row.get("imagetype", "") or ""
+        ref_w = int(ref_row.get("width", 0) or 0)
+        ref_h = int(ref_row.get("height", 0) or 0)
+
+        kept: list[dict] = []
+        dropped_types: dict[str, int] = {}
+        dropped_dims: int = 0
+        dropped_failed: int = 0
+        dropped_color: int = 0
+        ref_ch = int(ref_row.get("channels", 1) or 1)
+
+        for r in rows:
+            itype = r.get("imagetype", "") or ""
+            w = int(r.get("width", 0) or 0)
+            h = int(r.get("height", 0) or 0)
+            ch = int(r.get("channels", 1) or 1)
+
+            if w == 0 or h == 0:
+                # analyse_image_from_file failed — treat as unusable.
+                dropped_failed += 1
+                continue
+            # 3-channel guard: if the reference is mono but this file is
+            # debayered colour (e.g. a stray pre-processed RGB composite in
+            # an otherwise raw-mono folder), drop it. Blink pipelines work
+            # off pre-debayer mono subs; a 3-channel outlier would otherwise
+            # confuse the viewer (channel dimension mismatch) and the
+            # stats aggregation.
+            if ref_ch == 1 and ch == 3:
+                dropped_color += 1
+                continue
+            if ref_type and itype and itype != ref_type:
+                dropped_types[itype] = dropped_types.get(itype, 0) + 1
+                continue
+            if ref_w and ref_h and (w != ref_w or h != ref_h):
+                dropped_dims += 1
+                continue
+            kept.append(r)
+
+        # Compose the summary line. If nothing was dropped, return empty so
+        # the header banner stays quiet.
+        parts = []
+        total_dropped = (sum(dropped_types.values()) + dropped_dims
+                         + dropped_failed + dropped_color)
+        if total_dropped > 0:
+            parts.append(f"{len(kept)} {ref_type.lower() or 'frames'} kept")
+            for t, n in sorted(dropped_types.items()):
+                parts.append(f"{n} {t.lower()} skipped")
+            if dropped_color:
+                parts.append(f"{dropped_color} 3-channel skipped")
+            if dropped_dims:
+                parts.append(f"{dropped_dims} dimension mismatch skipped")
+            if dropped_failed:
+                parts.append(f"{dropped_failed} unreadable skipped")
+        summary = " • ".join(parts)
+
+        # Log to Siril so it's visible even if the user dismisses the banner.
+        if summary:
             try:
-                self.cache.compute_global_stretch()
-            except Exception as ex:
-                self.siril.log(
-                    f"[BlinkComparator] WARNING: compute_global_stretch after register failed: {ex}"
-                )
-            self.progress_bar.setFormat("Loading reference frame...")
-            self.progress_bar.setValue(50)
-            QApplication.processEvents()
-            try:
-                self.cache.load_reference_frame()
-            except Exception as ex:
-                self.siril.log(
-                    f"[BlinkComparator] WARNING: load_reference_frame after register failed: {ex}"
-                )
-            self.progress_bar.setValue(60)
-            QApplication.processEvents()
-        if self.thumb_cache is not None:
-            self.thumb_cache.seq = self.seq
-            # Re-seed stretch parameters on the thumb cache too so newly
-            # rendered thumbnails match the main canvas.
-            try:
-                self.thumb_cache.global_median = self.cache.global_median
-                self.thumb_cache.global_mad = self.cache.global_mad
-            except Exception:
+                self.siril.log(f"[BlinkComparator] Folder filter: {summary}")
+            except (SirilError, OSError, RuntimeError):
                 pass
-            if hasattr(self.thumb_cache, "invalidate"):
-                try:
-                    self.thumb_cache.invalidate()
-                except Exception:
-                    pass
-        if self.marker is not None:
-            self.marker.seq = self.seq
-            # self.marker.total stays valid as long as seq.number is unchanged;
-            # if register somehow pruned frames we bail cleanly.
-            if self.seq.number != self.marker.total:
-                self.siril.log(
-                    f"[BlinkComparator] WARNING: register changed frame count "
-                    f"({self.marker.total} -> {self.seq.number}); pending marks may be misaligned."
-                )
 
-        # Diagnostic: check regdata on all channels for frame 0
-        n_layers = getattr(self.seq, 'nb_layers', 1)
-        for ch in range(n_layers):
-            try:
-                reg = self.siril.get_seq_regdata(0, ch)
-                if reg is not None:
-                    attrs = {a: getattr(reg, a, None) for a in
-                             ['fwhm', 'weighted_fwhm', 'roundness', 'quality',
-                              'background_lvl', 'number_of_stars']}
-                    self.siril.log(f"[BlinkComparator] Frame 0 regdata ch{ch}: {attrs}")
-                else:
-                    self.siril.log(f"[BlinkComparator] Frame 0 regdata ch{ch}: None")
-            except Exception as ex:
-                self.siril.log(f"[BlinkComparator] Frame 0 regdata ch{ch} error: {ex}")
+        return kept, summary
 
-        # Reload all statistics
-        self.frame_stats = FrameStatistics(self.siril, self.seq)
+    def _reanalyse_files(self) -> None:
+        """Re-run `analyse_image_from_file` over every file in the folder
+        and refresh the stats table / graph / scatter.
 
-        def reload_progress(i, total):
-            # M2 (v1.2.8 audit-5): the stretch/reference rebind already
-            # advanced the bar to 60%; scale reload into the remaining
-            # 60→95% span so the progress bar doesn't visibly regress.
-            pct = 60 + int(35 * i / max(1, total))
+        Useful if the user edited the folder contents out-of-band (copied
+        in new frames, fixed a bad header) and wants the stats to pick up
+        the change without restarting.
+        """
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setFormat("Re-analysing frames...")
+        self.progress_bar.setValue(0)
+        total_paths = len(self.seq.paths)
+        self._show_canvas_status(
+            "<b style='color:#88aaff;'>Re-analysing frames\u2026</b><br>"
+            f"<span style='color:#e0e0e0; font-size:12pt;'>0 / {total_paths}</span>"
+        )
+        QApplication.processEvents()
+
+        def analyse_progress(done, total):
+            pct = int(95 * done / max(1, total))
             self.progress_bar.setValue(pct)
-            self.progress_bar.setFormat(f"Reloading stats... frame {i + 1}/{total}")
+            self.progress_bar.setFormat(f"Re-analysing frame {done}/{total}...")
+            self._show_canvas_status(
+                "<b style='color:#88aaff;'>Re-analysing frames\u2026</b><br>"
+                f"<span style='color:#e0e0e0; font-size:12pt;'>{done} / {total}</span>"
+            )
             QApplication.processEvents()
 
-        self.frame_stats.load_all(progress_callback=reload_progress)
+        rows = _analyse_file_batch(
+            self.siril, self.seq.paths, progress_callback=analyse_progress
+        )
+        self._initial_analysis = rows
 
-        # Refresh all UI
+        self.frame_stats = FrameStatistics(self.siril, self.seq)
+        self.frame_stats.load_all(preloaded=rows)
+
         self.stats_table.populate(self.frame_stats, self.marker)
         self.batch_widget.set_statistics(self.frame_stats, self.marker)
         self.approval_widget.set_statistics(self.frame_stats)
@@ -2956,23 +3684,10 @@ class BlinkComparatorWindow(QMainWindow):
         self._update_frame_info(self.current_frame)
         self._update_canvas_overlay(self.current_frame)
 
-        # Remove banner if regdata is now available
-        if self.frame_stats.has_regdata and hasattr(self, '_regdata_banner'):
-            self._regdata_banner.setVisible(False)
-
         self.progress_bar.setValue(100)
-        self.progress_bar.setFormat("Star detection complete!")
-        QTimer.singleShot(1500, lambda: self.progress_bar.setVisible(False))
-
-        if self.frame_stats.has_regdata:
-            QMessageBox.information(self, "Star Detection Complete",
-                                    "FWHM, Roundness, and Stars data is now available.\n"
-                                    "The statistics table has been refreshed.")
-        else:
-            QMessageBox.warning(self, "No Data",
-                                "Star detection ran but no FWHM data was found.\n"
-                                f"Try running 'register {self.seq.seqname} -2pass' manually\n"
-                                "in the Siril console and restart the script.")
+        self.progress_bar.setFormat("Re-analysis complete")
+        self._hide_canvas_status()
+        QTimer.singleShot(1200, lambda: self.progress_bar.setVisible(False))
 
     # ------------------------------------------------------------------
     # UI CONSTRUCTION
@@ -3274,6 +3989,19 @@ class BlinkComparatorWindow(QMainWindow):
         vt_layout = QVBoxLayout(viewer_tab)
         vt_layout.setContentsMargins(2, 2, 2, 2)
 
+        # Slim banner shown only when _analyse_and_filter_folder dropped
+        # files (calibration frames, dimension mismatches, unreadable FITS).
+        # Stays visible for the session so the user knows some files in the
+        # source folder are NOT in the viewer.
+        self.lbl_filter_summary = QLabel("")
+        self.lbl_filter_summary.setStyleSheet(
+            "QLabel { background-color: #1a2a3a; color: #c8d8f0; "
+            "border: 1px solid #3a5a7a; border-radius: 4px; "
+            "padding: 4px 8px; font-size: 10pt; }"
+        )
+        self.lbl_filter_summary.hide()
+        vt_layout.addWidget(self.lbl_filter_summary)
+
         self.lbl_frame_info = QLabel("No sequence loaded")
         self.lbl_frame_info.setStyleSheet("font-size: 10pt; color: #999;")
         vt_layout.addWidget(self.lbl_frame_info)
@@ -3281,7 +4009,28 @@ class BlinkComparatorWindow(QMainWindow):
         self.canvas = ImageCanvas()
         self.canvas.zoom_changed.connect(self._on_canvas_zoom_changed)
         self.canvas.resized.connect(self._on_canvas_resized)
+        self.canvas.resized.connect(self._reposition_canvas_status)
         vt_layout.addWidget(self.canvas, 1)
+
+        # Centered status overlay shown on the canvas during startup / re-analysis.
+        # Siril logs "Lese FITS" / "Findstar" in its console while analyse_image_from_file
+        # runs on every frame — without this overlay, users staring at the empty
+        # canvas assume the app has hung, because the small progress bar down in
+        # the left panel is easy to miss.
+        self.canvas_status = QLabel(self.canvas)
+        self.canvas_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.canvas_status.setStyleSheet(
+            "QLabel {"
+            " background-color: rgba(10, 10, 10, 220);"
+            " color: #e0e0e0;"
+            " border: 1px solid #3a5a7a;"
+            " border-radius: 8px;"
+            " padding: 18px 28px;"
+            " font-size: 13pt;"
+            "}"
+        )
+        self.canvas_status.setTextFormat(Qt.TextFormat.RichText)
+        self.canvas_status.hide()
 
         zoom_bar = QHBoxLayout()
         self.lbl_zoom = QLabel("Zoom: 100%")
@@ -3370,13 +4119,30 @@ class BlinkComparatorWindow(QMainWindow):
         st_layout = QVBoxLayout(scatter_tab)
         st_layout.setContentsMargins(2, 2, 2, 2)
 
+        # Coalesce rapid combo changes (e.g. the user flicking through X then Y
+        # in quick succession) into a single scatter rebuild. Each combo used
+        # to fire `currentIndexChanged` straight into `_refresh_scatter_plot`,
+        # which meant toggling both produced two back-to-back full matplotlib
+        # rebuilds. Restarting a 0 ms single-shot timer on each change defers
+        # the rebuild to the next event-loop tick and collapses any further
+        # changes within that tick into one render.
+        #
+        # The lambda swallows `currentIndexChanged`'s int arg — `QTimer.start`
+        # treats a positional int as a millisecond override, which would reset
+        # the interval to the combo's index.
+        self._scatter_refresh_timer = QTimer(self)
+        self._scatter_refresh_timer.setSingleShot(True)
+        self._scatter_refresh_timer.setInterval(0)
+        self._scatter_refresh_timer.timeout.connect(self._refresh_scatter_plot)
+        _scatter_refresh_kick = lambda _=None: self._scatter_refresh_timer.start()
+
         scatter_controls = QHBoxLayout()
         scatter_controls.addWidget(QLabel("X:"))
         self.combo_scatter_x = QComboBox()
         self.combo_scatter_x.addItems(["FWHM", "Roundness", "Background", "Stars", "Weight"])
         self.combo_scatter_x.setCurrentText("FWHM")
         _nofocus(self.combo_scatter_x)
-        self.combo_scatter_x.currentIndexChanged.connect(self._refresh_scatter_plot)
+        self.combo_scatter_x.currentIndexChanged.connect(_scatter_refresh_kick)
         scatter_controls.addWidget(self.combo_scatter_x)
 
         scatter_controls.addWidget(QLabel("Y:"))
@@ -3384,7 +4150,7 @@ class BlinkComparatorWindow(QMainWindow):
         self.combo_scatter_y.addItems(["Roundness", "FWHM", "Background", "Stars", "Weight"])
         self.combo_scatter_y.setCurrentText("Roundness")
         _nofocus(self.combo_scatter_y)
-        self.combo_scatter_y.currentIndexChanged.connect(self._refresh_scatter_plot)
+        self.combo_scatter_y.currentIndexChanged.connect(_scatter_refresh_kick)
         scatter_controls.addWidget(self.combo_scatter_y)
 
         scatter_controls.addStretch()
@@ -3675,10 +4441,6 @@ class BlinkComparatorWindow(QMainWindow):
                     parts.append(f"BG: {row['background']:.4f}")
                 if row["stars"] > 0:
                     parts.append(f"Stars: {row['stars']}")
-                if row["median"] > 0:
-                    parts.append(f"Med: {row['median']:.4f}")
-                if row["sigma"] > 0:
-                    parts.append(f"\u03C3: {row['sigma']:.4f}")
                 if row["date_obs"]:
                     parts.append(f"{row['date_obs']}")
 
@@ -3698,8 +4460,8 @@ class BlinkComparatorWindow(QMainWindow):
         # blockSignals() wrapper in _load_settings on the individual radios
         # does not suppress this handler. Guard against _show_frame being
         # called before _deferred_init has built the cache / stats — any
-        # programmatic setChecked during settings restore or a second Siril
-        # load_seq can otherwise trip AttributeError: 'cache'.
+        # programmatic setChecked during settings restore or a second folder
+        # re-analyse can otherwise trip AttributeError: 'cache'.
         if getattr(self, "cache", None) is None:
             return
         # Normal ↔ Side-by-side only changes *how* we lay out already-stretched
@@ -3805,9 +4567,17 @@ class BlinkComparatorWindow(QMainWindow):
         # re-creates all N×10 cells + the row-to-frame map (~100 ms on
         # N=2000). update_frame_status() is O(1) per row; the full loop
         # is ~5 ms on N=2000 — 20× faster and indistinguishable visually.
-        for i in range(self.total_frames):
-            self.stats_table.update_frame_status(i, True, self.marker)
-            self.filmstrip.update_border(i, True)
+        # Suppress table paint events around the sweep: Qt otherwise runs
+        # a per-row layout pass on each foreground/background change, so
+        # N row-repaint passes stack up on the event queue and the UI
+        # freezes for a frame or two on large sequences.
+        self.stats_table.set_updates_enabled(False)
+        try:
+            for i in range(self.total_frames):
+                self.stats_table.update_frame_status(i, True, self.marker)
+                self.filmstrip.update_border(i, True)
+        finally:
+            self.stats_table.set_updates_enabled(True)
         self.frame_slider.set_exclusions(set(), self.total_frames)
         self._update_marking_ui()
         self._update_frame_info(self.current_frame)
@@ -3940,55 +4710,15 @@ class BlinkComparatorWindow(QMainWindow):
             )
             return
 
-        # Map sequence-index → source FITS filename.
-        # Primary path: ask Siril directly via get_seq_imgdata(i).filename so
-        # the mapping is always correct regardless of how the OS / Python /
-        # Siril ordered the folder listing during `convert`. Fall back to
-        # the sorted-basename heuristic only if the RPC doesn't expose a
-        # filename (older sirilpy builds) — and in that case, surface the
-        # assumption clearly so the user can verify.
+        # Map sequence-index → source FITS filename straight from the
+        # FileSequence's path list. Since we never built a FITSEQ, there
+        # is no `convert`-order divergence to work around — each index is
+        # literally the path we analysed.
         rejected_names: list[str] = []
-        used_fallback = False
-        try:
-            for i in excluded:
-                name: str | None = None
-                try:
-                    imgdata = self.siril.get_seq_imgdata(i)
-                except Exception:
-                    imgdata = None
-                if imgdata is not None:
-                    fn = getattr(imgdata, 'filename', None) or getattr(imgdata, 'name', None)
-                    if fn:
-                        # Siril may return an absolute path; we want the basename
-                        # for the move loop below to join against the folder.
-                        name = os.path.basename(str(fn))
-                if name:
-                    rejected_names.append(name)
-                else:
-                    used_fallback = True
-                    break
-        except Exception:
-            used_fallback = True
-
-        if used_fallback:
-            # Legacy mapping: sorted basename list indexed by sequence index.
-            # Correct iff Siril's `convert -fitseq` iterated the folder in the
-            # same order as Python's sorted(). Verified empirically on macOS
-            # for simple ASCII filenames; flag to the user for awareness.
-            all_fits = _scan_fits_files(self._folder_mode_path)
-            source_files = [
-                f for f in all_fits
-                if not f.startswith(FOLDER_MODE_SEQNAME)
-            ]
-            if not source_files or len(source_files) < self.total_frames:
-                QMessageBox.warning(
-                    self, "Source Files Missing",
-                    f"Expected {self.total_frames} FITS files in the source folder "
-                    f"but only found {len(source_files)}.\n"
-                    f"Apply was aborted."
-                )
-                return
-            rejected_names = [source_files[i] for i in excluded if i < len(source_files)]
+        for i in excluded:
+            name = self.seq.filename_for(i)
+            if name:
+                rejected_names.append(name)
 
         move_box = QMessageBox(self)
         move_box.setWindowTitle("Apply Rejections")
@@ -4129,6 +4859,29 @@ class BlinkComparatorWindow(QMainWindow):
     def _on_canvas_zoom_changed(self, zoom: float) -> None:
         self.lbl_zoom.setText(f"Zoom: {int(zoom * 100)}%")
 
+    def _reposition_canvas_status(self, w: int, h: int) -> None:
+        """Keep the startup/re-analysis overlay centered on the canvas."""
+        if not hasattr(self, "canvas_status") or self.canvas_status is None:
+            return
+        self.canvas_status.adjustSize()
+        sw = self.canvas_status.width()
+        sh = self.canvas_status.height()
+        self.canvas_status.move(max(0, (w - sw) // 2), max(0, (h - sh) // 2))
+
+    def _show_canvas_status(self, html: str) -> None:
+        """Show the centered status overlay on the canvas with RichText content."""
+        if not hasattr(self, "canvas_status") or self.canvas_status is None:
+            return
+        self.canvas_status.setText(html)
+        self.canvas_status.adjustSize()
+        self._reposition_canvas_status(self.canvas.width(), self.canvas.height())
+        self.canvas_status.show()
+        self.canvas_status.raise_()
+
+    def _hide_canvas_status(self) -> None:
+        if hasattr(self, "canvas_status") and self.canvas_status is not None:
+            self.canvas_status.hide()
+
     def _on_canvas_resized(self, w: int, h: int) -> None:
         """Debounced canvas-resize handler. Updates the FrameCache's scaling
         target so future frame loads render at the new size, and invalidates
@@ -4199,6 +4952,14 @@ class BlinkComparatorWindow(QMainWindow):
         if self.thumb_cache is None:
             return
         start, end = self.filmstrip.get_visible_range()
+        # Kick the preload worker at the visible range before we start
+        # pulling thumbnails synchronously on the main thread. Thumbnails
+        # now go through FrameCache, so warming the cache in the background
+        # means most thumbs resolve via peek() without ever blocking the UI.
+        # Coalescing inside _start_preload ensures rapid scroll events
+        # don't pile up duplicate jobs.
+        if self.cache is not None:
+            self._start_preload(start, max(1, end - start))
         prev = self._prev_visible_range
         if prev is not None:
             prev_start, prev_end = prev
@@ -4333,7 +5094,7 @@ class BlinkComparatorWindow(QMainWindow):
             # frame exports this is a large saving on slow disks / network
             # shares where each write round-trips.
             headers = ["Frame", "Weight", "FWHM", "Roundness", "Background", "Stars",
-                       "Median", "Sigma", "Date", "Included"]
+                       "Date", "Included"]
             lines = [",".join(headers)]
             for row in self.frame_stats.get_all_rows():
                 idx = row["frame_idx"]
@@ -4345,8 +5106,6 @@ class BlinkComparatorWindow(QMainWindow):
                     f"{row['roundness']:.3f}",
                     f"{row['background']:.6f}",
                     str(row['stars']),
-                    f"{row['median']:.6f}",
-                    f"{row['sigma']:.6f}",
                     row.get('date_obs', ''),
                     incl,
                 ]))
@@ -4508,18 +5267,27 @@ class BlinkComparatorWindow(QMainWindow):
             self.chk_graph_fwhm.setChecked(st.value("graph_fwhm", True, type=bool))
             self.chk_graph_bg.setChecked(st.value("graph_bg", True, type=bool))
             self.chk_graph_round.setChecked(st.value("graph_round", False, type=bool))
-            self.combo_scatter_x.setCurrentText(
-                st.value("scatter_x", "FWHM", type=str))
-            self.combo_scatter_y.setCurrentText(
-                st.value("scatter_y", "Roundness", type=str))
+            # Validate against current combo items so stale v1.2.x values
+            # (e.g. "Median"/"Sigma") don't leave the combo in an unset state.
+            x_val = str(st.value("scatter_x", "FWHM", type=str))
+            if self.combo_scatter_x.findText(x_val) >= 0:
+                self.combo_scatter_x.setCurrentText(x_val)
+            y_val = str(st.value("scatter_y", "Roundness", type=str))
+            if self.combo_scatter_y.findText(y_val) >= 0:
+                self.combo_scatter_y.setCurrentText(y_val)
         finally:
             for widget, was_blocked in prev_blocked:
                 widget.blockSignals(was_blocked)
-        # Restore table sort
+        # Restore table sort — clamp to current column count so stale
+        # indices from a previous layout (e.g. old Median=7 / Sigma=8)
+        # don't land on the wrong column or fall out of bounds.
         sort_col = int(st.value("table_sort_col", 0))
         sort_order = int(st.value("table_sort_order", 0))
-        self.stats_table.table.horizontalHeader().setSortIndicator(
-            sort_col, Qt.SortOrder(sort_order))
+        col_count = self.stats_table.table.columnCount()
+        if col_count > 0:
+            sort_col = max(0, min(sort_col, col_count - 1))
+            self.stats_table.table.horizontalHeader().setSortIndicator(
+                sort_col, Qt.SortOrder(sort_order))
 
     def _save_settings(self) -> None:
         st = self._settings
@@ -4582,10 +5350,10 @@ class BlinkComparatorWindow(QMainWindow):
         except (SirilError, OSError, RuntimeError):
             pass
 
-        # Cancel any in-flight preload future before tearing Siril down.
-        # Otherwise the background worker can finish a `get_seq_frame` after
-        # `siril.cmd("close")` and raise a benign-but-noisy exception in
-        # the daemon thread (pollutes logs, nothing more).
+        # Cancel any in-flight preload future before the window tears down.
+        # Otherwise the background worker can finish a `load_image_from_file`
+        # after the QThreadPool / Siril interface have gone away and raise a
+        # benign-but-noisy exception in the daemon thread (pollutes logs, nothing more).
         #
         # M2 (v1.2.8 audit-3): Future.cancel() is a no-op if the task has
         # already started running (PENDING → CANCELLED only, never
@@ -4602,26 +5370,15 @@ class BlinkComparatorWindow(QMainWindow):
                 pass
             self._preload_future = None
 
-        # Ask Siril to release the sequence before we remove its files — otherwise
-        # Siril keeps file handles open (Windows) or stale cache state (all OSes).
+        # No FITSEQ / .seq on disk to clean up any more — we've been loading
+        # files directly via `load_image_from_file` the whole session. Just
+        # log the shutdown so the session trail in Siril stays coherent.
         try:
-            self.siril.cmd("close")
-        except (SirilError, OSError, RuntimeError) as ex:
-            try:
-                self.siril.log(f"[BlinkComparator] Siril 'close' returned: {ex}")
-            except Exception:
-                pass
-
-        try:
-            _cleanup_folder_sequence(self._folder_mode_path)
             self.siril.log(
-                f"[BlinkComparator] Folder-mode temp sequence cleaned up in {self._folder_mode_path}"
+                f"[BlinkComparator] Session closed for folder {self._folder_mode_path}"
             )
-        except Exception as ex:
-            try:
-                self.siril.log(f"[BlinkComparator] Cleanup warning: {ex}")
-            except Exception:
-                pass
+        except (SirilError, OSError, RuntimeError):
+            pass
 
         super().closeEvent(event)
 
@@ -4807,7 +5564,7 @@ class BlinkComparatorWindow(QMainWindow):
 
             "<b style='color:#ffcc66;'>Statistics Table</b><br>"
             "All frames listed with sortable columns: <b>Weight, FWHM, Roundness, "
-            "Background, Stars, Median, Sigma, Date, Status</b>.<br>"
+            "Background, Stars, Date, Status</b>.<br>"
             "\u2022 Click any <b>column header</b> to sort (click again to reverse).<br>"
             "\u2022 Click a <b>row</b> to jump to that frame in the viewer.<br>"
             "\u2022 <b>Ctrl+click</b> or <b>Shift+click</b> to multi-select, then "
@@ -4860,8 +5617,8 @@ class BlinkComparatorWindow(QMainWindow):
             "<div style='background:#252525; padding:8px; border-radius:4px;'>"
             "<b>What it is:</b> The diameter of stars measured at half their peak "
             "brightness (in pixels). A smaller FWHM means sharper, tighter stars.<br>"
-            "<b>Source:</b> Siril registration data (<span style='font-family:monospace;'>"
-            "get_seq_regdata</span>). Requires star detection to have been run.<br>"
+            "<b>Source:</b> Siril's per-file analyser (<span style='font-family:monospace;'>"
+            "analyse_image_from_file</span>). Computed on startup for every frame.<br>"
             "<b>Good values:</b> Depends on your focal length and seeing, but lower "
             "is always better. Typical range: 2\u20136 px for most setups.<br>"
             "<b>What to watch for:</b> A sudden increase indicates <b>focus drift</b>, "
@@ -4874,7 +5631,8 @@ class BlinkComparatorWindow(QMainWindow):
             "<b>What it is:</b> How circular the stars are, on a scale of 0 to 1 "
             "(1.0 = perfect circle, 0.0 = a line). Related to eccentricity: "
             "<span style='font-family:monospace;'>ecc \u2248 1 \u2212 roundness</span>.<br>"
-            "<b>Source:</b> Siril registration data.<br>"
+            "<b>Source:</b> Siril's per-file analyser (<span style='font-family:monospace;'>"
+            "analyse_image_from_file</span>).<br>"
             "<b>Good values:</b> Above 0.75 is generally good. Below 0.6 usually "
             "indicates problems.<br>"
             "<b>What to watch for:</b> Low roundness means <b>tracking errors</b> "
@@ -4885,11 +5643,11 @@ class BlinkComparatorWindow(QMainWindow):
             # ---- Background ----
             "<b style='color:#ffcc66;'>Background Level (BG Level)</b><br>"
             "<div style='background:#252525; padding:8px; border-radius:4px;'>"
-            "<b>What it is:</b> The median pixel value of the frame's sky background, "
-            "normalized to [0, 1]. Lower = darker sky.<br>"
-            "<b>Source:</b> Siril registration data (<span style='font-family:monospace;'>"
-            "background_lvl</span>) or, if unavailable, <span style='font-family:monospace;'>"
-            "stats.median</span> as fallback.<br>"
+            "<b>What it is:</b> Background noise level of the frame (sky + read noise), "
+            "normalized to [0, 1]. Lower = darker / cleaner sky.<br>"
+            "<b>Source:</b> Siril's per-file analyser "
+            "(<span style='font-family:monospace;'>bgnoise</span> field of "
+            "<span style='font-family:monospace;'>analyse_image_from_file</span>).<br>"
             "<b>Good values:</b> Consistent across frames. The absolute value depends "
             "on your light pollution, camera gain, and exposure length.<br>"
             "<b>What to watch for:</b> A sharp <b>spike</b> = clouds, airplane lights, "
@@ -4900,8 +5658,9 @@ class BlinkComparatorWindow(QMainWindow):
             "<b style='color:#ffcc66;'>Stars (Star Count)</b><br>"
             "<div style='background:#252525; padding:8px; border-radius:4px;'>"
             "<b>What it is:</b> Number of stars detected in the frame.<br>"
-            "<b>Source:</b> Siril registration data (<span style='font-family:monospace;'>"
-            "number_of_stars</span>).<br>"
+            "<b>Source:</b> Siril's per-file analyser (<span style='font-family:monospace;'>"
+            "nbstars</span> field of <span style='font-family:monospace;'>"
+            "analyse_image_from_file</span>).<br>"
             "<b>Good values:</b> Consistent count across frames. Higher is generally "
             "better, but the absolute number depends on your field of view and focal length.<br>"
             "<b>What to watch for:</b> A <b>sudden drop</b> = clouds obscuring the field, "
@@ -4926,36 +5685,14 @@ class BlinkComparatorWindow(QMainWindow):
             "subframes in one click. This is comparable to PixInsight's PSFSignalWeight, "
             "though with a simpler, transparent formula.</div><br>"
 
-            # ---- Median ----
-            "<b style='color:#ffcc66;'>Median</b><br>"
-            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
-            "<b>What it is:</b> The median pixel value of the entire frame "
-            "(normalized to [0, 1]). Represents the 'typical' brightness of a pixel.<br>"
-            "<b>Source:</b> Siril per-channel statistics (<span style='font-family:monospace;'>"
-            "get_seq_stats</span>). Always available, even without star detection.<br>"
-            "<b>How to use it:</b> Nearly identical to Background Level for typical "
-            "astro images (where the sky dominates). Useful as a fallback when "
-            "registration data is unavailable.</div><br>"
-
-            # ---- Sigma ----
-            "<b style='color:#ffcc66;'>Sigma (\u03c3)</b><br>"
-            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
-            "<b>What it is:</b> Standard deviation of pixel values in the frame. "
-            "A measure of how much the pixel values vary \u2014 roughly proportional "
-            "to signal + noise.<br>"
-            "<b>Source:</b> Siril per-channel statistics.<br>"
-            "<b>How to use it:</b> Higher sigma can indicate more signal (good) "
-            "or more noise (bad). Compare with other metrics: if sigma is high AND "
-            "background is high, it's noise from clouds. If sigma is high AND "
-            "background is low, it's genuine deep-sky signal.</div><br>"
-
             # ---- Date ----
             "<b style='color:#ffcc66;'>Date</b><br>"
             "<div style='background:#252525; padding:8px; border-radius:4px;'>"
             "<b>What it is:</b> The observation timestamp from the FITS header "
             "(<span style='font-family:monospace;'>DATE-OBS</span> keyword).<br>"
-            "<b>Source:</b> FITS file metadata via <span style='font-family:monospace;'>"
-            "get_seq_imgdata</span>.<br>"
+            "<b>Source:</b> <span style='font-family:monospace;'>timestamp</span> "
+            "field of <span style='font-family:monospace;'>analyse_image_from_file</span>, "
+            "converted to ISO-8601 UTC.<br>"
             "<b>Note:</b> Not all cameras write DATE-OBS (e.g. SeeStar S50 may leave "
             "this empty). When unavailable, the column shows '\u2014'.</div><br>"
 
@@ -4968,25 +5705,23 @@ class BlinkComparatorWindow(QMainWindow):
             "The pending counter shows how many frames are marked but not yet "
             "exported.</div><br>"
 
-            # ---- Star Detection ----
+            # ---- Analysis pipeline ----
             "<b style='color:#ffcc66; font-size:12pt;'>"
-            "\u2b50 Star Detection (required for FWHM, Roundness, Stars)</b><br>"
+            "\u2b50 Analysis Pipeline</b><br>"
             "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
             " border:1px solid #3a5a7a;'>"
-            "If the FWHM, Roundness, Stars, and Weight columns are empty, "
-            "star detection has not been run on the sequence. Click the yellow "
-            "<b>'Run Star Detection'</b> banner at the top of the window.<br><br>"
-            "This executes Siril's <span style='font-family:monospace;'>register "
-            "&lt;seq&gt; -2pass</span> command, which:<br>"
-            "\u2022 Detects stars in every frame<br>"
-            "\u2022 Computes FWHM, roundness, background, and star count<br>"
-            "\u2022 Stores results in the .seq file (persistent)<br>"
-            "\u2022 Does <b>not</b> create new output files (no r_ prefix added)<br><br>"
-            "<b>Note:</b> For RGB images, Siril stores registration data on the "
-            "<b>green channel</b> (highest SNR). The script automatically scans "
-            "all channels to find the data.<br><br>"
-            "<b>Median and Sigma</b> are always available from Siril's basic "
-            "per-channel statistics \u2014 no star detection needed."
+            "FWHM, Roundness, Stars, and Background are computed on startup by "
+            "calling <span style='font-family:monospace;'>"
+            "SirilInterface.analyse_image_from_file()</span> on each FITS file in the "
+            "selected folder. There is <b>no</b> FITSEQ build, no "
+            "<span style='font-family:monospace;'>register -2pass</span>, and nothing "
+            "written into the source folder.<br><br>"
+            "If the analyser could not fit stars in a frame (too few detections, very "
+            "noisy data), FWHM / Roundness / Stars remain empty for that row \u2014 "
+            "the frame itself is still playable and markable.<br><br>"
+            "<b>Re-analyse</b> is available from the toolbar if you want to re-run "
+            "<code>analyse_image_from_file</code> after editing files outside the "
+            "script."
             "</div>"
         )
         tabs.addTab(te_metrics, "\U0001f4cf Metrics")
@@ -5010,12 +5745,18 @@ class BlinkComparatorWindow(QMainWindow):
             "<b style='color:#ffcc66;'>Batch Selection</b><br>"
             "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
             " border:1px solid #3a5a7a;'>"
-            "<b>Threshold filter:</b> Choose a metric (FWHM, Background, Roundness), "
-            "an operator (>, <, >=, <=), and a value. The preview shows how many "
-            "frames match. Click 'Reject Matching' to exclude them all.<br><br>"
-            "<b>Worst N%:</b> Reject the worst 10% (or any %) of frames by the selected "
-            "metric. For FWHM and Background, worst = highest value. For Roundness, "
-            "worst = lowest value.</div><br>"
+            "<b>Threshold filter:</b> Choose a metric (FWHM, Background, "
+            "Roundness, Stars), an operator (&gt;, &lt;, &gt;=, &lt;=), and "
+            "a value. The preview shows how many frames match. Click "
+            "'Reject Matching' to exclude them all. A hint line underneath "
+            "the metric reminds you which direction is 'better' (e.g. "
+            "'FWHM: lower is better').<br><br>"
+            "<b>Percentile filter (Keep best N%):</b> Keep the best N% of "
+            "frames by the selected metric and reject the rest. Direction "
+            "is handled automatically \u2014 'best' means lowest FWHM / "
+            "lowest background, but highest roundness / most stars. Useful "
+            "when seeing varied during the session and absolute thresholds "
+            "are hard to pick.</div><br>"
 
             "<b style='color:#ffcc66;'>Approval Expression</b><br>"
             "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
@@ -5073,8 +5814,8 @@ class BlinkComparatorWindow(QMainWindow):
             "\u2022 <b>Side by Side (vs. reference)</b> \u2014 current frame on the left, "
             "the sequence reference frame on the right. Both zoom and pan together. "
             "Good for detailed comparison against the sharpest/best frame (reference "
-            "is picked by Siril during <code>register -2pass</code>; falls back to "
-            "frame 0 if registration was skipped).<br><br>"
+            "is the first frame in the folder \u2014 the one with the lowest "
+            "alphabetical filename).<br><br>"
 
             "<b style='color:#ffcc66;'>Playback Options</b><br>"
             "In the <b>Playback</b> group in the left panel:<br>"
@@ -5211,27 +5952,24 @@ class BlinkComparatorWindow(QMainWindow):
             "  Presets: Conservative / Default / Aggressive / Linear.\n\n"
             "WORKFLOW (folder mode)\n"
             "  1. Pick a folder of FITS files at startup.\n"
-            "  2. Siril runs 'cd <folder>' + 'convert svenesis_blink -fitseq'\n"
-            "     and optionally 'register svenesis_blink -2pass'.\n"
+            "  2. Every file is analysed in place via\n"
+            "     SirilInterface.analyse_image_from_file() on a background thread.\n"
             "  3. Marks are kept locally (pending) until Apply.\n"
             "  4. Apply writes rejected_frames.txt next to the source FITS and\n"
             "     moves rejected files into a 'rejected/' subfolder.\n"
-            "  5. On close, siril.cmd('close') is called and the temp sequence\n"
-            "     files (svenesis_blink.seq, .fit, _conversion.txt, cache/) are\n"
-            "     deleted. Original FITS files are never modified.\n\n"
+            "  5. On close, nothing needs cleanup — no FITSEQ, no .seq, no temp\n"
+            "     files. Original FITS files are never modified.\n\n"
             "FRAME CACHE\n"
             "  LRU cache (80 frames default) with thread-safe double-check locking.\n"
             "  One shared background worker preloads frames around the current one.\n"
             "  Separate thumbnail cache (200 entries) for the filmstrip.\n\n"
             "SIRIL API CALLS\n"
-            "  get_seq()               Load sequence metadata\n"
-            "  get_seq_frame()         Load frame pixel data (with_pixels=True)\n"
-            "  get_seq_regdata()       Registration data (FWHM, roundness, stars, BG)\n"
-            "  get_seq_stats()         Per-channel statistics (median, sigma, MAD)\n"
-            "  get_seq_imgdata()       Frame metadata (date_obs, inclusion)\n"
-            "  cmd('convert', ...)     Build the FITSEQ temp sequence\n"
-            "  cmd('register', ...)    Run -2pass star detection / registration\n"
-            "  cmd('close')            Release the sequence before cleanup\n\n"
+            "  analyse_image_from_file(path)   FWHM, wFWHM, roundness, nbstars,\n"
+            "                                  bgnoise, filter, timestamp, dimensions\n"
+            "  load_image_from_file(path,      Full float pixel data for the viewer\n"
+            "    with_pixels=True)             (globally-linked Python MTF stretch)\n"
+            "  load_image_from_file(path,      Fast C-side uint8 autostretched preview,\n"
+            "    preview=True, linked=True)    used for filmstrip thumbnails\n\n"
             "REQUIREMENTS\n"
             "  Siril 1.4+ with Python script support\n"
             "  sirilpy (bundled), numpy, PyQt6, matplotlib\n"
@@ -5274,19 +6012,30 @@ class BlinkComparatorWindow(QMainWindow):
 
 
 # ==============================================================================
-# FOLDER MODE — build a temp sequence from loose FITS files
+# FOLDER MODE — load loose FITS files directly via Siril's Python API
 # ==============================================================================
 
-FOLDER_MODE_SEQNAME = "svenesis_blink"
+# Supported input extensions. FITS is the primary format; the RAW set
+# matches what Siril's libraw-backed loader already accepts, so
+# analyse_image_from_file / load_image_from_file handle them transparently.
 FITS_EXTENSIONS = (".fit", ".fits", ".fts")
+RAW_EXTENSIONS = (
+    ".cr2", ".cr3", ".nef", ".nrw", ".arw", ".sr2", ".srf",
+    ".dng", ".orf", ".raf", ".rw2", ".pef", ".ptx", ".mrw",
+    ".3fr", ".iiq", ".rwl", ".x3f", ".kdc", ".k25", ".dcr",
+)
+SUPPORTED_EXTENSIONS = FITS_EXTENSIONS + RAW_EXTENSIONS
 
 
 def _scan_fits_files(folder: str) -> list[str]:
-    """Return sorted list of FITS filenames (basenames only) in folder, case-insensitive."""
+    """Return sorted list of supported image filenames (basenames only) in
+    folder, case-insensitive. Name kept for backwards compatibility; covers
+    FITS plus the common DSLR/mirrorless RAW formats Siril can decode.
+    """
     found: list[str] = []
     try:
         for name in os.listdir(folder):
-            if name.lower().endswith(FITS_EXTENSIONS):
+            if name.lower().endswith(SUPPORTED_EXTENSIONS):
                 found.append(name)
     except OSError:
         return []
@@ -5327,20 +6076,29 @@ def _show_welcome_dialog(parent=None) -> bool:
         "<b style='color:#FFDD00;'>What happens next:</b>"
         "<ol style='margin-top:4px;'>"
         "<li>Pick a folder containing your FITS files "
-        "(<code>.fit</code> / <code>.fits</code> / <code>.fts</code>).</li>"
-        "<li>Siril builds a temporary FITSEQ sequence "
-        f"(<code>{FOLDER_MODE_SEQNAME}</code>) from those files.</li>"
-        "<li>Optionally registers the frames to extract FWHM, roundness "
-        "and background statistics.</li>"
+        "(<code>.fit</code> / <code>.fits</code> / <code>.fts</code>) or "
+        "DSLR/mirrorless RAWs (<code>.cr2</code>, <code>.nef</code>, "
+        "<code>.arw</code>, <code>.dng</code>, \u2026).</li>"
+        "<li>Each file is analysed in place via Siril's "
+        "<code>analyse_image_from_file</code> — FWHM, roundness, star "
+        "count, background noise, timestamp. No FITSEQ conversion, no "
+        "<code>register -2pass</code>.</li>"
         "<li>The viewer opens — play / step through frames, mark bad ones "
-        "with <b>B</b>, good ones with <b>G</b>, undo with <b>Ctrl+Z</b>.</li>"
+        "with <b>B</b>, good ones with <b>G</b>, undo with <b>Ctrl+Z</b>. "
+        "Pixel data is streamed on demand via "
+        "<code>load_image_from_file</code>.</li>"
         "<li>Apply writes <code>rejected_frames.txt</code> and can move "
         "rejected files into a <code>rejected/</code> subfolder.</li>"
         "</ol>"
-        "<b style='color:#FFDD00;'>On close</b> the temp sequence, its "
-        "conversion log and the Siril <code>cache/</code> directory are "
-        "removed automatically — your original files are never modified "
-        "unless you explicitly say so."
+        "<b style='color:#FFDD00;'>Your original files are never modified</b> "
+        "unless you explicitly apply rejections — and there is no temp "
+        "sequence to clean up on close."
+        "<br><br>"
+        "<i style='color:#BBBBBB;font-size:10pt;'>Note on RAW files: FITS is "
+        "the first-class format. RAWs work, but often lack image-type and "
+        "filter metadata (so the mixed-folder auto-filter may pass everything "
+        "through), and star detection is only reliable on astronomical "
+        "exposures — not daylight or landscape photos.</i>"
         "</div>"
     )
     body.setTextFormat(Qt.TextFormat.RichText)
@@ -5365,14 +6123,14 @@ def _show_welcome_dialog(parent=None) -> bool:
     return dlg.exec() == QDialog.DialogCode.Accepted
 
 
-def _prompt_load_folder(parent=None) -> tuple[str, bool] | None:
-    """Prompt for a folder of FITS files. Returns (folder_path, register_yes_no) or None if cancelled."""
+def _prompt_load_folder(parent=None) -> str | None:
+    """Prompt for a folder of FITS files. Returns the folder path or None."""
     if not _show_welcome_dialog(parent):
         return None
 
     folder = QFileDialog.getExistingDirectory(
         parent,
-        "Blink Comparator — Select Folder of FITS Files"
+        "Blink Comparator — Select Folder of FITS / RAW Images"
     )
     if not folder:
         return None
@@ -5380,166 +6138,14 @@ def _prompt_load_folder(parent=None) -> tuple[str, bool] | None:
     files = _scan_fits_files(folder)
     if not files:
         QMessageBox.warning(
-            parent, "No FITS Files Found",
-            f"No {', '.join(FITS_EXTENSIONS)} files were found in:\n{folder}"
+            parent, "No Supported Image Files Found",
+            f"No FITS ({', '.join(FITS_EXTENSIONS)}) or supported "
+            f"RAW ({', '.join(RAW_EXTENSIONS[:6])}, \u2026) files were "
+            f"found in:\n{folder}"
         )
         return None
 
-    # Confirm + register checkbox
-    dlg = QDialog(parent)
-    dlg.setWindowTitle("Load Folder")
-    dlg.setStyleSheet("QDialog{background-color:#2b2b2b;color:#cccccc;}"
-                      "QLabel{color:#cccccc;}"
-                      "QCheckBox{color:#cccccc;}")
-    layout = QVBoxLayout(dlg)
-    layout.addWidget(QLabel(
-        f"Found <b>{len(files)}</b> FITS file(s) in:<br>"
-        f"<code>{folder}</code><br><br>"
-        f"A temporary sequence named <code>{FOLDER_MODE_SEQNAME}</code> will be created."
-    ))
-    chk_register = QCheckBox("Register frames for statistics (FWHM, roundness, background)")
-    chk_register.setChecked(True)
-    chk_register.setToolTip(
-        "Runs 'register -2pass' so statistics table, graph, batch-reject, and quality\n"
-        "weights are available. May take several minutes on large sequences."
-    )
-    layout.addWidget(chk_register)
-
-    btn_row = QHBoxLayout()
-    btn_ok = QPushButton("Continue")
-    btn_ok.setStyleSheet("padding:6px 16px;background-color:#285299;color:white;font-weight:bold;")
-    btn_ok.clicked.connect(dlg.accept)
-    btn_cancel = QPushButton("Cancel")
-    btn_cancel.setStyleSheet("padding:6px 16px;")
-    btn_cancel.clicked.connect(dlg.reject)
-    btn_row.addStretch()
-    btn_row.addWidget(btn_cancel)
-    btn_row.addWidget(btn_ok)
-    layout.addLayout(btn_row)
-
-    if dlg.exec() != QDialog.DialogCode.Accepted:
-        return None
-
-    return folder, chk_register.isChecked()
-
-
-def _build_folder_sequence(siril, folder: str, do_register: bool, parent=None) -> bool:
-    """Run cd + convert (+ optional register). Returns True on success."""
-    progress = QProgressDialog("Preparing temporary sequence...", None, 0, 0, parent)
-    progress.setWindowTitle("Loading Folder")
-    progress.setWindowModality(Qt.WindowModality.WindowModal)
-    progress.setMinimumDuration(0)
-    progress.setCancelButton(None)
-    progress.setAutoClose(False)
-    progress.show()
-    QApplication.processEvents()
-
-    try:
-        # Preflight: verify the folder still exists on disk. Catches
-        # deletes/renames between dialog pick and conversion start, and
-        # gives a clearer message than Siril's generic "Directory not found".
-        if not os.path.isdir(folder):
-            progress.close()
-            QMessageBox.critical(
-                parent, "Folder Not Found",
-                f"The selected folder no longer exists:\n\n{folder}"
-            )
-            return False
-
-        progress.setLabelText("Changing directory in Siril...")
-        QApplication.processEvents()
-        # Quote the folder path: sirilpy joins cmd args into a single Siril
-        # command line, and Siril's `cd` parser treats unquoted whitespace
-        # as an argument separator. Without quoting, any path containing
-        # spaces (very common on macOS: "Application Support", "My Astro
-        # Images", etc.) would fail with "Directory not found" — Siril
-        # only saw the first token.
-        siril.cmd("cd", f'"{folder}"')
-
-        # Defensive cleanup: if a previous run crashed (or was force-killed)
-        # its temp sequence artifacts may still be on disk, and `convert` will
-        # refuse to proceed ("destination already exists"). Wipe them + close
-        # any lingering sequence hold so `convert` always starts clean.
-        progress.setLabelText("Cleaning up any leftover temp sequence...")
-        QApplication.processEvents()
-        try:
-            siril.cmd("close")
-        except Exception:
-            pass
-        _cleanup_folder_sequence(folder)
-
-        progress.setLabelText(f"Converting FITS files to sequence '{FOLDER_MODE_SEQNAME}'...")
-        QApplication.processEvents()
-        siril.cmd("convert", FOLDER_MODE_SEQNAME, "-fitseq")
-
-        if do_register:
-            progress.setLabelText("Registering frames (may take several minutes)...")
-            QApplication.processEvents()
-            try:
-                siril.cmd("register", FOLDER_MODE_SEQNAME, "-2pass")
-            except Exception as ex:
-                try:
-                    siril.log(f"[BlinkComparator] Registration failed, continuing without stats: {ex}")
-                except Exception:
-                    pass
-                QMessageBox.warning(
-                    parent, "Registration Failed",
-                    f"register -2pass failed. Continuing without statistics.\n\n{ex}"
-                )
-
-        progress.setLabelText("Loading sequence...")
-        QApplication.processEvents()
-        # `convert` already leaves the new sequence active, but call load_seq to
-        # be explicit (and to refresh regdata if register was just run).
-        try:
-            siril.cmd("load_seq", FOLDER_MODE_SEQNAME)
-        except Exception as ex:
-            try:
-                siril.log(f"[BlinkComparator] load_seq warning (continuing): {ex}")
-            except Exception:
-                pass
-    except Exception as e:
-        progress.close()
-        QMessageBox.critical(
-            parent, "Conversion Failed",
-            f"Failed to build sequence from folder:\n{e}\n\n{traceback.format_exc()}"
-        )
-        return False
-    finally:
-        progress.close()
-
-    return True
-
-
-def _cleanup_folder_sequence(folder: str) -> None:
-    """Remove everything that was created by _build_folder_sequence:
-    the .seq files, the FITSEQ image files, the conversion log, and the
-    Siril thumbnail cache directory.
-    """
-    patterns = [
-        f"{FOLDER_MODE_SEQNAME}.seq",
-        f"r_{FOLDER_MODE_SEQNAME}.seq",
-        f"{FOLDER_MODE_SEQNAME}_*.fit",
-        f"{FOLDER_MODE_SEQNAME}_*.fits",
-        f"{FOLDER_MODE_SEQNAME}.fit",
-        f"{FOLDER_MODE_SEQNAME}.fits",
-        f"r_{FOLDER_MODE_SEQNAME}.fit",
-        f"r_{FOLDER_MODE_SEQNAME}.fits",
-        f"{FOLDER_MODE_SEQNAME}_conversion.txt",
-    ]
-    for pat in patterns:
-        for path in glob.glob(os.path.join(folder, pat)):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-
-    # Siril writes a "cache" directory into the working folder for sequence
-    # thumbnails / computed data. Since folder mode creates a throwaway
-    # sequence, wipe the whole cache subfolder on close.
-    cache_dir = os.path.join(folder, "cache")
-    if os.path.isdir(cache_dir):
-        shutil.rmtree(cache_dir, ignore_errors=True)
+    return folder
 
 
 # ==============================================================================
@@ -5577,15 +6183,13 @@ def main() -> int:
         if not siril.connected:
             siril.connect()
 
-        # Folder mode is the only mode — always prompt for a folder of FITS files
-        # and build a temporary sequence.
-        choice = _prompt_load_folder(None)
-        if choice is None:
+        # Folder mode is the only mode — the window itself scans the
+        # folder, analyses every file via `analyse_image_from_file`, and
+        # loads pixel data on demand via `load_image_from_file`. No
+        # FITSEQ conversion, no `register -2pass`, nothing to clean up.
+        folder = _prompt_load_folder(None)
+        if folder is None:
             return 0
-        folder, do_register = choice
-
-        if not _build_folder_sequence(siril, folder, do_register, None):
-            return 1
 
         return _launch(siril, folder_mode_path=folder)
 
