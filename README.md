@@ -28,6 +28,7 @@ GPL-3.0-or-later
 | [Svenesis Annotate Image](#svenesis-annotate-image) | Annotate plate-solved images with catalog objects, coordinate grids, and export as PNG/TIFF/JPEG. | [Guide](Instructions/Svenesis-AnnotateImage-Instructions.md) · [DE](Instructions/Svenesis-AnnotateImage-Instructions_de.md) | ✨ |
 | [Svenesis Blink Comparator](#svenesis-blink-comparator) | Animate a folder of FITS frames for rapid visual inspection and data-driven frame selection — statistics table, scatter plot, batch reject, file-based rejection workflow. | [Guide](Instructions/Svenesis-BlinkComparator-Instructions.md) · [DE](Instructions/Svenesis-BlinkComparator-Instructions_de.md) | ✨ |
 | [Svenesis CosmicDepth 3D](#svenesis-cosmicdepth-3d) | Render catalogued objects from a plate-solved image as a rotatable 3D scene — image plane with push-pin depth sticks, SIMBAD distances, stretched-log/linear/hybrid scaling, HTML/PNG/CSV export. | [Guide](Instructions/Svenesis-CosmicDepth3D-Instructions.md) · [DE](Instructions/Svenesis-CosmicDepth3D-Instructions_de.md) | ✨ |
+| [Svenesis GalacticView 3D](#svenesis-galacticview-3d) | Place your astrophoto inside an interactive 3D Milky Way — Earth in the Orion Arm, the photo as a textured rectangle pointing in the exact viewing direction, automatic Galactic / Cosmic mode based on object distance. | — | — |
 | [Svenesis Gradient Analyzer](#svenesis-gradient-analyzer) | Analyze background gradients with heatmaps, diagnostics, and tool recommendations. | [Guide](Instructions/Svenesis-GradientAnalyzer-Instructions.md) · [DE](Instructions/Svenesis-GradientAnalyzer-Instructions_de.md) | ✨ |
 | [Svenesis Image Advisor](#svenesis-image-advisor) | Analyze a stacked linear image and get a prioritized processing workflow with concrete Siril commands. | [Guide](Instructions/Svenesis-ImageAdvisor-Instructions.md) · [DE](Instructions/Svenesis-ImageAdvisor-Instructions_de.md) | — |
 | [Svenesis Multiple Histogram Viewer](#svenesis-multiple-histogram-viewer) | View linear and stretched images with RGB histograms, 3D surface plots, and detailed statistics. | [Guide](Instructions/Svenesis-MultipleHistogramViewer-Instructions.md) · [DE](Instructions/Svenesis-MultipleHistogramViewer-Instructions_de.md) | ✨ |
@@ -403,6 +404,86 @@ All exports are written to Siril's working directory with a timestamp appended t
 4. Click **Render 3D Map** (or press F5).
 5. Drag in the scene to rotate, scroll to zoom, hover markers for details. Toggle **Show image as sky plane** to switch between the pixel-mapped "window" layout and a pure abstract 3D map.
 6. Review the **Objects** tab for the full distance table; use **Export HTML / PNG / CSV** for sharing or archiving. The PNG export captures your current camera angle, so rotate first to the view you want.
+
+---
+
+## Svenesis GalacticView 3D
+
+**File:** `Svenesis-GalacticView3D.py` (v0.9.0)
+
+> ⚠️ Pre-release (0.9.0) — public preview, not yet submitted to the official Siril Script Repository.
+
+Reads the current plate-solved image from Siril, identifies the main astronomical object via SIMBAD, and renders the Milky Way as an interactive 3D model — with Earth physically positioned in the Orion Arm and the astrophoto itself placed as a textured rectangle pointing in the exact viewing direction in space. GalacticView 3D answers a question that no other tool answers: *"My photo is not just anywhere — it is a window into one specific direction of the universe. Where exactly?"*
+
+### Screenshots
+
+![GalacticView 3D — Milky Way scene with photo as a window in space](https://github.com/sramuschkat/Siril-Scripts/raw/main/screenshots/GalacticView3D_Image-1.jpg)
+
+*Main view: 5-arm Milky Way with galactic disk stars, Earth in the Orion Arm, and the plate-solved astrophoto rendered as a textured rectangle pointing in its actual viewing direction. Drag to rotate, scroll to zoom.*
+
+### Features
+
+#### Two automatic view modes
+
+- **Galactic mode** (object distance < 150,000 ly): 1 unit = 1,000 ly. Shows the Milky Way's spiral arms, galactic disk, central bulge, and Earth in the Orion Arm — answering *"where inside our galaxy am I looking?"*
+- **Cosmic mode** (object distance ≥ 150,000 ly): 1 unit = 100,000 ly. Adds neighbouring galaxies (LMC, SMC, M31, M33, …) with compressed log scaling beyond 1 Mly so the far-galaxy tail stays readable.
+- Mode is selected automatically from the resolved object distance and SIMBAD type — no manual toggling required.
+
+#### Photo placement in 3D space
+
+- **Plate-solved WCS ingestion** with the same 6-strategy WCS detection used by CosmicDepth 3D (FITS dict, header string, `pix2radec` sampling, file-on-disk fallback).
+- **Photo as a textured rectangle:** the four image corners are converted from RA/Dec to galactic coordinates and the FITS data is auto-stretched and applied as a Plotly surface texture.
+- **Viewing ray** drawn from Earth to the photo centre — the line literally shows where you were pointing your telescope.
+- **Photo distance** is the resolved distance to the main object identified in the image.
+
+#### Distance resolution
+
+- **Priority chain:** local JSON cache (90-day TTL) → SIMBAD `mesDistance` table → redshift × Hubble law (H₀ = 70 km/s/Mpc) → SIMBAD object-type median fallback (clearly labelled as *Type median*).
+- **Distance cache** in `~/.config/siril/svenesis_galacticview_cache.json` — re-rendering the same field is near-instant.
+- **Cosmological corrections** — for distant galaxies the redshift → distance conversion accounts for lookback time so cosmic-mode positions are physically meaningful.
+
+#### Galactic scene composition
+
+- **5 spiral arms** (Perseus, Sagittarius, Scutum-Centaurus, Norma, and the Orion Spur) rendered as smooth 3D curves with name labels in galactic mode.
+- **Galactic disk** populated with ~500 stars and a central bulge (~180 stars) for depth perception.
+- **Earth in the Orion Arm** — placed at the correct heliocentric position (~26,000 ly from the galactic centre).
+- **Distance rings** around the galactic centre and around Earth as scale references.
+- **Compass rose** anchored to the scene showing galactic north and the direction towards the galactic centre.
+- **Constellation lines** for the relevant region around the photo centre (galactic mode).
+- **Neighbour galaxies** in cosmic mode — embedded LMC/SMC/M31/M33/etc. as labelled markers.
+
+#### Interactive 3D rendering
+
+- **Plotly-in-QWebEngineView** with full drag-to-rotate, scroll-to-zoom, hover-for-details — the same embedded 3D approach as CosmicDepth 3D.
+- **Matplotlib 3D fallback** if `PyQt6-WebEngine` is not available (or ABI-mismatched against Siril's bundled PyQt6); the app keeps working but drops the live rotation.
+- **Dark-themed PyQt6 GUI** matching the rest of the Svenesis suite.
+- **Persistent settings** via `QSettings` — view mode, last target, render preferences are remembered across sessions.
+
+#### Target picker
+
+- When the main object cannot be uniquely identified (e.g. wide field with multiple bright SIMBAD candidates), a **target picker dialog** lists the candidates with type, magnitude, and distance so you can choose the actual photographic subject.
+
+#### Export
+
+- **HTML** — standalone, fully interactive Plotly scene (shareable, opens in any browser).
+- **PNG** — high-resolution snapshot of the current camera angle.
+- **CSV** — coordinate table of all scene elements (Earth, photo corners, identified object, neighbour galaxies) in galactic XYZ.
+
+### Requirements
+
+- Siril 1.4+ with Python script support
+- sirilpy (bundled with Siril)
+- numpy, PyQt6, matplotlib, astropy, astroquery, plotly, kaleido (installed automatically via `s.ensure_installed`)
+- PyQt6-WebEngine — probed at startup; if missing or ABI-mismatched the script falls back to a static matplotlib view
+- Internet connection for the initial SIMBAD queries (subsequent renders use the local distance cache)
+
+### Usage
+
+1. Load an image in Siril and **plate-solve** it (Tools → Astrometry → Image Plate Solver).
+2. Run **Svenesis GalacticView 3D** from Siril: **Processing → Scripts** (or your Scripts menu).
+3. The script identifies the main object and resolves its distance; if it asks, pick the correct target from the dialog.
+4. The scene renders automatically — Galactic or Cosmic mode is chosen for you. Drag to rotate, scroll to zoom.
+5. Use **Export HTML / PNG / CSV** to share or archive the view.
 
 ---
 
