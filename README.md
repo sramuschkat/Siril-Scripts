@@ -30,9 +30,7 @@ GPL-3.0-or-later
 | [Svenesis CosmicDepth 3D](#svenesis-cosmicdepth-3d) | Render catalogued objects from a plate-solved image as a rotatable 3D scene — image plane with push-pin depth sticks, SIMBAD distances, stretched-log/linear/hybrid scaling, HTML/PNG/CSV export. | [Guide](Instructions/Svenesis-CosmicDepth3D-Instructions.md) · [DE](Instructions/Svenesis-CosmicDepth3D-Instructions_de.md) | ✨ |
 | [Svenesis GalacticView 3D](#svenesis-galacticview-3d) | Place your astrophoto inside an interactive 3D Milky Way — Earth in the Orion Arm, the photo as a textured rectangle pointing in the exact viewing direction, automatic Galactic / Cosmic mode based on object distance. | — | — |
 | [Svenesis Gradient Analyzer](#svenesis-gradient-analyzer) | Analyze background gradients with heatmaps, diagnostics, and tool recommendations. | [Guide](Instructions/Svenesis-GradientAnalyzer-Instructions.md) · [DE](Instructions/Svenesis-GradientAnalyzer-Instructions_de.md) | ✨ |
-| [Svenesis Image Advisor](#svenesis-image-advisor) | Analyze a stacked linear image and get a prioritized processing workflow with concrete Siril commands. | [Guide](Instructions/Svenesis-ImageAdvisor-Instructions.md) · [DE](Instructions/Svenesis-ImageAdvisor-Instructions_de.md) | — |
 | [Svenesis Multiple Histogram Viewer](#svenesis-multiple-histogram-viewer) | View linear and stretched images with RGB histograms, 3D surface plots, and detailed statistics. | [Guide](Instructions/Svenesis-MultipleHistogramViewer-Instructions.md) · [DE](Instructions/Svenesis-MultipleHistogramViewer-Instructions_de.md) | ✨ |
-| [Svenesis Script Security Scanner](#svenesis-script-security-scanner) | Scan Siril Python scripts for malicious patterns across 10 threat categories. | — | — |
 
 ---
 
@@ -587,57 +585,6 @@ Reads the current image from Siril, divides it into a configurable grid of tiles
 
 ---
 
-## Svenesis Image Advisor
-
-**File:** `Svenesis-ImageAdvisor.py` (v1.3.1) — **[Detailed Instructions](Instructions/Svenesis-ImageAdvisor-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-ImageAdvisor-Instructions_de.md)**
-
-Analyses a stacked, linear FITS image loaded in Siril and generates a prioritised list of processing recommendations — including concrete Siril commands, suggested parameters, and reasoning. The script does **not** modify the image; it only diagnoses and advises. Think of it as a second opinion from an experienced astrophotographer before you start processing.
-
-### Features
-
-- **Full linear-stage workflow:** Recommendations follow the correct processing order — Crop → Background Extraction → Platesolving → SPCC → SCNR → Denoise → Deconvolution → Starless — with post-processing roadmap (stretch, fine-tune, star recomposition, export).
-- **Linear state detection:** Warns if the image is already stretched (scans FITS HISTORY for GHT, autostretch, MTF, asinh, etc. using word-boundary matching to avoid false positives).
-- **Calibration detection:** Checks HISTORY for dark/flat/bias calibration; shows "Unknown" when no history is present (e.g. stacked in another app) instead of false negatives.
-- **Background gradient analysis:** 8×8 sigma-clipped tile grid with gradient spread percentage, colour-coded heatmap, and pattern classification:
-  - **Vignetting** — corners dark, centre bright (needs flats, not subsky)
-  - **Linear gradient** — one side bright (light pollution, subsky appropriate)
-  - **Amp glow** — single corner bright (may need masking)
-  - Pattern classification is suppressed when gradient is below the action threshold to avoid noise-fitting.
-- **Calibration-aware gradient advice:** When flats are missing, gradient recommendations note that the gradient may be vignetting that subsky cannot fully correct.
-- **Nebulosity-aware subsky:** Adds `-samples=15/25` to `subsky` commands when nebulosity is present, preventing polynomial overcorrection on nebula regions.
-- **Noise & SNR estimation:** MAD-based noise on the darkest 25% of pixels; integration-time-aware advice (short integration → "add more subs" vs long integration → "faint target, denoise essential").
-- **Smart denoise ordering:** Denoise is promoted to an actionable step before deconvolution even at high SNR, because Richardson-Lucy amplifies noise.
-- **Narrowband-adjusted nebulosity:** Lower detection threshold (3σ) for narrowband/dual-narrowband images to catch diffuse low-contrast emission.
-- **Image type classification:** Detects OSC Broadband, Mono, Narrowband, Luminance, and Dual-Narrowband OSC (L-eNhance, L-Extreme, NBZ, etc.) — adjusts SPCC and colour balance advice accordingly.
-- **Star quality diagnostics:** FWHM (pixels and arcsec when plate-solved), elongation, centre-vs-edge spatial analysis, saturated star count, field curvature/coma detection. Soft stars and elongation are elevated as acquisition warnings near the top of the report.
-- **Deconvolution guidance:** Richardson-Lucy recommendation with `makepsf manual -gaussian` + `rl -loadpsf=psf.fits` commands when SNR allows; suggests GUI deconvolution tool for interactive control.
-- **Starless recommendation:** Only when nebulosity warrants it; `starnet -stretch` for linear images, bare `starnet` for already-stretched; autostretch preview tip included.
-- **Dynamic range:** Usable DR in stops (peak / noise floor), informs stretch aggressiveness advice with background pedestal warnings for high-background images.
-- **Clipping detection:** Black and white clipping percentages with cause suggestions. Extreme black clipping (>50%) with no detected signal triggers a critical warning and suppresses the workflow. Normal linear data (background near zero with real content) is correctly identified.
-- **Crop detection:** Scans edges for stacking borders and generates `boxselect`/`crop` commands. Warns when scan limits are hit and borders may extend further.
-- **Per-channel noise table:** R/G/B noise levels with noisiest channel highlighted. Notes when channels are unusually well-balanced (may already be colour-calibrated).
-- **Image sanity checks:** Flags common phone/screen resolutions (1080×1920, etc.) as unusual for astro cameras. Suppresses processing workflow when the image fails basic sanity checks.
-- **Verified Siril commands:** All command syntax verified against Siril 1.4.x binary (`subsky`, `denoise -mod=`, `makepsf manual -gaussian`, `rl -loadpsf= -iters=`, `starnet -stretch`, `platesolve`, `spcc`).
-- **Script export (.ssf):** Generates an executable Siril script with save checkpoints after key stages (`requires 1.4.1`).
-- **Report export (.txt):** Full plain-text report for archiving or sharing.
-- **PyQt6 dark-themed GUI:** Left panel with controls and image info, right panel with scrollable HTML report including heatmap, per-channel table, findings, and workflow.
-
-### Requirements
-
-- Siril 1.4.1+ with Python script support
-- sirilpy (bundled with Siril)
-- numpy, PyQt6 (installed automatically via `s.ensure_installed`)
-
-### Usage
-
-1. Load a stacked, linear FITS image in Siril.
-2. Run **Svenesis Image Advisor** from Siril: **Processing → Scripts** (or your Scripts menu).
-3. The analysis runs automatically on launch. Review findings, statistics, heatmap, and the recommended workflow in the report panel.
-4. Use **Re-Analyse** after making changes in Siril to get updated recommendations.
-5. Use **Export Script (.ssf)** to save the workflow as a runnable Siril script, or **Export Report (.txt)** to save the full analysis.
-
----
-
 ## Svenesis Multiple Histogram Viewer
 
 **File:** `Svenesis-MultipleHistogramViewer.py` (v1.1.0) — **[Detailed Instructions](Instructions/Svenesis-MultipleHistogramViewer-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-MultipleHistogramViewer-Instructions_de.md)**
@@ -679,60 +626,3 @@ Reads the current linear image from Siril (or a linear FITS file), applies a 2%�
 1. Load an image in Siril (or use **Load linear FITS...** in the script).
 2. Run **Svenesis Multiple Histogram Viewer** from Siril: **Processing → Scripts** (or your Scripts menu).
 3. Use the left panel for view type (Histogram / 3D), Data-Mode (Normal / Log), channels, and image/source options. Use **Enlarge Diagram** for a larger histogram or 3D view.
-
----
-
-## Svenesis Script Security Scanner
-
-**File:** `Svenesis-Script-Security-Scanner.py` (v2.0.0)
-
-Scans all Python scripts in your configured Siril script folders for potentially dangerous patterns across **10 threat categories**. Siril scripts run with full user-level OS permissions, so a malicious script can do virtually anything on your machine. This tool gives you a first-pass analysis before you run any script you did not write yourself.
-
-### ⚠️ A word of caution before you scan
-
-Siril Python scripts are powerful — and that power cuts both ways. A script can do **virtually anything your user account can do** on this machine: delete files and folders, download and execute additional programs, exfiltrate data, modify system settings … everything you can imagine a bad actor might want to do.
-
-We are a friendly and welcoming astronomy community — but *you never truly know* where a script came from or who really wrote it. **Be careful about where you load scripts from.**
-
-This tool gives you an impression of what a script is doing under the hood — potentially dangerous calls, obfuscated code, network access, file deletions, and more. It is a genuine help for spotting suspicious behaviour.
-
-**However:** this is a cat-and-mouse game (as we say in German: *„Hase und Igel"* — hare and hedgehog). A determined bad actor who knows this scanner exists will adapt their script to avoid triggering the rules. **No automated tool can give you a 100 % guarantee.** Use your own judgement, only run scripts from sources you trust, and keep backups of your data.
-
-Stay safe — and clear skies. 🌠
-
-### ⚠️ Important — Why you should always do an AI check
-
-This scanner performs **static analysis based on pattern matching** — it looks for known dangerous signatures in the source code. A clever attacker can evade these patterns. **ChatGPT and Claude understand code semantically**, like a human expert would, and can catch threats that pattern-based tools miss entirely. Paste the script into either AI with the prompt below — it takes 30 seconds and could save you from serious harm:
-
-> *"You are an expert Python developer and cybersecurity specialist. Analyze the following Python script designed for the astrophotography program Siril. The script can access Siril data via its API but runs with full user-level OS permissions. Review the code for any malicious, harmful, or risky behavior — including but not limited to: file system access, network calls, data exfiltration, privilege escalation, obfuscated code, or destructive operations. Provide a security risk assessment and a clear recommendation on whether the script is safe to run."*
-
-### Screenshots
-
-![Script Security Scanner — main window](https://github.com/sramuschkat/Siril-Scripts/raw/main/screenshots/Security-Scanner-1.jpg)
-
-*Main window: script directories, category selection, scan results grouped by file with severity indicators.*
-
-### Features
-
-- **10 threat categories:** File System — Destructive, File System — Data Theft, Network — Exfiltration, Network — Inbound/Backdoor, Code Execution — Escalation, Persistence, Obfuscation, Denial of Service, Social Engineering, Supply Chain.
-- **Severity levels:** HIGH (red) — likely dangerous; MEDIUM (orange) — suspicious; LOW (blue) — informational.
-- **Script directory discovery:** Automatically reads configured Siril script paths from the OS-specific Siril config file; falls back to well-known default locations.
-- **Anti-evasion measures:** Multi-line continuation joins, triple-quoted string awareness, import alias expansion, comment-line filtering.
-- **Detailed findings:** Click any finding for a full explanation; double-click to open the file in your default text editor.
-- **Export:** Save a full plain-text report of all findings with explanations.
-- **Startup warning:** Explains the limitations of static analysis and reminds you to also use AI-assisted review.
-- **AI-assisted analysis tip:** Includes a ready-to-use prompt for ChatGPT or Claude to perform a semantic review that can catch threats pattern-based tools miss.
-
-### Requirements
-
-- Siril 1.4+ with Python script support
-- sirilpy (bundled with Siril)
-- PyQt6 (installed automatically when the script runs)
-
-### Usage
-
-1. Run **Svenesis Script Security Scanner** from Siril: **Processing → Scripts** (or your Scripts menu).
-2. The scanner auto-discovers your Siril script directories. Use **Add Directory…** or **Paste Paths** to add more.
-3. Select the threat categories you want to scan, then press **Scan Now**.
-4. Review findings grouped by file. Click a finding for details; double-click to open the file.
-5. Use **Export Report…** to save the results as a plain-text file.
