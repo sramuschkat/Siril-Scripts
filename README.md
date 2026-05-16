@@ -31,7 +31,7 @@ GPL-3.0-or-later
 | [Svenesis GalacticView 3D](#svenesis-galacticview-3d) | Place your astrophoto inside an interactive 3D Milky Way — Earth in the Orion Arm, the photo as a textured rectangle pointing in the exact viewing direction, automatic Galactic / Cosmic mode based on object distance. | — | — |
 | [Svenesis Gradient Analyzer](#svenesis-gradient-analyzer) | Analyze background gradients with heatmaps, diagnostics, and tool recommendations. | [Guide](Instructions/Svenesis-GradientAnalyzer-Instructions.md) · [DE](Instructions/Svenesis-GradientAnalyzer-Instructions_de.md) | ✨ |
 | [Svenesis Multiple Histogram Viewer](#svenesis-multiple-histogram-viewer) | View linear and stretched images with RGB histograms, 3D surface plots, and detailed statistics. | [Guide](Instructions/Svenesis-MultipleHistogramViewer-Instructions.md) · [DE](Instructions/Svenesis-MultipleHistogramViewer-Instructions_de.md) | ✨ |
-| [Svenesis Satellite Trail Cleaner](#svenesis-satellite-trail-cleaner) | Per-frame satellite & aircraft trail detection and inpainting on FITS / XISF / RAW subs — STScI's Median Radon Transform (`findsat_mrt`) detection, three inpaint methods (NN+Smooth / Biharmonic / Perpendicular Strip Median) with sky-noise matching, XISF round-trip with metadata preservation, interactive line picker. | [Guide](Instructions/Svenesis-SatelliteTrailCleaner-Instructions.md) · [DE](Instructions/Svenesis-SatelliteTrailCleaner-Instructions_de.md) | — |
+| [Svenesis Satellite Trail Cleaner](#svenesis-satellite-trail-cleaner) | Per-frame satellite & aircraft trail detection and inpainting on FITS / XISF / TIFF / RAW subs — STScI's Median Radon Transform (`findsat_mrt`) detection, six inpaint methods with automatic per-frame recommendation, sky-noise matching, format-preserving round-trip, interactive line picker, parallel batch pipeline. | [Guide](Instructions/Svenesis-SatelliteTrailCleaner-Instructions.md) · [DE](Instructions/Svenesis-SatelliteTrailCleaner-Instructions_de.md) | — |
 
 ---
 
@@ -632,60 +632,72 @@ Reads the current linear image from Siril (or a linear FITS file), applies a 2%�
 
 ## Svenesis Satellite Trail Cleaner
 
-**File:** `Svenesis-SatelliteTrailCleaner.py` (v0.7.0) — **[Detailed Instructions](Instructions/Svenesis-SatelliteTrailCleaner-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-SatelliteTrailCleaner-Instructions_de.md)**
+**File:** `Svenesis-SatelliteTrailCleaner.py` (v0.8.9) — **[Detailed Instructions](Instructions/Svenesis-SatelliteTrailCleaner-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-SatelliteTrailCleaner-Instructions_de.md)**
 
-> ⚠️ Pre-release (0.7.0) — public preview, not yet submitted to the official Siril Script Repository.
+> ⚠️ Pre-release (0.8.9) — public preview, not yet submitted to the official Siril Script Repository.
 
 Detects linear satellite or aircraft trails in your individual sub-exposures and inpaints them using the local sky background — **before** stacking. Siril's normal answer to trails is sigma-clipped stack rejection, which works statistically when you have 8+ well-distributed subs. The trail is "out-voted" by clean frames and disappears. The problem: with short sequences (3–8 subs), single-night campaigns, or LRGB stacks with low per-filter counts, sigma clipping has too few samples to reliably remove the trail. This tool fills that gap by cleaning each affected sub individually before the integration even starts.
 
 ### Features
 
-#### Detection (v0.5+: STScI's `findsat_mrt` backend)
+#### Detection — STScI's `findsat_mrt` Median Radon Transform
 
-- **Median Radon Transform** via `acstools.findsat_mrt.TrailFinder` — the same satellite-trail detection pipeline STScI uses on HST/ACS images (Stark et al. 2022, ACS ISR 2022-08). The MRT replaces sum-Radon's line integral with the median, which is mathematically robust to point-source contamination: bright stars in a star-rich field don't produce the "fan of false positives" that plagues classical Hough/Canny detectors.
+- **Median Radon Transform** via `acstools.findsat_mrt.TrailFinder` — the same satellite-trail detection pipeline STScI uses on HST/ACS images (Stark et al. 2022, ACS ISR 2022-08). The MRT replaces the classic Radon transform's line *sum* with the line *median*, which is mathematically robust to point-source contamination: bright stars in a star-rich field don't produce the "fan of false positives" that plagues Hough/Canny detectors.
 - **Matched-filter peak detection in MRT space** with three precomputed line-width kernels (3 / 7 / 15 px) detects trails at SNR ≥ user threshold (default 5σ).
-- **Per-candidate image-space validation**: rotates a strip around each detection, fits a Gaussian across trail width, rejects candidates with width > `max_width` (kills comet tails). Then a **persistence test** chunks the trail along its length and demands a majority of chunks show consistent SNR (kills non-uniform features — comets fade along the tail, satellites do not).
-- **Endpoint extension to image boundary** — TrailFinder's per-source endpoints often truncate where signal weakens; the script extends them along the trail direction to cover the full sweep so dilation can mask the entire trail.
-- **Three scan modes**: Quick (4× downsample, 1° theta, no persistence) / Normal (2× downsample, 0.5° theta, persistence on) / Deep (full resolution, all filters) — speed vs sensitivity tradeoff.
+- **Per-candidate image-space validation** — rotates a strip around each detection, fits a Gaussian across trail width, rejects candidates with width > `max_width` (kills comet tails). Optional **persistence test** chunks the trail along its length and demands a majority of chunks show consistent SNR (kills non-uniform features — comets fade along the tail, satellites do not).
+- **Endpoint extension to image boundary** — TrailFinder's per-source endpoints often truncate where signal weakens; the script extends them along the trail direction so the dilated mask covers the full sweep.
+- **Bright-halo mask growth** — after the standard dilation, the mask is grown into any bright pixel (> sky + 3σ) directly adjacent to it, bounded at 25 hops. This automatically absorbs the PSF halos around "flashing satellite" pearls so no bright ring survives outside a fixed-width mask.
+- **Three scan modes** with auto-tuned multi-process MRT (v0.8.9):
+  - **Quick** — 4× downsample, 1° theta resolution, no persistence; ~2 processes
+  - **Normal** — 2× downsample, 0.5° theta, persistence on; ~half-cores
+  - **Deep** — full resolution, 0.5° theta, all filters; uses *all* CPU cores
 - **MRT cache** — when you tune SNR / max-width / persistence sliders without changing downsample or theta-step, the expensive MRT step is reused and only the cheap post-MRT phases re-run. Typical re-detection in < 1 second.
 - **Interactive line picker** — every detected trail is drawn as a clickable green/grey overlay; click any line to toggle remove/keep before Apply. **Select All / None / Invert** buttons for fast bulk operations.
 
-#### Inpainting (v0.7+: three algorithms with sky-noise matching)
+#### Inpainting — six methods with per-frame recommendation
 
-- **Nearest Neighbor + Smooth (default, fast)** — `scipy.ndimage.distance_transform_edt` finds the nearest unmasked pixel for each masked pixel; the filled region is then smoothed with a Gaussian whose σ adapts to mask thickness (σ ≈ half-thickness × 0.75). Sub-second per frame, no visible centreline ridge.
-- **Biharmonic (highest quality, slow)** — `skimage.restoration.inpaint_biharmonic` solves the biharmonic PDE ∇⁴u = 0 inside the mask with boundary values from the surrounding sky. Mathematically optimal smooth interpolation (minimum thin-plate energy). ~5-15 s per frame. Best for final Apply on critical frames.
-- **Perpendicular Strip Median (gradient-preserving)** — rotates the image so the trail is horizontal, then for each column in rotated space replaces masked pixels with the median of `strip_width` unmasked pixels above and below the masked stripe. Preserves any sky-background gradient (vignetting, light pollution) perpendicular to the trail. Vectorised, comparable speed to NN.
-- **Sky-noise matching post-process** — after any of the above runs, adds Gaussian noise inside the mask with σ taken robustly (via MAD) from a 30-px halo of unmasked sky around the trail. The filled region is now **statistically indistinguishable** from real sky for stack-rejection algorithms (smooth inpaints can be spotted by Winsorized/sigma-clipped stacking otherwise). On by default; ~50 ms overhead.
-- **Star Protection (optional, off by default)** — when on, detects stars in the image and excludes them from the inpaint mask so they survive the cleanup; smart filter ignores "stars" that lie inside the trail mask itself (those are misclassified trail pixels, not real stars).
+- **Perpendicular Strip Median (default, recommended)** — rotates the image so the trail is horizontal, then for each column in rotated space replaces masked pixels with the median of `strip_width` unmasked pixels above and below. Preserves any sky-background gradient (vignetting, light pollution) perpendicular to the trail. Robust on "flashing satellite" / tumbling-debris trails with bright pearls — the median naturally rejects pearl peaks at the centreline.
+- **Harmonic / Laplace (∇²u = 0, no ringing)** — bbox-cropped iterative 5-point Laplace solver with a nearest-neighbour warm start. Has the maximum principle, so the inpainted values cannot over- or undershoot the surrounding sky — perfect smooth physical fill, combined with Match-sky-noise gives a result statistically indistinguishable from real sky.
+- **Nearest Neighbor + Smooth (fast)** — `scipy.ndimage.distance_transform_edt` finds the nearest unmasked pixel for each masked pixel; the filled region is then smoothed with a Gaussian whose σ adapts to mask thickness. Sub-second per frame.
+- **cv2 Fast Marching (Telea)** and **cv2 Navier-Stokes** — OpenCV's C++ inpaint methods via percentile-scaled uint8 round-trip. Fastest options (~200 ms), good fallback for live preview.
+- **Biharmonic (experimental, may ring)** — `skimage.restoration.inpaint_biharmonic` solves ∇⁴u = 0 on a chunked bbox crop. Mathematically smooth, but the biharmonic equation lacks a maximum principle so long thin masks can produce the classic "string of pearls" overshoot artefact. Warned about explicitly when selected.
+- **Sky-noise matching post-process** — after any inpaint method runs, adds Gaussian noise inside the mask with σ taken robustly (via sigma-clipped MAD) from a 30-px halo of unmasked sky. The filled region is now **statistically indistinguishable** from real sky for stack-rejection algorithms. On by default; ~50 ms overhead.
+- **Star Protection (optional, off by default)** — when on, detects stars in the image and excludes them from the inpaint mask. Smart filter ignores "stars" that lie inside the trail mask itself (those are misclassified trail-pixel peaks, not real stars).
+- **Inpaint-method recommendation banner (v0.8.2+)** — after every detection, the tool analyses the trail profile (cross-trail sky gradient, pearl/peak count, mask compactness) and recommends the best-suited method for *that specific frame* with a one-click Apply button. Suppressible per-user via the dropdown.
 
 #### Workflow & UX
 
+- **Maximised on launch** (v0.8.3+) with a guided **5-step Quick Workflow dialog** that explains the tune-on-one-frame → Apply-to-All flow. Re-openable from Help anytime; can be silenced after the first run.
 - **Hybrid mode** — tune detection sliders on the current frame with live Mask Overlay / Cleaned Preview, then click **Apply to All Frames**. Optional **Confirm each frame** checkbox forces a per-frame approval step for the cautious first run.
 - **Non-destructive output** — source files are moved to an `originals/` subfolder; cleaned images take the original filename so your existing stacking pipeline picks them up unchanged.
-- **FITS header preservation** — original header survives the rewrite (WCS, `DATE-OBS`, `BSCALE/BZERO`, instrument keywords); cleaning operations are logged as `HISTORY` lines. Plate-solving information is preserved.
+- **Format-preserving round-trip** — FITS round-trips its header verbatim (WCS, `DATE-OBS`, `BSCALE/BZERO`, instrument keywords preserved). XISF round-trips all `FITSKeywords` AND `XISFProperties` (incl. plate-solving astrometric solutions). TIFF round-trips the original dtype (uint8/uint16/uint32/float32), compression, photometric interpretation, and `ImageDescription` / `Software` / `DateTime` tags. RAW is debayered to FITS.
 - **Frames with no trail are not touched** — the script only writes files for frames where it actually detected something.
-- **Audit trail** — per-folder `trail_cleanup_report.txt` records timestamp, status (cleaned / skipped_no_trail / skipped_user / error), trail count, pixels replaced, and source filename for every processed file.
-- **Dark-themed PyQt6 GUI** matching the rest of the Svenesis suite, with `QSettings` persistence for detection thresholds and view preferences.
+- **Per-folder audit trail (v0.8.9+)** — **`trail_cleanup_report.txt`** (human-readable TSV) AND **`trail_cleanup_report.json`** (machine-readable, structured records per frame: status, lines, pixels replaced, method used, dilation, scan mode, RGB-reduce mode, version, timestamp). Atomic JSON writes via tempfile + rename so crashes don't corrupt the audit.
+- **Parallel batch pipeline (v0.8.8+)** — during Apply-to-All, Frame N+1's load + detect runs in a worker thread while the main thread inpaints + writes Frame N. ~1.5–2× wall-clock speedup on batches of 20+ frames. Disabled when Confirm-each is active (user reaction time dominates anyway).
+- **ETA + counters in batch progress (v0.8.9+)** — the progress dialog shows running Cleaned / Skipped / Errors counts plus Elapsed / ETA, refreshed every frame.
+- **Dark-themed PyQt6 GUI** matching the rest of the Svenesis suite, with `QSettings` persistence for detection thresholds, inpaint method, view preferences, dismissed dialogs, scan mode, and RGB-reduce choice. **Reset dismissed dialogs** button in Help.
 
-#### RAW & XISF support
+#### File format support
 
-- DSLR / mirrorless RAW formats (CR2 / CR3 / NEF / ARW / DNG / ORF / PEF / RAF / RW2 / SRW / MRW / X3F / KDC) are loaded and debayered via Siril/libraw. Cleaned RAW output is always FITS (`<name>.fit`) since trail removal on raw CFA data would corrupt the Bayer pattern. Original RAW preserved in `originals/`.
-- PixInsight's native **XISF** (`.xisf`) is supported via Siril's built-in XISF reader (Siril 1.4+). **Cleaned XISF output stays XISF** (v0.6+) — all original `FITSKeywords` AND `XISFProperties` are preserved (incl. plate-solving astrometric solutions, camera/filter/exposure metadata). Cleaning operations are appended as `HISTORY` keywords. Output uses LZ4HC compression. Implementation via [`xisf`](https://pypi.org/project/xisf/) Python package.
-- FITS inputs round-trip with the original header preserved verbatim.
+- **FITS** (`.fit`, `.fits`, `.fts`) — round-tripped with header preserved verbatim. Plate-solving information stays.
+- **XISF** (`.xisf`) — PixInsight's native format. Cleaned XISF output stays XISF with all `FITSKeywords` and `XISFProperties` carried forward (incl. PixInsight astrometric solutions). Compression matches the source. Implementation via [`xisf`](https://pypi.org/project/xisf/) Python package.
+- **TIFF** (`.tif`, `.tiff`, v0.8.0+) — direct read/write via [`tifffile`](https://pypi.org/project/tifffile/), bypassing Siril for bit-exact dtype control. PlanarConfiguration tag is honoured; RGBA alpha channels are stripped with a warning. ImageDescription is carried forward with cleaning history appended (matches Siril / ASTAP / NINA conventions).
+- **RAW** (CR2 / CR3 / NEF / ARW / DNG / ORF / PEF / RAF / RW2 / SRW / MRW / X3F / KDC) — loaded and debayered via Siril/libraw. Cleaned RAW output is always FITS since trail removal on raw CFA data would corrupt the Bayer pattern. Original RAW preserved in `originals/`.
 - Original files are always moved to `originals/`, so any cleaning operation is fully reversible by moving the file back.
 
 ### Requirements
 
 - Siril 1.4+ with Python script support
 - sirilpy (bundled with Siril)
-- numpy, PyQt6, astropy, opencv-python-headless, photutils, scikit-image, acstools, xisf (installed automatically via `s.ensure_installed`)
+- numpy, PyQt6, astropy, opencv-python-headless, photutils, scikit-image, acstools, xisf, tifffile (installed automatically via `s.ensure_installed`)
 
 ### Usage
 
 1. Run **Svenesis Satellite Trail Cleaner** from Siril: **Processing → Scripts** (or your Scripts menu).
-2. Pick the folder of FITS, XISF or RAW subs you want to clean.
-3. Navigate to a frame with a visible trail (arrow keys or the slider), click **Detect Trails on Current**, and verify the red Mask Overlay covers the trail (not your stars).
-4. Tune the **Detection** sliders if needed and re-run Detect. Switch the View dropdown to **Cleaned Preview** to see the result.
-5. Click **Apply to All Frames** — originals move to `originals/`, cleaned images replace them under the original filenames.
+2. Pick the folder of FITS, XISF, TIFF or RAW subs you want to clean. The window opens maximised with a Quick Workflow walkthrough (dismissable, re-openable from Help).
+3. Navigate to a frame with a visible trail (arrow keys or the slider), click **🛰 Detect Trails on Current**. Detected lines appear as **green** (marked for removal) or **grey** (kept) overlays. Click any line to toggle.
+4. Watch the **💡 Recommendation banner** under the Method dropdown — the tool analyses your specific frame (cross-trail gradient, pearl pattern, mask compactness) and suggests the best inpaint method. Click **Apply** on the banner to switch to it.
+5. Switch the View dropdown to **Cleaned Preview** to verify the result. Tune **Mask dilation** / **Strip width** / **Match sky noise** if needed — the preview re-renders live.
+6. Click **▶ Apply to All Frames** — originals move to `originals/`, cleaned images replace them under the original filenames. Progress dialog shows running counters + ETA. Audit log written as `trail_cleanup_report.txt` (human-readable) and `.json` (structured).
 
 > **When you don't need this tool**: if you have 10+ well-distributed subs, Siril's normal sigma-clipped stacking removes trails for you statistically. The cleaner's main value is at short sequence lengths (3–8 subs). Quick sanity check: stack first **without** the cleaner; if you still see a streak in the result, run the cleaner and re-stack.
