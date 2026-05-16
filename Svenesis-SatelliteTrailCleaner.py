@@ -1,6 +1,6 @@
 """
 Svenesis Satellite Trail Cleaner
-Script Version: 0.6.0
+Script Version: 0.8.5
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -39,7 +39,7 @@ Steps:
 
 
 Features:
-- Folder picker for FITS, PixInsight XISF, and RAW (CR2 / CR3 / NEF / ARW / DNG and others via Siril/libraw)
+- Folder picker for FITS, PixInsight XISF, TIFF (8/16/32-bit + float), and RAW (CR2 / CR3 / NEF / ARW / DNG and others via Siril/libraw)
 - Hough-line detection on a background-subtracted, MTF-stretched residual
 - Star protection via photutils so stars under a trail are preserved when possible
 - Live mask overlay (red) and cleaned-preview view modes
@@ -50,8 +50,11 @@ Features:
   pipelines pick it up unchanged
 - XISF round-trip: cleaned output stays as `.xisf` with all FITS keywords AND
   XISFProperties preserved (incl. plate-solving astrometry) via the
-  sergio-dr/xisf Python package. FITS round-trips its header verbatim. RAW
-  inputs are debayered and written as FITS
+  sergio-dr/xisf Python package. FITS round-trips its header verbatim. TIFF
+  round-trips via the tifffile package, preserving dtype (uint8/uint16/
+  uint32/float32), compression, photometric interpretation, and the
+  ImageDescription / Software / DateTime tags. RAW inputs are debayered
+  and written as FITS
 - Per-folder `trail_cleanup_report.txt` audit (frames cleaned, trail count,
   line length, pixels replaced)
 - Dark themed PyQt6 GUI matching the rest of the Svenesis suite
@@ -93,6 +96,7 @@ s.ensure_installed(
     "numpy", "PyQt6", "astropy",
     "opencv-python-headless", "photutils",
     "scikit-image", "acstools", "xisf",
+    "tifffile",
 )
 
 import cv2
@@ -118,6 +122,12 @@ try:
 except ImportError:
     _HAVE_XISF = False
 
+try:
+    import tifffile
+    _HAVE_TIFFFILE = True
+except ImportError:
+    _HAVE_TIFFFILE = False
+
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QFormLayout,
     QWidget, QLabel, QPushButton, QMessageBox, QGroupBox,
@@ -134,7 +144,7 @@ from PyQt6.QtGui import (
     QDesktopServices, QShortcut, QKeySequence,
 )
 
-VERSION = "0.7.2"
+VERSION = "0.8.5"
 
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "SatelliteTrailCleaner"
@@ -150,6 +160,10 @@ RAW_EXTENSIONS = (
 # 1.4); we have no XISF write path, so cleaned XISF inputs are written as .fit
 # (same handling as RAW: synthesised header, original moved to originals/).
 XISF_EXTENSIONS = (".xisf",)
+# Plain TIFF: handled directly via the tifffile package, NOT via Siril,
+# so we get bit-exact dtype round-trip (uint8 / uint16 / uint32 / float32)
+# and can preserve ImageDescription / Software / DateTime tags.
+TIFF_EXTENSIONS = (".tif", ".tiff")
 
 # Single guard around every sirilpy RPC call. The Python binding to Siril
 # uses a single socket; concurrent calls from worker threads + the UI
@@ -313,6 +327,7 @@ def is_supported_file(path: str) -> bool:
         p.endswith(FITS_EXTENSIONS)
         or p.endswith(RAW_EXTENSIONS)
         or p.endswith(XISF_EXTENSIONS)
+        or p.endswith(TIFF_EXTENSIONS)
     )
 
 
@@ -328,15 +343,58 @@ def is_xisf_file(path: str) -> bool:
     return path.lower().endswith(XISF_EXTENSIONS)
 
 
+def is_tiff_file(path: str) -> bool:
+    return path.lower().endswith(TIFF_EXTENSIONS)
+
+
 def load_frame_data(siril_iface, path: str):
     """Load a single frame via Siril (handles FITS + RAW debayer automatically).
 
     Returns the data as a numpy array. RAW files come back debayered.
     Header (for FITS) is fetched separately via astropy when we need to
     preserve it on write.
+
+    TIFF is handled directly via the tifffile package, bypassing Siril.
+    Siril CAN load TIFF, but its 8/16-bit auto-promotion path and the
+    way it surfaces planar config differs from what we need for bit-
+    exact round-trip — and tifffile gives us all the metadata we need
+    for the write side anyway.
     """
     if not path:
         return None
+    # ---- TIFF fast path: direct via tifffile ----
+    if is_tiff_file(path) and _HAVE_TIFFFILE:
+        try:
+            data, _meta = read_tiff_with_meta(path)
+            if data is None:
+                return None
+            # Normalise dtype to what the rest of the pipeline expects.
+            # uint8 / uint16: keep as uint16 (promote 8 -> 16 to avoid
+            # precision loss in the inpaint step). uint32 / float: keep
+            # as float32 in [0,1] (consistent with FITS path).
+            if data.dtype == np.uint8:
+                return (data.astype(np.uint16) << 8)
+            if data.dtype == np.uint16:
+                return np.array(data, dtype=np.uint16, copy=True)
+            if np.issubdtype(data.dtype, np.integer):
+                # uint32 / int32: scale to float32 [0,1] via max range
+                info = np.iinfo(data.dtype)
+                scale = 1.0 / float(max(info.max, 1))
+                return data.astype(np.float32) * scale
+            # float TIFF: leave the dynamic range alone — astro TIFFs
+            # written by Siril / PixInsight are already [0,1] floats.
+            arr = data.astype(np.float32, copy=True)
+            mx = float(np.nanmax(arr)) if arr.size else 0.0
+            if mx > 1.5:
+                # Likely a 16-bit-scaled float TIFF (some tools store
+                # float in 0..65535 to match uint16 range). Normalise.
+                arr *= (1.0 / 65535.0)
+            return arr
+        except Exception as exc:
+            log.debug("tifffile read failed for %s: %s; falling back to Siril",
+                      path, exc)
+            # fall through to Siril path
+
     try:
         with _siril_io_lock:
             frame = siril_iface.load_image_from_file(path, with_pixels=True)
@@ -420,7 +478,9 @@ class DetectionParams:
         self.star_dilation: int = 4
 
         # Inpainting
-        self.inpaint_method: str = "cv2_ns"      # "cv2_ns" / "biharmonic" / "perp_strip"
+        # "perp_strip" / "harmonic" / "cv2_ns" / "cv2_telea" /
+        # "cv2_navier_stokes" / "biharmonic"
+        self.inpaint_method: str = "perp_strip"
         self.strip_width: int = 15
         # Post-process: add Gaussian noise matching the local sky std
         # so the inpainted region is statistically indistinguishable
@@ -465,6 +525,12 @@ class TrailDetection:
             self.selections = [True] * len(lines)
         else:
             self.selections = list(selections)
+        # Inpaint-method recommendation, filled by analyse_trail_profile()
+        # after detection completes. Empty by default so callers that
+        # build a TrailDetection without analysis (the empty/error
+        # constructors) don't show a stale suggestion.
+        self.recommended_method: str = ""
+        self.recommendation_rationale: str = ""
 
     @property
     def has_trails(self) -> bool:
@@ -706,6 +772,180 @@ def _trailfinder_endpoints(row, w: int, h: int) -> tuple[int, int, int, int] | N
     except Exception:
         return None
     return _line_endpoints_in_image(rho, theta, w, h)
+
+
+# ------------------------------------------------------------------------------
+# INPAINT METHOD RECOMMENDATION
+# ------------------------------------------------------------------------------
+
+# Human-readable labels — must stay in sync with the dropdown labels in
+# the main window (see SatelliteTrailCleanerWindow._build_left_panel).
+INPAINT_METHOD_LABELS = {
+    "perp_strip": "Perpendicular Strip Median",
+    "harmonic": "Harmonic / Laplace",
+    "cv2_ns": "Nearest Neighbor + Smooth",
+    "cv2_telea": "cv2 Fast Marching (Telea)",
+    "cv2_navier_stokes": "cv2 Navier-Stokes",
+    "biharmonic": "Biharmonic (experimental)",
+}
+
+
+def analyse_trail_profile(
+    mono: np.ndarray, detection: "TrailDetection",
+) -> tuple[str, str]:
+    """Inspect the detected trail(s) and recommend an inpaint method.
+
+    Heuristic, not learned — looks at three properties of the trail
+    geometry and the local sky:
+
+      1. **Cross-trail sky gradient** — sample two parallel strips
+         offset ±30 px to either side of the longest trail. If their
+         medians differ by more than 2 σ_sky, there's a real gradient
+         (vignetting, light-pollution slope, nearby extended source)
+         that a PDE-based method would average away. → recommend
+         Perpendicular Strip Median.
+
+      2. **Pearl / flashing pattern** — count distinct bright peaks
+         along the trail centreline (mono >> sky baseline). If there
+         are many evenly-spaced bright maxima (a tumbling rocket
+         body, a flashing satellite), the underlying trail has very
+         uneven brightness. Perpendicular Strip Median is robust
+         here because the median quietly rejects pearl peaks at the
+         centreline as outliers; biharmonic OVERSHOOTS these peaks.
+         → recommend Perpendicular Strip Median.
+
+      3. **Compact mask** — short trails (< 8 % of diagonal) with
+         small area are well-suited to Harmonic / Laplace, which
+         produces the smoothest physically-motivated fill. The
+         maximum principle keeps the result bounded by surrounding
+         sky values, no ringing risk on the short geometry.
+         → recommend Harmonic + Match-sky-noise.
+
+    Default when none of the special cases apply: Perpendicular
+    Strip Median (the safest choice on real astro data — survives
+    everything the existing test corpus throws at it).
+
+    Returns (method_id, rationale_string). method_id is one of the
+    keys in INPAINT_METHOD_LABELS; rationale is human-readable text
+    suitable for tooltip / status display.
+    """
+    if not detection.has_trails:
+        return "", ""
+
+    h, w = mono.shape
+    diag = float(np.hypot(h, w))
+
+    # Longest accepted line determines the geometry to analyse.
+    longest = max(
+        detection.lines,
+        key=lambda L: float(np.hypot(L[2] - L[0], L[3] - L[1])),
+    )
+    x1, y1, x2, y2 = longest
+    dx = float(x2 - x1); dy = float(y2 - y1)
+    L = float(np.hypot(dx, dy))
+    length_frac = L / diag if diag > 0 else 0.0
+
+    # Sky stats from pixels OUTSIDE the trail mask (sigma-clipped).
+    outside = mono[detection.mask == 0]
+    sky_med = 0.0; sky_sigma = 0.0
+    if outside.size > 1000:
+        vals = outside.astype(np.float32)
+        for _ in range(4):
+            if vals.size < 100:
+                break
+            m = float(np.median(vals))
+            s = float(np.median(np.abs(vals - m))) * 1.4826
+            if s <= 0:
+                break
+            keep = np.abs(vals - m) < 3.0 * s
+            if int(keep.sum()) == vals.size:
+                sky_med, sky_sigma = m, s
+                break
+            vals = vals[keep]
+            sky_med, sky_sigma = m, s
+
+    mask_area = int((detection.mask > 0).sum())
+
+    # ---- Feature 1: cross-trail gradient ----
+    gradient_strength = 0.0  # in units of sky σ
+    if L >= 1.0 and sky_sigma > 0:
+        px = -dy / L; py = dx / L  # perpendicular unit vector
+        offset = 30.0              # px from centreline
+        half = 5                   # ±strip thickness
+        n_samples = 40
+        left_vals, right_vals = [], []
+        for i in range(n_samples):
+            t = i / max(n_samples - 1, 1)
+            cx = x1 + dx * t; cy = y1 + dy * t
+            for d in range(-half, half + 1):
+                # Walk along the line direction by d for thickness sampling
+                tx = d * (dx / L); ty = d * (dy / L)
+                for off, bucket in ((-offset, left_vals), (offset, right_vals)):
+                    sx = int(round(cx + off * px + tx))
+                    sy = int(round(cy + off * py + ty))
+                    if 0 <= sx < w and 0 <= sy < h and detection.mask[sy, sx] == 0:
+                        bucket.append(float(mono[sy, sx]))
+        if len(left_vals) >= 30 and len(right_vals) >= 30:
+            ml = float(np.median(left_vals))
+            mr = float(np.median(right_vals))
+            gradient_strength = abs(ml - mr) / sky_sigma
+
+    # ---- Feature 2: pearl / peak count along trail centreline ----
+    pearl_count = 0
+    if L >= 50 and sky_sigma > 0:
+        peak_thr = sky_med + 5.0 * sky_sigma
+        # Sample a 1-D profile along the centreline
+        n_pts = int(min(L, 4000))
+        ts = np.linspace(0.0, 1.0, n_pts)
+        xs = np.clip(np.round(x1 + dx * ts).astype(int), 0, w - 1)
+        ys = np.clip(np.round(y1 + dy * ts).astype(int), 0, h - 1)
+        profile = mono[ys, xs]
+        bright = profile > peak_thr
+        # Count connected runs of bright pixels = peak count
+        if bright.any():
+            transitions = np.diff(bright.astype(np.int8))
+            pearl_count = int((transitions == 1).sum())
+            if bright[0]:
+                pearl_count += 1
+
+    # ---- Decision tree ----
+    if gradient_strength >= 2.0:
+        return (
+            "perp_strip",
+            f"Strong sky gradient ({gradient_strength:.1f}σ) across the "
+            "trail — Perpendicular Strip Median preserves it. "
+            "PDE methods (Harmonic / Biharmonic) would average it away."
+        )
+    if pearl_count >= 5:
+        return (
+            "perp_strip",
+            f"{pearl_count} bright peaks along the trail axis "
+            "('flashing satellite' / tumbling debris). "
+            "Perpendicular Strip Median's median operator quietly "
+            "rejects the pearl peaks; PDE methods risk overshoot."
+        )
+    if length_frac < 0.08 and mask_area < 4000:
+        return (
+            "harmonic",
+            f"Short compact mask ({mask_area:,} px, "
+            f"{length_frac * 100:.1f}% of diagonal) — Harmonic / Laplace "
+            "gives the smoothest physical fill. Combine with "
+            "Match-sky-noise for realistic texture."
+        )
+    if gradient_strength < 0.8 and pearl_count <= 2:
+        return (
+            "harmonic",
+            "Uniform sky, no pearl pattern detected. "
+            "Harmonic / Laplace + Match-sky-noise gives a smooth, "
+            "physically motivated fill. Perpendicular Strip Median is a "
+            "safe alternative."
+        )
+    # Default fall-through
+    return (
+        "perp_strip",
+        "Mixed conditions detected — Perpendicular Strip Median is the "
+        "robust default for typical satellite trails."
+    )
 
 
 def detect_trails(
@@ -967,6 +1207,78 @@ def detect_trails(
         )
         mask = cv2.dilate(mask, k)
 
+    # ---- Bright-halo growth (v0.7.4) ----
+    # A "flashing satellite" / tumbling-debris trail has periodic bright
+    # peaks (pearls) whose PSF halos extend WIDER than the trail itself.
+    # A fixed-radius dilation covers the line but truncates the pearls,
+    # leaving a ring of bright pixels just outside the mask. Inpaint
+    # then fills the mask centre with sky but the ring survives,
+    # producing the classic "string of pearls" remnant in the output.
+    #
+    # Fix: any bright pixel (> sky + Nσ) that is in the same connected
+    # component as the current mask is absorbed into it. The mask
+    # follows the actual bright structure regardless of cross-section.
+    # This is cheap (one connectedComponents pass) and degenerates to
+    # a no-op on uniform trails.
+    if accepted and mask.any():
+        outside_pixels = mono[mask == 0].astype(np.float32)
+        if outside_pixels.size > 1000:
+            # Sigma-clipped sky stats. Plain MAD breaks when the field
+            # contains an extended bright source (comet halo, nebula,
+            # galaxy halo): those pixels inflate the median absolute
+            # deviation by 10-100×, pushing sky+Nσ so high that no
+            # pearl pixel qualifies and halo growth does nothing.
+            # Iteratively reject pixels >3σ from the running median
+            # until the surviving population is stable.
+            vals = outside_pixels
+            sky_med = float(np.median(vals))
+            sky_mad = 0.0
+            for _ in range(5):
+                if vals.size < 100:
+                    break
+                m = float(np.median(vals))
+                s = float(np.median(np.abs(vals - m))) * 1.4826
+                if s <= 0:
+                    break
+                keep = np.abs(vals - m) < 3.0 * s
+                if int(keep.sum()) == vals.size:
+                    sky_med, sky_mad = m, s
+                    break
+                vals = vals[keep]
+                sky_med, sky_mad = m, s
+
+            if sky_mad > 0:
+                # Bounded iterative dilation into bright pixels. Each
+                # hop grows the mask by exactly 1 px (3×3 SE) AND
+                # restricts new pixels to those above sky + Nσ. The
+                # hop cap prevents runaway growth along a thin bright
+                # bridge into an unrelated extended source.
+                bright_thr = sky_med + 3.0 * sky_mad
+                bright = mono > bright_thr
+                growth = (mask > 0)
+                max_hops = 25
+                kern = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+                hops_used = 0
+                for hop in range(max_hops):
+                    growth_u8 = growth.astype(np.uint8)
+                    dilated = cv2.dilate(growth_u8, kern).astype(bool)
+                    new_pix = dilated & bright & ~growth
+                    if not new_pix.any():
+                        break
+                    growth = growth | new_pix
+                    hops_used = hop + 1
+                grown_count = int(growth.sum() - (mask > 0).sum())
+                bright_total = int(bright.sum())
+                if grown_count > 0:
+                    mask = np.where(
+                        growth, np.uint8(255), mask,
+                    ).astype(np.uint8)
+                notes_parts.append(
+                    f"halo growth: +{grown_count} px in {hops_used} hops "
+                    f"(sky={sky_med:.1f}±{sky_mad:.1f}, "
+                    f"thr={bright_thr:.1f}, bright px={bright_total})"
+                )
+
     star_mask = (
         _detect_star_mask(mono, params)
         if accepted else np.zeros((h, w), dtype=np.uint8)
@@ -988,7 +1300,7 @@ def detect_trails(
     if accepted:
         effective[star_mask > 0] = 0
 
-    return TrailDetection(
+    result = TrailDetection(
         lines=accepted,
         mask=mask,
         star_mask=star_mask,
@@ -997,19 +1309,39 @@ def detect_trails(
         notes="; ".join(notes_parts),
     )
 
+    # Inpaint-method recommendation: cheap (~10 ms even on 15 MP) so
+    # it always runs when we have at least one accepted trail. Empty
+    # rec stays as "" defaults from the constructor when no trails
+    # were found.
+    if accepted:
+        try:
+            rec_method, rec_rationale = analyse_trail_profile(mono, result)
+            result.recommended_method = rec_method
+            result.recommendation_rationale = rec_rationale
+        except Exception as exc:
+            log.debug("analyse_trail_profile failed: %s", exc, exc_info=True)
+
+    return result
+
 
 # ------------------------------------------------------------------------------
 # INPAINTING
 # ------------------------------------------------------------------------------
 
-def _inpaint_cv2_telea(plane: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """Fast Marching Method inpaint via cv2.inpaint(INPAINT_TELEA).
+def _inpaint_cv2_fmm(
+    plane: np.ndarray, mask: np.ndarray, flag: int,
+) -> np.ndarray:
+    """Shared OpenCV inpaint path — used by both Telea (FMM) and
+    Navier-Stokes (NS). They differ only in the algorithm flag passed
+    to ``cv2.inpaint``.
 
     Routes the plane through uint8 (with percentile-based linear scaling
-    to preserve dynamic range in the inpaint region) so cv2.inpaint
-    runs on its most-tested input dtype. The C++ implementation is
-    typically ~5× faster than the scipy-based methods because the
-    inner loop avoids Python overhead.
+    to preserve dynamic range in the inpaint region) because cv2.inpaint
+    silently no-ops on float32 / uint16 inputs on several macOS / Apple-
+    Silicon OpenCV builds. The percentile scaling clips the brightest
+    1 % of pixels (typically saturated stars — not inpainted anyway) so
+    the sky values get most of the 0-255 range, which preserves the
+    bit-depth that actually matters for the fill.
 
     Precision: 8-bit in the masked region only; all unmasked pixels
     keep their full original precision exactly.
@@ -1022,7 +1354,7 @@ def _inpaint_cv2_telea(plane: np.ndarray, mask: np.ndarray) -> np.ndarray:
 
     if src_dtype == np.uint8:
         mask_u8 = mask.astype(np.uint8) if mask.dtype != np.uint8 else mask
-        return cv2.inpaint(plane, mask_u8, radius, cv2.INPAINT_TELEA)
+        return cv2.inpaint(plane, mask_u8, radius, flag)
 
     # Scale to uint8 [0, 255] via percentile so the cv2 call sees a
     # well-conditioned image. Bright stars saturate to 255 (irrelevant —
@@ -1041,7 +1373,7 @@ def _inpaint_cv2_telea(plane: np.ndarray, mask: np.ndarray) -> np.ndarray:
     plane_u8 = norm.astype(np.uint8)
     mask_u8 = mask.astype(np.uint8) if mask.dtype != np.uint8 else mask
 
-    inp_u8 = cv2.inpaint(plane_u8, mask_u8, radius, cv2.INPAINT_TELEA)
+    inp_u8 = cv2.inpaint(plane_u8, mask_u8, radius, flag)
 
     inp_f = inp_u8.astype(np.float32) * (span / 255.0) + lo
     out = plane.copy()
@@ -1056,17 +1388,52 @@ def _inpaint_cv2_telea(plane: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return out
 
 
+def _inpaint_cv2_telea(plane: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Fast Marching Method inpaint via cv2.inpaint(INPAINT_TELEA).
+
+    Telea 2004: each masked pixel is filled as a normalised weighted
+    sum of its known neighbours, with weights depending on geometric
+    distance and surface direction. Fast Marching processes pixels in
+    order of distance from the boundary — fastest of the cv2 methods.
+    Quality: visually smooth, may slightly blur fine structure.
+    """
+    return _inpaint_cv2_fmm(plane, mask, cv2.INPAINT_TELEA)
+
+
+def _inpaint_cv2_navier_stokes(
+    plane: np.ndarray, mask: np.ndarray,
+) -> np.ndarray:
+    """Inpaint via cv2.inpaint(INPAINT_NS).
+
+    Bertalmio, Bertozzi & Sapiro 2001: models the inpaint region as a
+    fluid and propagates isophotes (level curves of intensity) into
+    the masked area while preserving local image smoothness. For
+    sky-dominated regions the result is essentially harmonic
+    (Laplace-like); for textured regions it preserves edge direction
+    better than Telea. Slightly slower than Telea but same complexity
+    class — both run in well under a second on a typical trail mask.
+    """
+    return _inpaint_cv2_fmm(plane, mask, cv2.INPAINT_NS)
+
+
 def _inpaint_biharmonic(plane: np.ndarray, mask: np.ndarray) -> np.ndarray:
     """Biharmonic inpainting: solves ∇⁴u = 0 inside the mask with the
     surrounding sky as Dirichlet boundary. Mathematically optimal
     smooth interpolation (minimum thin-plate energy).
 
-    Performance + numerical-stability optimisation (v0.7.1): rather
-    than passing the full 15-megapixel frame to skimage, we crop to
-    the mask's bounding box plus a 50-px halo, inpaint the crop, and
-    paste it back. This is ~10× faster and avoids precision issues
-    from skimage's internal [0,1] normalisation when typical sky
-    values are tiny (~1500/65535 ≈ 0.023).
+    Chunked along the trail's principal axis (v0.7.4) — skimage's sparse
+    biharmonic solver becomes numerically ill-conditioned on very long,
+    thin masks (typical: 5000×14 px), producing a periodic "string of
+    pearls" artefact along the centreline. The fix: split the mask into
+    overlapping segments of ~CHUNK_LEN pixels along its longest axis,
+    solve each segment in its own bbox crop with a halo of Dirichlet
+    boundary, and paste back. Each sub-problem is roughly square so the
+    sparse matrix stays well-conditioned. Short / blob-like masks fall
+    through to the original single-pass code path.
+
+    Halo (150 px) is wide enough that skimage's solver sees enough sky
+    on every side to stabilise the PDE away from crop edges. Chunks
+    overlap by HALO so neighbouring solutions agree at their seams.
     """
     if not mask.any():
         return plane.copy()
@@ -1079,50 +1446,104 @@ def _inpaint_biharmonic(plane: np.ndarray, mask: np.ndarray) -> np.ndarray:
     mask_bool = mask > 0
     h, w = plane.shape
 
-    # Tight bbox of the mask + halo for boundary conditions
     ys, xs = np.where(mask_bool)
     if ys.size == 0:
         return plane.copy()
-    halo = 50  # pixels of unmasked sky to keep around the bbox as boundary
-    y0 = max(0, int(ys.min()) - halo)
-    y1 = min(h, int(ys.max()) + 1 + halo)
-    x0 = max(0, int(xs.min()) - halo)
-    x1 = min(w, int(xs.max()) + 1 + halo)
 
-    crop_plane = plane[y0:y1, x0:x1]
-    crop_mask = mask_bool[y0:y1, x0:x1]
-
-    # Use the natural value range of the crop so skimage's internal
-    # normalisation has good dynamic range. Float32 throughout.
+    # Normalise plane to [0,1]-ish range once for skimage's internal
+    # normalisation (works better than tiny ~0.02 sky values).
     if np.issubdtype(src_dtype, np.integer):
         info = np.iinfo(src_dtype)
         scale = 1.0 / float(max(info.max, 1))
-        crop_f = crop_plane.astype(np.float32) * scale
+        plane_f = plane.astype(np.float32) * scale
     else:
-        crop_f = crop_plane.astype(np.float32)
+        plane_f = plane.astype(np.float32)
         scale = 1.0
 
-    try:
-        crop_result = inpaint_biharmonic(crop_f, crop_mask)
-    except Exception as exc:
-        log.warning(
-            "Biharmonic inpaint failed (%s); falling back to "
-            "nearest-neighbour", exc,
-        )
-        return _inpaint_cv2_ns(plane, mask)
-
-    # Paste filled crop back; only modify pixels inside the mask.
+    HALO = 150
+    CHUNK_LEN = 250  # px along principal axis per sub-problem
     out = plane.copy()
-    if np.issubdtype(src_dtype, np.integer):
-        info = np.iinfo(src_dtype)
-        crop_back = np.clip(
-            np.round(crop_result / scale), info.min, info.max,
-        ).astype(src_dtype)
-    else:
-        crop_back = crop_result.astype(src_dtype)
 
-    crop_out_view = out[y0:y1, x0:x1]
-    crop_out_view[crop_mask] = crop_back[crop_mask]
+    def _solve_segment(
+        seg_mask_full: np.ndarray,
+    ) -> None:
+        """Crop bbox+halo, biharmonic, paste back into ``out``."""
+        seg_ys, seg_xs = np.where(seg_mask_full)
+        if seg_ys.size == 0:
+            return
+        y0 = max(0, int(seg_ys.min()) - HALO)
+        y1 = min(h, int(seg_ys.max()) + 1 + HALO)
+        x0 = max(0, int(seg_xs.min()) - HALO)
+        x1 = min(w, int(seg_xs.max()) + 1 + HALO)
+
+        crop_f = plane_f[y0:y1, x0:x1]
+        crop_mask = seg_mask_full[y0:y1, x0:x1]
+        if not crop_mask.any():
+            return
+        try:
+            crop_result = inpaint_biharmonic(crop_f, crop_mask)
+        except Exception as exc:
+            log.warning(
+                "Biharmonic chunk failed (%s); falling back to "
+                "nearest-neighbour for this segment", exc,
+            )
+            ny_full = seg_mask_full.copy()
+            fb = _inpaint_cv2_ns(plane, ny_full)
+            out[ny_full] = fb[ny_full]
+            return
+
+        if np.issubdtype(src_dtype, np.integer):
+            info = np.iinfo(src_dtype)
+            crop_back = np.clip(
+                np.round(crop_result / scale), info.min, info.max,
+            ).astype(src_dtype)
+        else:
+            crop_back = crop_result.astype(src_dtype)
+
+        out_view = out[y0:y1, x0:x1]
+        out_view[crop_mask] = crop_back[crop_mask]
+
+    # Principal-axis projection via covariance eigenvector.
+    pts = np.column_stack((ys.astype(np.float64), xs.astype(np.float64)))
+    centroid = pts.mean(axis=0)
+    centered = pts - centroid
+    # 2x2 covariance — eigenvector for largest eigenvalue is the axis.
+    cov = np.cov(centered, rowvar=False)
+    try:
+        eigvals, eigvecs = np.linalg.eigh(cov)
+        axis = eigvecs[:, int(np.argmax(eigvals))]
+    except np.linalg.LinAlgError:
+        axis = np.array([0.0, 1.0])
+
+    proj = centered @ axis
+    pmin, pmax = float(proj.min()), float(proj.max())
+    extent = pmax - pmin
+
+    # If the mask is short or roughly square, skip chunking — the
+    # single-pass solver is well-conditioned and ~2× faster.
+    if extent < CHUNK_LEN * 1.5:
+        _solve_segment(mask_bool)
+        return out
+
+    # Build chunk boundaries along the principal axis with overlap so
+    # adjacent segments share boundary pixels and produce a smooth seam.
+    n_chunks = int(np.ceil(extent / CHUNK_LEN))
+    step = extent / n_chunks
+    overlap = step * 0.5  # 50 % overlap → each interior pixel is solved
+                          # by two neighbouring chunks; last write wins
+                          # but because both solvers see overlapping
+                          # context the values agree to <1 sky-σ.
+
+    for k in range(n_chunks):
+        lo = pmin + k * step - overlap
+        hi = pmin + (k + 1) * step + overlap
+        sel = (proj >= lo) & (proj <= hi)
+        if not sel.any():
+            continue
+        seg_full = np.zeros_like(mask_bool)
+        seg_full[ys[sel], xs[sel]] = True
+        _solve_segment(seg_full)
+
     return out
 
 
@@ -1188,6 +1609,107 @@ def _inpaint_cv2_ns(plane: np.ndarray, mask: np.ndarray) -> np.ndarray:
         ).astype(plane.dtype)
     else:
         out[invalid] = work[invalid].astype(plane.dtype)
+    return out
+
+
+def _inpaint_harmonic(
+    plane: np.ndarray, mask: np.ndarray,
+    max_iter: int = 800, tol: float = 1e-4,
+) -> np.ndarray:
+    """Harmonic (Laplace) inpainting: solves ∇²u = 0 inside the mask
+    with the surrounding sky as Dirichlet boundary.
+
+    Mathematical contrast to biharmonic (∇⁴u = 0): the Laplace
+    equation HAS a maximum principle — the inpainted values are
+    bounded by the boundary minima/maxima. That eliminates the
+    'string of pearls' overshoot/undershoot artefact that breaks
+    biharmonic on long thin masks. The trade-off: the harmonic
+    solution is smoother (it can produce a visible 'soft patch'
+    where a real-noise sky should be). That's exactly what the
+    Match-sky-noise post-step is for — physical fill + statistical
+    noise on top recovers the look of real sky.
+
+    Implementation: bbox-crop with halo for boundary context, seed
+    with a nearest-neighbour fill (gives the iteration a good warm
+    start), then run Gauss-Seidel-style 5-point Laplace smoothing
+    inside the mask only. Outside-mask pixels stay locked at their
+    original values, so the boundary condition is enforced at every
+    iteration without an explicit linear-system build. Convergence
+    is checked every 32 iterations against the max-delta tolerance;
+    for a typical 5000×15 px trail mask this converges in ~150-400
+    iterations, well below the 800-iteration cap.
+    """
+    if not mask.any():
+        return plane.copy()
+    src_dtype = plane.dtype
+    h, w = plane.shape
+    mask_bool = mask > 0
+
+    # Bbox crop with halo for sufficient boundary context.
+    ys, xs = np.where(mask_bool)
+    halo = 8  # 5-point Laplace decays fast — small halo is enough
+    y0 = max(0, int(ys.min()) - halo)
+    y1 = min(h, int(ys.max()) + 1 + halo)
+    x0 = max(0, int(xs.min()) - halo)
+    x1 = min(w, int(xs.max()) + 1 + halo)
+    crop = plane[y0:y1, x0:x1].astype(np.float32, copy=True)
+    crop_mask = mask_bool[y0:y1, x0:x1]
+
+    # Warm start: seed the masked region with nearest-neighbour values.
+    # Without it, Jacobi/Gauss-Seidel iteration starts from arbitrary
+    # values inside the mask and needs many more iterations to converge.
+    try:
+        from scipy.ndimage import distance_transform_edt
+        _, (iy, ix) = distance_transform_edt(
+            crop_mask, return_indices=True,
+        )
+        seeded = crop.copy()
+        seeded[crop_mask] = crop[iy[crop_mask], ix[crop_mask]]
+        crop = seeded
+    except ImportError:
+        # No scipy: fall back to global median seed (still better than
+        # leaving the masked region at its trail brightness).
+        bg = float(np.median(crop[~crop_mask])) if (~crop_mask).any() else 0.0
+        crop[crop_mask] = bg
+
+    # 5-point Laplace iteration. cv2.filter2D handles edge replication
+    # automatically; we re-lock the non-mask pixels each iteration so
+    # they act as Dirichlet boundary conditions.
+    kern = np.array(
+        [[0.0, 0.25, 0.0],
+         [0.25, 0.0, 0.25],
+         [0.0, 0.25, 0.0]],
+        dtype=np.float32,
+    )
+    original_crop = plane[y0:y1, x0:x1].astype(np.float32, copy=True)
+    prev_inside = crop[crop_mask].copy()
+    for it in range(max_iter):
+        avg = cv2.filter2D(crop, -1, kern, borderType=cv2.BORDER_REPLICATE)
+        # Update only inside the mask; outside stays at original value.
+        crop[crop_mask] = avg[crop_mask]
+        # Re-lock non-mask pixels (cv2.filter2D didn't touch them at
+        # this step but a future change might; cheap insurance).
+        crop[~crop_mask] = original_crop[~crop_mask]
+        # Convergence check every 32 iterations: max absolute change of
+        # any masked pixel since the last check. tol is in the same
+        # units as the input (typically 1e-4 of full range — ~7 ADU
+        # at 16-bit).
+        if (it & 31) == 31:
+            cur_inside = crop[crop_mask]
+            delta = float(np.max(np.abs(cur_inside - prev_inside)))
+            if delta < tol:
+                break
+            prev_inside = cur_inside.copy()
+
+    out = plane.copy()
+    out_view = out[y0:y1, x0:x1]
+    if np.issubdtype(src_dtype, np.integer):
+        info = np.iinfo(src_dtype)
+        out_view[crop_mask] = np.clip(
+            np.round(crop[crop_mask]), info.min, info.max,
+        ).astype(src_dtype)
+    else:
+        out_view[crop_mask] = crop[crop_mask].astype(src_dtype)
     return out
 
 
@@ -1370,10 +1892,30 @@ def _match_sky_noise(
         return cleaned
 
     halo_vals = original[halo].astype(np.float32)
-    # Robust σ via MAD (less sensitive to stars contaminating the halo)
-    med = float(np.median(halo_vals))
-    mad = float(np.median(np.abs(halo_vals - med)))
-    sigma = float(mad * 1.4826)  # MAD -> sigma for Gaussian
+    # Sigma-clipped σ estimation. Plain MAD is robust to a FEW stellar
+    # outliers but breaks when the halo crosses an extended bright
+    # feature (comet tail, bright nebula, large galaxy) -- the MAD
+    # picks up the bright-feature pixels and inflates σ by 10-30×,
+    # which would then make the noise-injection add MASSIVE artificial
+    # noise to the inpainted region. Iteratively reject pixels more
+    # than 3σ from the running median to converge on the true sky std.
+    vals = halo_vals
+    for _ in range(4):
+        if vals.size < 100:
+            break
+        m = float(np.median(vals))
+        s = float(np.median(np.abs(vals - m))) * 1.4826
+        if s <= 0:
+            break
+        keep = np.abs(vals - m) < 3.0 * s
+        if keep.sum() == vals.size:
+            break  # converged
+        vals = vals[keep]
+    if vals.size < 10:
+        return cleaned
+    med = float(np.median(vals))
+    mad = float(np.median(np.abs(vals - med)))
+    sigma = float(mad * 1.4826)
     if sigma <= 0:
         return cleaned
 
@@ -1418,8 +1960,12 @@ def inpaint_frame(
             )
         elif method == "biharmonic":
             cleaned = _inpaint_biharmonic(plane, mask)
+        elif method == "harmonic":
+            cleaned = _inpaint_harmonic(plane, mask)
         elif method == "cv2_telea":
             cleaned = _inpaint_cv2_telea(plane, mask)
+        elif method == "cv2_navier_stokes":
+            cleaned = _inpaint_cv2_navier_stokes(plane, mask)
         else:
             cleaned = _inpaint_cv2_ns(plane, mask)
         if match_noise:
@@ -1649,6 +2195,205 @@ def write_xisf_cleaned(
         image_metadata=meta,
         xisf_metadata=file_metadata,
         **compression_kwargs,
+    )
+
+
+# ------------------------------------------------------------------------------
+# TIFF I/O -- direct read/write via tifffile so we get bit-exact dtype
+# round-trip plus ImageDescription / Software / DateTime preservation.
+# Unlike FITS / XISF there's no canonical WCS keyword block to carry —
+# astro TIFFs typically embed plate-solving solutions in ImageDescription
+# as a free-form text blob (Siril, ASTAP, NINA all do this differently);
+# we preserve that blob verbatim and append our cleaning history.
+# ------------------------------------------------------------------------------
+
+def read_tiff_with_meta(path: str):
+    """Read a TIFF file's pixels plus the tags we care about preserving.
+
+    Returns ``(data, meta)`` where ``data`` is the pixel array in
+    ``(C, H, W)`` for RGB or ``(H, W)`` for mono (matching the rest of
+    the pipeline's layout convention), and ``meta`` is a dict of tag
+    info to round-trip into the cleaned output. Returns ``(None, None)``
+    on failure.
+    """
+    if not _HAVE_TIFFFILE:
+        return None, None
+    try:
+        with tifffile.TiffFile(path) as tf:
+            page = tf.pages[0]
+            data = page.asarray()
+            tags = page.tags
+
+            def _tag_value(name):
+                t = tags.get(name)
+                if t is None:
+                    return None
+                try:
+                    return t.value
+                except Exception:
+                    return None
+
+            meta = {
+                "description": _tag_value("ImageDescription"),
+                "software": _tag_value("Software"),
+                "datetime": _tag_value("DateTime"),
+                "make": _tag_value("Make"),
+                "model": _tag_value("Model"),
+                "resolution_x": _tag_value("XResolution"),
+                "resolution_y": _tag_value("YResolution"),
+                "resolution_unit": _tag_value("ResolutionUnit"),
+                "photometric": getattr(page, "photometric", None),
+                "planar_config": getattr(page, "planarconfig", None),
+                "compression": getattr(page, "compression", None),
+                "bits_per_sample": getattr(page, "bitspersample", None),
+                "samples_per_pixel": getattr(page, "samplesperpixel", None),
+                "dtype": data.dtype,
+            }
+
+        # tifffile returns (H,W) for mono, (H,W,C) for RGB. Pipeline
+        # expects (C,H,W) — transpose RGB only.
+        if data.ndim == 3 and data.shape[-1] in (1, 3, 4):
+            data = np.transpose(data, (2, 0, 1))
+        return data, meta
+    except Exception as exc:
+        log.debug("read_tiff_with_meta failed for %s: %s", path, exc)
+        return None, None
+
+
+def _tiff_compression_name(compression):
+    """Map a tifffile.COMPRESSION enum / int to the string keyword the
+    writer accepts. Returns ``None`` (= no compression) for unknown
+    values so the write never fails on a quirky source.
+    """
+    if compression is None:
+        return "zlib"
+    try:
+        val = int(getattr(compression, "value", compression))
+    except Exception:
+        return "zlib"
+    # Common TIFF compression codes
+    return {
+        1: None,          # NONE
+        5: "lzw",         # LZW
+        7: "jpeg",        # OJPEG / JPEG (lossy; we never emit this)
+        8: "zlib",        # ADOBE_DEFLATE
+        32773: "packbits",
+        32946: "zlib",    # DEFLATE
+        34925: "lzma",    # LZMA
+        50000: "zstd",    # ZSTD
+    }.get(val, "zlib")
+
+
+def _cast_for_tiff(arr: np.ndarray, target_dtype) -> np.ndarray:
+    """Cast cleaned data back to the original TIFF dtype.
+
+    Astro TIFFs come in four practical flavours: uint8 (rare, drizzle
+    previews), uint16 (the workhorse — Siril, ASTAP, most cameras),
+    uint32 (scientific cameras with deep wells), float32 (PixInsight /
+    Siril floating-point exports). We preserve whichever was on the
+    source so a 16-bit stack-input stays 16-bit and a 32-bit float
+    export stays 32-bit float.
+    """
+    if target_dtype is None:
+        return arr
+    if arr.dtype == target_dtype:
+        return arr
+    src = arr
+    src_is_float = np.issubdtype(src.dtype, np.floating)
+    tgt_is_int = np.issubdtype(target_dtype, np.integer)
+    if src_is_float and tgt_is_int:
+        info = np.iinfo(target_dtype)
+        # Float pipeline runs in [0,1]; rescale to target range.
+        scale = float(info.max)
+        return np.clip(np.round(src * scale), info.min, info.max).astype(target_dtype)
+    if not src_is_float and tgt_is_int:
+        # uint16 -> uint8 (rare): downsize via shift
+        src_info = np.iinfo(src.dtype)
+        tgt_info = np.iinfo(target_dtype)
+        if src_info.bits > tgt_info.bits:
+            shift = src_info.bits - tgt_info.bits
+            return (src >> shift).astype(target_dtype)
+        return src.astype(target_dtype)
+    if src_is_float and np.issubdtype(target_dtype, np.floating):
+        return src.astype(target_dtype)
+    if not src_is_float and np.issubdtype(target_dtype, np.floating):
+        info = np.iinfo(src.dtype)
+        return (src.astype(np.float32) * (1.0 / max(info.max, 1))).astype(target_dtype)
+    return src.astype(target_dtype)
+
+
+def write_tiff_cleaned(
+    dest_path: str,
+    cleaned_frame: np.ndarray,
+    meta: dict | None,
+    history_lines: list[str],
+) -> None:
+    """Write the cleaned data back as a TIFF, preserving the source's
+    dtype, photometric interpretation, compression, and a sensible
+    subset of TIFF tags (Software, DateTime, ImageDescription).
+
+    Cleaning history is appended to the ImageDescription tag (Siril
+    and ASTAP both encode their plate-solve / processing notes there,
+    so this matches the file format's convention).
+    """
+    if not _HAVE_TIFFFILE:
+        raise RuntimeError("tifffile not installed; cannot write TIFF.")
+
+    target_dtype = (meta or {}).get("dtype")
+    data = cleaned_frame
+
+    # (C,H,W) -> (H,W) mono or (H,W,C) RGB for the writer.
+    if data.ndim == 3 and data.shape[0] in (1, 3, 4):
+        if data.shape[0] == 1:
+            data = data[0]
+        else:
+            data = np.transpose(data, (1, 2, 0))
+
+    data = _cast_for_tiff(data, target_dtype)
+    data = np.ascontiguousarray(data)
+
+    # ---- Build the description (carry-forward + cleaning history) ----
+    desc_parts: list[str] = []
+    if meta is not None and meta.get("description"):
+        existing = meta["description"]
+        if isinstance(existing, bytes):
+            try:
+                existing = existing.decode("utf-8", errors="replace")
+            except Exception:
+                existing = str(existing)
+        desc_parts.append(str(existing).rstrip())
+    desc_parts.append("--- Svenesis-SatelliteTrailCleaner ---")
+    desc_parts.extend(history_lines)
+    description = "\n".join(desc_parts)
+
+    # ---- Compression: match source where we can ----
+    compression = _tiff_compression_name((meta or {}).get("compression"))
+
+    # ---- Photometric interpretation ----
+    if data.ndim == 3 and data.shape[-1] >= 3:
+        photometric = "rgb"
+    else:
+        photometric = "minisblack"
+
+    extra_kwargs = {}
+    # Carry-forward resolution if present (kept as raw tag rationals)
+    rx = (meta or {}).get("resolution_x")
+    ry = (meta or {}).get("resolution_y")
+    if rx is not None and ry is not None:
+        try:
+            extra_kwargs["resolution"] = (rx, ry)
+        except Exception:
+            pass
+
+    tifffile.imwrite(
+        dest_path,
+        data,
+        photometric=photometric,
+        compression=compression,
+        description=description,
+        software=f"Svenesis-SatelliteTrailCleaner v{VERSION}",
+        datetime=True,
+        **extra_kwargs,
     )
 
 
@@ -2035,6 +2780,7 @@ def apply_to_path(
         write_strategy = "fits"  # default
         xisf_image_meta = None
         xisf_file_meta = None
+        tiff_meta = None
         if is_fits_file(path):
             write_strategy = "fits"
         elif is_xisf_file(path) and _HAVE_XISF:
@@ -2046,8 +2792,19 @@ def apply_to_path(
                 write_strategy = "xisf"
             else:
                 write_strategy = "fits"  # fall back if metadata parse failed
+        elif is_tiff_file(path) and _HAVE_TIFFFILE:
+            # Read TIFF tags BEFORE moving the source so the cleaned
+            # output retains description / software / datetime and the
+            # original dtype + compression. If metadata read fails we
+            # still write a clean TIFF (synthesised tags) rather than
+            # downgrading to FITS — preserving the user's chosen
+            # file format is more important than a perfect metadata
+            # round-trip.
+            _, tiff_meta = read_tiff_with_meta(path)
+            write_strategy = "tiff"
         else:
-            # RAW input, or XISF without xisf library
+            # RAW input, or XISF without xisf library, or TIFF without
+            # tifffile
             write_strategy = "fits"
 
         if write_strategy == "fits":
@@ -2067,7 +2824,10 @@ def apply_to_path(
                 dest_basename = name_no_ext + ".fit"
                 dest_path = os.path.join(folder, dest_basename)
             original_target = os.path.join(originals_dir, basename)
-        else:  # write_strategy == "xisf"
+        elif write_strategy == "xisf":
+            dest_path = path  # overwrite after move-out (same filename)
+            original_target = os.path.join(originals_dir, basename)
+        else:  # write_strategy == "tiff"
             dest_path = path  # overwrite after move-out (same filename)
             original_target = os.path.join(originals_dir, basename)
 
@@ -2081,6 +2841,12 @@ def apply_to_path(
                     dest_path, cleaned,
                     image_metadata=xisf_image_meta,
                     file_metadata=xisf_file_meta,
+                    history_lines=history_lines,
+                )
+            elif write_strategy == "tiff":
+                write_tiff_cleaned(
+                    dest_path, cleaned,
+                    meta=tiff_meta,
                     history_lines=history_lines,
                 )
             else:
@@ -2150,6 +2916,14 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         self._update_strip_enabled()
         self._show_placeholder()
         QTimer.singleShot(50, lambda: self._load_and_show(self.current_index, autodetect=False))
+        # Workflow walkthrough — pops up once the main window is on
+        # screen and rendered. 200 ms gives Qt time to lay out the
+        # window first, so the dialog appears centred over a fully
+        # painted background instead of a half-empty frame. The dialog
+        # has a 'Don't show this again' checkbox; the QSettings flag
+        # keeps power users from being nagged after they've internalised
+        # the flow.
+        QTimer.singleShot(200, self._maybe_show_workflow_dialog)
 
     # ---- UI construction ----
 
@@ -2305,26 +3079,67 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         f_inp = QFormLayout(grp_inp)
 
         self.cmb_method = QComboBox()
+        self.cmb_method.addItem("Perpendicular Strip Median (recommended)", "perp_strip")
+        self.cmb_method.addItem("Harmonic / Laplace (∇²u = 0, no ringing)", "harmonic")
         self.cmb_method.addItem("Nearest Neighbor + Smooth (fast)", "cv2_ns")
-        self.cmb_method.addItem("cv2 Fast Marching (very fast, C++)", "cv2_telea")
-        self.cmb_method.addItem("Biharmonic (highest quality, slow)", "biharmonic")
-        self.cmb_method.addItem("Perpendicular Strip Median", "perp_strip")
+        self.cmb_method.addItem("cv2 Fast Marching / Telea (very fast)", "cv2_telea")
+        self.cmb_method.addItem("cv2 Navier-Stokes (very fast)", "cv2_navier_stokes")
+        self.cmb_method.addItem("Biharmonic (experimental, may ring)", "biharmonic")
         idx = self.cmb_method.findData(self.params.inpaint_method)
         if idx >= 0:
             self.cmb_method.setCurrentIndex(idx)
         self.cmb_method.setToolTip(
+            "Perpendicular Strip Median (default): replaces each masked "
+            "pixel with the median of a strip ±strip_width perpendicular "
+            "to the trail. Preserves any sky gradient that runs across "
+            "the trail (vignetting / light-pollution slope). Robust on "
+            "flashing-satellite / tumbling-debris trails with bright "
+            "pearls — no PDE ringing.\n"
+            "Harmonic / Laplace: iterative 5-point ∇²u=0 solver on a "
+            "bbox crop. Has the maximum principle (no overshoot, unlike "
+            "biharmonic), produces very smooth fills — combined with "
+            "Match-sky-noise this gives physical fill + realistic noise.\n"
             "Nearest Neighbor + Smooth: pure-Python via scipy, ~500 ms "
-            "on 15 MP. Good for live preview and most cases.\n"
-            "cv2 Fast Marching: OpenCV's C++ Telea algorithm via "
-            "percentile-scaled uint8. Fastest option (~200 ms). Quality "
-            "between NN and Biharmonic.\n"
+            "on 15 MP. Good fallback for live preview.\n"
+            "cv2 Fast Marching (Telea): OpenCV's C++ FMM algorithm via "
+            "percentile-scaled uint8. Fastest option (~200 ms).\n"
+            "cv2 Navier-Stokes (Bertalmio): propagates isophotes into "
+            "the masked region instead of normalised distance weights. "
+            "Same speed class as Telea; sometimes nicer edge behaviour "
+            "but on sky-dominated regions essentially identical.\n"
             "Biharmonic: skimage ∇⁴u=0 PDE solver on a bbox crop. "
-            "Mathematically optimal, ~1-2 s on a typical trail mask.\n"
-            "Perpendicular Strip Median: preserves the sky-background "
-            "gradient perpendicular to the trail (vignetting / light "
-            "pollution gradient)."
+            "Mathematically smooth but the biharmonic equation has no "
+            "maximum principle — long thin masks can produce periodic "
+            "over/undershoot (the classic 'string of pearls' artefact)."
         )
         f_inp.addRow("Method:", self.cmb_method)
+
+        # Recommendation banner: populated by _update_inpaint_recommendation()
+        # after each detection completes. The label wraps long rationales
+        # and stays hidden until there's a non-empty recommendation. The
+        # "Apply" button switches the dropdown to the recommended value
+        # without nagging the user with auto-changes.
+        self.rec_container = QWidget()
+        rec_layout = QHBoxLayout(self.rec_container)
+        rec_layout.setContentsMargins(0, 4, 0, 4)
+        rec_layout.setSpacing(6)
+        self.lbl_recommendation = QLabel("")
+        self.lbl_recommendation.setWordWrap(True)
+        self.lbl_recommendation.setStyleSheet(
+            "color:#88aaff; font-size:9pt; "
+            "background:#1f2630; border:1px solid #3a5a7a; "
+            "border-radius:4px; padding:4px 6px;"
+        )
+        self.lbl_recommendation.setTextFormat(Qt.TextFormat.RichText)
+        rec_layout.addWidget(self.lbl_recommendation, stretch=1)
+        self.btn_apply_rec = QPushButton("Apply")
+        self.btn_apply_rec.setToolTip(
+            "Switch the inpaint method to the recommendation above."
+        )
+        self.btn_apply_rec.setMaximumWidth(60)
+        rec_layout.addWidget(self.btn_apply_rec, alignment=Qt.AlignmentFlag.AlignTop)
+        self.rec_container.setVisible(False)
+        f_inp.addRow(self.rec_container)
 
         self.sp_strip = QSpinBox()
         self.sp_strip.setRange(5, 80)
@@ -2411,11 +3226,35 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         self.btn_detect = QPushButton("\U0001f6f0  Detect Trails on Current")
         self.btn_detect.setObjectName("DetectButton")
         top_bar.addWidget(self.btn_detect)
-        top_bar.addStretch(1)
+        top_bar.addSpacing(20)
 
         self.lbl_info = QLabel("")
         self.lbl_info.setStyleSheet("color:#ccc;")
-        top_bar.addWidget(self.lbl_info)
+        # Constrain to a single line so long detection summaries
+        # ("Cleaned Preview — inpaint changed 49,684 px (mask: 50,543
+        # expected) — findsat_mrt: 33 candidates → 1 accepted; halo
+        # growth +129 px in 6 hops (sky=…, thr=…)") can never wrap to
+        # two lines and push the canvas down. Full text is preserved
+        # in the tooltip via _set_status_text().
+        self.lbl_info.setWordWrap(False)
+        self.lbl_info.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed,
+        )
+        fm_h = self.lbl_info.fontMetrics().height()
+        self.lbl_info.setMinimumHeight(fm_h + 2)
+        self.lbl_info.setMaximumHeight(fm_h + 2)
+        self.lbl_info.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse,
+        )
+        # Reserve a sane minimum width so the layout doesn't try to
+        # shrink the label to zero before clipping. Anything wider than
+        # this is clipped at the right edge (no wrap).
+        self.lbl_info.setMinimumWidth(200)
+        # stretch=1 makes this the elastic widget — it absorbs any
+        # leftover horizontal space, so the Detect button on its left
+        # stays anchored even when the label is empty. Without it, a
+        # short label would let the Detect button drift to the right.
+        top_bar.addWidget(self.lbl_info, stretch=1)
 
         r_layout.addLayout(top_bar)
 
@@ -2487,9 +3326,12 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         self.cb_protect.toggled.connect(self._on_params_changed)
         self.sp_star_sigma.valueChanged.connect(self._on_params_changed)
         self.sp_star_dil.valueChanged.connect(self._on_params_changed)
-        self.cmb_method.currentIndexChanged.connect(self._on_params_changed)
-        self.sp_strip.valueChanged.connect(self._on_params_changed)
-        self.cb_match_noise.toggled.connect(self._on_params_changed)
+        # Inpaint param changes trigger a Cleaned-Preview refresh when
+        # the user is currently in that view -- otherwise the user has
+        # to switch View away and back to see the new result.
+        self.cmb_method.currentIndexChanged.connect(self._on_inpaint_param_changed)
+        self.sp_strip.valueChanged.connect(self._on_inpaint_param_changed)
+        self.cb_match_noise.toggled.connect(self._on_inpaint_param_changed)
 
         self.cmb_view.currentIndexChanged.connect(self._on_view_changed)
 
@@ -2500,6 +3342,7 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         self.btn_help.clicked.connect(self._show_help_dialog)
         self.btn_coffee.clicked.connect(self._show_coffee_dialog)
         self.btn_close.clicked.connect(self.close)
+        self.btn_apply_rec.clicked.connect(self._on_apply_recommendation)
 
         self.btn_first.clicked.connect(lambda: self._navigate(0, absolute=True))
         self.btn_prev.clicked.connect(lambda: self._navigate(-1))
@@ -2517,6 +3360,12 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         # Disable strip-width when inpaint method is OpenCV NS (it's only
         # used by the perpendicular-strip method)
         self.cmb_method.currentIndexChanged.connect(self._update_strip_enabled)
+        # Warn once (per QSettings) when the user picks Biharmonic — it's
+        # mathematically the most "sophisticated" option but has known
+        # numerical instability on long thin masks. Most users see the
+        # artefact and assume the whole tool is broken; the warning
+        # short-circuits that loop.
+        self.cmb_method.currentIndexChanged.connect(self._maybe_warn_biharmonic)
 
         # Line-selection toolbar
         self.canvas.selection_toggled.connect(self._on_line_toggled)
@@ -2625,6 +3474,19 @@ class SatelliteTrailCleanerWindow(QMainWindow):
             self._executor.shutdown(wait=False)
         super().closeEvent(ev)
 
+    def resizeEvent(self, ev) -> None:  # noqa: N802
+        """When the window resizes, the status label's available width
+        changes — so re-elide the displayed text against the new width.
+        The full text is preserved in the tooltip, so this is just a
+        visual refresh."""
+        super().resizeEvent(ev)
+        try:
+            full = self.lbl_info.toolTip()
+            if full:
+                self._set_status_text(full)
+        except Exception:
+            pass
+
     # ---- Param updates ----
 
     def _read_params_from_widgets(self) -> None:
@@ -2646,6 +3508,24 @@ class SatelliteTrailCleanerWindow(QMainWindow):
     def _on_params_changed(self) -> None:
         self._read_params_from_widgets()
         # Don't auto-rerun detection on every spinbox tick -- user clicks Detect.
+
+    def _on_inpaint_param_changed(self) -> None:
+        """Inpaint params (method / strip width / match-noise) -- update
+        the Cleaned Preview live if that's the active view. The detection
+        and mask are unchanged; only the post-detection rendering needs
+        to re-run."""
+        self._read_params_from_widgets()
+        # Refresh the recommendation banner so the "currently selected"
+        # marker tracks the dropdown change.
+        if hasattr(self, "rec_container"):
+            self._update_inpaint_recommendation()
+        if (
+            self.view_mode == "cleaned_preview"
+            and self.last_detection is not None
+            and self.last_detection.detection is not None
+            and self.last_detection.detection.has_trails
+        ):
+            self._refresh_canvas()
 
     def _on_scan_mode_changed(self) -> None:
         """Apply a preset bundle of params when the scan mode changes."""
@@ -2681,6 +3561,89 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         is_strip = (str(self.cmb_method.currentData()) == "perp_strip")
         self.sp_strip.setEnabled(is_strip)
 
+    def _maybe_warn_biharmonic(self) -> None:
+        """Show a one-time modal warning when the user selects Biharmonic.
+
+        Biharmonic is the only inpaint method here that solves a PDE
+        (∇⁴u = 0). The biharmonic equation has no maximum principle, so
+        on long thin masks the iterative solver overshoots / undershoots
+        and produces a periodic 'string of pearls' dark-spot artefact
+        along the trail centreline. This is a mathematical property of
+        the method, not a bug we can fix server-side — but most users
+        try it first (because the label sounds best) and conclude the
+        tool is broken when the artefact appears. The warning is shown
+        once per machine via QSettings and has a 'don't show again'
+        opt-out (defaulted to off so a future re-tickle still warns).
+        """
+        if str(self.cmb_method.currentData()) != "biharmonic":
+            return
+        if not hasattr(self, "_settings") or self._settings is None:
+            return
+        suppressed = str(
+            self._settings.value("biharmonic_warning_suppressed", "false")
+        ).lower() == "true"
+        if suppressed:
+            return
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Biharmonic — experimental")
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setText(
+            "<b>Biharmonic is marked experimental for a reason.</b>"
+        )
+        box.setInformativeText(
+            "It solves ∇⁴u = 0 inside the mask — mathematically elegant, "
+            "but the biharmonic equation has <i>no maximum principle</i>, "
+            "so on long thin satellite-trail masks the solver overshoots "
+            "and undershoots its sky-boundary values periodically. "
+            "Visually this looks like a regular pattern of dark dots along "
+            "the trail (\"string of pearls\"). It is not a bug we can fix "
+            "— it is a property of the equation.<br><br>"
+            "Recommended methods for normal use:<br>"
+            "&nbsp;&nbsp;• <b>Perpendicular Strip Median</b> (default) — "
+            "robust on flashing-satellite trails<br>"
+            "&nbsp;&nbsp;• <b>Nearest Neighbor + Smooth</b> — fast, no "
+            "overshoot<br><br>"
+            "Use Biharmonic only on short, compact masks (single isolated "
+            "blobs, very short trails) where the geometry stays "
+            "well-conditioned."
+        )
+        cb = QCheckBox("Don't show this warning again")
+        box.setCheckBox(cb)
+        box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        box.exec()
+        if cb.isChecked():
+            try:
+                self._settings.setValue(
+                    "biharmonic_warning_suppressed", "true",
+                )
+            except Exception:
+                pass
+
+    def _set_status_text(self, text: str) -> None:
+        """Single setter for the top-bar status label.
+
+        Stores the full text as the tooltip (visible on hover) and
+        displays an elided version that fits the label's current width
+        on a single line. This guarantees the top bar never wraps to
+        two lines and pushes the canvas down — the original cause of
+        the 'image shifts after Detect' UX bug.
+        """
+        if not text:
+            self.lbl_info.setText("")
+            self.lbl_info.setToolTip("")
+            return
+        # Always preserve full text on hover.
+        self.lbl_info.setToolTip(text)
+        try:
+            fm = self.lbl_info.fontMetrics()
+            avail = max(self.lbl_info.width() - 8, 100)
+            elided = fm.elidedText(text, Qt.TextElideMode.ElideRight, avail)
+        except Exception:
+            elided = text
+        self.lbl_info.setText(elided)
+
     def _on_detection_progress(self, stage: str) -> None:
         """Update the progress bar / status label with the current phase."""
         labels = {
@@ -2694,7 +3657,7 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         msg = labels.get(stage, stage)
         self.progress_bar.setVisible(True)
         self.progress_bar.setFormat(msg)
-        self.lbl_info.setText(msg)
+        self._set_status_text(msg)
 
     def _on_view_changed(self) -> None:
         self.view_mode = str(self.cmb_view.currentData())
@@ -2711,7 +3674,7 @@ class SatelliteTrailCleanerWindow(QMainWindow):
                 "mask_overlay": "Mask Overlay",
                 "cleaned_preview": "Cleaned Preview",
             }[self.view_mode]
-            self.lbl_info.setText(
+            self._set_status_text(
                 f"{label_for} needs a detection. "
                 "Click 'Detect Trails on Current' first."
             )
@@ -2758,7 +3721,7 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         if self._busy:
             return
         self._set_busy(True)
-        self.lbl_info.setText("Loading frame...")
+        self._set_status_text("Loading frame...")
         self.canvas.set_placeholder("Loading...")
         self.canvas.set_image(None)
 
@@ -2844,7 +3807,7 @@ class SatelliteTrailCleanerWindow(QMainWindow):
             return
         self._read_params_from_widgets()
         self._set_busy(True)
-        self.lbl_info.setText("Detecting trails...")
+        self._set_status_text("Detecting trails...")
 
         params_snapshot = self._snapshot_params()
         path = self.paths[self.current_index]
@@ -2924,7 +3887,7 @@ class SatelliteTrailCleanerWindow(QMainWindow):
             self._mrt_cache.popitem(last=False)
 
         if result.error:
-            self.lbl_info.setText(f"Error: {result.error}")
+            self._set_status_text(f"Error: {result.error}")
             QMessageBox.warning(self, "Frame Error",
                                 f"Could not load / process frame:\n{result.error}")
             return
@@ -2932,7 +3895,7 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         det = result.detection
         if det is None or not det.has_trails:
             note = f"  —  {det.notes}" if (det is not None and det.notes) else ""
-            self.lbl_info.setText(f"No trails detected.{note}")
+            self._set_status_text(f"No trails detected.{note}")
         else:
             # Many-candidate safety net: with the segmentation pipeline the
             # typical false-positive rate is very low (the elongation +
@@ -2949,13 +3912,63 @@ class SatelliteTrailCleanerWindow(QMainWindow):
                     "elongation / straightness sliders to filter more "
                     "aggressively."
                 )
-                self.lbl_info.setText(hint)
+                self._set_status_text(hint)
             else:
                 note = f"  —  {det.notes}" if det.notes else ""
-                self.lbl_info.setText(f"{len(det.lines)} trail(s) detected.{note}")
+                self._set_status_text(f"{len(det.lines)} trail(s) detected.{note}")
 
         self._update_selection_label()
+        self._update_inpaint_recommendation()
         self._refresh_canvas()
+
+    def _update_inpaint_recommendation(self) -> None:
+        """Show / hide the inpaint-method recommendation banner.
+
+        Called after every detection. Compares the recommended method
+        against the currently selected method:
+          - if they match, the banner shows a confirmation (green-ish)
+          - if they differ, the banner suggests switching and the
+            "Apply" button becomes meaningful
+          - if there's no detection or no recommendation, hide.
+        """
+        det = self.last_detection.detection if self.last_detection else None
+        if det is None or not det.has_trails or not det.recommended_method:
+            self.rec_container.setVisible(False)
+            return
+
+        rec_id = det.recommended_method
+        rec_label = INPAINT_METHOD_LABELS.get(rec_id, rec_id)
+        current_id = str(self.cmb_method.currentData())
+        if rec_id == current_id:
+            self.lbl_recommendation.setText(
+                f"<b>💡 Recommendation:</b> <b>{rec_label}</b> "
+                f"<span style='color:#88ff88;'>(currently selected)</span>"
+                f"<br><span style='color:#aab;'>{det.recommendation_rationale}</span>"
+            )
+            self.btn_apply_rec.setEnabled(False)
+            self.btn_apply_rec.setText("✓ in use")
+        else:
+            self.lbl_recommendation.setText(
+                f"<b>💡 Recommendation:</b> <b>{rec_label}</b>"
+                f"<br><span style='color:#aab;'>{det.recommendation_rationale}</span>"
+            )
+            self.btn_apply_rec.setEnabled(True)
+            self.btn_apply_rec.setText("Apply")
+        self.rec_container.setVisible(True)
+
+    def _on_apply_recommendation(self) -> None:
+        """Switch the dropdown to the recommended method. Does NOT
+        re-run detection — only swaps the inpaint choice and refreshes
+        the Cleaned Preview if it's currently shown."""
+        det = self.last_detection.detection if self.last_detection else None
+        if det is None or not det.recommended_method:
+            return
+        idx = self.cmb_method.findData(det.recommended_method)
+        if idx >= 0:
+            self.cmb_method.setCurrentIndex(idx)
+        # _on_inpaint_param_changed will be triggered automatically by
+        # currentIndexChanged → it pushes params + refreshes preview.
+        self._update_inpaint_recommendation()
 
     def _update_selection_label(self) -> None:
         det = self.last_detection.detection if self.last_detection else None
@@ -3050,9 +4063,13 @@ class SatelliteTrailCleanerWindow(QMainWindow):
                 except Exception:
                     n_diff = -1
                 target = int(det.pixels_to_inpaint)
-                self.lbl_info.setText(
+                note_suffix = (
+                    f"  —  {det.notes}" if det.notes else ""
+                )
+                self._set_status_text(
                     f"Cleaned Preview — inpaint changed "
                     f"{n_diff:,} pixels (mask: {target:,} px expected)"
+                    f"{note_suffix}"
                 )
                 cleaned_stretched = stretch_for_display(cleaned)
                 img = stretched_to_qimage(cleaned_stretched)
@@ -3124,7 +4141,7 @@ class SatelliteTrailCleanerWindow(QMainWindow):
             return
 
         self._set_busy(True)
-        self.lbl_info.setText("Applying...")
+        self._set_status_text("Applying...")
 
         params_snapshot = self._snapshot_params()
         # Pass through the user-curated detection so apply uses the actual
@@ -3157,7 +4174,7 @@ class SatelliteTrailCleanerWindow(QMainWindow):
             self._clear_mrt_cache()
 
         if outcome.status == "cleaned":
-            self.lbl_info.setText(
+            self._set_status_text(
                 f"Cleaned. {outcome.lines} trail(s), {outcome.pixels_replaced:,} px replaced."
             )
             self._log_siril(f"Cleaned {os.path.basename(outcome.path)}: "
@@ -3173,9 +4190,9 @@ class SatelliteTrailCleanerWindow(QMainWindow):
             self._update_frame_label()
             self._load_and_show(self.current_index, autodetect=False)
         elif outcome.status == "skipped_no_trail":
-            self.lbl_info.setText("Skipped: no trails detected (re-run detection if needed).")
+            self._set_status_text("Skipped: no trails detected (re-run detection if needed).")
         else:
-            self.lbl_info.setText(f"Error: {outcome.note}")
+            self._set_status_text(f"Error: {outcome.note}")
             QMessageBox.warning(self, "Apply Failed", outcome.note or "Unknown error")
 
     def _on_skip_current(self) -> None:
@@ -3319,7 +4336,7 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         if self._cancel_batch:
             summary = "Cancelled.\n\n" + summary
         QMessageBox.information(self, "Apply to All Frames", summary)
-        self.lbl_info.setText(f"Batch done: {cleaned} cleaned, {skipped} skipped, {errors} errors.")
+        self._set_status_text(f"Batch done: {cleaned} cleaned, {skipped} skipped, {errors} errors.")
         self._log_siril(
             f"Apply-to-all complete: cleaned={cleaned} skipped={skipped} errors={errors}"
         )
@@ -3430,6 +4447,186 @@ class SatelliteTrailCleanerWindow(QMainWindow):
 
         dlg.exec()
 
+    def _maybe_show_workflow_dialog(self) -> None:
+        """One-time-per-user (toggleable) walkthrough dialog that shows
+        the recommended 5-step workflow as soon as the app screen is
+        ready. The 'Don't show this again' checkbox is mirrored to
+        QSettings, so power users can silence the dialog once they've
+        memorised the flow. They can still open the full Help dialog
+        from the left panel any time."""
+        if not hasattr(self, "_settings") or self._settings is None:
+            return
+        suppressed = str(
+            self._settings.value("workflow_dialog_suppressed", "false")
+        ).lower() == "true"
+        if suppressed:
+            return
+        self._show_workflow_dialog()
+
+    def _show_workflow_dialog(self) -> None:
+        """Modal walkthrough — explains the recommended 5-step flow
+        without burying it in the full Help tabs."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Quick Workflow — Recommended Steps")
+        dlg.setMinimumSize(820, 640)
+        dlg.setStyleSheet(DARK_STYLESHEET)
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(16, 16, 16, 12)
+        layout.setSpacing(10)
+
+        # Headline
+        head = QLabel(
+            "<span style='font-size:18pt; color:#88aaff;'>"
+            "<b>How to clean a folder of subs &mdash; 5 steps</b></span>"
+        )
+        head.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(head)
+
+        sub = QLabel(
+            "<span style='font-size:11pt; color:#aab;'>Tune detection and "
+            "inpainting on <b>one good test frame</b>, then apply the same "
+            "settings to the whole folder.</span>"
+        )
+        sub.setTextFormat(Qt.TextFormat.RichText)
+        sub.setWordWrap(True)
+        layout.addWidget(sub)
+
+        # Body — scrollable so it works on small displays too
+        body = QTextBrowser()
+        body.setOpenExternalLinks(True)
+        body.setStyleSheet(
+            "font-size: 13pt; color: #e0e0e0; background: #1e1e1e;"
+            " font-family: 'Helvetica Neue', Helvetica, Arial; padding: 14px;"
+            " border: 1px solid #3a3a3a; border-radius: 6px;"
+        )
+        body.setHtml(
+            "<div style='line-height:1.55;'>"
+            # Step 1
+            "<div style='background:#1f2630; padding:10px; border-radius:6px;"
+            " border-left:4px solid #88aaff; margin-bottom:10px;'>"
+            "<b style='color:#88aaff; font-size:14pt;'>1 &nbsp; Find a frame with a visible trail</b>"
+            "<br>Use the slider or the <code>&lt;</code>/<code>&gt;</code> buttons at "
+            "the bottom of the canvas to step through your subs. Switch the "
+            "<b>View</b> dropdown to <i>Stretched</i> so faint trails become "
+            "visible. Pick the frame where the satellite trail is the "
+            "clearest — that's your tuning reference."
+            "</div>"
+            # Step 2
+            "<div style='background:#1f2630; padding:10px; border-radius:6px;"
+            " border-left:4px solid #88aaff; margin-bottom:10px;'>"
+            "<b style='color:#88aaff; font-size:14pt;'>2 &nbsp; Click \U0001f6f0 Detect Trails on Current</b>"
+            "<br>STScI's Median Radon Transform analyses the frame. Detected "
+            "trails are drawn as <span style='color:#88ff88;'>green</span> "
+            "overlays (marked for removal) or <span style='color:#aaa;'>grey</span> "
+            "(kept). <b>Click any line</b> in the canvas to toggle its state. "
+            "If false positives appear, tighten <i>SNR threshold</i> / "
+            "<i>Min length</i> / <i>Max width</i> in the left panel and re-run."
+            "</div>"
+            # Step 3
+            "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+            " border-left:4px solid #ffcc66; margin-bottom:10px;'>"
+            "<b style='color:#ffcc66; font-size:14pt;'>3 &nbsp; \U0001f4a1 Follow the recommendation</b>"
+            "<br>Right under the <b>Method</b> dropdown a banner appears with "
+            "the inpaint method that fits <i>your specific frame</i> best. "
+            "The recommendation is based on three measurements the tool just "
+            "took on your data: cross-trail sky gradient, pearl/peak pattern, "
+            "and mask compactness."
+            "<br><br>"
+            "Click the banner's <b>Apply</b> button to switch the method "
+            "automatically. If you want to override, just pick another method "
+            "from the dropdown — the banner stays visible so you can see how "
+            "your manual choice compares to the recommendation."
+            "</div>"
+            # Step 4
+            "<div style='background:#1f2630; padding:10px; border-radius:6px;"
+            " border-left:4px solid #88aaff; margin-bottom:10px;'>"
+            "<b style='color:#88aaff; font-size:14pt;'>4 &nbsp; Verify in Cleaned Preview</b>"
+            "<br>Switch <b>View</b> to <i>Cleaned Preview</i>. You now see "
+            "the actual result of the chosen inpaint method on this frame. "
+            "Toggle <i>Mask Overlay</i> to see which pixels will be replaced "
+            "(red). If the result still shows residual artefacts:"
+            "<ul style='margin-top:4px;'>"
+            "<li>Increase <b>Mask dilation</b> (covers wider PSF halos around "
+            "bright pearls)</li>"
+            "<li>Try a different <b>Method</b> from the dropdown</li>"
+            "<li>Tweak <b>Strip width</b> if you're using Perpendicular Strip "
+            "Median</li>"
+            "<li>Toggle <b>Match sky noise</b> on / off to compare</li>"
+            "</ul>"
+            "The preview re-renders live with every change — no need to "
+            "re-detect."
+            "</div>"
+            # Step 5
+            "<div style='background:#1a2a1a; padding:10px; border-radius:6px;"
+            " border-left:4px solid #88ff88; margin-bottom:10px;'>"
+            "<b style='color:#88ff88; font-size:14pt;'>5 &nbsp; ▶ Apply to All Frames</b>"
+            "<br>When the test frame looks clean, click <b>Apply to All "
+            "Frames</b>. The current settings are <b>frozen</b> and applied "
+            "to every sub in the folder:"
+            "<ul style='margin-top:4px;'>"
+            "<li>Each frame is re-detected with the same parameters</li>"
+            "<li>Frames with no trail are <b>skipped</b> (file untouched)</li>"
+            "<li>Frames with a trail: original moved to "
+            "<code>originals/</code>, cleaned version written under the "
+            "original filename — same format (FITS / XISF / TIFF) and same "
+            "header / WCS / dtype</li>"
+            "</ul>"
+            "Optional: enable <b>Confirm each frame before writing</b> if you "
+            "want to review every detection during the batch. Cancel during "
+            "the run is always safe — already-cleaned frames stay cleaned, "
+            "no half-written outputs."
+            "</div>"
+            # Summary block
+            "<div style='background:#252525; padding:10px; border-radius:6px;"
+            " margin-top:8px;'>"
+            "<b style='color:#ffcc66;'>\U0001f4dd What you get after the batch</b>"
+            "<br>The tool writes <code>trail_cleanup_report.txt</code> in the "
+            "source folder. It contains one line per frame — cleaned vs "
+            "skipped vs error, line count, pixels replaced, inpaint method, "
+            "mask-dilation setting, timestamp. Open it any time to audit "
+            "what the batch did. The <code>originals/</code> subfolder is "
+            "your safety net: every modified file is recoverable bit-exact."
+            "</div>"
+            "</div>"
+        )
+        layout.addWidget(body, stretch=1)
+
+        # Footer: don't-show-again + close
+        footer = QHBoxLayout()
+        cb_silence = QCheckBox("Don't show this dialog again")
+        cb_silence.setToolTip(
+            "You can always re-open the full guide via the Help button on "
+            "the left panel."
+        )
+        footer.addWidget(cb_silence)
+        footer.addStretch(1)
+        btn_open_help = QPushButton("Open full Help")
+        btn_open_help.setToolTip("Open the multi-tab help (Detection, Output, Tips, Science Notes).")
+        btn_close = QPushButton("Got it — let's start")
+        btn_close.setDefault(True)
+        btn_close.setObjectName("DetectButton")
+        footer.addWidget(btn_open_help)
+        footer.addWidget(btn_close)
+        layout.addLayout(footer)
+
+        def _on_close():
+            if cb_silence.isChecked():
+                try:
+                    self._settings.setValue(
+                        "workflow_dialog_suppressed", "true",
+                    )
+                except Exception:
+                    pass
+            dlg.accept()
+
+        def _on_open_help():
+            _on_close()
+            QTimer.singleShot(0, self._show_help_dialog)
+
+        btn_close.clicked.connect(_on_close)
+        btn_open_help.clicked.connect(_on_open_help)
+        dlg.exec()
+
     def _show_help_dialog(self) -> None:
         dlg = QDialog(self)
         dlg.setWindowTitle("Satellite Trail Cleaner — Help")
@@ -3455,7 +4652,7 @@ class SatelliteTrailCleanerWindow(QMainWindow):
             "Detects linear satellite or aircraft trails in your individual "
             "sub-exposures and inpaints (paints over) the pixels along the "
             "trail using the local sky background. Runs <b>before stacking</b>, "
-            "on every FITS or RAW frame in a folder.<br><br>"
+            "on every FITS, XISF, TIFF or RAW frame in a folder.<br><br>"
             "Siril's normal answer to trails is sigma-clipping during stacking, "
             "which works well for 8+ subs but leaves visible streaks in short "
             "sequences. This tool fills that gap."
@@ -3883,6 +5080,16 @@ class SatelliteTrailCleanerWindow(QMainWindow):
             "Cleaning operations are appended as HISTORY keywords. "
             "Output uses LZ4HC compression. (Requires the <code>xisf</code> "
             "package; falls back to FITS write if unavailable.)<br><br>"
+            "<b>TIFF inputs (.tif / .tiff):</b> cleaned output is written "
+            "back as <code>.tif</code> via the <code>tifffile</code> "
+            "package. The original <b>dtype</b> (uint8 / uint16 / uint32 / "
+            "float32) is preserved bit-exact, as are the original "
+            "compression scheme (LZW / ZSTD / Deflate / none), photometric "
+            "interpretation (mono vs RGB), and resolution tags. Cleaning "
+            "history is appended to the <code>ImageDescription</code> tag "
+            "where Siril / ASTAP / NINA typically store plate-solve and "
+            "processing notes. (Requires the <code>tifffile</code> "
+            "package; falls back to FITS write if unavailable.)<br><br>"
             "<b>RAW inputs (.cr2 / .nef / .arw / .dng / …):</b> debayered "
             "by Siril before cleaning. Output is always FITS "
             "(<code>&lt;name&gt;.fit</code>) with a minimal synthesised "
@@ -3999,6 +5206,104 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         )
         tabs.addTab(te4, "\U0001f4a1 Tips && Pitfalls")
 
+        # ---- Tab: Scientific Positioning ----
+        te_sci = QTextEdit()
+        te_sci.setReadOnly(True)
+        te_sci.setStyleSheet(base_style)
+        te_sci.setHtml(
+            "<b style='color:#88aaff; font-size:16pt;'>"
+            "\U0001f52c Why we inpaint &mdash; and what STScI does instead"
+            "</b><br><br>"
+            "<b style='color:#ffcc66;'>The honest scientific positioning"
+            "</b><br>"
+            "<div style='background:#252525; padding:8px; "
+            "border-radius:4px;'>"
+            "The detection backend in this tool is "
+            "<b>STScI's <code>findsat_mrt.TrailFinder</code></b> &mdash; "
+            "the same Median Radon Transform algorithm published in "
+            "Stark, Avila, Anderson et&nbsp;al. (ACS&nbsp;ISR&nbsp;2022-08) "
+            "and used to find satellite trails in HST/ACS images.<br><br>"
+            "Importantly, the original paper does <b>NOT</b> recommend "
+            "any specific inpainting algorithm. It treats the output "
+            "mask as a Data Quality flag for the downstream HST pipeline "
+            "(<code>AstroDrizzle</code>), which combines multiple "
+            "exposures and simply <b>rejects</b> the masked pixels &mdash; "
+            "the sky information for the trail region comes from the "
+            "<i>other</i> exposures in the stack, not from spatial "
+            "interpolation. That is the cleanest possible approach: "
+            "every output pixel is a real measurement from some sub, "
+            "never an estimate."
+            "</div><br>"
+            "<b style='color:#ffcc66;'>Why we deviate &mdash; the amateur "
+            "regime</b><br>"
+            "<div style='background:#1a2a3a; padding:10px; "
+            "border-radius:6px; border:1px solid #3a5a7a;'>"
+            "STScI's mask-and-reject approach requires <b>enough "
+            "exposures</b> for the rejection to leave a clean sky in the "
+            "trail region. HST programmes typically have 8&ndash;16+ "
+            "well-dithered sub-exposures &mdash; the trail in a single "
+            "sub is, statistically, an outlier the σ-clip rejects "
+            "cleanly.<br><br>"
+            "Amateur astrophotography usually has 4&ndash;6 subs (often "
+            "fewer on rare targets). At <i>n=5</i>, σ-clipping a single "
+            "outlier doesn't have enough surviving population to leave "
+            "a confident sky estimate; below <i>n=4</i> it is "
+            "statistically not possible. The trail residual survives "
+            "the stack and degrades the final image.<br><br>"
+            "<b>That gap is what this tool fills.</b> Spatial inpainting "
+            "per-frame, <i>before</i> stacking, lets the σ-clip in "
+            "Siril's stacker work on already-clean inputs."
+            "</div><br>"
+            "<b style='color:#ffcc66;'>How we stay HST-faithful in "
+            "spirit</b><br>"
+            "<div style='background:#252525; padding:8px; "
+            "border-radius:4px;'>"
+            "Even though spatial inpainting introduces "
+            "<i>synthetic data</i>, the HST tradition of <b>not "
+            "hallucinating structure</b> guides our defaults:"
+            "<ul style='margin-top:6px;'>"
+            "<li>The default method, <b>Perpendicular Strip Median</b>, "
+            "copies the median of the local sky perpendicular to the "
+            "trail &mdash; no model, no learned prior, no invented "
+            "stars. The strongest possible &laquo;don't invent "
+            "structure&raquo; constraint short of leaving the mask "
+            "untouched.</li>"
+            "<li><b>Match-sky-noise</b> adds Gaussian noise with σ "
+            "matching the local sky. The inpainted region is "
+            "<i>statistically</i> a sky sample, so stack-rejection "
+            "downstream cannot tell it apart from a real sky pixel.</li>"
+            "<li><b>Star Protection</b> excludes detected stars from "
+            "the mask so we never replace a real star with sky.</li>"
+            "<li>We <b>refuse to ship deep-learning inpainting</b> "
+            "(LaMa, Stable Diffusion, etc.) because those models "
+            "halluzinate stars, galaxies and Bahtinov-spike-like "
+            "structure that is not in the original data. That is "
+            "<i>fabrication</i>, not interpolation, and incompatible "
+            "with the scientific posture of the underlying STScI "
+            "algorithm.</li>"
+            "</ul>"
+            "</div><br>"
+            "<b style='color:#ffcc66;'>If you have enough subs &mdash; "
+            "consider skipping this tool</b><br>"
+            "<div style='background:#2a1a1a; padding:10px; "
+            "border-radius:6px; border:1px solid #7a3a3a;'>"
+            "If your stack has <b>8 or more well-dithered subs</b> and "
+            "the trail does not repeat across multiple of them, "
+            "Siril's built-in σ-clip / Winsorized / Linear-Fit "
+            "rejection during <code>Stacking → Image stacking</code> "
+            "is mathematically the correct choice. It uses real "
+            "measurements, not estimates. This tool is most useful "
+            "for the regime where σ-clip cannot reach a clean result: "
+            "few subs, repeating trails, or trails crossing science "
+            "targets where you want to preserve the frame."
+            "</div><br>"
+            "<b style='color:#888;'>Reference: Stark et&nbsp;al. 2022, "
+            "&laquo;findsat_mrt: A New Algorithm for Detecting Linear "
+            "Features in Astronomical Images&raquo;, "
+            "ACS&nbsp;ISR&nbsp;2022-08, STScI.</b>"
+        )
+        tabs.addTab(te_sci, "\U0001f52c Science Notes")
+
         layout.addWidget(tabs)
 
         btns = QHBoxLayout()
@@ -4061,7 +5366,8 @@ def _show_welcome_dialog(parent=None) -> bool:
         "<ol style='margin-top:4px;'>"
         "<li>Pick a folder containing your FITS files "
         "(<code>.fit</code> / <code>.fits</code> / <code>.fts</code>), "
-        "PixInsight XISF (<code>.xisf</code>) or "
+        "PixInsight XISF (<code>.xisf</code>), "
+        "TIFF (<code>.tif</code> / <code>.tiff</code>) or "
         "DSLR/mirrorless RAWs (<code>.cr2</code>, <code>.nef</code>, "
         "<code>.arw</code>, <code>.dng</code>, …).</li>"
         "<li>The viewer opens — navigate to a frame with a visible "
@@ -4157,9 +5463,10 @@ def main() -> int:
         QMessageBox.warning(
             None,
             "Svenesis Satellite Trail Cleaner",
-            f"No FITS, XISF or RAW files found in:\n{folder}\n\n"
+            f"No FITS, XISF, TIFF or RAW files found in:\n{folder}\n\n"
             f"Supported extensions:\n  FITS: {', '.join(FITS_EXTENSIONS)}\n"
             f"  XISF: {', '.join(XISF_EXTENSIONS)}\n"
+            f"  TIFF: {', '.join(TIFF_EXTENSIONS)}\n"
             f"  RAW: {', '.join(RAW_EXTENSIONS)}",
         )
         return 0
@@ -4170,7 +5477,14 @@ def main() -> int:
         pass
 
     win = SatelliteTrailCleanerWindow(siril, folder, paths)
-    win.show()
+    # showMaximized() rather than show() — the preview canvas benefits
+    # massively from extra screen real estate (Mask Overlay / Cleaned
+    # Preview are essentially side-by-side comparisons in the user's
+    # head, and a 1500×880 default barely fits a single 4k-resolution
+    # sub at 50 %). On macOS this triggers the green-button maximize
+    # equivalent, on Linux/Windows it fills the available screen
+    # excluding the taskbar.
+    win.showMaximized()
     return app.exec()
 
 
