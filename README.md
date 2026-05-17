@@ -638,6 +638,12 @@ Reads the current linear image from Siril (or a linear FITS file), applies a 2%�
 
 Detects linear satellite or aircraft trails in your individual sub-exposures and inpaints them using the local sky background — **before** stacking. Siril's normal answer to trails is sigma-clipped stack rejection, which works statistically when you have 8+ well-distributed subs. The trail is "out-voted" by clean frames and disappears. The problem: with short sequences (3–8 subs), single-night campaigns, or LRGB stacks with low per-filter counts, sigma clipping has too few samples to reliably remove the trail. This tool fills that gap by cleaning each affected sub individually before the integration even starts.
 
+### Screenshots
+
+![Satellite Trail Cleaner — main window](https://github.com/sramuschkat/Siril-Scripts/raw/main/screenshots/SatelliteTrailCleaner-1.jpg)
+
+*Main window: left panel with Detection (MRT) controls, Star Protection, Inpainting method picker with 💡 per-frame recommendation banner, and Apply group. Right side shows the preview canvas with the detected satellite trail highlighted in green, plus the workflow-advisor banner that tells you upfront whether your folder is the right fit for this tool.*
+
 ### Features
 
 #### Detection — STScI's `findsat_mrt` Median Radon Transform
@@ -662,20 +668,32 @@ Detects linear satellite or aircraft trails in your individual sub-exposures and
 - **cv2 Fast Marching (Telea)** and **cv2 Navier-Stokes** — OpenCV's C++ inpaint methods via percentile-scaled uint8 round-trip. Fastest options (~200 ms), good fallback for live preview.
 - **Biharmonic (experimental, may ring)** — `skimage.restoration.inpaint_biharmonic` solves ∇⁴u = 0 on a chunked bbox crop. Mathematically smooth, but the biharmonic equation lacks a maximum principle so long thin masks can produce the classic "string of pearls" overshoot artefact. Warned about explicitly when selected.
 - **Sky-noise matching post-process** — after any inpaint method runs, adds Gaussian noise inside the mask with σ taken robustly (via sigma-clipped MAD) from a 30-px halo of unmasked sky. The filled region is now **statistically indistinguishable** from real sky for stack-rejection algorithms. On by default; ~50 ms overhead.
-- **Star Protection (optional, off by default)** — when on, detects stars in the image and excludes them from the inpaint mask. Smart filter ignores "stars" that lie inside the trail mask itself (those are misclassified trail-pixel peaks, not real stars).
-- **Inpaint-method recommendation banner (v0.8.2+)** — after every detection, the tool analyses the trail profile (cross-trail sky gradient, pearl/peak count, mask compactness) and recommends the best-suited method for *that specific frame* with a one-click Apply button. Suppressible per-user via the dropdown.
+- **Star Protection (default ON since v1.0)** — detects stars in the image and excludes them from the inpaint mask so real stars under the trail survive the cleanup. An **isotropy filter** (8-direction PSF ring test) keeps radially-symmetric peaks (real stars) and rejects elongated peaks (pearls on a flashing-satellite trail) — the historical failure mode where Star Protection would silently leave the trail uncleaned is gone.
+- **Inpaint-method recommendation banner** — after every detection, the tool analyses the trail profile (cross-trail sky gradient, pearl/peak count, mask compactness, mask length) and recommends the best-suited method for *that specific frame* with a one-click Apply button. The recommendation also adapts to the mask geometry (long trails get Perpendicular Strip Median; short compact masks get Harmonic).
+- **Show rejected candidates** — toggle the canvas to display every MRT candidate killed by the post-filters as colour-coded dashed lines (red = SNR, orange = duplicate, yellow = persistence / width). **Click any rejected line to PROMOTE it** to an accepted detection — the escape hatch when the persistence test wrongly killed a faint real trail.
 
 #### Workflow & UX
 
-- **Maximised on launch** (v0.8.3+) with a guided **5-step Quick Workflow dialog** that explains the tune-on-one-frame → Apply-to-All flow. Re-openable from Help anytime; can be silenced after the first run.
-- **Hybrid mode** — tune detection sliders on the current frame with live Mask Overlay / Cleaned Preview, then click **Apply to All Frames**. Optional **Confirm each frame** checkbox forces a per-frame approval step for the cautious first run.
+- **Workflow advisor banner** — a colour-coded banner above the canvas tells you upfront whether the tool is the right choice for your folder:
+  - ⛔ **wrong_tool** (red) — many uncalibrated subs (typical SeeStar / Vespera / eVscope output): stack with σ-clip in Siril instead
+  - ⚠️ **calibrate_first** (orange) — sensor banding detected: pre-calibrate with bias/dark first; the "How to fix" button walks through the Siril workflow
+  - ⚠️ **stack_first** (orange) — many clean subs: σ-clip stacking usually handles trails for free
+  - 💡 **borderline** (yellow) — moderate sub count, both approaches work
+  - **appropriate** (banner hidden) — short sequence, cleaner is the right tool, proceed
+- **Sensor-banding diagnostic** — every Detect runs an MAD-based column/row banding test (`np.diff` of per-column / per-row medians vs expected noise). False-positives on smooth structures like comet tails or vignetting are filtered out by the high-pass design.
+- **Maximised on launch** with a guided **5-step Quick Workflow dialog** explaining the tune-on-one-frame → Apply-to-All flow. Re-openable any time via Help; silenceable after first run.
+- **Hybrid mode** — tune detection sliders on the current frame with live Mask Overlay / Cleaned Preview, then click **Apply to All Frames**. Optional **Confirm each frame** checkbox forces per-frame approval for the cautious first run.
+- **📁 Select new Folder** button — switch the working folder without quitting and re-launching the script. The last-used folder is persisted across sessions.
+- **↺ Reset parameters to defaults** (Help dialog) — restore every detection / inpaint slider and checkbox to factory defaults when you've drifted too far while tuning. Folder, dismissed-dialog flags, and audit history are untouched.
+- **Scrollable left panel** — every control stays reachable even on smaller screens; the panel scrolls vertically when content overflows.
 - **Non-destructive output** — source files are moved to an `originals/` subfolder; cleaned images take the original filename so your existing stacking pipeline picks them up unchanged.
-- **Format-preserving round-trip** — FITS round-trips its header verbatim (WCS, `DATE-OBS`, `BSCALE/BZERO`, instrument keywords preserved). XISF round-trips all `FITSKeywords` AND `XISFProperties` (incl. plate-solving astrometric solutions). TIFF round-trips the original dtype (uint8/uint16/uint32/float32), compression, photometric interpretation, and `ImageDescription` / `Software` / `DateTime` tags. RAW is debayered to FITS.
+- **Format-preserving round-trip** — FITS round-trips its header verbatim (WCS, `DATE-OBS`, `BSCALE/BZERO`, instrument keywords). XISF round-trips all `FITSKeywords` AND `XISFProperties` (incl. plate-solving astrometric solutions). TIFF round-trips the original dtype (uint8/uint16/uint32/float32), compression, photometric interpretation, and `ImageDescription` / `Software` / `DateTime` tags. RAW is debayered to FITS.
 - **Frames with no trail are not touched** — the script only writes files for frames where it actually detected something.
-- **Per-folder audit trail (v0.8.9+)** — **`trail_cleanup_report.txt`** (human-readable TSV) AND **`trail_cleanup_report.json`** (machine-readable, structured records per frame: status, lines, pixels replaced, method used, dilation, scan mode, RGB-reduce mode, version, timestamp). Atomic JSON writes via tempfile + rename so crashes don't corrupt the audit.
-- **Parallel batch pipeline (v0.8.8+)** — during Apply-to-All, Frame N+1's load + detect runs in a worker thread while the main thread inpaints + writes Frame N. ~1.5–2× wall-clock speedup on batches of 20+ frames. Disabled when Confirm-each is active (user reaction time dominates anyway).
-- **ETA + counters in batch progress (v0.8.9+)** — the progress dialog shows running Cleaned / Skipped / Errors counts plus Elapsed / ETA, refreshed every frame.
-- **Dark-themed PyQt6 GUI** matching the rest of the Svenesis suite, with `QSettings` persistence for detection thresholds, inpaint method, view preferences, dismissed dialogs, scan mode, and RGB-reduce choice. **Reset dismissed dialogs** button in Help.
+- **Per-folder audit trail** — **`trail_cleanup_report.txt`** (human-readable TSV) AND **`trail_cleanup_report.json`** (machine-readable, structured records per frame: status, lines, pixels replaced, method used, dilation, scan mode, RGB-reduce mode, version, timestamp). Atomic JSON writes via tempfile + rename so crashes don't corrupt the audit.
+- **Parallel batch pipeline** — during Apply-to-All, Frame N+1's load + detect runs in a worker thread while the main thread inpaints + writes Frame N. ~1.5–2× wall-clock speedup on batches of 20+ frames. Disabled when Confirm-each is active (user reaction time dominates anyway).
+- **ETA + counters in batch progress** — the progress dialog shows running Cleaned / Skipped / Errors counts plus Elapsed / ETA, refreshed every frame. Cancel is always safe — the current frame finishes, no half-written outputs.
+- **Cross-platform BLAS thread sanity** — `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, `VECLIB_MAXIMUM_THREADS`, `NUMEXPR_NUM_THREADS` are set to 1 per worker process to prevent oversubscription when the MRT spawns parallel workers. Equally effective on macOS Apple Silicon (Accelerate), Linux (OpenBLAS / MKL), and Windows (MKL).
+- **Dark-themed PyQt6 GUI** matching the rest of the Svenesis suite, with `QSettings` persistence for every tuning parameter, view preferences, dismissed dialogs, and the last-opened folder.
 
 #### File format support
 
