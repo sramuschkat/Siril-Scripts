@@ -1,6 +1,6 @@
 """
 Svenesis Satellite Trail Cleaner
-Script Version: 0.8.9
+Script Version: 1.0.0
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -78,6 +78,49 @@ import datetime as _dt
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
+# -----------------------------------------------------------------------------
+# Anti-oversubscription for parallel MRT detection (v0.8.10)
+# -----------------------------------------------------------------------------
+# acstools.findsat_mrt.TrailFinder uses Python's multiprocessing to fan the
+# Median Radon Transform out over theta angles. With N worker processes and
+# multi-threaded BLAS in each worker, the total thread count becomes
+# N × BLAS_threads, which routinely exceeds the physical core count by 5-10×.
+# The OS scheduler then thrashes between threads, and apparently-idle E-cores
+# (on Apple Silicon) or P-cores (on Linux/Windows) are actually waiting for
+# context switches rather than doing work.
+#
+# Fix: pin every BLAS / OpenMP backend to 1 thread per worker process so the
+# multiprocessing pool gets clean 1:1 process-to-core scaling.
+#
+# Cross-platform coverage (each variable is a no-op on platforms that don't
+# use the corresponding backend):
+#   - OMP_NUM_THREADS         OpenMP (Linux + Windows + macOS)
+#   - OPENBLAS_NUM_THREADS    OpenBLAS (Linux + Windows default NumPy)
+#   - MKL_NUM_THREADS         Intel MKL (Linux + Windows, Anaconda default)
+#   - VECLIB_MAXIMUM_THREADS  Apple Accelerate (macOS Intel + Apple Silicon)
+#   - NUMEXPR_NUM_THREADS     numexpr (all platforms, if installed)
+#
+# setdefault() respects any value the user already set in their shell — power
+# users on huge servers may want different threading. Must run BEFORE
+# `import numpy` so numpy reads the value once at import time. The worker
+# processes inherit os.environ via both fork() (Linux/macOS) and spawn()
+# (Windows + macOS default), so the setting propagates everywhere.
+#
+# Cost on single-frame interactive use: negligible. Our inpaint and detection
+# code is dominated by element-wise numpy ops, cv2.filter2D, and
+# scipy.ndimage routines — none of which benefit meaningfully from BLAS
+# multi-threading. The benefit on batch (10-core Apple Silicon): the E-cores
+# go from ~30 % idle-looking utilisation to fully productive, ~10-25 % faster
+# MRT phase.
+for _env_var in (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+):
+    os.environ.setdefault(_env_var, "1")
+
 log = logging.getLogger("SatelliteTrailCleaner")
 
 import numpy as np
@@ -144,7 +187,7 @@ from PyQt6.QtGui import (
     QDesktopServices, QShortcut, QKeySequence,
 )
 
-VERSION = "0.8.9"
+VERSION = "1.0.0"
 
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "SatelliteTrailCleaner"
@@ -224,7 +267,8 @@ QPushButton#ApplyAllButton{background-color:#2a4a3a;border:1px solid #408060;pad
 QPushButton#ApplyAllButton:hover{background-color:#3a6a5a}
 QPushButton#DetectButton{background-color:#3a3a5a;border:1px solid #5060a0}
 QPushButton#DetectButton:hover{background-color:#4a4a7a}
-QPushButton#SkipButton{background-color:#444444;border:1px solid #777777}
+QPushButton#SelectFolderButton{background-color:#2a3a4a;border:1px solid #4060a0}
+QPushButton#SelectFolderButton:hover{background-color:#3a4a6a}
 
 QTabWidget::pane{border:1px solid #444444;background:#2b2b2b}
 QTabBar::tab{background:#3c3c3c;color:#cccccc;padding:6px 12px;border:1px solid #444444;border-bottom:none;border-radius:4px 4px 0 0;margin-right:2px}
@@ -524,17 +568,29 @@ class DetectionParams:
         # would lose √3 of its SNR and might fall below the threshold.
         self.mono_mode: str = "mean"             # "mean" | "max"
 
+        # Whether to render rejected MRT candidates as colour-coded
+        # overlays on the canvas. When on, the user can click any
+        # rejected line to "rescue" it — promote it to an accepted
+        # detection. Useful when the persistence/width/SNR filters
+        # killed something MRT clearly saw (typical faint-satellite
+        # symptom: MRT finds 90 candidates, all 90 fail persistence).
+        self.show_rejected: bool = False
+
         # Mask construction
         self.dilation_radius: int = 7            # px to thicken each line into a mask
 
-        # Star protection (for inpaint: optionally preserve real stars
-        # detected in the halo around the trail). Default OFF because a
-        # bright satellite trail produces many local maxima along its
-        # length that find_peaks misidentifies as stars; turning star
-        # protection on can then mask out the trail itself and leave it
-        # uncleaned. Enable manually when you have a known star sitting
-        # in the trail's dilation halo that you want to preserve.
-        self.protect_stars: bool = False
+        # Star protection (for inpaint: preserve real stars detected in
+        # the halo around the trail).
+        #
+        # Default ON since v0.8.17: the isotropy filter in
+        # _detect_star_mask now distinguishes real stars (radially
+        # symmetric PSF, ring max/min ratio ≤2.5) from pearl peaks on a
+        # flashing-satellite trail (elongated along trail axis, ratio
+        # >2.5). Pearls are excluded from the star mask, so the historic
+        # failure mode where star protection killed the trail itself is
+        # gone. Real stars under the trail now survive the cleanup
+        # instead of being silently inpainted to sky.
+        self.protect_stars: bool = True
         self.star_sigma: float = 5.0
         self.star_dilation: int = 4
 
@@ -599,6 +655,39 @@ class TrailDetection:
         # computed" — consumers should re-derive if they need them.
         self.sky_med: float = 0.0
         self.sky_sigma: float = 0.0
+        # Rejected MRT candidates (v0.8.11+) — every line that came back
+        # from TrailFinder.source_list but didn't pass the post-MRT
+        # filters. Stored so the UI can render them as colour-coded
+        # overlays and let the user manually "rescue" a candidate that
+        # the persistence / width filters wrongly killed (typical case:
+        # very faint satellite trails fail persistence because the
+        # per-chunk SNR is below 3 even though the global SNR is fine).
+        # Each entry is (x1, y1, x2, y2, reason) where reason is one of:
+        #   "snr"          — status 1 (SNR filter rejected)
+        #   "duplicate"    — status 0 (duplicate of another line)
+        #   "no_endpoints" — endpoint extraction failed
+        #   "persistence"  — explicit persistence-test reject
+        #   "width"        — explicit width-filter reject
+        #   "other"        — unknown status code
+        self.rejected_candidates: list[tuple[int, int, int, int, str]] = []
+        # Sensor-banding diagnostic (v0.8.13+) — populated by
+        # detect_sensor_banding() during detect_trails(). When
+        # has_banding is True, the UI surfaces a warning explaining
+        # that the user should pre-calibrate their RAW files before
+        # running the cleaner. Dict structure:
+        #   has_banding: bool
+        #   severity_v: float  (column / vertical banding ratio)
+        #   severity_h: float  (row / horizontal banding ratio)
+        #   verdict: str       ("clean" | "moderate" | "strong" | "severe")
+        #   col_excess_adu, row_excess_adu: float (diagnostic ADU)
+        self.banding_info: dict = {
+            "has_banding": False,
+            "severity_v": 0.0,
+            "severity_h": 0.0,
+            "verdict": "clean",
+            "col_excess_adu": 0.0,
+            "row_excess_adu": 0.0,
+        }
 
     @property
     def has_trails(self) -> bool:
@@ -661,10 +750,70 @@ def _sigma_clip_background(mono: np.ndarray) -> tuple[float, float]:
         return med, std
 
 
+def _is_isotropic_peak(
+    mono: np.ndarray, cx: int, cy: int, r: int = 4,
+    threshold_ratio: float = 2.5,
+) -> bool:
+    """Cheap isotropy test for a candidate star peak (v0.8.17+).
+
+    Real stars (and saturated stars) are radially symmetric — their PSF
+    looks the same in all directions from the centre. Satellite-trail
+    "pearls" (the bright periodic flashes of a tumbling rocket body) are
+    *elongated along the trail axis* and asymmetric: bright down the
+    trail direction, dim perpendicular to it.
+
+    The test samples eight pixels around the peak in a small ring of
+    radius ``r``: (cx±r, cy), (cx, cy±r), and the four 45° diagonals.
+    For an isotropic peak (real star) all eight samples have similar
+    brightness. For a pearl two of them (along the trail axis) are
+    much brighter than the other six.
+
+    Returns True if the peak is isotropic (looks like a real star).
+    Returns False if the peak is anisotropic (looks like a pearl /
+    elongated trail feature).
+
+    Threshold: ``threshold_ratio`` is the max/min ratio above which the
+    peak is declared anisotropic. 2.5 is permissive (catches obvious
+    pearls) without rejecting real stars whose PSF asymmetry due to
+    seeing / focus / coma can still produce ratios up to ~2.0.
+    """
+    h, w = mono.shape[:2]
+    if not (r <= cx < w - r and r <= cy < h - r):
+        return False  # too close to edge, conservatively skip
+    # Eight cardinal/diagonal samples on the ring of radius r.
+    # 0, 45, 90, 135, 180, 225, 270, 315 degrees.
+    r2 = max(1, int(round(r * 0.7071)))
+    samples = np.array([
+        mono[cy, cx + r],
+        mono[cy - r2, cx + r2],
+        mono[cy - r, cx],
+        mono[cy - r2, cx - r2],
+        mono[cy, cx - r],
+        mono[cy + r2, cx - r2],
+        mono[cy + r, cx],
+        mono[cy + r2, cx + r2],
+    ], dtype=np.float32)
+    s_min = float(samples.min())
+    s_max = float(samples.max())
+    if s_min <= 0:
+        # Background-subtracted or negative values — treat as isotropic
+        # to err on the safe side (keep the star, don't blank it).
+        return True
+    ratio = s_max / s_min
+    return ratio <= threshold_ratio
+
+
 def _detect_star_mask(mono: np.ndarray, params: DetectionParams) -> np.ndarray:
     """Build a 0/255 uint8 mask of star pixels (dilated) so they can be
     excluded from the trail mask. Falls back to a plain sigma-threshold
     when photutils is not available.
+
+    v0.8.17+ adds an **isotropy filter**: every candidate peak is
+    checked against an 8-direction ring sample. Anisotropic peaks
+    (pearls along a flashing-satellite trail) are *rejected* from the
+    star mask, so the star-protection feature can finally be left ON
+    as the default without accidentally protecting trail pearls from
+    inpaint. Real stars (radially symmetric PSF) sail through cleanly.
     """
     h, w = mono.shape
     star_mask = np.zeros((h, w), dtype=np.uint8)
@@ -683,11 +832,26 @@ def _detect_star_mask(mono: np.ndarray, params: DetectionParams) -> np.ndarray:
             xs = np.asarray(peaks["x_peak"], dtype=np.int32)
             ys = np.asarray(peaks["y_peak"], dtype=np.int32)
             r = max(1, params.star_dilation)
+            n_iso = 0
+            n_aniso = 0
             for x, y in zip(xs, ys):
-                cv2.circle(star_mask, (int(x), int(y)), r, 255, thickness=-1)
+                # Isotropy gate: a real star's 8-direction ring is
+                # within ~2.5× max/min. A pearl on a trail axis is
+                # elongated → ratio explodes → skip this "star".
+                if _is_isotropic_peak(mono, int(x), int(y), r=max(3, r)):
+                    cv2.circle(star_mask, (int(x), int(y)), r, 255, thickness=-1)
+                    n_iso += 1
+                else:
+                    n_aniso += 1
+            log.debug(
+                "star detection: %d isotropic (kept), %d anisotropic "
+                "(rejected as pearls / trail features)", n_iso, n_aniso,
+            )
             return star_mask
 
-    # Fallback: simple sigma threshold + dilate
+    # Fallback: simple sigma threshold + dilate (no per-peak isotropy
+    # filtering possible without find_peaks; this path is less robust
+    # against pearl contamination).
     bright = (mono > threshold).astype(np.uint8) * 255
     if params.star_dilation > 0:
         k = cv2.getStructuringElement(
@@ -1009,13 +1173,46 @@ def analyse_trail_profile(
             "gives the smoothest physical fill. Combine with "
             "Match-sky-noise for realistic texture."
         )
-    if gradient_strength < 0.8 and pearl_count <= 2:
+    # Harmonic / Laplace is the best fill *mathematically*, but only on
+    # masks where the boundary conditions are reasonably homogeneous.
+    # For a long thin mask crossing a complex sky region (Milky Way
+    # texture, comet tail, faint nebulosity) Harmonic produces a
+    # visible smooth streak that doesn't match the surrounding noise
+    # texture even with sky-noise matching. Perpendicular Strip Median
+    # avoids this because it copies the LOCAL median per column —
+    # the fill blends naturally into whatever sky structure is there.
+    #
+    # Heuristic: recommend Harmonic only when the mask is also COMPACT
+    # enough that the boundary is largely uniform sky. Bumping the
+    # length threshold to 25 % of the diagonal (was implicit in the
+    # earlier short-mask branch's 8 % cap) covers more cases without
+    # tripping over long trails.
+    if (
+        gradient_strength < 0.8
+        and pearl_count <= 2
+        and length_frac < 0.25
+        and mask_area < 15000
+    ):
         return (
             "harmonic",
-            "Uniform sky, no pearl pattern detected. "
+            "Uniform sky, no pearl pattern, compact mask "
+            f"({mask_area:,} px, {length_frac * 100:.1f}% of diagonal) — "
             "Harmonic / Laplace + Match-sky-noise gives a smooth, "
             "physically motivated fill. Perpendicular Strip Median is a "
             "safe alternative."
+        )
+    # Long mask in a uniform sky → Perpendicular Strip Median is the
+    # right pick, not Harmonic. Per-column local median copies any
+    # background structure (Milky Way, faint nebula) naturally instead
+    # of averaging it into a visible streak.
+    if gradient_strength < 0.8 and pearl_count <= 2:
+        return (
+            "perp_strip",
+            f"Long mask ({mask_area:,} px, {length_frac * 100:.1f}% of "
+            "diagonal) through a uniform sky — Perpendicular Strip "
+            "Median copies the local sky per column and blends "
+            "naturally with any background texture. Harmonic would "
+            "produce a visibly-smoothed streak across the trail."
         )
     # Default fall-through
     return (
@@ -1023,6 +1220,332 @@ def analyse_trail_profile(
         "Mixed conditions detected — Perpendicular Strip Median is the "
         "robust default for typical satellite trails."
     )
+
+
+# ------------------------------------------------------------------------------
+# SENSOR BANDING DETECTOR
+# ------------------------------------------------------------------------------
+
+def detect_sensor_banding(
+    mono: np.ndarray, sky_med: float, sky_sigma: float,
+) -> dict:
+    """Detect column / row banding patterns that would dominate the MRT.
+
+    Uncalibrated DSLR RAW files (Canon CR2/CR3, Nikon NEF, etc.) routinely
+    show strong **column readout patterns** from the CMOS sensor: every
+    column has a slight intensity offset that survives debayering. The
+    Median Radon Transform sees those vertical patterns as the dominant
+    linear features in the image and produces hundreds of vertical-line
+    candidates that mask any real satellite trail.
+
+    The fix at the user's end is to **calibrate the RAW** (bias + dark
+    + flat subtraction in Siril's Preprocessing tab) before running the
+    cleaner. This function detects whether that prep step is missing
+    so we can surface a clear warning instead of letting the user fight
+    the slider.
+
+    Algorithm (v0.8.15+): compare the std of FIRST DIFFERENCES of the
+    column-median and row-median profiles against the expected std
+    from pure Gaussian noise. The np.diff() high-pass filter isolates
+    real per-column / per-row banding (hi-freq) from smooth
+    astronomical structures like comet tails, light-pollution
+    gradients, or extended nebulosity (lo-freq). Without this filter
+    the simple MAD on column-medians false-positives on every frame
+    with a comet, nebula, or vignetting.
+
+    Returns a dict:
+        has_banding: bool       — overall verdict
+        severity_v: float       — vertical (column) banding severity
+        severity_h: float       — horizontal (row) banding severity
+        verdict: str            — "clean", "moderate", "strong", "severe"
+        col_excess_adu: float   — measured ADU above expected noise
+        row_excess_adu: float   — same for rows
+    """
+    h, w = mono.shape[:2]
+    out = {
+        "has_banding": False,
+        "severity_v": 0.0,
+        "severity_h": 0.0,
+        "verdict": "clean",
+        "col_excess_adu": 0.0,
+        "row_excess_adu": 0.0,
+    }
+    if h < 100 or w < 100:
+        return out
+
+    # Fallback: compute our own sigma-clipped sky stats if the caller
+    # didn't supply them. The original sky_med/sky_sigma path in
+    # detect_trails() only runs when at least one trail was accepted —
+    # but the banding-detection has to work specifically on frames
+    # where NO trail was accepted, which is the exact case where the
+    # warning is most needed. Without this fallback the banner stays
+    # silent on the very frames it should fire on.
+    if sky_sigma <= 0:
+        # Subsample for speed when computing our own stats.
+        s_stride_y = max(1, h // 500)
+        s_stride_x = max(1, w // 500)
+        flat = mono[::s_stride_y, ::s_stride_x].astype(np.float32).ravel()
+        if flat.size < 100:
+            return out
+        # Iteratively sigma-clip — even on banded frames the underlying
+        # sky distribution is reasonably gaussian, the banding just
+        # shifts column/row medians by a few ADU. MAD is robust enough.
+        vals = flat
+        local_med = float(np.median(vals))
+        local_sig = 0.0
+        for _ in range(4):
+            m = float(np.median(vals))
+            s_ = float(np.median(np.abs(vals - m))) * 1.4826
+            local_med = m
+            if s_ > 0:
+                local_sig = s_
+            if s_ <= 0:
+                break
+            keep = np.abs(vals - m) < 3.0 * s_
+            if int(keep.sum()) == vals.size:
+                break
+            vals = vals[keep]
+        if local_sig <= 0:
+            return out
+        sky_med = local_med
+        sky_sigma = local_sig
+
+    # Subsample for speed on huge frames — banding has spatial scale of
+    # whole columns / rows, so a 4× row subsample doesn't hide it.
+    stride_y = max(1, h // 1500)
+    stride_x = max(1, w // 1500)
+    sub = mono[::stride_y, ::stride_x]
+    sh, sw = sub.shape
+
+    # Per-column and per-row medians of the subsampled image.
+    col_med = np.median(sub, axis=0)  # shape (sw,)
+    row_med = np.median(sub, axis=1)  # shape (sh,)
+
+    # High-pass filter via first-difference (v0.8.15): np.diff isolates
+    # the column-to-column variation independent of any smooth
+    # underlying trend. Smooth trends — vignetting, light-pollution
+    # gradient, a bright comet tail spanning many columns, M42 in the
+    # frame — all show up as low-frequency content in the column-median
+    # profile and cancel out under np.diff. Real CMOS readout banding
+    # is per-column random noise, which np.diff captures fully.
+    #
+    # Compare against the expected std of a difference between two
+    # IID column-medians: each column-median has std σ/sqrt(N), so
+    # the diff std is σ*sqrt(2/N). The severity ratio is then a
+    # clean "how much per-column random noise above pure shot noise"
+    # measurement, with smooth astronomical structures contributing
+    # essentially zero.
+    if col_med.size > 1:
+        col_diff = np.diff(col_med)
+        col_std = float(np.median(np.abs(col_diff)) * 1.4826)
+    else:
+        col_std = 0.0
+    if row_med.size > 1:
+        row_diff = np.diff(row_med)
+        row_std = float(np.median(np.abs(row_diff)) * 1.4826)
+    else:
+        row_std = 0.0
+
+    # Expected diff-std under pure Gaussian noise.
+    expected_col_std = sky_sigma * float(np.sqrt(2.0 / sh))
+    expected_row_std = sky_sigma * float(np.sqrt(2.0 / sw))
+    expected_col_std = max(expected_col_std, 1e-9)
+    expected_row_std = max(expected_row_std, 1e-9)
+
+    severity_v = col_std / expected_col_std
+    severity_h = row_std / expected_row_std
+
+    # Tiered verdict — empirical thresholds:
+    #   < 3   : clean enough, MRT will work fine
+    #   3–6   : moderate banding, MRT may struggle on faint trails
+    #   6–15  : strong banding, MRT will likely produce many false candidates
+    #   >15   : severe — almost certainly uncalibrated DSLR RAW
+    max_sev = max(severity_v, severity_h)
+    if max_sev < 3.0:
+        verdict = "clean"
+        has_banding = False
+    elif max_sev < 6.0:
+        verdict = "moderate"
+        has_banding = True
+    elif max_sev < 15.0:
+        verdict = "strong"
+        has_banding = True
+    else:
+        verdict = "severe"
+        has_banding = True
+
+    out["has_banding"] = has_banding
+    out["severity_v"] = severity_v
+    out["severity_h"] = severity_h
+    out["verdict"] = verdict
+    out["col_excess_adu"] = col_std - expected_col_std
+    out["row_excess_adu"] = row_std - expected_row_std
+    log.debug(
+        "banding check: v=%.2fx h=%.2fx (col_std=%.2f exp=%.3f, "
+        "row_std=%.2f exp=%.3f, sky_med=%.1f sky_sigma=%.2f) → %s",
+        severity_v, severity_h,
+        col_std, expected_col_std,
+        row_std, expected_row_std,
+        sky_med, sky_sigma, verdict,
+    )
+    return out
+
+
+# ------------------------------------------------------------------------------
+# WORKFLOW-SUITABILITY EVALUATOR (v0.8.19+)
+# ------------------------------------------------------------------------------
+
+def evaluate_workflow_suitability(
+    n_subs: int,
+    banding_info: dict | None,
+    sky_med: float,
+    sky_sigma: float,
+) -> dict:
+    """Decide whether this tool is the right choice for the current
+    folder + frame, based on three signals:
+
+      1. **Sub count**: with ≥8 well-distributed subs, Siril's σ-clip
+         stacking statistically rejects trails for free. The cleaner's
+         sweet spot is short sequences (3–7 subs) where σ-clip can't
+         reliably reject a 1-of-n outlier. Above ~50 subs (typical
+         smart-telescope or long-session output) the cleaner is
+         essentially always overkill.
+
+      2. **Per-sub SNR** = sky_med / sky_sigma. Low per-sub SNR (< 3)
+         means the frame is dominated by noise — cleaning a single
+         such frame contributes very little compared to stacking,
+         because the trail removal is swamped by the per-pixel noise
+         that the cleaner doesn't touch.
+
+      3. **Sensor banding severity**: real CMOS readout banding
+         dominates the MRT and the cleaner produces unreliable
+         results. If you also have many subs, "just stack" is the
+         clear answer because the banding averages out across frames.
+
+    Returns a dict::
+
+        {
+          "verdict":  "appropriate" | "borderline" | "stack_first" |
+                       "calibrate_first" | "wrong_tool",
+          "level":    "info" | "advice" | "warning" | "block",
+          "title":    short headline
+          "message":  full explanation (rich-text-safe plain string)
+          "snr_per_sub": float  # for downstream display
+        }
+
+    "block" never actually blocks (the tool always runs), but it tells
+    the UI to use the most prominent visual style (red border, etc.).
+    """
+    snr_per_sub = (sky_med / sky_sigma) if sky_sigma > 0 else 0.0
+    banding_sev = 0.0
+    if banding_info:
+        banding_sev = max(
+            float(banding_info.get("severity_v", 0.0)),
+            float(banding_info.get("severity_h", 0.0)),
+        )
+    has_banding = banding_sev >= 3.0
+
+    # --- Worst case first: many uncalibrated subs ---
+    # This is the SeeStar / Vespera / eVscope case. The user has
+    # plenty of subs AND each sub is uncalibrated (banding present).
+    # Stacking solves both problems in one pass; the cleaner solves
+    # neither well on a single uncalibrated sub.
+    if has_banding and n_subs >= 20:
+        return {
+            "verdict": "wrong_tool",
+            "level": "block",
+            "title": "This tool is the wrong choice for this folder",
+            "message": (
+                f"You have <b>{n_subs} uncalibrated subs</b> "
+                f"(banding severity {banding_sev:.1f}× expected noise, "
+                f"per-sub SNR ~{snr_per_sub:.1f}×). The right workflow "
+                "is to <b>stack the whole folder in Siril with σ-clip "
+                "rejection</b> — this removes both the sensor banding "
+                "AND any satellite trail in any single sub, "
+                "automatically, with much better results than per-sub "
+                "cleaning. This tool is built for the opposite case: "
+                "short sequences (3–7 subs) where σ-clip can't "
+                "statistically reject a trail outlier."
+            ),
+            "snr_per_sub": snr_per_sub,
+        }
+
+    # --- Banding alone, with few subs ---
+    if has_banding:
+        return {
+            "verdict": "calibrate_first",
+            "level": "warning",
+            "title": "Sensor banding — calibrate before cleaning",
+            "message": (
+                f"Sensor banding detected (severity {banding_sev:.1f}× "
+                f"expected noise) on a folder of {n_subs} sub(s). "
+                "Pre-calibrate with bias + dark in Siril's Preprocessing "
+                "step, then run the cleaner on the calibrated output. "
+                "Without calibration the detector finds the banding "
+                "patterns more easily than the actual satellite trail. "
+                "Click 'How to fix' for the calibration workflow."
+            ),
+            "snr_per_sub": snr_per_sub,
+        }
+
+    # --- Smart-telescope-scale sub count, no banding ---
+    if n_subs >= 100:
+        return {
+            "verdict": "stack_first",
+            "level": "warning",
+            "title": "Very high sub count — cleaner usually unnecessary",
+            "message": (
+                f"<b>{n_subs} subs</b> in this folder. Even if a "
+                "satellite trail is in a couple of subs, σ-clip "
+                "stacking treats it as a 2 % outlier and rejects it "
+                "cleanly. <b>Stack first</b>; only come back to this "
+                "tool if you can still see a residual streak in the "
+                "stacked output."
+            ),
+            "snr_per_sub": snr_per_sub,
+        }
+
+    if n_subs >= 30:
+        return {
+            "verdict": "stack_first",
+            "level": "advice",
+            "title": "Many subs — σ-clip stacking probably enough",
+            "message": (
+                f"{n_subs} subs. σ-clip stacking reliably rejects "
+                "trails when you have more than ~8 well-distributed "
+                "subs. <b>Try stacking first</b>; only use the cleaner "
+                "if the stacked output still shows a residual streak."
+            ),
+            "snr_per_sub": snr_per_sub,
+        }
+
+    if n_subs >= 12:
+        return {
+            "verdict": "borderline",
+            "level": "advice",
+            "title": "Moderate sub count — both approaches work",
+            "message": (
+                f"{n_subs} subs. σ-clip stacking should handle a trail "
+                "in 1–2 subs at this count. Use the cleaner if many "
+                "subs are trail-affected, or as a safety net before "
+                "stacking."
+            ),
+            "snr_per_sub": snr_per_sub,
+        }
+
+    # --- The sweet-spot regime: few subs, clean frame ---
+    return {
+        "verdict": "appropriate",
+        "level": "info",
+        "title": "Tool is appropriate for this folder",
+        "message": (
+            f"{n_subs} sub(s), per-sub SNR ~{snr_per_sub:.1f}×, no "
+            "significant banding. Short-sequence regime where σ-clip "
+            "stacking can't reliably reject a single-frame trail — "
+            "per-frame cleaning is the right approach."
+        ),
+        "snr_per_sub": snr_per_sub,
+    }
 
 
 def detect_trails(
@@ -1209,50 +1732,83 @@ def detect_trails(
 
     # ---- Pull accepted trails out of the source list ----
     accepted: list[tuple[int, int, int, int]] = []
+    rejected: list[tuple[int, int, int, int, str]] = []
     source_list = getattr(finder, "source_list", None)
     n_total = 0
     n_status_ok = 0
+
+    def _row_to_endpoints(row, *, extend: bool = True):
+        """Translate a TrailFinder source row into (x1, y1, x2, y2) in
+        full-resolution image coordinates. When ``extend=True`` (default,
+        for accepted trails) the endpoints are pushed to the image
+        boundary so the dilated mask covers the full sweep. For rejected
+        candidates we set ``extend=False`` so the visualisation shows
+        the *actual* MRT-detected segment length — extending a rejected
+        candidate to the full frame produces misleading edge-to-edge
+        lines when MRT really only saw a short feature."""
+        ep = _trailfinder_endpoints(row, ds_w, ds_h)
+        if ep is None:
+            return None
+        x1, y1, x2, y2 = ep
+        if ds > 1:
+            x1 *= ds; x2 *= ds; y1 *= ds; y2 *= ds
+        x1 = int(np.clip(x1, 0, w - 1))
+        x2 = int(np.clip(x2, 0, w - 1))
+        y1 = int(np.clip(y1, 0, h - 1))
+        y2 = int(np.clip(y2, 0, h - 1))
+        if extend:
+            x1, y1, x2, y2 = _extend_endpoints_to_boundary(x1, y1, x2, y2, w, h)
+        return (x1, y1, x2, y2)
+
     if source_list is not None:
         try:
             n_total = len(source_list)
         except Exception:
             n_total = 0
-        # TrailFinder marks accepted candidates with status == 2
-        # (1 = SNR filtered out, 0 = duplicates removed). Older versions
-        # may not have a status column -- in that case all rows are taken.
+        # TrailFinder marks accepted candidates with status == 2.
+        # Known TrailFinder status codes (acstools.findsat_mrt):
+        #   0 = duplicate (removed by deduplication step)
+        #   1 = SNR filter rejected
+        #   2 = accepted (passed all filters)
+        # Some acstools releases tack on more codes (persistence, width)
+        # which we map to "other" with the raw value preserved for debug.
+        # If the status column is missing we treat everything as accepted
+        # (legacy behaviour).
         for row in source_list:
-            keep = True
             try:
                 status = int(row["status"])
-                keep = (status == 2)
             except Exception:
-                keep = True
-            if not keep:
-                continue
-            n_status_ok += 1
-            # Endpoints come back in the *downsampled* image coords --
-            # _trailfinder_endpoints derives them from rho/theta against
-            # the array TrailFinder was actually given. Scale to full-res.
-            ep = _trailfinder_endpoints(row, ds_w, ds_h)
-            if ep is None:
-                continue
-            x1, y1, x2, y2 = ep
-            if ds > 1:
-                x1 *= ds
-                x2 *= ds
-                y1 *= ds
-                y2 *= ds
-            x1 = int(np.clip(x1, 0, w - 1))
-            x2 = int(np.clip(x2, 0, w - 1))
-            y1 = int(np.clip(y1, 0, h - 1))
-            y2 = int(np.clip(y2, 0, h - 1))
-            # Extend to image boundary so the dilated mask covers the
-            # full sweep of the trail, including the faint PSF-tail
-            # ends that TrailFinder truncates.
-            x1, y1, x2, y2 = _extend_endpoints_to_boundary(
-                x1, y1, x2, y2, w, h,
-            )
-            accepted.append((x1, y1, x2, y2))
+                status = 2  # no status column → assume accepted
+            if status == 2:
+                # ---- Accepted path ----
+                n_status_ok += 1
+                # Endpoints come back in the *downsampled* image coords --
+                # _trailfinder_endpoints derives them from rho/theta against
+                # the array TrailFinder was actually given. Scale to full-res.
+                ep_full = _row_to_endpoints(row)
+                if ep_full is None:
+                    continue
+                accepted.append(ep_full)
+            else:
+                # ---- Rejected path (v0.8.11): keep endpoints so the UI
+                # can render the candidate as a colour-coded overlay and
+                # let the user manually "rescue" it. Without this, the 89
+                # of 90 candidates that fail the persistence filter were
+                # silently discarded, leaving the user with no recourse
+                # when MRT clearly saw the trail but a filter killed it.
+                reason = {
+                    0: "duplicate",
+                    1: "snr",
+                }.get(status, "other")
+                # extend=False so the user sees the actual MRT segment
+                # length, not an edge-to-edge synthetic extension.
+                ep_full = _row_to_endpoints(row, extend=False)
+                if ep_full is None:
+                    # We still record it with synthetic endpoints (none)
+                    # so the count matches what the diagnostic message
+                    # promises. But drawing-wise we can't show it.
+                    continue
+                rejected.append((*ep_full, reason))
 
     # Diagnostic for the status bar
     if not accepted:
@@ -1407,6 +1963,42 @@ def detect_trails(
     # their own pass on 100k+ pixels. ~80 ms saved per Detect on 60 MP.
     result.sky_med = sky_med_out
     result.sky_sigma = sky_sigma_out
+    # Carry rejected MRT candidates so the UI can offer manual rescue.
+    result.rejected_candidates = rejected
+
+    # Sensor-banding diagnostic (v0.8.13). Runs always — even on frames
+    # where detection succeeded — because moderate banding can quietly
+    # corrupt the mask boundary too. The UI decides whether to show
+    # a warning based on the verdict.
+    try:
+        result.banding_info = detect_sensor_banding(
+            mono, sky_med_out, sky_sigma_out,
+        )
+        # Always surface the severity in the status notes so a user
+        # can verify the banding check actually ran, even when the
+        # verdict is "clean" and the banner stays hidden.
+        sv = result.banding_info.get("severity_v", 0.0)
+        sh = result.banding_info.get("severity_h", 0.0)
+        verdict = result.banding_info.get("verdict", "?")
+        notes_parts.append(
+            f"banding check: v={sv:.1f}× h={sh:.1f}× → {verdict}"
+        )
+        # Per-sub SNR (background proxy) — gives the user / a downstream
+        # workflow advisor a quick read on how clean each individual
+        # sub is. Cleaning a single very-noisy sub gains little over
+        # what σ-clip stacking would do for free, so this is the second
+        # signal (along with sub count) for the suitability evaluator.
+        if sky_sigma_out > 0:
+            snr_per_sub = sky_med_out / sky_sigma_out
+            notes_parts.append(
+                f"per-sub SNR≈{snr_per_sub:.1f}× "
+                f"(sky_med={sky_med_out:.1f}, sky_σ={sky_sigma_out:.2f})"
+            )
+        # Re-stamp notes onto the result (notes_parts was already
+        # joined into result.notes earlier; append here).
+        result.notes = "; ".join(notes_parts)
+    except Exception as exc:
+        log.debug("detect_sensor_banding failed: %s", exc, exc_info=True)
 
     # Inpaint-method recommendation: cheap (~10 ms even on 15 MP) so
     # it always runs when we have at least one accepted trail. Empty
@@ -2690,6 +3282,10 @@ class ImageCanvas(QWidget):
     """
 
     selection_toggled = pyqtSignal(int)  # emitted with index of toggled line
+    # v0.8.11: emitted with the index of a rejected candidate the user
+    # clicked. The main window then "promotes" that candidate into
+    # det.lines, rebuilds the mask, and refreshes the canvas.
+    rejected_promoted = pyqtSignal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2697,6 +3293,12 @@ class ImageCanvas(QWidget):
         self._image_size: tuple[int, int] = (0, 0)   # (W, H) of source array
         self._lines: list[tuple[int, int, int, int]] = []
         self._selections: list[bool] = []
+        # Rejected candidates: list of (x1, y1, x2, y2, reason) tuples.
+        # Drawn in reason-coded colours when self._show_rejected is True.
+        # Clickable when rendered — clicking emits rejected_promoted with
+        # the candidate's index.
+        self._rejected: list[tuple[int, int, int, int, str]] = []
+        self._show_rejected: bool = False
         self._needs_y_flip: bool = True
         self._last_paint: tuple[float, float, int, int, int, int] | None = None
         self.setMinimumSize(400, 300)
@@ -2724,9 +3326,23 @@ class ImageCanvas(QWidget):
         self._selections = list(selections)
         self.update()
 
+    def set_rejected(
+        self,
+        rejected: list[tuple[int, int, int, int, str]],
+        show: bool,
+    ) -> None:
+        """Push the list of rejected MRT candidates plus the visibility
+        flag. Drawing is gated on ``show`` so the canvas stays uncluttered
+        when the user hasn't asked for them. Each entry is
+        ``(x1, y1, x2, y2, reason)``."""
+        self._rejected = list(rejected)
+        self._show_rejected = bool(show)
+        self.update()
+
     def clear_lines(self) -> None:
         self._lines = []
         self._selections = []
+        self._rejected = []
         self.update()
 
     def set_placeholder(self, text: str) -> None:
@@ -2757,17 +3373,16 @@ class ImageCanvas(QWidget):
         p.drawImage(ox, oy, scaled)
 
         iw, ih = self._image_size
-        if iw > 0 and ih > 0 and self._lines and scaled.width() > 0 and scaled.height() > 0:
+        any_overlay = (
+            self._lines
+            or (self._show_rejected and self._rejected)
+        )
+        if iw > 0 and ih > 0 and any_overlay and scaled.width() > 0 and scaled.height() > 0:
             sx = scaled.width() / iw
             sy = scaled.height() / ih
             self._last_paint = (sx, sy, ox, oy, iw, ih)
 
-            # Adapt visual weight to line count: when there are many lines
-            # (a Newton/SCT spider with rich star field produces hundreds
-            # of false-positive spike segments), drawing them all in bold
-            # green completely obscures the underlying image. We thin the
-            # strokes and drop alpha so the photo remains readable through
-            # the overlay.
+            # Adapt visual weight to line count.
             n_lines = len(self._lines)
             if n_lines > 60:
                 sel_w, sel_a = 1, 180
@@ -2779,8 +3394,39 @@ class ImageCanvas(QWidget):
                 sel_w, sel_a = 2, 235
                 keep_w, keep_a = 1, 150
 
-            # Draw deselected first (so selected lines paint on top)
             p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+            # ---- Pass 1: rejected candidates (drawn first, so accepted
+            # lines paint on top of any overlapping rejects). Colour-code
+            # by reject reason so the user can see at a glance why each
+            # candidate was killed:
+            #   SNR-rejected   = bright red    (most common: too faint)
+            #   Duplicate      = orange        (already represented by a kept line)
+            #   Other / persistence / width = yellow
+            # Dashed pen marks them as "tentative" — visually distinct
+            # from the solid green/grey accepted lines.
+            if self._show_rejected and self._rejected:
+                rej_w = 1 if len(self._rejected) > 60 else 2
+                rej_a = 130 if len(self._rejected) > 60 else 180
+                for (x1, y1, x2, y2, reason) in self._rejected:
+                    if self._needs_y_flip:
+                        y1 = ih - 1 - y1
+                        y2 = ih - 1 - y2
+                    wx1 = ox + x1 * sx; wy1 = oy + y1 * sy
+                    wx2 = ox + x2 * sx; wy2 = oy + y2 * sy
+                    if reason == "snr":
+                        colour = QColor(255, 90, 90, rej_a)       # red
+                    elif reason == "duplicate":
+                        colour = QColor(255, 165, 0, rej_a)       # orange
+                    else:
+                        colour = QColor(255, 230, 60, rej_a)      # yellow
+                    pen = QPen(colour, rej_w)
+                    pen.setStyle(Qt.PenStyle.DashLine)
+                    p.setPen(pen)
+                    p.drawLine(int(wx1), int(wy1), int(wx2), int(wy2))
+
+            # ---- Pass 2: accepted lines (deselected first, then selected
+            # so green-for-remove paints on top of grey-for-keep).
             for sel_state in (False, True):
                 for line, sel in zip(self._lines, self._selections):
                     if sel != sel_state:
@@ -2807,7 +3453,10 @@ class ImageCanvas(QWidget):
     def mousePressEvent(self, ev) -> None:  # noqa: N802
         if ev.button() != Qt.MouseButton.LeftButton:
             return
-        if not self._lines or self._last_paint is None:
+        has_anything = bool(self._lines) or (
+            self._show_rejected and bool(self._rejected)
+        )
+        if not has_anything or self._last_paint is None:
             return
         sx, sy, ox, oy, iw, ih = self._last_paint
         if sx <= 0 or sy <= 0:
@@ -2823,18 +3472,35 @@ class ImageCanvas(QWidget):
         # Hit tolerance: 10 widget-px in image space (slightly generous so
         # picking a faint trail under a crowded overlay is forgiving).
         tol = 10.0 / max(sx, sy)
-        best_idx = -1
-        best_d = float("inf")
+
+        # Find the closest accepted line and closest rejected candidate.
+        # Accepted lines take precedence on ties — they're already in the
+        # mask, the user expects clicking them to toggle, not to be
+        # shadowed by an overlapping rejected line.
+        best_acc_idx = -1
+        best_acc_d = float("inf")
         for i, (x1, y1, x2, y2) in enumerate(self._lines):
             d = _point_to_segment_distance(img_x, img_y, x1, y1, x2, y2)
-            if d < best_d:
-                best_d = d
-                best_idx = i
-        if best_idx >= 0 and best_d <= tol:
-            # Toggle is owned by the main window (single source of truth).
-            # We only emit -- the window updates `selections` and pushes
-            # back via set_lines().
-            self.selection_toggled.emit(best_idx)
+            if d < best_acc_d:
+                best_acc_d = d
+                best_acc_idx = i
+
+        best_rej_idx = -1
+        best_rej_d = float("inf")
+        if self._show_rejected:
+            for i, (x1, y1, x2, y2, _reason) in enumerate(self._rejected):
+                d = _point_to_segment_distance(img_x, img_y, x1, y1, x2, y2)
+                if d < best_rej_d:
+                    best_rej_d = d
+                    best_rej_idx = i
+
+        # Decide which one to emit for:
+        #   - If an accepted line is within tolerance → toggle it
+        #   - Else if a rejected candidate is within tolerance → promote it
+        if best_acc_idx >= 0 and best_acc_d <= tol and best_acc_d <= best_rej_d:
+            self.selection_toggled.emit(best_acc_idx)
+        elif best_rej_idx >= 0 and best_rej_d <= tol:
+            self.rejected_promoted.emit(best_rej_idx)
 
 
 # ------------------------------------------------------------------------------
@@ -3106,9 +3772,37 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
 
-        # ---- Left panel ----
+        # ---- Left panel (scrollable, v0.8.21+) ----
+        # The left panel now lives inside a QScrollArea so its contents
+        # remain reachable even when the window is too short to show
+        # everything (especially with the Recommendation banner and
+        # Banding banner both expanded, plus four bottom buttons).
+        #
+        # Layout structure:
+        #   left_scroll  = QScrollArea (fixed width, scrolls vertically)
+        #     └─ left   = QWidget  (the actual container)
+        #          └─ left_layout = QVBoxLayout (the visible content)
+        #
+        # The scroll area itself is what gets added to `root`. Vertical
+        # scrollbar appears automatically when the content is taller
+        # than the viewport; horizontal stays off (panel is fixed width).
+        left_scroll = QScrollArea()
+        left_scroll.setObjectName("LeftScroll")
+        left_scroll.setFixedWidth(LEFT_PANEL_WIDTH)
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # Match the rest of the dark theme; QScrollArea's default light
+        # viewport background looks broken on dark UI.
+        left_scroll.setStyleSheet(
+            "QScrollArea#LeftScroll { background:transparent; border:0; }"
+        )
+
         left = QWidget()
-        left.setFixedWidth(LEFT_PANEL_WIDTH)
+        # Inner widget no longer needs a fixed width — the scroll area
+        # enforces it via setFixedWidth above. The inner widget can grow
+        # vertically as much as it wants; the scroll area scrolls.
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(6, 6, 6, 6)
         left_layout.setSpacing(8)
@@ -3242,6 +3936,26 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         )
         f_det.addRow("RGB reduce:", self.cmb_mono_mode)
 
+        # Show rejected MRT candidates (v0.8.11+) — colour-coded overlays
+        # for every line that came back from TrailFinder but failed the
+        # post-MRT filters. Click any rejected line to manually promote
+        # it. Default off so the canvas isn't cluttered for the common
+        # case where the accepted detection is correct.
+        self.cb_show_rejected = QCheckBox("Show rejected candidates (clickable)")
+        self.cb_show_rejected.setChecked(self.params.show_rejected)
+        self.cb_show_rejected.setToolTip(
+            "Render every MRT candidate that the post-detection filters "
+            "killed, colour-coded by reject reason:\n"
+            "  • Red = rejected by SNR filter (too faint)\n"
+            "  • Orange = rejected as duplicate of another line\n"
+            "  • Yellow = rejected by width / persistence / other filter\n"
+            "Click any rejected line on the canvas to PROMOTE it — it "
+            "becomes an accepted detection, joins the mask, and gets "
+            "inpainted. Useful when MRT clearly saw the trail but a "
+            "filter wrongly killed it (typical faint-satellite case)."
+        )
+        f_det.addRow(self.cb_show_rejected)
+
         left_layout.addWidget(grp_det)
 
         # Star protection
@@ -3250,6 +3964,16 @@ class SatelliteTrailCleanerWindow(QMainWindow):
 
         self.cb_protect = QCheckBox("Protect detected stars")
         self.cb_protect.setChecked(self.params.protect_stars)
+        self.cb_protect.setToolTip(
+            "Detect stars in the trail's vicinity and exclude them "
+            "from the inpaint mask, so real stars under the trail "
+            "survive the cleanup.\n\n"
+            "An isotropy filter (since v0.8.17) checks each candidate "
+            "peak in 8 directions — radially symmetric peaks (real "
+            "stars) are kept, elongated peaks (pearls on a flashing-"
+            "satellite trail) are rejected so they don't shield the "
+            "trail itself from being inpainted."
+        )
         f_star.addRow(self.cb_protect)
 
         self.sp_star_sigma = QDoubleSpinBox()
@@ -3364,38 +4088,59 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         self.lbl_apply_stats.setStyleSheet("color:#999; font-size:9pt;")
         v_apply.addWidget(self.lbl_apply_stats)
 
+        # Apply buttons side-by-side (v0.8.20): Apply to Current on
+        # the left, Apply to All Frames on the right. The previous Skip
+        # button has been removed — frame navigation is fully handled
+        # by the arrow buttons / slider below the canvas, so a separate
+        # Skip in the Apply group was just visual clutter.
         h_apply = QHBoxLayout()
         self.btn_apply_current = QPushButton("✓ Apply to Current")
         self.btn_apply_current.setObjectName("ApplyButton")
         h_apply.addWidget(self.btn_apply_current)
-        self.btn_skip_current = QPushButton("Skip")
-        self.btn_skip_current.setObjectName("SkipButton")
-        h_apply.addWidget(self.btn_skip_current)
-        v_apply.addLayout(h_apply)
-
         self.btn_apply_all = QPushButton("⏩ Apply to All Frames")
         self.btn_apply_all.setObjectName("ApplyAllButton")
-        v_apply.addWidget(self.btn_apply_all)
+        h_apply.addWidget(self.btn_apply_all)
+        v_apply.addLayout(h_apply)
 
         left_layout.addWidget(grp_apply)
 
         left_layout.addStretch(1)
 
-        # Buy me a Coffee / Help / Close
+        # Bottom action stack: Coffee → Help → Select new Folder → Close
+        # The Select-new-folder button sits directly above Close
+        # because it's a navigation action (similar to "open new file"
+        # in other apps) — putting it next to Close keeps the workflow
+        # action paired with the session-end action.
         self.btn_coffee = QPushButton("☕  Buy me a Coffee")
         _nofocus(self.btn_coffee)
         self.btn_coffee.setObjectName("CoffeeButton")
         self.btn_coffee.setToolTip("Support the development of this tool")
+
         self.btn_help = QPushButton("Help")
         _nofocus(self.btn_help)
+
+        self.btn_select_folder = QPushButton("📁  Select new Folder")
+        _nofocus(self.btn_select_folder)
+        self.btn_select_folder.setObjectName("SelectFolderButton")
+        self.btn_select_folder.setToolTip(
+            "Pick a different folder of subs without quitting the "
+            "script. Useful for processing multiple sessions in one "
+            "run."
+        )
+
         self.btn_close = QPushButton("Close")
         _nofocus(self.btn_close)
         self.btn_close.setObjectName("CloseButton")
+
         left_layout.addWidget(self.btn_coffee)
         left_layout.addWidget(self.btn_help)
+        left_layout.addWidget(self.btn_select_folder)
         left_layout.addWidget(self.btn_close)
 
-        root.addWidget(left)
+        # Mount the inner container into the scroll area and add the
+        # scroll area to the root layout (not the bare `left` widget).
+        left_scroll.setWidget(left)
+        root.addWidget(left_scroll)
 
         # ---- Right side ----
         right = QWidget()
@@ -3460,6 +4205,45 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         r_layout.addWidget(self.progress_bar)
 
+        # Sensor-banding warning banner (v0.8.13+). Hidden by default;
+        # shown when detect_trails() reports strong column/row banding.
+        # The container is added to the layout now but visibility is
+        # toggled based on detection.banding_info — so it doesn't
+        # permanently steal vertical space from the canvas.
+        self.banding_banner = QWidget()
+        self.banding_banner.setObjectName("BandingBanner")
+        self.banding_banner.setStyleSheet(
+            "#BandingBanner { background:#3a2a1a; "
+            "border:1px solid #cc8844; border-radius:6px; }"
+        )
+        _bb_layout = QHBoxLayout(self.banding_banner)
+        _bb_layout.setContentsMargins(10, 6, 10, 6)
+        _bb_layout.setSpacing(8)
+        self.lbl_banding = QLabel("")
+        self.lbl_banding.setWordWrap(True)
+        self.lbl_banding.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_banding.setStyleSheet(
+            "color:#ffd28a; font-size:11pt; background:transparent; border:0;"
+        )
+        _bb_layout.addWidget(self.lbl_banding, stretch=1)
+        self.btn_banding_help = QPushButton("How to fix")
+        self.btn_banding_help.setMaximumWidth(110)
+        self.btn_banding_help.setToolTip(
+            "Open the workflow guide for calibrating RAW files before "
+            "running the satellite trail cleaner."
+        )
+        _bb_layout.addWidget(
+            self.btn_banding_help, alignment=Qt.AlignmentFlag.AlignTop,
+        )
+        self.btn_banding_dismiss = QPushButton("✕")
+        self.btn_banding_dismiss.setMaximumWidth(28)
+        self.btn_banding_dismiss.setToolTip("Hide for this session")
+        _bb_layout.addWidget(
+            self.btn_banding_dismiss, alignment=Qt.AlignmentFlag.AlignTop,
+        )
+        self.banding_banner.setVisible(False)
+        r_layout.addWidget(self.banding_banner)
+
         # Line-selection toolbar (visible after detection)
         sel_bar = QHBoxLayout()
         self.lbl_selection = QLabel("")
@@ -3517,6 +4301,12 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         self.sp_processes.valueChanged.connect(self._on_params_changed)
         self.sp_dilate.valueChanged.connect(self._on_params_changed)
         self.cmb_mono_mode.currentIndexChanged.connect(self._on_params_changed)
+        # Show-rejected toggle: doesn't change the detection itself,
+        # only the canvas rendering. Push to params, then refresh canvas.
+        def _on_show_rejected_toggled():
+            self._read_params_from_widgets()
+            self._refresh_canvas()
+        self.cb_show_rejected.toggled.connect(_on_show_rejected_toggled)
         self.cb_protect.toggled.connect(self._on_params_changed)
         self.sp_star_sigma.valueChanged.connect(self._on_params_changed)
         self.sp_star_dil.valueChanged.connect(self._on_params_changed)
@@ -3531,8 +4321,8 @@ class SatelliteTrailCleanerWindow(QMainWindow):
 
         self.btn_detect.clicked.connect(self._on_detect_current)
         self.btn_apply_current.clicked.connect(self._on_apply_current)
-        self.btn_skip_current.clicked.connect(self._on_skip_current)
         self.btn_apply_all.clicked.connect(self._on_apply_all)
+        self.btn_select_folder.clicked.connect(self._on_select_new_folder)
         self.btn_help.clicked.connect(self._show_help_dialog)
         self.btn_coffee.clicked.connect(self._show_coffee_dialog)
         self.btn_close.clicked.connect(self.close)
@@ -3563,6 +4353,11 @@ class SatelliteTrailCleanerWindow(QMainWindow):
 
         # Line-selection toolbar
         self.canvas.selection_toggled.connect(self._on_line_toggled)
+        self.canvas.rejected_promoted.connect(self._on_rejected_promoted)
+        self.btn_banding_help.clicked.connect(self._show_banding_help_dialog)
+        self.btn_banding_dismiss.clicked.connect(
+            lambda: self.banding_banner.setVisible(False)
+        )
         self.btn_select_all.clicked.connect(self._on_select_all)
         self.btn_select_none.clicked.connect(self._on_select_none)
         self.btn_select_invert.clicked.connect(self._on_select_invert)
@@ -3599,6 +4394,10 @@ class SatelliteTrailCleanerWindow(QMainWindow):
             )
             if stored_mono_mode in ("mean", "max"):
                 self.params.mono_mode = stored_mono_mode
+            self.params.show_rejected = (
+                str(s_.value("show_rejected", self.params.show_rejected)).lower()
+                in ("1", "true")
+            )
             self.params.dilation_radius = int(s_.value("dilation_radius", self.params.dilation_radius))
             self.params.protect_stars = (
                 str(s_.value("protect_stars", self.params.protect_stars)).lower() in ("1", "true")
@@ -3650,6 +4449,9 @@ class SatelliteTrailCleanerWindow(QMainWindow):
             self.cmb_mono_mode.blockSignals(True)
             self.cmb_mono_mode.setCurrentIndex(idx_mm)
             self.cmb_mono_mode.blockSignals(False)
+        self.cb_show_rejected.blockSignals(True)
+        self.cb_show_rejected.setChecked(self.params.show_rejected)
+        self.cb_show_rejected.blockSignals(False)
         self.cb_protect.setChecked(self.params.protect_stars)
         self.sp_star_sigma.setValue(self.params.star_sigma)
         self.sp_star_dil.setValue(self.params.star_dilation)
@@ -3686,6 +4488,7 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         s_.setValue("theta_step_deg", self.params.theta_step_deg)
         s_.setValue("dilation_radius", self.params.dilation_radius)
         s_.setValue("mono_mode", self.params.mono_mode)
+        s_.setValue("show_rejected", self.params.show_rejected)
         s_.setValue("protect_stars", self.params.protect_stars)
         s_.setValue("star_sigma", self.params.star_sigma)
         s_.setValue("star_dilation", self.params.star_dilation)
@@ -3694,6 +4497,114 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         s_.setValue("match_sky_noise", self.params.match_sky_noise)
         s_.setValue("view_mode", self.view_mode)
         s_.setValue("confirm_each", self.cb_confirm_each.isChecked())
+
+    def _reset_params_to_defaults(self) -> None:
+        """Restore every tuning parameter (Detection, Star Protection,
+        Inpaint, RGB-reduce, scan mode) to the constructor defaults of
+        ``DetectionParams``. Pushes the fresh values into every widget,
+        persists them via QSettings, and refreshes the canvas if a
+        live preview is active.
+
+        Not touched: folder selection, dismissed-dialog flags, audit
+        history, MRT cache. Those are session / cross-session state
+        that lives independently of tuning sliders.
+        """
+        # Replace params with a fresh instance — single source of truth
+        # for every default. If we ever add a new field to
+        # DetectionParams we get the new default for free here without
+        # having to maintain a parallel list.
+        self.params = DetectionParams()
+
+        # Block signals while we push values into widgets so the
+        # cascade of valueChanged / toggled signals doesn't trigger
+        # auto-detect or repaint storms.
+        widgets_to_block = [
+            self.sp_snr, self.sp_min_len, self.sp_max_w,
+            self.cb_persistence, self.sp_persist_frac,
+            self.sp_persist_chunk, self.sp_processes,
+            self.cmb_scan, self.sp_dilate, self.cmb_mono_mode,
+            self.cb_show_rejected, self.cb_protect,
+            self.sp_star_sigma, self.sp_star_dil,
+            self.cmb_method, self.sp_strip, self.cb_match_noise,
+            self.cmb_view, self.cb_confirm_each,
+        ]
+        for w in widgets_to_block:
+            try:
+                w.blockSignals(True)
+            except Exception:
+                pass
+        try:
+            # Push defaults into every widget. Combo boxes need
+            # findData() since their stored value is a string key.
+            self.sp_snr.setValue(self.params.snr_threshold)
+            self.sp_min_len.setValue(self.params.min_length)
+            self.sp_max_w.setValue(self.params.max_width)
+            self.cb_persistence.setChecked(self.params.check_persistence)
+            self.sp_persist_frac.setValue(self.params.min_persistence)
+            self.sp_persist_chunk.setValue(self.params.persistence_chunk)
+            self.sp_processes.setValue(self.params.processes)
+            idx = self.cmb_scan.findData(self.params.scan_mode)
+            if idx >= 0:
+                self.cmb_scan.setCurrentIndex(idx)
+            self.sp_dilate.setValue(self.params.dilation_radius)
+            idx = self.cmb_mono_mode.findData(self.params.mono_mode)
+            if idx >= 0:
+                self.cmb_mono_mode.setCurrentIndex(idx)
+            self.cb_show_rejected.setChecked(self.params.show_rejected)
+            self.cb_protect.setChecked(self.params.protect_stars)
+            self.sp_star_sigma.setValue(self.params.star_sigma)
+            self.sp_star_dil.setValue(self.params.star_dilation)
+            idx = self.cmb_method.findData(self.params.inpaint_method)
+            if idx >= 0:
+                self.cmb_method.setCurrentIndex(idx)
+            self.sp_strip.setValue(self.params.strip_width)
+            self.cb_match_noise.setChecked(self.params.match_sky_noise)
+            # Default view mode + confirm-each: also reset these for a
+            # truly clean baseline.
+            self.view_mode = "stretched"
+            idx = self.cmb_view.findData(self.view_mode)
+            if idx >= 0:
+                self.cmb_view.setCurrentIndex(idx)
+            self.cb_confirm_each.setChecked(False)
+        finally:
+            for w in widgets_to_block:
+                try:
+                    w.blockSignals(False)
+                except Exception:
+                    pass
+
+        # Make sure enabled-states / dependent widgets reflect the
+        # reset values (e.g. Strip width is only enabled for the
+        # perpendicular-strip method, Persistence sub-fields only
+        # when the persistence-check is on).
+        try:
+            self._update_persistence_enabled()
+        except Exception:
+            pass
+        try:
+            self._update_strip_enabled()
+        except Exception:
+            pass
+        # Persist the reset values immediately so the next start
+        # sees the defaults too — otherwise QSettings keeps the old
+        # values and a restart would silently re-load them.
+        self._save_settings()
+        # Refresh the canvas + recommendation banner so the user sees
+        # the effect of the reset live (especially the inpaint-method
+        # change becomes visible in Cleaned Preview).
+        try:
+            self._update_inpaint_recommendation()
+        except Exception:
+            pass
+        try:
+            self._update_banding_banner()
+        except Exception:
+            pass
+        self._refresh_canvas()
+        self._set_status_text(
+            "Parameters reset to defaults. Run 'Detect Trails on "
+            "Current' to apply the fresh settings."
+        )
 
     def closeEvent(self, ev) -> None:  # noqa: N802
         self._save_settings()
@@ -3740,6 +4651,7 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         self.params.processes = int(self.sp_processes.value())
         self.params.dilation_radius = int(self.sp_dilate.value())
         self.params.mono_mode = str(self.cmb_mono_mode.currentData())
+        self.params.show_rejected = self.cb_show_rejected.isChecked()
         self.params.protect_stars = self.cb_protect.isChecked()
         self.params.star_sigma = float(self.sp_star_sigma.value())
         self.params.star_dilation = int(self.sp_star_dil.value())
@@ -4175,7 +5087,25 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         det = result.detection
         if det is None or not det.has_trails:
             note = f"  —  {det.notes}" if (det is not None and det.notes) else ""
-            self._set_status_text(f"No trails detected.{note}")
+            # Mention rejected candidates so the user knows there's a
+            # rescue option. This is the killer case for the feature:
+            # MRT saw 90 candidates but every single one failed the
+            # filters → "No trails detected" looks like a dead end,
+            # unless we hint that rescue is possible.
+            n_rej = (
+                len(getattr(det, "rejected_candidates", []) or [])
+                if det is not None else 0
+            )
+            if n_rej > 0:
+                self._set_status_text(
+                    f"No trails accepted, but {n_rej} candidate(s) "
+                    "were rejected by the filters. Toggle 'Show "
+                    "rejected candidates' on the left to inspect and "
+                    "click any to rescue manually."
+                    f"{note}"
+                )
+            else:
+                self._set_status_text(f"No trails detected.{note}")
         else:
             # Many-candidate safety net: with the segmentation pipeline the
             # typical false-positive rate is very low (the elongation +
@@ -4183,23 +5113,295 @@ class SatelliteTrailCleanerWindow(QMainWindow):
             # thresholds yield a flood of candidates, default to "keep all"
             # so the user can click only the ones they want to remove
             # instead of having to deselect dozens.
+            n_rej = len(getattr(det, "rejected_candidates", []) or [])
+            rej_suffix = (
+                f"  +  {n_rej} rejected (toggle 'Show rejected' to display)"
+                if n_rej > 0 else ""
+            )
             if len(det.lines) > 10:
                 det.selections = [False] * len(det.lines)
                 det.rebuild_effective_mask(self._snapshot_params())
                 hint = (
-                    f"{len(det.lines)} candidate(s) detected. All set to "
-                    "KEEP — click each line you want to remove. Tighten "
-                    "elongation / straightness sliders to filter more "
-                    "aggressively."
+                    f"{len(det.lines)} candidate(s) detected{rej_suffix}. "
+                    "All set to KEEP — click each line you want to "
+                    "remove. Tighten elongation / straightness sliders "
+                    "to filter more aggressively."
                 )
                 self._set_status_text(hint)
             else:
                 note = f"  —  {det.notes}" if det.notes else ""
-                self._set_status_text(f"{len(det.lines)} trail(s) detected.{note}")
+                self._set_status_text(
+                    f"{len(det.lines)} trail(s) detected{rej_suffix}.{note}"
+                )
 
         self._update_selection_label()
         self._update_inpaint_recommendation()
+        self._update_banding_banner()
         self._refresh_canvas()
+
+    def _update_banding_banner(self) -> None:
+        """Show / hide the workflow-advisory banner based on the last
+        detection. v0.8.19+: the banner is now driven by
+        ``evaluate_workflow_suitability()`` which combines sub-count,
+        per-sub SNR, and banding severity into a single verdict and
+        message. Five possible states:
+
+          - "appropriate"      → hide banner; tool is right for this folder
+          - "borderline"       → soft yellow advice
+          - "stack_first"      → yellow / orange "many subs" advice
+          - "calibrate_first"  → orange banding-only warning
+          - "wrong_tool"       → red "this is not the right tool" header
+
+        The banner stays informational — Apply still works. The visual
+        weight just scales with how strongly we think the user should
+        do something different.
+        """
+        det = self.last_detection.detection if self.last_detection else None
+        if det is None:
+            self.banding_banner.setVisible(False)
+            return
+
+        n_subs = len(self.paths) if self.paths else 1
+        info = getattr(det, "banding_info", None)
+        sky_med = float(getattr(det, "sky_med", 0.0) or 0.0)
+        sky_sigma = float(getattr(det, "sky_sigma", 0.0) or 0.0)
+
+        try:
+            verdict = evaluate_workflow_suitability(
+                n_subs, info, sky_med, sky_sigma,
+            )
+        except Exception as exc:
+            log.debug("workflow eval failed: %s", exc, exc_info=True)
+            self.banding_banner.setVisible(False)
+            return
+
+        if verdict["verdict"] == "appropriate":
+            self.banding_banner.setVisible(False)
+            return
+
+        # Map verdict level to banner colours.
+        level = verdict["level"]
+        bg, border, text_colour, icon = {
+            "info":    ("#1a2a1a", "#446644", "#aaddaa", "ℹ️"),
+            "advice":  ("#2a2a1a", "#776633", "#ddddaa", "💡"),
+            "warning": ("#3a2a1a", "#cc8844", "#ffd28a", "⚠️"),
+            "block":   ("#3a1a1a", "#cc3333", "#ff9999", "⛔"),
+        }.get(level, ("#3a2a1a", "#cc8844", "#ffd28a", "⚠️"))
+
+        self.banding_banner.setStyleSheet(
+            f"#BandingBanner {{ background:{bg}; "
+            f"border:1px solid {border}; border-radius:6px; }}"
+        )
+        self.lbl_banding.setStyleSheet(
+            f"color:{text_colour}; font-size:11pt; "
+            "background:transparent; border:0;"
+        )
+
+        snr_str = (
+            f" • per-sub SNR ≈{verdict['snr_per_sub']:.1f}×"
+            if verdict["snr_per_sub"] > 0 else ""
+        )
+        self.lbl_banding.setText(
+            f"{icon} <b>{verdict['title']}</b>"
+            f" <span style='color:#888; font-size:9pt;'>"
+            f"({n_subs} subs{snr_str})</span>"
+            f"<br>{verdict['message']}"
+        )
+        self.banding_banner.setVisible(True)
+
+    def _show_banding_help_dialog(self) -> None:
+        """Modal explainer for the sensor-banding situation.
+
+        Three audiences this dialog speaks to:
+          1. DSLR / mirrorless RAW shooters who skipped calibration
+          2. Smart-telescope users (SeeStar, Vespera, eVscope) whose
+             individual subs are uncalibrated by design — usually they
+             should be stacking, not single-frame cleaning
+          3. CMOS astro-camera users (ZWO, QHY) who exported subs
+             without bias / dark subtraction
+        The text explicitly says when this tool is the wrong choice
+        and points to the right Siril workflow for each case.
+        """
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Sensor banding — when this tool helps and when it doesn't")
+        dlg.setMinimumSize(760, 640)
+        dlg.setStyleSheet(DARK_STYLESHEET)
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(16, 14, 16, 12)
+        layout.setSpacing(10)
+
+        head = QLabel(
+            "<span style='font-size:17pt; color:#88aaff;'>"
+            "<b>Sensor banding detected</b></span>"
+            "<br><span style='color:#aab; font-size:11pt;'>"
+            "Affects DSLR RAW, single-sub astro-camera FITS, "
+            "smart-telescope subs (SeeStar / Vespera / eVscope), "
+            "and any other uncalibrated CMOS exposure</span>"
+        )
+        head.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(head)
+
+        body = QTextBrowser()
+        body.setOpenExternalLinks(True)
+        body.setStyleSheet(
+            "font-size: 13pt; color: #e0e0e0; background: #1e1e1e;"
+            " font-family: 'Helvetica Neue', Helvetica, Arial; padding: 14px;"
+            " border: 1px solid #3a3a3a; border-radius: 6px;"
+        )
+        body.setHtml(
+            "<div style='line-height:1.55;'>"
+            "<p>Your current frame shows <b>strong column or row "
+            "patterns</b> on top of the sky background. These are a "
+            "fingerprint of <b>any uncalibrated single CMOS exposure</b> "
+            "— every readout column has a slight intensity offset that "
+            "survives debayering, plus per-pixel dark current that's "
+            "visible at exposures of more than a few seconds. The "
+            "result is a faint but mathematically very <i>linear</i> "
+            "texture across the whole frame.</p>"
+
+            "<p><b style='color:#ffcc66;'>This warning is NOT specific "
+            "to DSLR RAW.</b> It fires equally on:</p>"
+            "<ul style='margin-top:4px;'>"
+            "<li><b>Single FITS subs</b> from astronomical CMOS cameras "
+            "(ZWO ASI, QHY, Player One, Atik, ToupTek) when no bias / "
+            "dark subtraction has been applied yet</li>"
+            "<li><b>Smart-telescope subs</b> from SeeStar S30/S50, "
+            "Vespera, eVscope, Stellina — these save raw 10–60 s "
+            "exposures as uncalibrated FITS. Their app does internal "
+            "stacking that removes the pattern, but the individual "
+            "subs the app writes to your folder still show it</b></li>"
+            "<li><b>DSLR / mirrorless RAW</b> (CR2 / CR3 / NEF / ARW / "
+            "DNG) without bias / dark calibration</li>"
+            "<li><b>XISF / FITS</b> from PixInsight / NINA / APT when "
+            "exported pre-calibration</li>"
+            "</ul>"
+
+            "<p><b>Why this breaks the trail cleaner:</b> "
+            "<code>findsat_mrt</code> searches for the strongest "
+            "<i>linear features</i> in the image. The banding patterns "
+            "are stronger than your satellite trail, so the detector's "
+            "candidate list fills up with hundreds of vertical / "
+            "horizontal banding lines before the real trail makes it "
+            "in. You see this as 'No trails accepted' even though "
+            "MRT found dozens of candidates.</p>"
+
+            "<hr style='border:0; border-top:1px solid #444; margin:14px 0;'>"
+
+            "<p><b style='color:#88aaff; font-size:14pt;'>"
+            "When this tool is the wrong choice (and what to do "
+            "instead)</b></p>"
+
+            "<p><b>If you have many subs (50+):</b> you probably "
+            "<b>don't need this tool at all</b>. Siril's σ-clip "
+            "stacking does two things for free at the same time:</p>"
+            "<ol style='margin-top:4px;'>"
+            "<li>It <b>averages out the banding</b> — sensor patterns "
+            "are slightly different in every frame (thermal drift, "
+            "amplifier state), so the average across 50 + frames "
+            "cancels them out</li>"
+            "<li>It <b>rejects satellite trails statistically</b> — a "
+            "trail in 1 of 50 frames is a 2 % minority sample, σ-clip "
+            "rejects it as a 3 σ + outlier per affected pixel</li>"
+            "</ol>"
+
+            "<p>Typical smart-telescope workflow (SeeStar, Vespera, "
+            "eVscope, …) for a single-night session:</p>"
+            "<ol style='margin-top:4px;'>"
+            "<li>Open Siril, drop the folder of subs in</li>"
+            "<li><b>Conversion</b> tab → Convert to a Siril sequence</li>"
+            "<li><b>Registration</b> → Global star alignment</li>"
+            "<li><b>Stacking</b> → Average + Sigma Clipping rejection "
+            "(default 3 σ low / 3 σ high)</li>"
+            "<li>Save the result. <b>Satellite trails AND banding are "
+            "both gone</b> from the stacked output.</li>"
+            "</ol>"
+
+            "<p>The cleaner is built for the <b>opposite case</b>: "
+            "very short sequences (3 – 8 subs), single-night campaigns, "
+            "per-filter LRGB stacks where σ-clip has too few samples "
+            "to reject the trail reliably. <b>If your folder has 20 + "
+            "subs, the cleaner is overkill and the banding warning is "
+            "the right answer.</b></p>"
+
+            "<hr style='border:0; border-top:1px solid #444; margin:14px 0;'>"
+
+            "<p><b style='color:#88ff88;'>✓ If you DO want to clean a "
+            "single sub — calibrate it in Siril first:</b></p>"
+            "<ol style='margin-top:4px;'>"
+            "<li>Acquire / load a set of <b>bias frames</b> (shortest "
+            "possible exposure with the lens / aperture capped, same "
+            "ISO / gain). 30 – 50 frames is enough.</li>"
+            "<li>Acquire / load a set of <b>dark frames</b> (same "
+            "exposure as your lights, lens cap on, similar "
+            "temperature). 10 – 30 frames.</li>"
+            "<li>Optionally <b>flat frames</b> (uniform-light "
+            "exposures with the same optical train).</li>"
+            "<li>In Siril: <b>Image processing → Preprocessing</b>. "
+            "Build master bias, master dark, master flat from the "
+            "respective sequences.</li>"
+            "<li>Run <b>Preprocessing</b> on your light frames with "
+            "the masters checked. Output is calibrated FITS / XISF "
+            "with the banding subtracted.</li>"
+            "<li>Run the <b>Satellite Trail Cleaner</b> on the "
+            "calibrated frames. The banding is gone, MRT can now "
+            "find the real trail.</li>"
+            "</ol>"
+
+            "<p style='color:#aab; font-size:11pt;'>Smart-telescope "
+            "users: most apps don't expose bias / dark capture in their "
+            "GUI, but you can take dark frames manually by covering "
+            "the optical aperture with a piece of dark cloth and "
+            "running a normal 'imaging' session. The app will store the "
+            "darks as FITS in the same folder, ready for Siril.</p>"
+
+            "<hr style='border:0; border-top:1px solid #444; margin:14px 0;'>"
+
+            "<p><b style='color:#ffcc66;'>If you don't have calibration "
+            "frames AND can't re-stack:</b></p>"
+            "<ul>"
+            "<li><b>Run anyway</b>, but expect mediocre results. The "
+            "cleaner may detect the banding instead of the trail, "
+            "leaving the trail in the output. The <b>Show rejected "
+            "candidates</b> toggle lets you click rejected lines to "
+            "rescue them manually — sometimes the real trail is in "
+            "the rejected list, just outranked by banding.</li>"
+            "<li><b>Wait for the manual-draw feature</b> (on the "
+            "roadmap). Two clicks on the canvas → trail added → mask "
+            "+ inpaint runs as if MRT found it. Coming in a future "
+            "release.</li>"
+            "<li><b>Reject the affected frame</b> from your stack. "
+            "If you have 10 + subs total, losing one to keep the "
+            "rest clean is often the pragmatic choice — Siril's "
+            "<b>Blink Comparator</b> script (also in this repo) makes "
+            "rejecting individual subs a one-click operation.</li>"
+            "</ul>"
+
+            "<hr style='border:0; border-top:1px solid #444; margin:14px 0;'>"
+
+            "<p><b>Why not just denoise the banding inside this "
+            "tool?</b> Banding subtraction shifts the pixel statistics "
+            "in ways that interact with the sky-noise matching and "
+            "audit log. The cleaner intentionally stays a "
+            "<i>read-only-on-detection / write-only-on-trail-mask</i> "
+            "tool — calibration is a separate processing step that "
+            "Siril does well, with proper master frames the user "
+            "controls. Mixing them would mean inventing pixel values "
+            "outside the trail region, which violates the "
+            "non-hallucinating posture documented in the Science "
+            "Notes help tab.</p>"
+            "</div>"
+        )
+        layout.addWidget(body, stretch=1)
+
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        btn_close = QPushButton("Got it")
+        btn_close.setDefault(True)
+        btn_close.clicked.connect(dlg.accept)
+        btns.addWidget(btn_close)
+        layout.addLayout(btns)
+
+        dlg.exec()
 
     def _update_inpaint_recommendation(self) -> None:
         """Show / hide the inpaint-method recommendation banner.
@@ -4281,6 +5483,46 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         self._update_selection_label()
         # Push the updated selections back to the canvas + refresh underlay
         # (mask overlay / cleaned preview reflect the new mask).
+        self._refresh_canvas()
+
+    def _on_rejected_promoted(self, rej_idx: int) -> None:
+        """The user clicked a rejected MRT candidate on the canvas.
+        Promote it to an accepted detection: move it from
+        ``det.rejected_candidates`` into ``det.lines`` (marked for
+        removal), rebuild the mask, and refresh the canvas.
+
+        This is the manual escape hatch when the post-MRT filters
+        (persistence / SNR / width) killed a candidate that MRT clearly
+        saw but the heuristics couldn't justify keeping. Typical case:
+        a faint satellite where global SNR clears 5 but each 100-px
+        persistence chunk only reaches SNR ~2 — Persistence kills all
+        90 candidates, the user clicks the obvious one in the canvas.
+        """
+        if self.last_detection is None or self.last_detection.detection is None:
+            return
+        det = self.last_detection.detection
+        rej = getattr(det, "rejected_candidates", None)
+        if not rej or not (0 <= rej_idx < len(rej)):
+            return
+        x1, y1, x2, y2, _reason = rej.pop(rej_idx)
+        # When a candidate moves from "rejected" to "accepted" we extend
+        # its endpoints to the image boundary just like the regular
+        # detection pipeline does for accepted lines. This keeps the
+        # mask dilation consistent — without this, a manually-rescued
+        # candidate's mask would stop wherever MRT happened to bound
+        # its detection, leaving the trail's faint tails unmasked.
+        h, w = det.mask.shape[:2]
+        x1, y1, x2, y2 = _extend_endpoints_to_boundary(x1, y1, x2, y2, w, h)
+        det.lines.append((x1, y1, x2, y2))
+        det.selections.append(True)   # default: mark for removal
+        det.rebuild_effective_mask(self._snapshot_params())
+        self._update_selection_label()
+        # Diagnostic on the status line so the user knows the click
+        # registered.
+        self._set_status_text(
+            f"Rescued rejected candidate → {len(det.lines)} trail(s) "
+            f"now accepted, {len(rej)} rejected remaining."
+        )
         self._refresh_canvas()
 
     def _on_select_all(self) -> None:
@@ -4370,13 +5612,29 @@ class SatelliteTrailCleanerWindow(QMainWindow):
             self.canvas.set_lines(det.lines, det.selections)
         else:
             self.canvas.clear_lines()
+        # Push rejected MRT candidates separately. They're only drawn
+        # when the user has toggled "Show rejected candidates" AND we're
+        # not in Cleaned Preview (same rationale: in Cleaned Preview the
+        # underlying pixels are the inpaint result, overlays would
+        # confuse the user about what they're seeing).
+        if (
+            det is not None
+            and getattr(det, "rejected_candidates", None)
+            and self.view_mode != "cleaned_preview"
+        ):
+            self.canvas.set_rejected(
+                det.rejected_candidates, self.params.show_rejected,
+            )
+        else:
+            self.canvas.set_rejected([], False)
 
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
         for w in (
-            self.btn_detect, self.btn_apply_current, self.btn_skip_current,
+            self.btn_detect, self.btn_apply_current,
             self.btn_apply_all, self.btn_first, self.btn_prev,
             self.btn_next, self.btn_last, self.slider,
+            self.btn_select_folder,
         ):
             w.setEnabled(not busy)
 
@@ -4474,9 +5732,6 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         else:
             self._set_status_text(f"Error: {outcome.note}")
             QMessageBox.warning(self, "Apply Failed", outcome.note or "Unknown error")
-
-    def _on_skip_current(self) -> None:
-        self._navigate(+1)
 
     def _on_apply_all(self) -> None:
         if self._busy:
@@ -4755,6 +6010,106 @@ class SatelliteTrailCleanerWindow(QMainWindow):
 
     def _cancel_batch_action(self) -> None:
         self._cancel_batch = True
+
+    # ---- Select new folder (v0.8.20+) ----
+
+    def _on_select_new_folder(self) -> None:
+        """Pick a different folder of subs and reload the app state
+        in-place, without quitting and re-launching from Siril's
+        Scripts menu. Useful for processing multiple sessions or
+        targets in one run.
+
+        Steps:
+          1. QFileDialog → user picks a folder
+          2. _collect_supported_files() → verify it contains supported
+             files; if empty, show a friendly error and keep the
+             current folder loaded
+          3. Swap self.folder, self.paths; reset current_index
+          4. Clear last_detection, MRT cache, status banners
+          5. Reset slider range, hide rejected-candidates state,
+             reload the first frame
+          6. Persist the new folder so the next launch starts there
+        """
+        if self._busy:
+            return
+        last_folder = self.folder or os.path.expanduser("~")
+        new_folder = QFileDialog.getExistingDirectory(
+            self,
+            "Select a folder of FITS / XISF / TIFF / RAW subs",
+            last_folder,
+        )
+        if not new_folder:
+            return  # user cancelled
+        if os.path.realpath(new_folder) == os.path.realpath(self.folder):
+            self._set_status_text(
+                "Same folder — nothing to change."
+            )
+            return
+
+        # Validate the new folder before tearing down state.
+        try:
+            new_paths = _collect_supported_files(new_folder)
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Folder scan failed",
+                f"Could not scan the selected folder:\n{exc}",
+            )
+            return
+        if not new_paths:
+            QMessageBox.warning(
+                self, "No supported files",
+                f"The selected folder contains no FITS / XISF / TIFF / "
+                f"RAW files:\n{new_folder}\n\n"
+                f"Supported extensions:\n"
+                f"  FITS: {', '.join(FITS_EXTENSIONS)}\n"
+                f"  XISF: {', '.join(XISF_EXTENSIONS)}\n"
+                f"  TIFF: {', '.join(TIFF_EXTENSIONS)}\n"
+                f"  RAW: {', '.join(RAW_EXTENSIONS)}",
+            )
+            return
+
+        # --- Commit the swap ---
+        self.folder = new_folder
+        self.paths = new_paths
+        self.current_index = 0
+        self.last_detection = None
+        self._clear_mrt_cache()
+
+        # Reset every UI element that holds state from the old folder.
+        self.canvas.clear_lines()
+        self.banding_banner.setVisible(False)
+        if hasattr(self, "rec_container"):
+            self.rec_container.setVisible(False)
+        self.slider.blockSignals(True)
+        self.slider.setMinimum(0)
+        self.slider.setMaximum(max(0, len(self.paths) - 1))
+        self.slider.setValue(0)
+        self.slider.blockSignals(False)
+
+        # Update the folder-path label at the top of the left panel.
+        if hasattr(self, "lbl_folder"):
+            self.lbl_folder.setText(self.folder)
+        self.setWindowTitle(
+            f"Svenesis Satellite Trail Cleaner  v{VERSION}"
+        )
+        self._update_frame_label()
+        self._update_selection_label()
+        self._set_status_text(
+            f"Loaded {len(self.paths)} file(s) from {os.path.basename(new_folder)}."
+        )
+        self._log_siril(
+            f"Switched to folder: {new_folder} ({len(self.paths)} subs)"
+        )
+
+        # Persist for next launch (lets the user pick up where they
+        # left off without re-navigating).
+        try:
+            self._settings.setValue("last_folder", self.folder)
+        except Exception:
+            pass
+
+        # Load the first frame of the new folder.
+        self._load_and_show(0, autodetect=False)
 
     # ---- Audit / Logging ----
 
@@ -5048,12 +6403,64 @@ class SatelliteTrailCleanerWindow(QMainWindow):
             "<div style='background:#252525; padding:10px; border-radius:6px;"
             " margin-top:8px;'>"
             "<b style='color:#ffcc66;'>\U0001f4dd What you get after the batch</b>"
-            "<br>The tool writes <code>trail_cleanup_report.txt</code> in the "
-            "source folder. It contains one line per frame — cleaned vs "
-            "skipped vs error, line count, pixels replaced, inpaint method, "
-            "mask-dilation setting, timestamp. Open it any time to audit "
-            "what the batch did. The <code>originals/</code> subfolder is "
-            "your safety net: every modified file is recoverable bit-exact."
+            "<br>The tool writes two audit files in the source folder:"
+            "<ul style='margin-top:4px;'>"
+            "<li><code>trail_cleanup_report.txt</code> — human-readable "
+            "TSV, one line per frame</li>"
+            "<li><code>trail_cleanup_report.json</code> — machine-readable "
+            "structured records (status, lines, pixels, method, dilation, "
+            "scan mode, RGB-reduce, timestamp, version) for downstream "
+            "tooling</li>"
+            "</ul>"
+            "The <code>originals/</code> subfolder is your safety net: "
+            "every modified file is recoverable bit-exact by moving it "
+            "back from there."
+            "</div>"
+
+            # Workflow-advisor block (v0.8.19+)
+            "<div style='background:#2a1a1a; padding:10px; border-radius:6px;"
+            " border-left:4px solid #cc8844; margin-top:10px;'>"
+            "<b style='color:#ffcc66;'>⚠️ Workflow advisor banner</b>"
+            "<br>If your folder doesn't fit the cleaner's sweet spot, an "
+            "advisory banner appears above the canvas with a clear "
+            "verdict:"
+            "<ul style='margin-top:4px;'>"
+            "<li><b style='color:#ff9999;'>⛔ wrong_tool</b> — many "
+            "uncalibrated subs (e.g. SeeStar / Vespera): just stack in "
+            "Siril with σ-clip rejection, the cleaner is not for "
+            "you here</li>"
+            "<li><b style='color:#ffd28a;'>⚠️ calibrate_first</b> — "
+            "sensor banding detected: pre-calibrate with bias / dark in "
+            "Siril, then come back</li>"
+            "<li><b style='color:#ffd28a;'>⚠️ stack_first</b> — "
+            "many clean subs: σ-clip stacking usually handles trails "
+            "for free</li>"
+            "<li><b style='color:#ddddaa;'>\U0001f4a1 borderline / "
+            "appropriate</b> — short sequence, cleaner is the right "
+            "tool, proceed</li>"
+            "</ul>"
+            "Click the banner's <b>How to fix</b> button for the full "
+            "explanation."
+            "</div>"
+
+            # Other helpful actions (v0.8.20+ UX additions)
+            "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
+            " margin-top:10px;'>"
+            "<b style='color:#88aaff;'>\U0001f4a1 Other helpful actions</b>"
+            "<ul style='margin-top:4px;'>"
+            "<li><b>\U0001f4c1 Select new Folder</b> (left panel, near "
+            "Close) — switch the working folder without quitting and "
+            "re-launching from Siril's Scripts menu</li>"
+            "<li><b>Help → ↺ Reset parameters to defaults</b> — "
+            "restore every slider / checkbox to its factory default when "
+            "you've drifted too far while tuning</li>"
+            "<li><b>Help → Reset dismissed dialogs</b> — make this "
+            "walkthrough + the Biharmonic warning appear again, after "
+            "you've ticked 'Don't show again'</li>"
+            "<li>If the left panel doesn't fit on your screen, "
+            "<b>scroll inside it</b> — every control stays reachable "
+            "even on smaller windows</li>"
+            "</ul>"
             "</div>"
             "</div>"
         )
@@ -5129,31 +6536,77 @@ class SatelliteTrailCleanerWindow(QMainWindow):
             "<div style='background:#1a2a3a; padding:10px; border-radius:6px;"
             " border:1px solid #3a5a7a;'>"
             "<b>1.</b> Run <b>Satellite Trail Cleaner</b> from Processing → "
-            "Scripts and pick the folder of subs you want to clean.<br>"
+            "Scripts and pick the folder of subs you want to clean. The "
+            "window opens maximised with a one-time Quick Workflow "
+            "walkthrough (re-openable from Help).<br>"
             "<b>2.</b> Navigate to a frame that has a visible trail and "
-            "click <b>Detect Trails on Current</b>. Detected lines are "
+            "click <b>🛰 Detect Trails on Current</b>. Detected lines are "
             "drawn as <span style='color:#88ff88;'><b>green</b></span> "
             "(marked for removal) or "
             "<span style='color:#aaaaaa;'>grey</span> (kept) overlays.<br>"
             "<b>3.</b> Click any line in the preview to toggle its state. "
-            "Use <b>Select None</b> + click only the satellite if many "
-            "candidates were found (e.g. extra false positives). Switch "
-            "the View dropdown to <b>Cleaned Preview</b> to see the "
-            "result of the current selection.<br>"
-            "<b>4.</b> Tune the <b>Scan mode</b> (Quick / Normal / Deep) "
-            "or other sliders if needed and re-run Detect.<br>"
-            "<b>5.</b> Click <b>Apply to All Frames</b>. Each cleaned "
-            "frame's original is moved to <code>originals/</code>; the "
-            "cleaned image takes its place under the same filename."
+            "Watch the <b>💡 Recommendation banner</b> under the Method "
+            "dropdown — it picks the best inpaint method for <i>this</i> "
+            "frame based on the trail profile. Click its <b>Apply</b> "
+            "button to use it, or override manually.<br>"
+            "<b>4.</b> Switch the View dropdown to <b>Cleaned Preview</b> "
+            "to verify the result. Tune <b>Scan mode</b> / <b>Mask "
+            "dilation</b> / <b>Strip width</b> / <b>Match sky noise</b> "
+            "if needed — preview re-renders live.<br>"
+            "<b>5.</b> Click <b>Apply to Current</b> for a single frame, "
+            "or <b>Apply to All Frames</b> for the whole folder (current "
+            "settings are frozen and applied to every sub). Progress "
+            "dialog shows running Cleaned / Skipped / Errors + ETA."
             "</div><br>"
             "<b style='color:#ffcc66;'>What gets written</b><br>"
             "<div style='background:#252525; padding:8px; border-radius:4px;'>"
             "• <b>originals/</b> — subfolder created next to your subs; "
-            "every cleaned frame's source file lands here.<br>"
-            "• <b>&lt;name&gt;.fit</b> — cleaned FITS with the original "
-            "filename and FITS header preserved (WCS, DATE-OBS, BSCALE/BZERO).<br>"
-            "• <b>trail_cleanup_report.txt</b> — tab-separated audit "
-            "per file (status, line count, pixels replaced).<br>"
+            "every cleaned frame's source file lands here. Recovery is "
+            "always a simple file move back.<br>"
+            "• <b>&lt;name&gt;.&lt;ext&gt;</b> — cleaned file with the "
+            "original filename and format. FITS keeps its header verbatim "
+            "(WCS, DATE-OBS, BSCALE/BZERO). XISF preserves FITSKeywords "
+            "+ XISFProperties (incl. astrometric solutions). TIFF "
+            "preserves dtype + compression + ImageDescription. Cleaning "
+            "operations are appended as HISTORY lines.<br>"
+            "• <b>trail_cleanup_report.txt</b> — human-readable TSV "
+            "audit per file (status, line count, pixels replaced).<br>"
+            "• <b>trail_cleanup_report.json</b> — machine-readable "
+            "structured records for downstream tooling (Excel, pandas, "
+            "scripts).<br>"
+            "</div><br>"
+            "<b style='color:#ffcc66;'>Workflow advisor banner (above the canvas)</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "After Detect, a coloured banner may appear telling you "
+            "whether the tool is the right choice for this folder:"
+            "<ul style='margin-top:4px;'>"
+            "<li><span style='color:#ff9999;'>⛔ wrong_tool</span> — "
+            "many uncalibrated subs (typical smart-telescope output): "
+            "stack with σ-clip in Siril instead</li>"
+            "<li><span style='color:#ffd28a;'>⚠️ calibrate_first</span> — "
+            "sensor banding: pre-calibrate with bias/dark first</li>"
+            "<li><span style='color:#ffd28a;'>⚠️ stack_first</span> — "
+            "many clean subs: σ-clip stacking usually handles it</li>"
+            "<li><span style='color:#ddddaa;'>💡 borderline</span> — "
+            "moderate sub count, both approaches work</li>"
+            "<li>(banner hidden) — tool is appropriate, proceed</li>"
+            "</ul>"
+            "Each non-green verdict has a <b>How to fix</b> button with "
+            "the right alternative workflow."
+            "</div><br>"
+            "<b style='color:#ffcc66;'>Useful navigation actions</b><br>"
+            "<div style='background:#1a2a1a; padding:8px; border-radius:4px;"
+            " border:1px solid #446644;'>"
+            "• <b>📁 Select new Folder</b> (left panel, near Close) — "
+            "switch the working folder without quitting and re-launching.<br>"
+            "• <b>↺ Reset parameters to defaults</b> (Help dialog footer) — "
+            "restore every slider / checkbox to factory defaults when "
+            "you've drifted too far while tuning.<br>"
+            "• <b>Reset dismissed dialogs</b> (Help dialog footer) — "
+            "make the Quick Workflow + Biharmonic warning appear again "
+            "after you've ticked 'Don't show again'.<br>"
+            "• <b>Scroll the left panel</b> if your window is small — "
+            "all controls stay reachable even on smaller screens."
             "</div><br>"
             "<b style='color:#ffcc66;'>RAW input note</b><br>"
             "<div style='background:#2a2a1a; padding:8px; border-radius:4px;"
@@ -5240,67 +6693,108 @@ class SatelliteTrailCleanerWindow(QMainWindow):
             "</div><br>"
             "<b style='color:#ffcc66;'>Star Protection (inpaint-only)</b><br>"
             "<div style='background:#252525; padding:8px; border-radius:4px;'>"
-            "<b>OFF by default in v0.6+.</b> When enabled, detects bright "
-            "peaks in the image and excludes them from the inpaint mask "
-            "(so they survive the cleanup). Star detections that lie on "
-            "the trail core itself are now ignored — otherwise a bright "
-            "trail's own local maxima would protect the trail from being "
-            "cleaned and you'd see the trail still in the output. "
-            "Enable manually only when you have a known star in the trail's "
-            "dilation halo that you want to preserve.<br><br>"
+            "<b>ON by default since v0.8.17.</b> When enabled, detects "
+            "bright peaks in the image and excludes them from the inpaint "
+            "mask so real stars survive the cleanup. An <b>isotropy "
+            "filter</b> tests every candidate peak in 8 directions — "
+            "radially-symmetric peaks (real stars) are kept; elongated "
+            "peaks (pearls on a flashing-satellite trail) are rejected "
+            "so they don't shield the trail from being cleaned. The old "
+            "failure mode where Star Protection would silently leave the "
+            "trail untouched is gone.<br><br>"
             "<b>Sigma</b> — detection threshold above background "
             "(median + N · sigma). Lower = catch fainter stars. Default 5.<br><br>"
             "<b>Star halo</b> — pixels of protection around each star "
             "centroid. Increase if cleaned stars look haloed or hollowed."
             "</div><br>"
-            "<b style='color:#ffcc66;'>Inpainting (v0.7+)</b><br>"
+
+            "<b style='color:#ffcc66;'>RGB reduce (colour subs only)</b><br>"
             "<div style='background:#252525; padding:8px; border-radius:4px;'>"
-            "Four algorithms, all dtype-preserving and applied only "
+            "How to collapse RGB channels into a single intensity image "
+            "for trail detection. Ignored for mono FITS.<br><br>"
+            "<b>Mean (default)</b> — equal-weight average across R+G+B. "
+            "Works for white / luminance trails (typical satellite).<br>"
+            "<b>Max per pixel</b> — takes the brightest channel at each "
+            "pixel. Use when the trail is bright in only one channel "
+            "(e.g. sodium-reflective satellite glowing red) — under Mean "
+            "reduction such a trail loses ~√3 of its SNR."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>Show rejected candidates</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "Toggle to display every MRT candidate that the post-detection "
+            "filters killed, colour-coded by reject reason (red = SNR, "
+            "orange = duplicate, yellow = persistence/width/other). "
+            "<b>Click any rejected line</b> on the canvas to PROMOTE it "
+            "to an accepted detection — useful when the persistence "
+            "filter wrongly killed a faint real trail."
+            "</div><br>"
+            "<b style='color:#ffcc66;'>Inpainting — six methods + auto-recommendation</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "All six methods are dtype-preserving and applied only "
             "inside the mask region (the rest of the frame keeps full "
-            "original precision).<br><br>"
-            "<b>Nearest Neighbor + Smooth (default)</b><br>"
-            "For each masked pixel, copy the value of the nearest "
-            "unmasked pixel via a Euclidean distance transform, then "
-            "smooth the filled region with a Gaussian whose σ scales "
-            "with the local mask thickness (σ ≈ mask half-width × "
-            "0.75). Pure scipy, ~500 ms on 15 MP. Good for live "
-            "preview while tuning sliders.<br><br>"
-            "<b>cv2 Fast Marching (very fast, C++)</b><br>"
-            "Telea's Fast Marching Method via "
-            "<code>cv2.inpaint(INPAINT_TELEA)</code>. Propagates pixels "
-            "from the mask boundary inward, weighted by distance and "
-            "local gradient. Runs on percentile-scaled uint8 (8-bit "
-            "precision in the masked region only; full precision "
-            "outside). ~200 ms on 15 MP — fastest option. Quality "
-            "sits between NN and Biharmonic.<br><br>"
-            "<b>Biharmonic (highest quality, slow)</b><br>"
-            "Solves the biharmonic PDE ∇⁴u = 0 inside the mask with "
-            "boundary values fixed to the surrounding sky "
-            "(<code>skimage.restoration.inpaint_biharmonic</code>). "
-            "Mathematically optimal smooth interpolation (minimum "
-            "thin-plate energy). Slower (~5-15 s) but produces "
-            "results visually indistinguishable from real sky. Best "
-            "for final Apply on critical frames.<br><br>"
-            "<b>Perpendicular Strip Median</b><br>"
+            "original precision). The <b>💡 Recommendation banner</b> "
+            "under the Method dropdown picks the right one for "
+            "<i>your</i> frame after every Detect (based on cross-trail "
+            "gradient, pearl-count, and mask compactness).<br><br>"
+
+            "<b>Perpendicular Strip Median (recommended default)</b><br>"
             "Rotates the image so the trail is horizontal, then for "
             "every column in rotated space replaces the masked pixels "
             "with the median of <b>strip_width</b> unmasked pixels "
             "immediately above and below the masked stripe. "
             "Vectorised — comparable speed to NN+Smooth. Preserves "
-            "any sky-background gradient perpendicular to the trail "
-            "(useful when vignetting or light-pollution gradient is "
-            "noticeable). <b>Fixed in v0.7</b> — previous versions "
-            "only filled the centreline pixel of each line and left "
-            "92% of the dilated mask untouched.<br><br>"
+            "any sky-background gradient perpendicular to the trail. "
+            "Robust on flashing-satellite trails with bright pearls — "
+            "the median naturally rejects pearl peaks as outliers.<br><br>"
+
+            "<b>Harmonic / Laplace (∇²u = 0, no ringing)</b><br>"
+            "Iterative 5-point Laplace solver on a bbox crop with a "
+            "nearest-neighbour warm start. Has the maximum principle, "
+            "so the inpainted values cannot over- or undershoot the "
+            "surrounding sky — perfect smooth physical fill. Combined "
+            "with Match-sky-noise gives a result statistically "
+            "indistinguishable from real sky. Best for short, compact "
+            "masks in uniform sky regions.<br><br>"
+
+            "<b>Nearest Neighbor + Smooth (fast)</b><br>"
+            "For each masked pixel, copy the value of the nearest "
+            "unmasked pixel via a Euclidean distance transform, then "
+            "smooth the filled region with a Gaussian whose σ scales "
+            "with the local mask thickness. Pure scipy, ~500 ms on "
+            "15 MP. Good fallback when other methods misbehave.<br><br>"
+
+            "<b>cv2 Fast Marching (Telea, very fast)</b><br>"
+            "Telea's FMM via <code>cv2.inpaint(INPAINT_TELEA)</code>. "
+            "Propagates pixels from the mask boundary inward, weighted "
+            "by distance and local gradient. Runs on percentile-scaled "
+            "uint8 (8-bit precision in the masked region only). "
+            "~200 ms — fastest option.<br><br>"
+
+            "<b>cv2 Navier-Stokes (very fast)</b><br>"
+            "Bertalmio's NS algorithm. Same speed class as Telea; "
+            "propagates isophotes (level curves of intensity) instead "
+            "of normalised distance weights. On sky-dominated regions "
+            "essentially identical to Telea.<br><br>"
+
+            "<b>Biharmonic (experimental, may ring)</b><br>"
+            "Solves ∇⁴u = 0 on a chunked bbox crop "
+            "(<code>skimage.restoration.inpaint_biharmonic</code>). "
+            "Mathematically very smooth, but the biharmonic equation "
+            "<b>lacks a maximum principle</b> — long thin masks can "
+            "produce periodic over/undershoot (the classic 'string of "
+            "pearls' artefact). A one-time warning fires when selected. "
+            "Use only on short, compact masks where geometry stays "
+            "well-conditioned.<br><br>"
+
             "<b>Match sky noise (checkbox, recommended)</b><br>"
             "After the chosen method runs, add Gaussian noise inside "
-            "the mask with σ taken robustly (via MAD) from a 30-px "
-            "halo of unmasked sky around the trail. Real sky has "
-            "photon shot-noise + read-noise; without this step the "
-            "filled patch is statistically too smooth and can be "
-            "spotted on close inspection or by stack-rejection "
-            "algorithms. Adds < 50 ms overhead and is recommended on "
-            "for all photometry-aware workflows."
+            "the mask with σ taken robustly (via sigma-clipped MAD) "
+            "from a 30-px halo of unmasked sky. Real sky has photon "
+            "shot-noise + read-noise; without this step the filled "
+            "patch is statistically too smooth and can be spotted on "
+            "close inspection or by stack-rejection algorithms. "
+            "Adds ~50 ms overhead. Recommended ON."
             "</div>"
         )
         tabs.addTab(te2, "\U0001f50d Detection Controls")
@@ -5579,13 +7073,24 @@ class SatelliteTrailCleanerWindow(QMainWindow):
             "The script does not delete anything except via the move into "
             "<code>originals/</code>."
             "</div><br>"
-            "<b style='color:#ffcc66;'>Audit trail</b><br>"
+            "<b style='color:#ffcc66;'>Audit trail (TSV + JSON)</b><br>"
             "<div style='background:#252525; padding:8px; border-radius:4px;'>"
-            "<code>trail_cleanup_report.txt</code> is appended in the source "
-            "folder. One tab-separated line per processed file: timestamp, "
-            "status (cleaned / skipped_no_trail / skipped_user / error), "
-            "trail count, pixels replaced, source filename, optional note. "
-            "The file is created on first write and never truncated."
+            "Two audit files are appended in the source folder after "
+            "each Apply, in lock-step:"
+            "<ul style='margin-top:4px;'>"
+            "<li><code>trail_cleanup_report.txt</code> — human-readable "
+            "TSV. One line per processed file: timestamp, status "
+            "(cleaned / skipped_no_trail / skipped_user / error), trail "
+            "count, pixels replaced, source filename, optional note.</li>"
+            "<li><code>trail_cleanup_report.json</code> — structured "
+            "machine-readable records with everything from the TSV plus "
+            "inpaint method, mask dilation, scan mode, RGB-reduce mode, "
+            "match-sky-noise flag, cleaned-path, tool version. Atomic "
+            "write via tempfile + rename so a crash mid-write doesn't "
+            "corrupt the file. Parseable by Excel, pandas, or any other "
+            "JSON consumer.</li>"
+            "</ul>"
+            "Both files are created on first write and never truncated."
             "</div>"
         )
         tabs.addTab(te3, "\U0001f4be Output && Safety")
@@ -5604,9 +7109,21 @@ class SatelliteTrailCleanerWindow(QMainWindow):
             "satellite trails statistically. This tool's main value is at "
             "<b>short sequence lengths</b> (3-8 subs) where the clipping has "
             "too few samples to work reliably.<br><br>"
-            "Quick sanity check: stack first <i>without</i> cleaning. If you "
-            "still see a visible streak in the result, run this tool and "
-            "re-stack."
+            "The tool tells you upfront via the <b>workflow advisor "
+            "banner</b> when your folder is the wrong fit:"
+            "<ul style='margin-top:4px;'>"
+            "<li>Many uncalibrated subs (smart-telescope folders like "
+            "SeeStar / Vespera / eVscope) → ⛔ banner saying 'stack "
+            "instead'</li>"
+            "<li>Sensor banding on any sub → ⚠️ 'calibrate first' "
+            "with a 'How to fix' button showing the bias / dark / flat "
+            "workflow in Siril</li>"
+            "<li>20+ subs without banding → 💡 'stack first' "
+            "suggestion (cleaner usually unnecessary)</li>"
+            "</ul>"
+            "Quick sanity check if no banner: stack first <i>without</i> "
+            "cleaning. If you still see a visible streak in the result, "
+            "run this tool and re-stack."
             "</div><br>"
             "<b style='color:#ffcc66;'>Common pitfalls</b><br>"
             "<div style='background:#252525; padding:8px; border-radius:4px;'>"
@@ -5636,22 +7153,34 @@ class SatelliteTrailCleanerWindow(QMainWindow):
             "• <b>Detection too slow</b> — switch to Quick scan mode "
             "(4× downsample), or raise Processes to match your CPU cores."
             "</div><br>"
-            "<b style='color:#ffcc66;'>Choosing an inpaint method (v0.7+)</b><br>"
+            "<b style='color:#ffcc66;'>Choosing an inpaint method</b><br>"
             "<div style='background:#252525; padding:8px; border-radius:4px;'>"
-            "• <b>Nearest Neighbor + Smooth (default)</b> — use for "
-            "live preview iteration and most batch cleanups. Fast "
-            "(&lt;1 s), adaptive σ scales the Gaussian with mask "
-            "thickness so no visible centreline.<br>"
-            "• <b>Biharmonic</b> — switch to this just before the "
-            "final Apply on critical frames. Mathematically optimal "
-            "smooth fill, ~5-15 s per frame. Visually indistinguishable "
-            "from real sky after the noise-matching post-process.<br>"
-            "• <b>Perpendicular Strip Median</b> — use when there's a "
-            "noticeable sky gradient (heavy vignetting, light pollution "
-            "gradient) perpendicular to the trail. Preserves that "
-            "gradient because the median is taken from pixels just "
-            "above and below the trail at each column in rotated "
-            "space. Comparable speed to NN.<br><br>"
+            "<b>First instinct: follow the 💡 Recommendation banner</b> "
+            "under the Method dropdown. It analyses each frame's trail "
+            "profile (cross-trail gradient, pearl-count, mask "
+            "compactness) and picks the right method for ~90% of cases. "
+            "Click its <b>Apply</b> button — one click, optimal choice.<br><br>"
+            "When you want to override manually:"
+            "<ul style='margin-top:4px;'>"
+            "<li><b>Perpendicular Strip Median (recommended default)</b> "
+            "— safest choice for long trails, flashing-satellite pearls, "
+            "or any frame with noticeable sky gradient. Vectorised, "
+            "&lt;1 s. Robust against pearl-peaks because the median "
+            "rejects outliers naturally.</li>"
+            "<li><b>Harmonic / Laplace</b> — best for short compact "
+            "masks in uniform sky. Has the maximum principle, so no "
+            "ringing. Combined with Match-sky-noise gives a result "
+            "statistically indistinguishable from real sky.</li>"
+            "<li><b>Nearest Neighbor + Smooth</b> — fallback when "
+            "Perpendicular and Harmonic both misbehave. Sub-second, "
+            "dtype-preserving.</li>"
+            "<li><b>cv2 Telea / Navier-Stokes</b> — fastest options "
+            "(~200 ms). Use for quick A/B testing.</li>"
+            "<li><b>Biharmonic (experimental)</b> — avoid for long thin "
+            "satellite trails (produces 'string of pearls' overshoot). "
+            "Only safe on short compact masks. A warning fires when "
+            "selected.</li>"
+            "</ul>"
             "<b>Always keep 'Match sky noise' on</b> unless you have "
             "a specific reason to want a perfectly smooth fill. The "
             "noise-matched fill is statistically invisible to "
@@ -5659,7 +7188,28 @@ class SatelliteTrailCleanerWindow(QMainWindow):
             "<b>Mask dilation</b> tradeoff: wider dilation (e.g. 10 "
             "instead of 7) better covers faint trail wings but the "
             "inpainted region grows quadratically. Stick with 7 for "
-            "typical PSF-convolved trails."
+            "typical PSF-convolved trails. The bright-halo growth step "
+            "(automatic) handles wider PSF halos around flashing "
+            "satellite pearls without you needing to bump this."
+            "</div><br>"
+
+            "<b style='color:#ffcc66;'>If MRT misses the trail</b><br>"
+            "<div style='background:#252525; padding:8px; border-radius:4px;'>"
+            "Sometimes MRT finds candidates but the post-filters "
+            "(persistence, width, SNR) kill them all and you see "
+            "'No trails detected' even though MRT had hits. The "
+            "rescue path:"
+            "<ol style='margin-top:4px;'>"
+            "<li>Toggle <b>Show rejected candidates (clickable)</b> "
+            "in the Detection panel</li>"
+            "<li>The canvas overlays every rejected candidate as a "
+            "dashed coloured line (red/orange/yellow by reject reason)</li>"
+            "<li>Click any rejected line that looks like the real trail "
+            "→ it gets promoted to an accepted detection, joins the "
+            "mask, and inpaint runs as if MRT had accepted it directly</li>"
+            "</ol>"
+            "This is the manual escape hatch when the persistence test "
+            "wrongly killed a faint real trail."
             "</div><br>"
             "<b style='color:#ffcc66;'>Photometry</b><br>"
             "<div style='background:#252525; padding:8px; border-radius:4px;'>"
@@ -5790,6 +7340,48 @@ class SatelliteTrailCleanerWindow(QMainWindow):
         btn_workflow.clicked.connect(_open_workflow)
         btns.addWidget(btn_workflow)
 
+        # Reset every detection / star-protection / inpaint parameter
+        # back to the constructor defaults of DetectionParams. Useful
+        # when the user has drifted the sliders far from sensible values
+        # while debugging and wants a clean baseline. Folder selection,
+        # workflow-suppressed flags, and the audit history are not
+        # affected — those are session / cross-session state, not tuning
+        # parameters.
+        btn_reset_params = QPushButton("↺ Reset parameters to defaults")
+        btn_reset_params.setToolTip(
+            "Restore SNR threshold, min length, max width, persistence "
+            "settings, mask dilation, star-protection, inpaint method, "
+            "strip width, match-sky-noise, scan mode, and RGB-reduce "
+            "to their factory defaults. Folder, dismissed dialogs, and "
+            "trail_cleanup_report.* are not touched."
+        )
+        def _reset_params():
+            ans = QMessageBox.question(
+                dlg, "Reset parameters",
+                "This restores every detection / star-protection / "
+                "inpaint slider and checkbox to its factory default.\n\n"
+                "Not affected:\n"
+                "  • Selected folder\n"
+                "  • Dismissed dialog preferences\n"
+                "  • Audit history (trail_cleanup_report.*)\n"
+                "  • Suppressed warnings\n\n"
+                "Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if ans != QMessageBox.StandardButton.Yes:
+                return
+            self._reset_params_to_defaults()
+            QMessageBox.information(
+                dlg, "Parameters reset",
+                "All detection, inpaint, and star-protection "
+                "parameters have been restored to defaults.\n\n"
+                "Run 'Detect Trails on Current' to see the result "
+                "with the fresh settings.",
+            )
+        btn_reset_params.clicked.connect(_reset_params)
+        btns.addWidget(btn_reset_params)
+
         # Reset every 'Don't show this again' flag in QSettings — the
         # workflow dialog and the Biharmonic warning will reappear on
         # their normal triggers (next start, next biharmonic selection).
@@ -5877,25 +7469,40 @@ def _show_welcome_dialog(parent=None) -> bool:
         "TIFF (<code>.tif</code> / <code>.tiff</code>) or "
         "DSLR/mirrorless RAWs (<code>.cr2</code>, <code>.nef</code>, "
         "<code>.arw</code>, <code>.dng</code>, …).</li>"
-        "<li>The viewer opens — navigate to a frame with a visible "
-        "trail and click <b>Detect Trails on Current</b>. Detected lines "
+        "<li>The viewer opens maximised. A <b>workflow walkthrough</b> "
+        "explains the 5 steps the first time you launch (re-openable "
+        "anytime via Help). Navigate to a frame with a visible trail "
+        "and click <b>Detect Trails on Current</b>. Detected lines "
         "appear as <span style='color:#88ff88;'><b>green</b></span> "
         "(marked for removal) or "
         "<span style='color:#aaaaaa;'>grey</span> (kept) overlays.</li>"
-        "<li>Click any line to toggle its state. Switch the View "
-        "dropdown to <b>Cleaned Preview</b> to see the inpainting "
-        "result of your current selection. Apply to the current frame "
-        "or to all frames in the folder.</li>"
+        "<li>Watch the <b>💡 Recommendation banner</b> under the Method "
+        "dropdown — the tool analyses the trail profile (gradient, "
+        "pearl pattern, mask compactness) and picks the best inpaint "
+        "method for <i>this specific frame</i>. Switch the View "
+        "dropdown to <b>Cleaned Preview</b> to verify, then click "
+        "<b>Apply to Current</b> or <b>Apply to All Frames</b>.</li>"
         "<li>Each cleaned frame's original is moved to "
         "<code>originals/</code>; the cleaned image takes the original "
         "filename, so your existing stacking pipeline picks it up "
-        "unchanged. A per-folder "
-        "<code>trail_cleanup_report.txt</code> records what was done.</li>"
+        "unchanged. Per-folder <code>trail_cleanup_report.txt</code> "
+        "(human-readable) and <code>trail_cleanup_report.json</code> "
+        "(structured) record everything that was done.</li>"
         "</ol>"
         "<b style='color:#FFDD00;'>Your original files are never "
         "modified</b> — they are moved into <code>originals/</code> "
         "(reversible by moving them back). Frames with no detected trail "
         "are not touched at all."
+        "<br><br>"
+        "<b style='color:#88aaff;'>Workflow advisor:</b> if your folder "
+        "is the <b>wrong fit</b> for this tool (e.g. lots of "
+        "uncalibrated SeeStar / Vespera subs, or sensor banding), a "
+        "coloured banner appears above the canvas after Detect with a "
+        "clear verdict — from <span style='color:#aaddaa;'>green "
+        "'appropriate'</span> via <span style='color:#ffd28a;'>orange "
+        "'stack first'</span> to <span style='color:#ff9999;'>red "
+        "'wrong tool'</span> — plus a 'How to fix' button with the "
+        "right Siril workflow."
         "<br><br>"
         "<i style='color:#BBBBBB;font-size:10pt;'>Note on RAW files: "
         "trail removal cannot operate on raw CFA data without corrupting "
@@ -5903,17 +7510,19 @@ def _show_welcome_dialog(parent=None) -> bool:
         "cleaned output is written as <code>.fit</code>. The original "
         "RAW is preserved in <code>originals/</code>."
         "<br><br>"
-        "Note on XISF files: cleaned output stays as <code>.xisf</code> "
-        "with all original FITS keywords AND XISF properties preserved "
-        "(astrometric solutions, filter, exposure, instrument metadata). "
-        "Cleaning operations are appended as HISTORY entries. Your "
-        "PixInsight / Siril stacking pipeline can keep using the same "
-        "filenames as before.</i>"
+        "Note on XISF / TIFF: cleaned output stays in the same format "
+        "with all original metadata preserved (astrometric solutions, "
+        "filter, exposure, instrument keywords, TIFF dtype + "
+        "compression). Cleaning operations are appended as HISTORY "
+        "entries. Your existing stacking pipeline keeps reading the "
+        "same filenames.</i>"
         "<br><br>"
         "<i style='color:#BBBBBB;font-size:10pt;'>When you don't need "
         "this tool: with 10+ well-distributed subs, Siril's sigma-clipped "
         "stacking already removes trails statistically. The cleaner's "
-        "main value is at short sequence lengths (3–8 subs).</i>"
+        "main value is at short sequence lengths (3–8 subs). The "
+        "workflow advisor banner will tell you upfront if your data "
+        "doesn't fit the sweet spot.</i>"
         "</div>"
     )
     body.setTextFormat(Qt.TextFormat.RichText)
@@ -5956,14 +7565,34 @@ def main() -> int:
     if not _show_welcome_dialog(None):
         return 0
 
-    # Folder picker
+    # Folder picker — start in the user's last-used folder if there is
+    # one persisted from a previous session (set via "Select new Folder"
+    # or normal close). Falls back to the home directory so the picker
+    # opens somewhere sensible, not at the filesystem root.
+    try:
+        _initial_settings = QSettings(SETTINGS_ORG, SETTINGS_APP)
+        start_dir = str(_initial_settings.value(
+            "last_folder", os.path.expanduser("~"),
+        ))
+        if not os.path.isdir(start_dir):
+            start_dir = os.path.expanduser("~")
+    except Exception:
+        start_dir = os.path.expanduser("~")
+
     folder = QFileDialog.getExistingDirectory(
         None,
         "Svenesis Satellite Trail Cleaner -- Select Folder of Sub-Exposures",
-        "",
+        start_dir,
     )
     if not folder:
         return 0
+
+    # Persist this choice so the next launch starts here. Mirrors what
+    # "Select new Folder" inside the running app already does.
+    try:
+        _initial_settings.setValue("last_folder", folder)
+    except Exception:
+        pass
 
     paths = _collect_supported_files(folder)
     if not paths:

@@ -632,9 +632,9 @@ Reads the current linear image from Siril (or a linear FITS file), applies a 2%�
 
 ## Svenesis Satellite Trail Cleaner
 
-**File:** `Svenesis-SatelliteTrailCleaner.py` (v0.8.9) — **[Detailed Instructions](Instructions/Svenesis-SatelliteTrailCleaner-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-SatelliteTrailCleaner-Instructions_de.md)**
+**File:** `Svenesis-SatelliteTrailCleaner.py` (v1.0.0) — **[Detailed Instructions](Instructions/Svenesis-SatelliteTrailCleaner-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-SatelliteTrailCleaner-Instructions_de.md)**
 
-> ⚠️ Pre-release (0.8.9) — public preview, not yet submitted to the official Siril Script Repository.
+> 🚀 **First stable release (v1.0.0)** — feature-complete; not yet submitted to the official Siril Script Repository.
 
 Detects linear satellite or aircraft trails in your individual sub-exposures and inpaints them using the local sky background — **before** stacking. Siril's normal answer to trails is sigma-clipped stack rejection, which works statistically when you have 8+ well-distributed subs. The trail is "out-voted" by clean frames and disappears. The problem: with short sequences (3–8 subs), single-night campaigns, or LRGB stacks with low per-filter counts, sigma clipping has too few samples to reliably remove the trail. This tool fills that gap by cleaning each affected sub individually before the integration even starts.
 

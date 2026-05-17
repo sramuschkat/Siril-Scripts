@@ -1,6 +1,6 @@
 # Svenesis Satellite Trail Cleaner — User Instructions
 
-**Version 0.8.9** | Siril Python Script for Per-Frame Satellite Trail Removal
+**Version 1.0.0** | Siril Python Script for Per-Frame Satellite Trail Removal
 
 > *Bridges the gap between Siril's sigma-clip stack rejection (needs 8+ subs) and the all-or-nothing decision of throwing a trail-affected frame away. Cleans each affected sub individually, before stacking.*
 

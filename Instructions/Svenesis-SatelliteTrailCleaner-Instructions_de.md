@@ -1,6 +1,6 @@
 # Svenesis Satellite Trail Cleaner — Benutzeranleitung
 
-**Version 0.8.9** | Siril Python-Skript zur Entfernung von Satellitenspuren pro Einzelbild
+**Version 1.0.0** | Siril Python-Skript zur Entfernung von Satellitenspuren pro Einzelbild
 
 > *Schließt die Lücke zwischen Sirils σ-Clip-Stack-Rejection (benötigt 8+ Subs) und der Alles-oder-Nichts-Entscheidung, ein spurkontaminiertes Bild zu verwerfen. Bereinigt jedes betroffene Sub einzeln, **vor** dem Stacken.*
 
