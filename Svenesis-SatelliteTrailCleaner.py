@@ -6235,7 +6235,7 @@ class SatelliteTrailCleanerWindow(QMainWindow):
             "<span style='color:#aaaaaa;'>Your support helps maintain:</span><br>"
             "• Svenesis Blink Comparator • Svenesis Satellite Trail Cleaner<br>"
             "• Svenesis Gradient Analyzer • Svenesis CosmicDepth 3D<br>"
-            "• Svenesis GalacticView 3D • Svenesis Annotate Image<br>"
+            "• Svenesis CosmicView 3D • Svenesis Annotate Image<br>"
             "</div>"
         )
         header_msg.setWordWrap(True)

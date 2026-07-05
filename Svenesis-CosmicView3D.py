@@ -1,5 +1,5 @@
 """
-Svenesis GalacticView 3D
+Svenesis CosmicView 3D
 Script Version: 1.0.0
 =====================================
 
@@ -13,7 +13,7 @@ astrophoto as a textured rectangle along the exact line of sight, and the
 target's distance made tangible through story text, scale rings, and a
 cinematic "Journey" flight from Earth to the target.
 
-GalacticView 3D makes spatial orientation visible:
+CosmicView 3D makes spatial orientation visible:
   "Your photo is not just anywhere. It is a window into one specific
    direction of the universe -- and now you can see where."
 
@@ -66,8 +66,8 @@ named Utility in one of Siril's Script Storage Directories.
 SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Script Name: Svenesis GalacticView 3D
-# Script Version: 0.9.0
+# Script Name: Svenesis CosmicView 3D
+# Script Version: 1.0.0
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: processing
@@ -129,7 +129,7 @@ def _log_swallowed(exc: BaseException) -> None:
             lineno = tb.tb_lineno
             tb = tb.tb_next
         sys.stderr.write(
-            f"[GalacticView3D] swallowed {type(exc).__name__} "
+            f"[CosmicView3D] swallowed {type(exc).__name__} "
             f"(line {lineno}): {exc}\n")
     except Exception:
         pass  # logging must never throw
@@ -615,12 +615,12 @@ except Exception:
 # ---------------------------------------------------------------------------
 VERSION = "1.0.0"
 SETTINGS_ORG = "Svenesis"
-SETTINGS_APP = "GalacticView3D"
+SETTINGS_APP = "CosmicView3D"
 LEFT_PANEL_WIDTH = 360
 
 # Cache
 CACHE_DIR = os.path.expanduser("~/.config/siril")
-CACHE_PATH = os.path.join(CACHE_DIR, "svenesis_galacticview_cache.json")
+CACHE_PATH = os.path.join(CACHE_DIR, "svenesis_cosmicview_cache.json")
 CACHE_TTL_DAYS = 90
 # Bumped 1 → 2 when redshift→distance switched from the linear
 # Hubble law (H0=70) to Planck18 light-travel distance — cached
@@ -680,7 +680,7 @@ SIMBAD_PROBE_SLOW_S = 2.0        # probe slower than this → "degraded"
 # SIMBAD's object database changes slowly, but 7 days keeps things
 # reasonably fresh while making same-target re-renders fully offline.
 CONESEARCH_CACHE_PATH = os.path.join(
-    CACHE_DIR, "svenesis_galacticview_conesearch.json")
+    CACHE_DIR, "svenesis_cosmicview_conesearch.json")
 CONESEARCH_TTL_DAYS = 7
 
 # ---- Figure-builder tuning (previously inline magic numbers) -------------
@@ -780,7 +780,7 @@ class SceneSpec:
     # Local Bubble / Local Group context spheres.  Hidden in the
     # default "Story" view style; shown in "Explorer".
     show_context_spheres: bool = True
-    title: str = "Svenesis GalacticView 3D"
+    title: str = "Svenesis CosmicView 3D"
     distance_label: str = ""
     arm_hint: str = ""
     target_arm_membership: tuple | None = None
@@ -1972,9 +1972,9 @@ def compute_pixel_scale(wcs: WCS) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Distance cache (GalacticView-owned)
+# Distance cache (CosmicView-owned)
 # ---------------------------------------------------------------------------
-class GalacticViewCache:
+class CosmicViewCache:
     """JSON-backed single-object distance cache with TTL."""
 
     def __init__(self, path: str = CACHE_PATH, ttl_days: int = CACHE_TTL_DAYS):
@@ -2007,7 +2007,7 @@ class GalacticViewCache:
                 # will re-query online sources.  Log to stderr so at least
                 # the reason (permissions? disk full?) is traceable.
                 sys.stderr.write(
-                    f"[GalacticView3D] distance cache save failed: {e}\n")
+                    f"[CosmicView3D] distance cache save failed: {e}\n")
 
     def _key(self, name: str) -> str:
         return _RE_WHITESPACE.sub(' ', name).strip().upper()
@@ -2272,7 +2272,7 @@ def collect_simbad_candidates(center_ra: float, center_dec: float,
     same tile-wide-fields logic (>0.75° radius), the same useful-catalog
     prefix filter, name dedup, magnitude cut, and pixel-bounds check.
 
-    Extra bits kept for GalacticView3D's own use: parallax / redshift /
+    Extra bits kept for CosmicView3D's own use: parallax / redshift /
     distance estimate. Distance is *not* used to filter candidates — the
     list matches CosmicDepth3D's object set exactly.
 
@@ -3193,7 +3193,7 @@ def redshift_to_ly(z: float) -> float:
 
 
 def resolve_object_distance(name: str, obj_type: str,
-                            simbad_result, cache: GalacticViewCache,
+                            simbad_result, cache: CosmicViewCache,
                             use_online: bool = True, log_func=None
                             ) -> tuple[float | None, float, str, str]:
     """
@@ -3315,7 +3315,7 @@ def prepare_texture_array(image_data: np.ndarray,
             # unexpected dtype would otherwise look like a silent quality
             # regression.
             sys.stderr.write(
-                f"[GalacticView3D] PIL thumbnail failed ({e}); "
+                f"[CosmicView3D] PIL thumbnail failed ({e}); "
                 "using stride fallback.\n")
             h, w = u8.shape[:2]
             step_y = max(1, h // max_size)
@@ -5103,7 +5103,7 @@ def _build_galaxy_figure_impl(scene: "SceneSpec") -> object:
             _log_swallowed(_swallowed_exc)
 
     # --- Layout ---
-    title = scene.get("title", "Svenesis GalacticView 3D")
+    title = scene.get("title", "Svenesis CosmicView 3D")
     if mode is ViewMode.GALACTIC:
         unit_label = "Linear scale — light years"
     else:
@@ -5290,7 +5290,7 @@ def render_matplotlib_galaxy(scene: "SceneSpec", out_path: str,
                 [0, photo_center[2]],
                 color="#ffcc44", linewidth=1.5, linestyle=":")
 
-    ax.set_title(scene.get("title", "GalacticView 3D"),
+    ax.set_title(scene.get("title", "CosmicView 3D"),
                  color="#e0e0e0")
     for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
         axis.label.set_color("#aaa")
@@ -5351,11 +5351,11 @@ def _sweep_orphan_scene_html(d: str) -> None:
                 continue
         if removed:
             sys.stderr.write(
-                f"[GalacticView3D] plotly cache sweep removed "
+                f"[CosmicView3D] plotly cache sweep removed "
                 f"{removed} orphan scene HTML file(s).\n")
     except Exception as e:
         sys.stderr.write(
-            f"[GalacticView3D] plotly cache sweep skipped: {e}\n")
+            f"[CosmicView3D] plotly cache sweep skipped: {e}\n")
 
 
 def _plotly_cache_dir() -> str:
@@ -5367,7 +5367,7 @@ def _plotly_cache_dir() -> str:
         _sweep_orphan_scene_html(_PLOTLY_CACHE_DIR)
         return _PLOTLY_CACHE_DIR
     import tempfile
-    d = os.path.join(tempfile.gettempdir(), "svenesis_galacticview_plotly")
+    d = os.path.join(tempfile.gettempdir(), "svenesis_cosmicview_plotly")
     os.makedirs(d, exist_ok=True)
     js_path = os.path.join(d, "plotly.min.js")
     if not os.path.isfile(js_path):
@@ -5377,7 +5377,7 @@ def _plotly_cache_dir() -> str:
                 f.write(get_plotlyjs())
         except Exception as e:
             sys.stderr.write(
-                f"[GalacticView3D] plotly.min.js cache write failed: {e}\n")
+                f"[CosmicView3D] plotly.min.js cache write failed: {e}\n")
 
     _sweep_orphan_scene_html(d)
     _PLOTLY_CACHE_DIR = d
@@ -7837,9 +7837,9 @@ class Preview3DWidget(QWidget):
 # ---------------------------------------------------------------------------
 # Main window
 # ---------------------------------------------------------------------------
-class GalacticView3DWindow(QMainWindow):
+class CosmicView3DWindow(QMainWindow):
     """
-    Main window for Svenesis GalacticView 3D.
+    Main window for Svenesis CosmicView 3D.
 
     Left panel: view mode, object info, view presets, cache, export.
     Right panel: interactive 3D Milky Way scene and status log.
@@ -7878,7 +7878,7 @@ class GalacticView3DWindow(QMainWindow):
         # references.  The flag + disabled button are a belt-and-
         # braces guard.
         self._rendering = False
-        self._cache = GalacticViewCache()
+        self._cache = CosmicViewCache()
         self._settings = QSettings(SETTINGS_ORG, SETTINGS_APP)
         # WCS detection is expensive (up to 6 strategies, FITS re-reads).
         # Cache by (file path, mtime) — re-renders for the same image
@@ -7962,7 +7962,7 @@ class GalacticView3DWindow(QMainWindow):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(4, 4, 4, 4)
 
-        lbl = QLabel(f"Svenesis GalacticView 3D {VERSION}")
+        lbl = QLabel(f"Svenesis CosmicView 3D {VERSION}")
         lbl.setStyleSheet(
             "font-size: 15pt; font-weight: bold; color: #88aaff; "
             "margin-top: 5px;")
@@ -8382,7 +8382,7 @@ class GalacticView3DWindow(QMainWindow):
         name_label = QLabel("Filename:")
         name_label.setFixedWidth(70)
         name_layout.addWidget(name_label)
-        self.edit_filename = QLineEdit("galactic_view_3d")
+        self.edit_filename = QLineEdit("cosmic_view_3d")
         self.edit_filename.setToolTip(
             "Base filename for HTML / PNG / CSV exports. "
             "A timestamp is appended automatically.")
@@ -8634,7 +8634,7 @@ class GalacticView3DWindow(QMainWindow):
         self._left_panel = self._build_left_panel()
         layout.addWidget(self._left_panel)
         layout.addWidget(self._build_right_panel(), 1)
-        self.setWindowTitle("Svenesis GalacticView 3D")
+        self.setWindowTitle("Svenesis CosmicView 3D")
         self.setStyleSheet(DARK_STYLESHEET)
         self.resize(1400, 900)
 
@@ -8711,11 +8711,11 @@ class GalacticView3DWindow(QMainWindow):
     # ------------------------------------------------------------------
     def _log(self, msg: str) -> None:
         if threading.current_thread() is not threading.main_thread():
-            self._log_buffer.append(f"[GalacticView3D] {msg}")
+            self._log_buffer.append(f"[CosmicView3D] {msg}")
             return
-        self.log_text.append(f"[GalacticView3D] {msg}")
+        self.log_text.append(f"[CosmicView3D] {msg}")
         try:
-            self.siril.log(f"[GalacticView3D] {msg}")
+            self.siril.log(f"[CosmicView3D] {msg}")
         except (SirilError, OSError, RuntimeError, AttributeError):
             pass
 
@@ -8728,7 +8728,7 @@ class GalacticView3DWindow(QMainWindow):
         into a bug report.
         """
         try:
-            # Strip the '[GV3D] ' tag so _log's own '[GalacticView3D]'
+            # Strip the '[GV3D] ' tag so _log's own '[CosmicView3D]'
             # prefix doesn't stack awkwardly.  Add a 'JS:' marker so
             # users can tell which side of the boundary fired.
             trimmed = msg[len("[GV3D]"):].lstrip(" :")
@@ -9099,7 +9099,7 @@ class GalacticView3DWindow(QMainWindow):
         self.progress.setValue(0)
         self.log_text.clear()
 
-        self._log("Starting GalacticView 3D render...")
+        self._log("Starting CosmicView 3D render...")
         self._update_progress(5, "Loading image from Siril...")
 
         if not self._load_from_siril():
@@ -9529,7 +9529,7 @@ class GalacticView3DWindow(QMainWindow):
         # Build scene dict + figure
         self._update_progress(70, "Building 3D scene...")
         dist_label = (dtxt if dist_ly else "distance unknown")
-        title = (f"Svenesis GalacticView 3D — {obj_name} "
+        title = (f"Svenesis CosmicView 3D — {obj_name} "
                  f"({mode.value} mode)")
 
         # --- Nearest / farthest fan-out across the picked field ------
@@ -9738,7 +9738,7 @@ class GalacticView3DWindow(QMainWindow):
             wd = self.siril.get_siril_wd() or os.getcwd()
         except Exception:
             wd = os.getcwd()
-        base = self.edit_filename.text().strip() or "galactic_view_3d"
+        base = self.edit_filename.text().strip() or "cosmic_view_3d"
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         self._last_html_path = os.path.join(wd, f"{base}_{ts}.html")
         self._last_png_path = os.path.join(wd, f"{base}_{ts}.png")
@@ -10547,7 +10547,7 @@ class GalacticView3DWindow(QMainWindow):
     def _show_coffee_dialog(self) -> None:
         BMC_URL = "https://buymeacoffee.com/sramuschkat"
         dlg = QDialog(self)
-        dlg.setWindowTitle("☕ Support Svenesis GalacticView 3D")
+        dlg.setWindowTitle("☕ Support Svenesis CosmicView 3D")
         dlg.setMinimumSize(520, 480)
         dlg.setStyleSheet(
             "QDialog{background-color:#1e1e1e;color:#e0e0e0}"
@@ -10562,11 +10562,11 @@ class GalacticView3DWindow(QMainWindow):
             "<span style='font-size:48pt;'>☕</span><br>"
             "<span style='font-size:18pt; font-weight:bold; color:#FFDD00;'>"
             "Buy me a Coffee</span><br><br>"
-            "<b style='color:#e0e0e0;'>Enjoying Svenesis GalacticView 3D?</b><br><br>"
+            "<b style='color:#e0e0e0;'>Enjoying Svenesis CosmicView 3D?</b><br><br>"
             "This tool is free and open source. It's built with love for the "
             "astrophotography community by <b style='color:#88aaff;'>Sven Ramuschkat</b> "
             "(<span style='color:#88aaff;'>svenesis.org</span>).<br><br>"
-            "If GalacticView 3D helped you see your image's place in the Milky Way — "
+            "If CosmicView 3D helped you see your image's place in the Milky Way — "
             "consider buying me a coffee to keep development going!<br><br>"
             "<span style='color:#FFDD00;'>☕ Every coffee fuels a new feature, "
             "bug fix, or clear-sky night of testing.</span><br>"
@@ -10617,7 +10617,7 @@ class GalacticView3DWindow(QMainWindow):
     # ------------------------------------------------------------------
     def _show_help_dialog(self) -> None:
         dlg = QDialog(self)
-        dlg.setWindowTitle("Svenesis GalacticView 3D — Help")
+        dlg.setWindowTitle("Svenesis CosmicView 3D — Help")
         dlg.setMinimumSize(800, 600)
         dlg.setStyleSheet(
             "QDialog{background-color:#1e1e1e;color:#e0e0e0}"
@@ -10631,7 +10631,7 @@ class GalacticView3DWindow(QMainWindow):
         tab1.setReadOnly(True)
         tab1.setHtml(
             "<h2 style='color:#88aaff;'>Getting Started</h2>"
-            "<p><b>What does GalacticView 3D do?</b></p>"
+            "<p><b>What does CosmicView 3D do?</b></p>"
             "<p>This script shows <i>where</i> your astrophoto is pointing "
             "in the universe.  It renders the Milky Way (or the cosmic "
             "neighbourhood) as an interactive 3D model and places your "
@@ -11018,10 +11018,10 @@ def main() -> int:
     app = QApplication(sys.argv)
     try:
         siril = s.SirilInterface()
-        win = GalacticView3DWindow(siril)
+        win = CosmicView3DWindow(siril)
         win.showMaximized()
         try:
-            siril.log(f"Svenesis GalacticView 3D v{VERSION} loaded.")
+            siril.log(f"Svenesis CosmicView 3D v{VERSION} loaded.")
         except (SirilError, OSError, RuntimeError):
             pass
         return app.exec()
@@ -11032,7 +11032,7 @@ def main() -> int:
         return 1
     except Exception as e:
         QMessageBox.critical(
-            None, "Svenesis GalacticView 3D Error",
+            None, "Svenesis CosmicView 3D Error",
             f"{e}\n\n{traceback.format_exc()}")
         return 1
 

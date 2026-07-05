@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Tests for the embedded JavaScript of Svenesis-GalacticView3D.py.
+// Tests for the embedded JavaScript of Svenesis-CosmicView3D.py.
 //
 // Run:  node tests/js_harness.mjs
 //
@@ -19,7 +19,7 @@ import {dirname, join} from 'node:path';
 import vm from 'node:vm';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SCRIPT = join(HERE, '..', 'Svenesis-GalacticView3D.py');
+const SCRIPT = join(HERE, '..', 'Svenesis-CosmicView3D.py');
 
 let passed = 0, failed = 0;
 function check(name, cond, detail = '') {

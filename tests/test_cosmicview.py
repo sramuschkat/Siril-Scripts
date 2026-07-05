@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Tests for the pure-function core of Svenesis-GalacticView3D.py.
+"""Tests for the pure-function core of Svenesis-CosmicView3D.py.
 
-Run:  python3 tests/test_galacticview.py
-(or:  pytest tests/test_galacticview.py)
+Run:  python3 tests/test_cosmicview.py
+(or:  pytest tests/test_cosmicview.py)
 
 The shipped script is a single file with heavy runtime deps (sirilpy,
 PyQt6, astropy) that aren't importable outside Siril — so these tests
@@ -32,7 +32,7 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCRIPT = os.path.join(HERE, os.pardir, "Svenesis-GalacticView3D.py")
+SCRIPT = os.path.join(HERE, os.pardir, "Svenesis-CosmicView3D.py")
 FUT = "from __future__ import annotations\n"
 
 _passed = 0

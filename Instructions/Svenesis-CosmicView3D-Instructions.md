@@ -1,14 +1,14 @@
-# Svenesis GalacticView 3D — User Instructions
+# Svenesis CosmicView 3D — User Instructions
 
 **Version 1.0.0** | Siril Python Script for Visualizing Where Your Photo Points in the Universe
 
-> *Your photo is not just anywhere. It is a window into one specific direction of the universe — and now you can see exactly where. GalacticView 3D places Earth in the Orion Arm, hangs your plate-solved image along its true line of sight, and lets you fly the light path from Earth to the target.*
+> *Your photo is not just anywhere. It is a window into one specific direction of the universe — and now you can see exactly where. CosmicView 3D places Earth in the Orion Arm, hangs your plate-solved image along its true line of sight, and lets you fly the light path from Earth to the target.*
 
 ---
 
 ## Table of Contents
 
-1. [What Is GalacticView 3D?](#1-what-is-galacticview-3d)
+1. [What Is CosmicView 3D?](#1-what-is-cosmicview-3d)
 2. [Background for Beginners](#2-background-for-beginners)
 3. [Prerequisites & Installation](#3-prerequisites--installation)
 4. [Getting Started](#4-getting-started)
@@ -31,9 +31,9 @@
 
 ---
 
-## 1. What Is GalacticView 3D?
+## 1. What Is CosmicView 3D?
 
-The **Svenesis GalacticView 3D** is a Siril Python script that answers a question no other astrophotography tool answers:
+The **Svenesis CosmicView 3D** is a Siril Python script that answers a question no other astrophotography tool answers:
 
 > *"My photo is not just anywhere — it is a window into one specific direction of the universe. Where exactly?"*
 
@@ -44,7 +44,7 @@ It reads your currently loaded, **plate-solved** image from Siril, identifies th
 - A **viewing ray** runs from Earth to the photo, showing literally where your telescope was aimed.
 - The target's **distance is made tangible** through a story card, scale rings, and a cinematic **Journey** flight from Earth all the way out to the object.
 
-Where the sibling tool **CosmicDepth 3D** shows the *depth* of everything *inside* one photo, GalacticView 3D zooms out to show *where that whole photo sits* in the structure of the galaxy and the universe.
+Where the sibling tool **CosmicDepth 3D** shows the *depth* of everything *inside* one photo, CosmicView 3D zooms out to show *where that whole photo sits* in the structure of the galaxy and the universe.
 
 ---
 
@@ -56,17 +56,17 @@ A photograph is a flat projection: everything in it lies along one direction fro
 
 ### What does "plate-solved" mean?
 
-Plate-solving matches the star pattern in your image against a catalog and writes a **WCS** (World Coordinate System) solution into the file. This lets the script convert any pixel into a precise sky coordinate (right ascension / declination). GalacticView 3D **requires** a plate-solved image — without WCS, it cannot know which way your photo points.
+Plate-solving matches the star pattern in your image against a catalog and writes a **WCS** (World Coordinate System) solution into the file. This lets the script convert any pixel into a precise sky coordinate (right ascension / declination). CosmicView 3D **requires** a plate-solved image — without WCS, it cannot know which way your photo points.
 
 In Siril: **Tools → Astrometry → Image Plate Solver…**
 
 ### Galactic vs. cosmic scale
 
-The Milky Way is ~100,000 light-years across. The nearest large galaxy, Andromeda, is 2.5 *million* light-years away. Distant galaxies are *billions*. No single linear ruler can show a 500-light-year nebula and a 2-billion-light-year quasar in the same frame. GalacticView 3D solves this with two modes and a log-compressed cosmic scale (explained in §6).
+The Milky Way is ~100,000 light-years across. The nearest large galaxy, Andromeda, is 2.5 *million* light-years away. Distant galaxies are *billions*. No single linear ruler can show a 500-light-year nebula and a 2-billion-light-year quasar in the same frame. CosmicView 3D solves this with two modes and a log-compressed cosmic scale (explained in §6).
 
 ### What is the Orion Arm?
 
-Our Sun sits in a minor spiral arm called the **Orion Arm** (or Orion Spur), between the larger Sagittarius and Perseus arms. GalacticView 3D highlights it because that is *your* address in the galaxy — every photo you take is taken from here.
+Our Sun sits in a minor spiral arm called the **Orion Arm** (or Orion Spur), between the larger Sagittarius and Perseus arms. CosmicView 3D highlights it because that is *your* address in the galaxy — every photo you take is taken from here.
 
 ---
 
@@ -84,7 +84,7 @@ Our Sun sits in a minor spiral arm called the **Orion Arm** (or Orion Spur), bet
 
 ### Installation
 
-1. Place `Svenesis-GalacticView3D.py` in a folder named **Utility** inside one of Siril's Script Storage Directories.
+1. Place `Svenesis-CosmicView3D.py` in a folder named **Utility** inside one of Siril's Script Storage Directories.
 2. Restart Siril (or refresh the scripts menu).
 3. The script appears under **Scripts** in Siril's menu.
 
@@ -100,7 +100,7 @@ Open any deep-sky image in Siril and plate-solve it (**Tools → Astrometry → 
 
 ### Step 2 — Run the script
 
-**Processing → Scripts → Svenesis GalacticView 3D**. The window opens maximized.
+**Processing → Scripts → Svenesis CosmicView 3D**. The window opens maximized.
 
 ### Step 3 — Render
 
@@ -294,7 +294,7 @@ When SIMBAD finds objects *behind* your target within the same photo, they are d
 
 The distance to your target is resolved through a priority chain — the first source that yields a value wins:
 
-1. **Local cache** — a 90-day store in `~/.config/siril/svenesis_galacticview_cache.json`. Re-rendering a known target is instant and offline.
+1. **Local cache** — a 90-day store in `~/.config/siril/svenesis_cosmicview_cache.json`. Re-rendering a known target is instant and offline.
 2. **SIMBAD `mesDistance`** — direct distance measurements from the literature (the most authoritative source). When several measurements exist, the one with the smallest uncertainty (compared in light-years) is chosen.
 3. **Redshift → distance** — for distant galaxies, converted to light-travel distance via `astropy.cosmology.Planck18` (H₀ ≈ 67.4 km/s/Mpc). A linear-Hubble fallback is used only if the cosmology package is unavailable.
 4. **Parallax** — for nearby stars, when reliable. A consistency check rejects SIMBAD's noise parallaxes on extragalactic objects (a galaxy with a spurious sub-milliarcsecond parallax is caught by its redshift).
@@ -369,7 +369,7 @@ Two convenience buttons — **Open Output Folder** and **Open Exported HTML** �
 ## 18. Troubleshooting
 
 **"The image is not plate-solved."**
-GalacticView 3D needs a WCS solution. Plate-solve first: **Tools → Astrometry → Image Plate Solver…**
+CosmicView 3D needs a WCS solution. Plate-solve first: **Tools → Astrometry → Image Plate Solver…**
 
 **SIMBAD is slow or times out.**
 The CDS SIMBAD service occasionally has outages. The script logs *SIMBAD tile timeout* and proceeds with whatever it retrieved; the health probe shortens timeouts automatically. Re-renders of cached targets stay fast and offline.
@@ -403,7 +403,7 @@ After the first render of a target, yes — both the distance and the candidate 
 Mode follows the object's SIMBAD type and distance. Galaxies and quasars are extragalactic (Cosmic); nebulae, clusters and stars are inside the Milky Way (Galactic). You can override this at any time.
 
 **Q: What's the difference from CosmicDepth 3D?**
-CosmicDepth 3D shows the depth of *everything inside one photo*. GalacticView 3D shows *where that whole photo sits* in the galaxy and universe, from Earth's viewpoint.
+CosmicDepth 3D shows the depth of *everything inside one photo*. CosmicView 3D shows *where that whole photo sits* in the galaxy and universe, from Earth's viewpoint.
 
 **Q: Does the Journey represent real travel time?**
 No — nothing travels faster than light. The Journey is a visualization of *distance and the age of the light*. The counter shows how far each point is and how long ago the light in your photo passed it.

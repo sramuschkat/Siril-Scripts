@@ -28,7 +28,7 @@ GPL-3.0-or-later
 | [Svenesis Annotate Image](#svenesis-annotate-image) | Annotate plate-solved images with catalog objects, coordinate grids, and export as PNG/TIFF/JPEG. | [Guide](Instructions/Svenesis-AnnotateImage-Instructions.md) · [DE](Instructions/Svenesis-AnnotateImage-Instructions_de.md) | ✨ |
 | [Svenesis Blink Comparator](#svenesis-blink-comparator) | Animate a folder of FITS frames for rapid visual inspection and data-driven frame selection — statistics table, scatter plot, batch reject, file-based rejection workflow. | [Guide](Instructions/Svenesis-BlinkComparator-Instructions.md) · [DE](Instructions/Svenesis-BlinkComparator-Instructions_de.md) | ✨ |
 | [Svenesis CosmicDepth 3D](#svenesis-cosmicdepth-3d) | Render catalogued objects from a plate-solved image as a rotatable 3D scene — image plane with push-pin depth sticks, SIMBAD distances, stretched-log/linear/hybrid scaling, HTML/PNG/CSV export. | [Guide](Instructions/Svenesis-CosmicDepth3D-Instructions.md) · [DE](Instructions/Svenesis-CosmicDepth3D-Instructions_de.md) | ✨ |
-| [Svenesis GalacticView 3D](#svenesis-galacticview-3d) | See where your astrophoto points in the universe — interactive 3D scene with the photo along its true line of sight, an auto-generated story card, a cinematic Journey flight from Earth to the target, and Story / Explorer view styles. Automatic Galactic / Cosmic mode, Planck18 cosmology. | [Guide](Instructions/Svenesis-GalacticView3D-Instructions.md) · [DE](Instructions/Svenesis-GalacticView3D-Instructions_de.md) | — |
+| [Svenesis CosmicView 3D](#svenesis-cosmicview-3d) | See where your astrophoto points in the universe — interactive 3D scene with the photo along its true line of sight, an auto-generated story card, a cinematic Journey flight from Earth to the target, and Story / Explorer view styles. Automatic Galactic / Cosmic mode, Planck18 cosmology. | [Guide](Instructions/Svenesis-CosmicView3D-Instructions.md) · [DE](Instructions/Svenesis-CosmicView3D-Instructions_de.md) | — |
 | [Svenesis Gradient Analyzer](#svenesis-gradient-analyzer) | Analyze background gradients with heatmaps, diagnostics, and tool recommendations. | [Guide](Instructions/Svenesis-GradientAnalyzer-Instructions.md) · [DE](Instructions/Svenesis-GradientAnalyzer-Instructions_de.md) | ✨ |
 | [Svenesis Multiple Histogram Viewer](#svenesis-multiple-histogram-viewer) | View linear and stretched images with RGB histograms, 3D surface plots, and detailed statistics. | [Guide](Instructions/Svenesis-MultipleHistogramViewer-Instructions.md) · [DE](Instructions/Svenesis-MultipleHistogramViewer-Instructions_de.md) | ✨ |
 | [Svenesis Satellite Trail Cleaner](#svenesis-satellite-trail-cleaner) | Per-frame satellite & aircraft trail detection and inpainting on FITS / XISF / TIFF / RAW subs — STScI's Median Radon Transform (`findsat_mrt`) detection, six inpaint methods with automatic per-frame recommendation, sky-noise matching, format-preserving round-trip, interactive line picker, parallel batch pipeline. | [Guide](Instructions/Svenesis-SatelliteTrailCleaner-Instructions.md) · [DE](Instructions/Svenesis-SatelliteTrailCleaner-Instructions_de.md) | — |
@@ -406,17 +406,19 @@ All exports are written to Siril's working directory with a timestamp appended t
 
 ---
 
-## Svenesis GalacticView 3D
+## Svenesis CosmicView 3D
 
-**File:** `Svenesis-GalacticView3D.py` (v1.0.0) — **[Detailed Instructions](Instructions/Svenesis-GalacticView3D-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-GalacticView3D-Instructions_de.md)**
+**File:** `Svenesis-CosmicView3D.py` (v1.0.0) — **[Detailed Instructions](Instructions/Svenesis-CosmicView3D-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-CosmicView3D-Instructions_de.md)**
 
 > ⚠️ Public preview — not yet submitted to the official Siril Script Repository.
 
-Reads the current plate-solved image from Siril, identifies the main astronomical object via SIMBAD, and renders **where your photo points in the universe** as an interactive 3D model — Earth in the Orion Arm, the astrophoto as a textured rectangle along the exact line of sight, and the target's distance made tangible through a story card, scale rings, and a cinematic **Journey** flight from Earth to the target. GalacticView 3D answers a question that no other tool answers: *"My photo is not just anywhere — it is a window into one specific direction of the universe. Where exactly?"*
+Reads the current plate-solved image from Siril, identifies the main astronomical object via SIMBAD, and renders **where your photo points in the universe** as an interactive 3D model — Earth in the Orion Arm, the astrophoto as a textured rectangle along the exact line of sight, and the target's distance made tangible through a story card, scale rings, and a cinematic **Journey** flight from Earth to the target. CosmicView 3D answers a question that no other tool answers: *"My photo is not just anywhere — it is a window into one specific direction of the universe. Where exactly?"*
+
+> **CosmicView vs. CosmicDepth:** the sibling script **[CosmicDepth 3D](#svenesis-cosmicdepth-3d)** shows the *depth of everything inside one photo* (each catalogued object on its own push-pin at its true distance). **CosmicView 3D** zooms out to show *where that whole photo sits* in the galaxy and the universe, seen from Earth.
 
 ### Screenshots
 
-![GalacticView 3D — Milky Way scene with photo as a window in space](https://github.com/sramuschkat/Siril-Scripts/raw/main/screenshots/GalacticView3D_Image-1.jpg)
+![CosmicView 3D — Milky Way scene with photo as a window in space](https://github.com/sramuschkat/Siril-Scripts/raw/main/screenshots/CosmicView3D_Image-1.jpg)
 
 *Main view: 5-arm Milky Way with galactic disk stars, Earth in the Orion Arm, and the plate-solved astrophoto rendered as a textured rectangle pointing in its actual viewing direction. Drag to rotate, scroll to zoom.*
 
@@ -478,7 +480,7 @@ Reads the current plate-solved image from Siril, identifies the main astronomica
 ### Usage
 
 1. Load an image in Siril and **plate-solve** it (Tools → Astrometry → Image Plate Solver).
-2. Run **Svenesis GalacticView 3D** from Siril: **Processing → Scripts** (or your Scripts menu).
+2. Run **Svenesis CosmicView 3D** from Siril: **Processing → Scripts** (or your Scripts menu).
 3. Confirm (or change) the identified target in the picker dialog.
 4. Watch the opening pull-back reveal where your photo sits; read the story card.
 5. Press **🚀 Journey** (or **J**) to fly the light path from Earth to your target.
@@ -487,7 +489,7 @@ Reads the current plate-solved image from Siril, identifies the main astronomica
 
 ### Development
 
-- `tests/test_galacticview.py` (pure-function tests) and `tests/js_harness.mjs` (embedded-JS camera/overlay tests) run with plain `python3` / `node` — no Siril required.
+- `tests/test_cosmicview.py` (pure-function tests) and `tests/js_harness.mjs` (embedded-JS camera/overlay tests) run with plain `python3` / `node` — no Siril required.
 
 ---
 
