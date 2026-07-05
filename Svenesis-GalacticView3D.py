@@ -83,6 +83,7 @@ import gc
 import io
 import json
 import math
+import dataclasses
 import base64
 import datetime
 import threading
@@ -90,6 +91,30 @@ import traceback
 import warnings
 
 import numpy as np
+
+
+def _log_swallowed(exc: BaseException) -> None:
+    """Last-resort visibility for intentionally-swallowed exceptions.
+
+    The script has many defensive ``except Exception`` guards around
+    optional / decorative features (a failed ring or halo must never
+    kill the whole render).  Previously those guards were bare
+    ``pass`` — a real bug in the guarded block was indistinguishable
+    from "feature intentionally skipped".  Now every swallow leaves a
+    one-line trace on stderr (which Siril surfaces in its console),
+    including the line where the exception was actually raised.
+    """
+    try:
+        tb = exc.__traceback__
+        lineno = -1
+        while tb is not None:      # deepest frame = real blow-up site
+            lineno = tb.tb_lineno
+            tb = tb.tb_next
+        sys.stderr.write(
+            f"[GalacticView3D] swallowed {type(exc).__name__} "
+            f"(line {lineno}): {exc}\n")
+    except Exception:
+        pass  # logging must never throw
 
 import sirilpy as s
 from sirilpy import NoImageError
@@ -103,7 +128,7 @@ except ImportError:
         pass
 
 s.ensure_installed("numpy", "PyQt6", "matplotlib", "astropy", "astroquery",
-                   "plotly", "Pillow", "kaleido")
+                   "plotly", "Pillow", "kaleido", "requests")
 
 try:
     from PyQt6.QtWebEngineWidgets import QWebEngineView as _probe  # noqa
@@ -118,8 +143,8 @@ except Exception:
             s.ensure_installed(f"PyQt6-WebEngine=={_minor}.*")
         except Exception:
             s.ensure_installed("PyQt6-WebEngine")
-    except Exception:
-        pass
+    except Exception as _swallowed_exc:
+        _log_swallowed(_swallowed_exc)
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout,
@@ -356,8 +381,8 @@ from astroquery.simbad import Simbad
 try:
     from astroquery.exceptions import NoResultsWarning as _NoResultsWarning
     warnings.filterwarnings("ignore", category=_NoResultsWarning)
-except Exception:
-    pass
+except Exception as _swallowed_exc:
+    _log_swallowed(_swallowed_exc)
 warnings.filterwarnings(
     "ignore", category=DeprecationWarning, module="astroquery.*")
 
@@ -433,8 +458,51 @@ LOG_WINDOW_COSMIC = 1.0          # picked … picked × 10
 PHOTO_DEFAULT_PX = 480
 
 # SIMBAD tile timeout (seconds) for the per-future guard in
-# collect_simbad_candidates().
+# collect_simbad_candidates().  When the pre-render health probe
+# detects a degraded SIMBAD (see probe_simbad_health), the shorter
+# DEGRADED value is used instead so a dead backend fails fast rather
+# than stalling the pipeline for minutes.
 SIMBAD_TILE_TIMEOUT_S = 30.0
+SIMBAD_TILE_TIMEOUT_DEGRADED_S = 10.0
+SIMBAD_PROBE_TIMEOUT_S = 3.0     # health-probe HTTP timeout
+SIMBAD_PROBE_SLOW_S = 2.0        # probe slower than this → "degraded"
+
+# Cone-search result cache: candidates lists keyed by (RA, Dec, radius,
+# mag limit).  Much shorter TTL than the per-object distance cache —
+# SIMBAD's object database changes slowly, but 7 days keeps things
+# reasonably fresh while making same-target re-renders fully offline.
+CONESEARCH_CACHE_PATH = os.path.join(
+    CACHE_DIR, "svenesis_galacticview_conesearch.json")
+CONESEARCH_TTL_DAYS = 7
+
+# ---- Figure-builder tuning (previously inline magic numbers) -------------
+# Spiral-arm / disk-star LOD fade: full opacity at |camera.eye| >=
+# FULL, zero at <= ZERO, linear ramp between.  Injected into the JS
+# bootstrap via the GV3D_CONFIG object.
+ARM_FADE_EYE_FULL = 1.6
+ARM_FADE_EYE_ZERO = 0.5
+
+# Adaptive scene-box tiers for galactic mode (scene units; 1 unit =
+# 1 kly).  Targets closer than SUBKLY get the tight box, closer than
+# MID the medium box, beyond that the full ±50 kly disk.
+ADAPTIVE_BOX_SUBKLY_UNITS = 1.0   # target <= 1 kly
+ADAPTIVE_BOX_SUBKLY_FLOOR = 0.5   # ±500 ly minimum half-width
+ADAPTIVE_BOX_MID_UNITS = 10.0     # target <= 10 kly
+ADAPTIVE_BOX_MID_FLOOR = 4.0      # ±4 kly minimum half-width
+
+# Reference-structure radii (light-years)
+CMB_DIST_LY = 13.8e9              # last-scattering surface
+LOCAL_BUBBLE_R_LY = 400.0         # supernova-carved local cavity
+LOCAL_GROUP_R_LY = 3_000_000.0    # gravitationally bound group
+LOCAL_BUBBLE_MAX_TARGET_LY = 2_000.0     # draw bubble when target <=
+LOCAL_GROUP_MAX_TARGET_LY = 5_000_000.0  # draw group when target <=
+
+# Photo-texture resolution cap for cosmic mode.  The photo rectangle
+# occupies far less screen space in cosmic mode than in galactic, so a
+# full-resolution texture mesh (the single biggest GPU cost in the
+# scene) buys nothing visually.  The user's Scene Elements value is
+# capped to this in cosmic mode, with a log line explaining why.
+PHOTO_COSMIC_MAX_PX = 288
 
 _RE_WHITESPACE = re.compile(r'\s+')
 
@@ -457,6 +525,68 @@ class ViewMode(str, Enum):
             return cls(str(value))
         except Exception:
             return default if default is not None else cls.GALACTIC
+
+
+@dataclasses.dataclass
+class SceneSpec:
+    """Typed description of everything the figure builder needs.
+
+    Replaces the old ~30-key plain dict.  Constructing with a typo'd
+    keyword now raises ``TypeError`` immediately — the plain dict's
+    failure mode was a silent ``.get()`` default weeks later.
+
+    Backward compatibility: all existing consumers use dict-style
+    access (``scene["mode"]``, ``scene.get("dist_ly")``), so the
+    class implements ``get`` / ``__getitem__`` / ``__contains__``.
+    Unknown keys behave exactly like a dict: ``get`` returns the
+    default, ``[]`` raises ``KeyError``.
+    """
+    mode: "ViewMode"
+    object_name: str = ""
+    object_type: str = ""
+    dist_ly: float | None = None
+    dist_err_ly: float = 0.0
+    nearest_dist_ly: float | None = None
+    nearest_name: str | None = None
+    farthest_dist_ly: float | None = None
+    farthest_name: str | None = None
+    dist_source: str = ""
+    dist_confidence: str = "none"
+    center_ra: float = 0.0
+    center_dec: float = 0.0
+    l_deg: float = 0.0
+    b_deg: float = 0.0
+    fov_radius_deg: float = 0.0
+    photo_corners: list | None = None
+    photo_center_xyz: tuple | None = None
+    photo_texture_mesh: dict | None = None
+    photo_pixel_grid: dict | None = None
+    constellation_lines: dict | None = None
+    background_pins: list = dataclasses.field(default_factory=list)
+    show_arms: bool = True
+    show_disk: bool = True
+    show_neighbors: bool = False
+    show_landmarks: bool = True
+    show_clusters: bool = True
+    show_cosmic_landmarks: bool = True
+    show_cmb: bool = True
+    title: str = "Svenesis GalacticView 3D"
+    distance_label: str = ""
+    arm_hint: str = ""
+    target_arm_membership: tuple | None = None
+    distance_metric: str = "light-travel"
+
+    def get(self, key: str, default=None):
+        return getattr(self, key, default)
+
+    def __getitem__(self, key: str):
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            raise KeyError(key) from None
+
+    def __contains__(self, key: str) -> bool:
+        return hasattr(self, key)
 
 
 # ---------------------------------------------------------------------------
@@ -1446,7 +1576,58 @@ def build_helio_rings(mode: ViewMode) -> list[dict]:
     return rings
 
 
-def build_compass_rose(scene: dict, mode: ViewMode,
+def build_sphere_mesh(center_xyz: tuple[float, float, float],
+                      radius: float,
+                      n_lon: int = 16, n_lat: int = 10,
+                      radius_z: float | None = None,
+                      lat_clamp: float = 1.0) -> dict:
+    """UV-sphere mesh for a Plotly ``Mesh3d`` trace.
+
+    Single implementation shared by the Local Bubble, Local Group,
+    galaxy-cluster halos, and CMB texture sphere (previously four
+    copy-pasted loops).  Returns ``{"x","y","z","i","j","k"}`` lists.
+
+    Vertices are emitted latitude-major (all longitudes of the first
+    latitude, then the next latitude …) — callers that overlay a
+    per-vertex (n_lat, n_lon) grid such as the CMB intensity map rely
+    on this ordering.
+
+    ``radius_z`` allows an oblate/prolate spheroid (defaults to
+    ``radius``).  ``lat_clamp`` < 1.0 keeps the poles open (used by
+    the CMB texture so pole vertices don't pinch).
+    """
+    cx, cy, cz = center_xyz
+    rz = radius if radius_z is None else radius_z
+    lons = np.linspace(0.0, 2.0 * math.pi, n_lon, endpoint=False)
+    lats = np.linspace(-math.pi / 2.0 * lat_clamp,
+                       math.pi / 2.0 * lat_clamp, n_lat)
+    xs: list[float] = []
+    ys: list[float] = []
+    zs: list[float] = []
+    for lat in lats:
+        cos_lat = math.cos(lat)
+        sin_lat = math.sin(lat)
+        for lon in lons:
+            xs.append(cx + radius * cos_lat * math.cos(lon))
+            ys.append(cy + radius * cos_lat * math.sin(lon))
+            zs.append(cz + rz * sin_lat)
+    i_idx: list[int] = []
+    j_idx: list[int] = []
+    k_idx: list[int] = []
+    for la in range(n_lat - 1):
+        for lo in range(n_lon):
+            a = la * n_lon + lo
+            b = la * n_lon + (lo + 1) % n_lon
+            c = (la + 1) * n_lon + (lo + 1) % n_lon
+            d_ = (la + 1) * n_lon + lo
+            i_idx.extend([a, a])
+            j_idx.extend([b, c])
+            k_idx.extend([c, d_])
+    return {"x": xs, "y": ys, "z": zs,
+            "i": i_idx, "j": j_idx, "k": k_idx}
+
+
+def build_compass_rose(scene: "SceneSpec", mode: ViewMode,
                        length: float | None = None
                        ) -> list[dict]:
     """Three short labeled arrows at Earth's origin pointing at:
@@ -1502,16 +1683,16 @@ def extract_wcs_from_header(header_str: str) -> WCS | None:
         w = WCS(hdr, naxis=[1, 2])
         if w.has_celestial:
             return w
-    except Exception:
-        pass
+    except Exception as _swallowed_exc:
+        _log_swallowed(_swallowed_exc)
     try:
         # Sometimes header is returned without line-endings
         hdr = astropy_fits.Header.fromstring(header_str)
         w = WCS(hdr, naxis=[1, 2])
         if w.has_celestial:
             return w
-    except Exception:
-        pass
+    except Exception as _swallowed_exc:
+        _log_swallowed(_swallowed_exc)
     return None
 
 
@@ -1521,8 +1702,8 @@ def extract_wcs_from_fits_file(siril, log_func=None) -> WCS | None:
         fn = siril.get_image_filename()
         if fn and os.path.isfile(fn):
             candidates.append(fn)
-    except Exception:
-        pass
+    except Exception as _swallowed_exc:
+        _log_swallowed(_swallowed_exc)
     try:
         wd = siril.get_siril_wd() or os.getcwd()
         if wd and os.path.isdir(wd):
@@ -1531,8 +1712,8 @@ def extract_wcs_from_fits_file(siril, log_func=None) -> WCS | None:
                                    os.path.join(wd, n)), reverse=True):
                 if name.lower().endswith((".fit", ".fits", ".fts")):
                     candidates.append(os.path.join(wd, name))
-    except Exception:
-        pass
+    except Exception as _swallowed_exc:
+        _log_swallowed(_swallowed_exc)
     seen = set()
     for path in candidates[:5]:
         if path in seen:
@@ -1564,8 +1745,8 @@ def compute_pixel_scale(wcs: WCS) -> float:
                                   - cd[0, 1] * cd[1, 0])) * 3600.0
             if scale > 0:
                 return float(scale)
-    except Exception:
-        pass
+    except Exception as _swallowed_exc:
+        _log_swallowed(_swallowed_exc)
     try:
         return float(abs(wcs.wcs.cdelt[0]) * 3600.0)
     except Exception:
@@ -1673,8 +1854,8 @@ def _simbad_query_object(name: str, log_func=None):
             for field in ("rvz_redshift", "rvz_radvel"):
                 try:
                     custom.add_votable_fields(field)
-                except Exception:
-                    pass
+                except Exception as _swallowed_exc:
+                    _log_swallowed(_swallowed_exc)
             custom.ROW_LIMIT = 5
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
@@ -1736,6 +1917,127 @@ def _is_useful_catalog_name(name: str) -> bool:
     return cs is not None and any(name.startswith(p) for p in cs)
 
 
+# Set by probe_simbad_health(); read by collect_simbad_candidates to
+# pick a fail-fast tile timeout while SIMBAD is degraded.
+_SIMBAD_DEGRADED = False
+
+
+def probe_simbad_health(log_func=None) -> bool:
+    """Quick reachability/latency probe of the SIMBAD backend.
+
+    Returns True when SIMBAD looks healthy.  Side effect: sets the
+    module flag ``_SIMBAD_DEGRADED`` which shortens the per-tile
+    query timeout (30 s → 10 s) so a dead backend fails fast instead
+    of stalling the render pipeline for minutes.
+
+    Uses ``requests`` (an astroquery dependency, guaranteed present).
+    Never raises.
+    """
+    global _SIMBAD_DEGRADED
+    try:
+        import requests
+        import time as _time
+        t0 = _time.monotonic()
+        r = requests.get("https://simbad.u-strasbg.fr/simbad/",
+                         timeout=SIMBAD_PROBE_TIMEOUT_S)
+        elapsed = _time.monotonic() - t0
+        healthy = (r.status_code == 200
+                   and elapsed < SIMBAD_PROBE_SLOW_S)
+        _SIMBAD_DEGRADED = not healthy
+        if log_func:
+            if healthy:
+                log_func(f"SIMBAD health: OK ({elapsed:.1f} s).")
+            else:
+                log_func(
+                    f"SIMBAD health: DEGRADED (HTTP {r.status_code}, "
+                    f"{elapsed:.1f} s) — tile timeout reduced to "
+                    f"{SIMBAD_TILE_TIMEOUT_DEGRADED_S:.0f} s, "
+                    "relying on caches where possible.")
+        return healthy
+    except Exception as e:
+        _SIMBAD_DEGRADED = True
+        if log_func:
+            log_func(f"SIMBAD health: UNREACHABLE ({e}) — tile "
+                     f"timeout reduced to "
+                     f"{SIMBAD_TILE_TIMEOUT_DEGRADED_S:.0f} s, "
+                     "relying on caches where possible.")
+        return False
+
+
+def _conesearch_cache_key(center_ra: float, center_dec: float,
+                          fov_radius_deg: float, row_limit: int,
+                          img_w: int, img_h: int,
+                          pixel_scale_arcsec: float,
+                          mag_limit: float) -> str:
+    """Cache key for a cone-search result.  Includes the image
+    geometry because per-candidate pixel coordinates and sizes are
+    baked into the cached entries."""
+    return (f"{center_ra:.4f}|{center_dec:.4f}|{fov_radius_deg:.3f}|"
+            f"{row_limit}|{img_w}x{img_h}|{pixel_scale_arcsec:.4f}|"
+            f"{mag_limit:g}|v{CACHE_VERSION}")
+
+
+def _conesearch_cache_load(key: str, log_func=None) -> list[dict] | None:
+    """Return cached candidates for ``key`` or None (miss / expired /
+    unreadable).  Failures never propagate — a broken cache file just
+    means a fresh SIMBAD query."""
+    try:
+        with open(CONESEARCH_CACHE_PATH, "r", encoding="utf-8") as f:
+            store = json.load(f)
+        entry = store.get(key)
+        if not entry:
+            return None
+        age_days = ((datetime.datetime.now().timestamp()
+                     - float(entry.get("ts", 0))) / 86400.0)
+        if age_days > CONESEARCH_TTL_DAYS:
+            return None
+        cands = entry.get("candidates")
+        if not isinstance(cands, list):
+            return None
+        # rank_key tuples became lists in the JSON round-trip; restore
+        # tuples so downstream sort/compare semantics stay identical.
+        for c in cands:
+            rk = c.get("rank_key")
+            if isinstance(rk, list):
+                c["rank_key"] = tuple(rk)
+        if log_func:
+            log_func(f"Cone-search cache HIT ({len(cands)} candidates,"
+                     f" {age_days:.1f} d old) — skipping SIMBAD.")
+        return cands
+    except Exception:
+        return None
+
+
+def _conesearch_cache_store(key: str, candidates: list[dict],
+                            log_func=None) -> None:
+    """Persist a cone-search result.  Prunes expired entries on the
+    way so the file can't grow without bound."""
+    try:
+        store: dict = {}
+        try:
+            with open(CONESEARCH_CACHE_PATH, "r",
+                      encoding="utf-8") as f:
+                store = json.load(f)
+            if not isinstance(store, dict):
+                store = {}
+        except Exception:
+            store = {}
+        now_ts = datetime.datetime.now().timestamp()
+        cutoff = now_ts - CONESEARCH_TTL_DAYS * 86400.0
+        store = {k: v for k, v in store.items()
+                 if isinstance(v, dict)
+                 and float(v.get("ts", 0)) >= cutoff}
+        store[key] = {"ts": now_ts, "candidates": candidates}
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        tmp = CONESEARCH_CACHE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(store, f)
+        os.replace(tmp, CONESEARCH_CACHE_PATH)
+    except Exception as e:
+        if log_func:
+            log_func(f"Cone-search cache write failed (ignored): {e}")
+
+
 def collect_simbad_candidates(center_ra: float, center_dec: float,
                               fov_radius_deg: float,
                               row_limit: int = 3000,
@@ -1755,7 +2057,17 @@ def collect_simbad_candidates(center_ra: float, center_dec: float,
     Extra bits kept for GalacticView3D's own use: parallax / redshift /
     distance estimate. Distance is *not* used to filter candidates — the
     list matches CosmicDepth3D's object set exactly.
+
+    Results are cached on disk for CONESEARCH_TTL_DAYS keyed by
+    position + FOV + image geometry, so re-renders of the same target
+    are fully offline (and immune to SIMBAD outages).
     """
+    _cache_key = _conesearch_cache_key(
+        center_ra, center_dec, fov_radius_deg, row_limit,
+        img_w, img_h, pixel_scale_arcsec, mag_limit)
+    _cached = _conesearch_cache_load(_cache_key, log_func=log_func)
+    if _cached is not None:
+        return _cached
 
     def _build_simbad() -> Simbad:
         s = Simbad()
@@ -1824,10 +2136,11 @@ def collect_simbad_candidates(center_ra: float, center_dec: float,
                 ThreadPoolExecutor, as_completed, TimeoutError as FutTimeout,
             )
             # Per-future timeout so a single hung DNS / network stall
-            # cannot freeze the UI thread indefinitely.  Value comes from
-            # the module-level SIMBAD_TILE_TIMEOUT_S constant (30 s by
-            # default, matching the astroquery default with vstack room).
-            TILE_TIMEOUT_S = SIMBAD_TILE_TIMEOUT_S
+            # cannot freeze the pipeline indefinitely.  Fail-fast value
+            # when the pre-render health probe flagged SIMBAD degraded.
+            TILE_TIMEOUT_S = (SIMBAD_TILE_TIMEOUT_DEGRADED_S
+                              if _SIMBAD_DEGRADED
+                              else SIMBAD_TILE_TIMEOUT_S)
             with ThreadPoolExecutor(
                 max_workers=min(8, len(tiles)),
                 thread_name_prefix="simbad_tile",
@@ -2086,9 +2399,9 @@ def collect_simbad_candidates(center_ra: float, center_dec: float,
                                dec=decs_all[finite_mask] * u.deg)
                 seps_finite = center.separation(pts).deg
                 seps_deg[finite_mask] = np.asarray(seps_finite, dtype=float)
-            except Exception:
+            except Exception as _swallowed_exc:
                 # Leave NaN; ranking falls back to 99.0 below.
-                pass
+                _log_swallowed(_swallowed_exc)
 
     candidates: list[dict] = []
     for i, s in enumerate(staged):
@@ -2136,6 +2449,12 @@ def collect_simbad_candidates(center_ra: float, center_dec: float,
             f"(filtered: {filtered_cryptic} non-catalog, "
             f"{filtered_dup} dup, {filtered_mag} over mag "
             f"{mag_limit:g}, {filtered_bounds} outside frame).")
+    # Cache only non-empty results — an empty list may just mean
+    # SIMBAD was down, and caching that would hide candidates for a
+    # week even after the service recovers.
+    if candidates:
+        _conesearch_cache_store(_cache_key, candidates,
+                                log_func=log_func)
     return candidates
 
 
@@ -2355,8 +2674,8 @@ class TargetPickerDialog(QDialog):
                 sb = self.table.verticalScrollBar()
                 if sb is not None:
                     sb.setValue(0)
-            except Exception:
-                pass
+            except Exception as _swallowed_exc:
+                _log_swallowed(_swallowed_exc)
 
         # Run twice: once at the end of this event-loop tick (after
         # layout), and once more on a short delay in case Qt issues a
@@ -3322,8 +3641,31 @@ def _textposition_for(x: float, y: float, z: float) -> str:
 # ---------------------------------------------------------------------------
 # Plotly figure builder
 # ---------------------------------------------------------------------------
-def build_galaxy_figure(scene: dict) -> object:
+def build_galaxy_figure(scene: "SceneSpec") -> object:
     """Build the interactive 3D Plotly figure for the Milky Way + photo.
+
+    Thin exception-safe wrapper around :func:`_build_galaxy_figure_impl`.
+    Applies the scene's chosen distance metric for the entire render
+    pass — ``scale_dist()`` consults the module global, so all 3D
+    positions honour the metric — and guarantees via ``try/finally``
+    that the global is restored even when the figure build raises.
+    Without the ``finally``, one mid-render exception would leave every
+    subsequent render silently using the wrong metric.
+    """
+    if not HAS_PLOTLY:
+        return None
+    global _ACTIVE_DISTANCE_METRIC
+    _prev_metric = _ACTIVE_DISTANCE_METRIC
+    _ACTIVE_DISTANCE_METRIC = scene.get(
+        "distance_metric", "light-travel")
+    try:
+        return _build_galaxy_figure_impl(scene)
+    finally:
+        _ACTIVE_DISTANCE_METRIC = _prev_metric
+
+
+def _build_galaxy_figure_impl(scene: "SceneSpec") -> object:
+    """Figure construction proper — see :func:`build_galaxy_figure`.
 
     Trace z-order (earliest = drawn first = visually behind):
       1. Galactic-plane mesh   (very faint, gives arms a surface)
@@ -3340,22 +3682,9 @@ def build_galaxy_figure(scene: dict) -> object:
     (``Milky Way`` / ``References`` / ``Target`` / ``Background``)
     instead of a flat dump of every trace.
     """
-    if not HAS_PLOTLY:
-        return None
     mode: ViewMode = scene["mode"]
     show_neighbors = scene.get("show_neighbors",
                                mode is ViewMode.COSMIC)
-
-    # P4.12 — apply the chosen distance metric for the entire render
-    # pass.  scale_dist() consults this global, so all 3D positions
-    # (and any pre-computed photo_center / pin xyz that came from
-    # data-pipeline scale_dist calls) honour the metric.  Reset on
-    # the way out so an exception or a parallel call doesn't leak
-    # the setting.
-    global _ACTIVE_DISTANCE_METRIC
-    _prev_metric = _ACTIVE_DISTANCE_METRIC
-    _ACTIVE_DISTANCE_METRIC = scene.get(
-        "distance_metric", "light-travel")
 
     fig = go.Figure()
     gc_x = scale_dist(EARTH_TO_GC_LY, mode)
@@ -3385,8 +3714,8 @@ def build_galaxy_figure(scene: dict) -> object:
                 hoverinfo="skip", showscale=False, showlegend=False,
                 legendgroup="milkyway",
             ))
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
     # --- 2. Distance rings (scale reference) ---
     if scene.get("show_disk", True):
@@ -3472,8 +3801,8 @@ def build_galaxy_figure(scene: dict) -> object:
                     showlegend=False,
                     legendgroup="references",
                 ))
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
     # --- 2a. Log-compression boundary (cosmic mode, 1 Mly) ---
     # `scale_dist` is linear inside 1 Mly, log-compressed beyond.
@@ -3532,8 +3861,8 @@ def build_galaxy_figure(scene: dict) -> object:
                 showlegend=False,
                 legendgroup="references",
             ))
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
     # --- 2c. CMB / observable-universe edge (cosmic mode) ---
     # The cosmic microwave background's last-scattering surface sits
@@ -3546,7 +3875,7 @@ def build_galaxy_figure(scene: dict) -> object:
     # eating the visual budget.
     if mode is ViewMode.COSMIC and scene.get("show_cmb", True):
         try:
-            r_cmb = scale_dist(13.8e9, mode)
+            r_cmb = scale_dist(CMB_DIST_LY, mode)
             # Spherical shape — physically honest.  The observable
             # universe is isotropic by construction in standard
             # ΛCDM cosmology, so the CMB last-scattering surface is
@@ -3649,8 +3978,8 @@ def build_galaxy_figure(scene: dict) -> object:
                 showlegend=False,
                 legendgroup="references",
             ))
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
     # --- 2c-tex. CMB stylized texture sphere (cosmic mode, opt-in) ---
     # Procedural Gaussian-noise texture on a low-poly sphere at the
@@ -3667,36 +3996,19 @@ def build_galaxy_figure(scene: dict) -> object:
     # the universe" gesture.
     if mode is ViewMode.COSMIC and scene.get("show_cmb", True):
         try:
-            r_cmb_t = scale_dist(13.8e9, mode)
-            # Match the wireframe's spherical aspect.  Kept as a
-            # triplet so this stays in sync if anyone ever stylizes
-            # the shape (just change both blocks together).
-            ax_x_t = r_cmb_t * 1.0
-            ax_y_t = r_cmb_t * 1.0
-            ax_z_t = r_cmb_t * 1.0
-            # Reduced from 60×30 = 1800 → 36×18 = 648 vertices.
-            # The CMB texture is already a soft procedural noise
-            # blur; the lower-poly mesh is visually nearly identical
-            # but ~3× cheaper on the WebGL side.
+            r_cmb_t = scale_dist(CMB_DIST_LY, mode)
+            # 36×18 = 648 vertices — the CMB texture is a soft
+            # procedural noise blur, so low-poly is visually fine.
+            # lat_clamp=0.97 keeps pole vertices from pinching.
             n_lon, n_lat = 36, 18
-            lons_t = np.linspace(0.0, 2.0 * math.pi, n_lon,
-                                  endpoint=False)
-            lats_t = np.linspace(-math.pi / 2.0 * 0.97,
-                                  math.pi / 2.0 * 0.97, n_lat)
-            xs_t = []
-            ys_t = []
-            zs_t = []
-            for lat in lats_t:
-                cos_lat = math.cos(lat)
-                sin_lat = math.sin(lat)
-                for lon in lons_t:
-                    xs_t.append(ax_x_t * cos_lat * math.cos(lon))
-                    ys_t.append(ax_y_t * cos_lat * math.sin(lon))
-                    zs_t.append(ax_z_t * sin_lat)
+            mesh = build_sphere_mesh((0.0, 0.0, 0.0), r_cmb_t,
+                                     n_lon=n_lon, n_lat=n_lat,
+                                     lat_clamp=0.97)
             # Procedural Gaussian noise + a few smoothing passes so
             # the texture has spatially-correlated patches rather
             # than per-pixel salt-and-pepper.  Seeded so re-renders
-            # of the same scene don't flicker.
+            # of the same scene don't flicker.  Grid shape matches
+            # build_sphere_mesh's latitude-major vertex order.
             rng_cmb = np.random.default_rng(seed=2725)
             T_grid = rng_cmb.standard_normal((n_lat, n_lon))
             for _ in range(3):
@@ -3708,17 +4020,9 @@ def build_galaxy_figure(scene: dict) -> object:
                     + np.roll(T_grid, -1, axis=1)
                 ) / 5.0
             T_flat = T_grid.flatten().tolist()
-            i_idx, j_idx, k_idx = [], [], []
-            for la in range(n_lat - 1):
-                for lo in range(n_lon):
-                    a = la * n_lon + lo
-                    b = la * n_lon + (lo + 1) % n_lon
-                    c = (la + 1) * n_lon + (lo + 1) % n_lon
-                    d_ = (la + 1) * n_lon + lo
-                    i_idx.extend([a, a]); j_idx.extend([b, c]); k_idx.extend([c, d_])
             fig.add_trace(go.Mesh3d(
-                x=xs_t, y=ys_t, z=zs_t,
-                i=i_idx, j=j_idx, k=k_idx,
+                x=mesh["x"], y=mesh["y"], z=mesh["z"],
+                i=mesh["i"], j=mesh["j"], k=mesh["k"],
                 intensity=T_flat,
                 # Red-blue colorscale mimicking real CMB anisotropy
                 # plots (cold spots blue/violet, hot spots warm).
@@ -3744,8 +4048,8 @@ def build_galaxy_figure(scene: dict) -> object:
                 # the dramatic edge-of-universe view.
                 visible="legendonly",
             ))
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
     # --- 2b. Heliocentric distance rings (galactic mode) ---
     # Earth-centered companion to the GC-centered rings above.  Same
@@ -3802,8 +4106,8 @@ def build_galaxy_figure(scene: dict) -> object:
                     showlegend=False,
                     legendgroup="references",
                 ))
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
     # --- 3. Compass rose ---
     try:
@@ -3834,8 +4138,8 @@ def build_galaxy_figure(scene: dict) -> object:
                 showlegend=False,
                 legendgroup="references",
             ))
-    except Exception:
-        pass
+    except Exception as _swallowed_exc:
+        _log_swallowed(_swallowed_exc)
 
     # --- 4. Galactic disk stars (exponential + arm-biased) ---
     if scene.get("show_disk", True):
@@ -3870,8 +4174,8 @@ def build_galaxy_figure(scene: dict) -> object:
                 showlegend=False,
                 legendgroup="milkyway",
             ))
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
     # --- 5. Spiral arms ---
     if scene.get("show_arms", True):
@@ -3915,8 +4219,8 @@ def build_galaxy_figure(scene: dict) -> object:
                         showlegend=False,
                         legendgroup="milkyway",
                     ))
-            except Exception:
-                pass
+            except Exception as _swallowed_exc:
+                _log_swallowed(_swallowed_exc)
 
     # --- 6. Galactic centre Sgr A* ---
     fig.add_trace(go.Scatter3d(
@@ -3992,10 +4296,10 @@ def build_galaxy_figure(scene: dict) -> object:
                     legendgroup="landmarks",
                     legendgrouptitle_text="Landmarks",
                 ))
-        except Exception:
+        except Exception as _swallowed_exc:
             # Landmark rendering is decorative — a parse error in
             # one entry shouldn't kill the figure.  Silently skip.
-            pass
+            _log_swallowed(_swallowed_exc)
 
     # (Cosmic-history event markers removed by request — labels at
     # specific lookback times along the +x axis are no longer drawn.
@@ -4084,8 +4388,8 @@ def build_galaxy_figure(scene: dict) -> object:
                     legendgroup="cosmic_landmarks",
                     legendgrouptitle_text="Cosmic landmarks",
                 ))
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
     # --- 6d. Galaxy-cluster halos (cosmic mode) ---
     # Translucent spheres at known cluster positions, radius ≈ each
@@ -4094,17 +4398,10 @@ def build_galaxy_figure(scene: dict) -> object:
     # landmarks catalog, turns the void into recognizable structure.
     if mode is ViewMode.COSMIC and scene.get("show_clusters", True):
         try:
-            # Cluster halos are translucent shells; 12×8 = 96 verts
-            # is plenty given the ~10% opacity (was 16×12 = 192).
-            n_lon, n_lat = 12, 8
-            lons = np.linspace(0.0, 2.0 * math.pi, n_lon, endpoint=False)
-            lats = np.linspace(-math.pi / 2.0, math.pi / 2.0, n_lat)
             for cluster in GALAXY_CLUSTERS:
                 cx, cy, cz = gal_to_xyz(
                     cluster["l"], cluster["b"],
                     scale_dist(float(cluster["dist_ly"]), mode))
-                r_units = scale_dist(
-                    float(cluster["extent_ly"]), mode)
                 # In cosmic mode `scale_dist` is non-linear; the
                 # cluster's apparent size in scene units depends on
                 # whether we're in the linear (≤1 Mly) or log
@@ -4120,20 +4417,11 @@ def build_galaxy_figure(scene: dict) -> object:
                               - cluster["extent_ly"])),
                     mode)
                 r_units = max(0.05, (r_outer - r_inner) * 0.5)
-                xs_c, ys_c, zs_c = [], [], []
-                for lat in lats:
-                    for lon in lons:
-                        xs_c.append(cx + r_units * math.cos(lat) * math.cos(lon))
-                        ys_c.append(cy + r_units * math.cos(lat) * math.sin(lon))
-                        zs_c.append(cz + r_units * math.sin(lat))
-                i_idx, j_idx, k_idx = [], [], []
-                for la in range(n_lat - 1):
-                    for lo in range(n_lon):
-                        a = la * n_lon + lo
-                        b = la * n_lon + (lo + 1) % n_lon
-                        c = (la + 1) * n_lon + (lo + 1) % n_lon
-                        d_ = (la + 1) * n_lon + lo
-                        i_idx.extend([a, a]); j_idx.extend([b, c]); k_idx.extend([c, d_])
+                # 12×8 = 96 verts is plenty at ~10 % opacity.
+                mesh = build_sphere_mesh((cx, cy, cz), r_units,
+                                         n_lon=12, n_lat=8)
+                xs_c, ys_c, zs_c = mesh["x"], mesh["y"], mesh["z"]
+                i_idx, j_idx, k_idx = mesh["i"], mesh["j"], mesh["k"]
                 z_cl, lb_cl = estimate_z_and_lookback(
                     float(cluster["dist_ly"]))
                 z_str = (f"{z_cl:.4f}" if z_cl < 0.01
@@ -4162,8 +4450,8 @@ def build_galaxy_figure(scene: dict) -> object:
                     legendgroup="clusters",
                     legendgrouptitle_text="Galaxy clusters",
                 ))
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
     # --- 6c. Local Group boundary (cosmic mode, nearby targets) ---
     # The Milky Way + Andromeda + ~80 satellites form the Local
@@ -4172,30 +4460,15 @@ def build_galaxy_figure(scene: dict) -> object:
     # gives "your photo is in the Local Group" framing.
     dist_ly_lg = scene.get("dist_ly") or 0.0
     if (mode is ViewMode.COSMIC and dist_ly_lg > 0
-            and dist_ly_lg <= 5_000_000.0
+            and dist_ly_lg <= LOCAL_GROUP_MAX_TARGET_LY
             and scene.get("show_disk", True)):
         try:
-            r_units = scale_dist(3_000_000.0, mode)   # 3 Mly
-            n_lon, n_lat = 16, 10
-            lons = np.linspace(0.0, 2.0 * math.pi, n_lon, endpoint=False)
-            lats = np.linspace(-math.pi / 2.0, math.pi / 2.0, n_lat)
-            xs_g, ys_g, zs_g = [], [], []
-            for lat in lats:
-                for lon in lons:
-                    xs_g.append(r_units * math.cos(lat) * math.cos(lon))
-                    ys_g.append(r_units * math.cos(lat) * math.sin(lon))
-                    zs_g.append(r_units * math.sin(lat))
-            i_idx, j_idx, k_idx = [], [], []
-            for la in range(n_lat - 1):
-                for lo in range(n_lon):
-                    a = la * n_lon + lo
-                    b = la * n_lon + (lo + 1) % n_lon
-                    c = (la + 1) * n_lon + (lo + 1) % n_lon
-                    d_ = (la + 1) * n_lon + lo
-                    i_idx.extend([a, a]); j_idx.extend([b, c]); k_idx.extend([c, d_])
+            r_units = scale_dist(LOCAL_GROUP_R_LY, mode)
+            mesh = build_sphere_mesh((0.0, 0.0, 0.0), r_units,
+                                     n_lon=16, n_lat=10)
             fig.add_trace(go.Mesh3d(
-                x=xs_g, y=ys_g, z=zs_g,
-                i=i_idx, j=j_idx, k=k_idx,
+                x=mesh["x"], y=mesh["y"], z=mesh["z"],
+                i=mesh["i"], j=mesh["j"], k=mesh["k"],
                 color="#a08060", opacity=0.05,
                 name="Local Group (~3 Mly)",
                 hovertext=("Local Group — gravitationally bound "
@@ -4207,8 +4480,8 @@ def build_galaxy_figure(scene: dict) -> object:
                 legendgroup="references",
                 legendgrouptitle_text="References",
             ))
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
     # --- 6b. Local Bubble (galactic mode, nearby targets only) ---
     # The Solar System sits inside a low-density cavity carved by
@@ -4221,32 +4494,15 @@ def build_galaxy_figure(scene: dict) -> object:
     # clutter the scene).
     dist_ly_val_bubble = scene.get("dist_ly") or 0.0
     if (mode is ViewMode.GALACTIC and dist_ly_val_bubble > 0
-            and dist_ly_val_bubble <= 2000.0
+            and dist_ly_val_bubble <= LOCAL_BUBBLE_MAX_TARGET_LY
             and scene.get("show_disk", True)):
         try:
-            bubble_r_ly = 400.0   # ~400-ly average radius
-            r_units = scale_dist(bubble_r_ly, mode)
-            # Low-poly sphere mesh (UV sphere) — 16×10 = 160 verts.
-            n_lon, n_lat = 16, 10
-            lons = np.linspace(0.0, 2.0 * math.pi, n_lon, endpoint=False)
-            lats = np.linspace(-math.pi / 2.0, math.pi / 2.0, n_lat)
-            xs_b, ys_b, zs_b = [], [], []
-            for lat in lats:
-                for lon in lons:
-                    xs_b.append(r_units * math.cos(lat) * math.cos(lon))
-                    ys_b.append(r_units * math.cos(lat) * math.sin(lon))
-                    zs_b.append(r_units * math.sin(lat))
-            i_idx, j_idx, k_idx = [], [], []
-            for la in range(n_lat - 1):
-                for lo in range(n_lon):
-                    a = la * n_lon + lo
-                    b = la * n_lon + (lo + 1) % n_lon
-                    c = (la + 1) * n_lon + (lo + 1) % n_lon
-                    d_ = (la + 1) * n_lon + lo
-                    i_idx.extend([a, a]); j_idx.extend([b, c]); k_idx.extend([c, d_])
+            r_units = scale_dist(LOCAL_BUBBLE_R_LY, mode)
+            mesh = build_sphere_mesh((0.0, 0.0, 0.0), r_units,
+                                     n_lon=16, n_lat=10)
             fig.add_trace(go.Mesh3d(
-                x=xs_b, y=ys_b, z=zs_b,
-                i=i_idx, j=j_idx, k=k_idx,
+                x=mesh["x"], y=mesh["y"], z=mesh["z"],
+                i=mesh["i"], j=mesh["j"], k=mesh["k"],
                 color="#5a8aaa", opacity=0.06,
                 name="Local Bubble (~400 ly)",
                 hovertext=("Local Bubble — supernova-carved cavity "
@@ -4257,8 +4513,8 @@ def build_galaxy_figure(scene: dict) -> object:
                 legendgroup="references",
                 legendgrouptitle_text="References",
             ))
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
     # --- 7. Earth at origin (target-reticle "you are here" glyph) ---
     # Stacked traces: outer open ring (halo) + inner solid dot.  Reads
@@ -4355,8 +4611,8 @@ def build_galaxy_figure(scene: dict) -> object:
                 showlegend=False,
                 legendgroup="milkyway",
             ))
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
     # --- 8. Neighbor galaxies (cosmic mode) ---
     if show_neighbors:
@@ -4500,8 +4756,8 @@ def build_galaxy_figure(scene: dict) -> object:
                     legendgroup="target",
                     legendgrouptitle_text="Target",
                 ))
-            except Exception:
-                pass
+            except Exception as _swallowed_exc:
+                _log_swallowed(_swallowed_exc)
 
         # Bright outline always on top
         fig.add_trace(go.Scatter3d(
@@ -4724,8 +4980,8 @@ def build_galaxy_figure(scene: dict) -> object:
                 legendgroup="references",
                 legendgrouptitle_text="References",
             ))
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
     # --- Layout ---
     title = scene.get("title", "Svenesis GalacticView 3D")
@@ -4790,8 +5046,8 @@ def build_galaxy_figure(scene: dict) -> object:
         #     this tier is left to the JS LOD fade below.
         #   1-10 kly target → previous behaviour (±4 kly floor).
         #   ≥10 kly target  → no override (full ±50 kly disk).
-        if pc_mag < 1.0:        # target ≤ 1 kly
-            box = max(pc_mag * 2.5, 0.5)   # ±500 ly floor
+        if pc_mag < ADAPTIVE_BOX_SUBKLY_UNITS:        # target ≤ 1 kly
+            box = max(pc_mag * 2.5, ADAPTIVE_BOX_SUBKLY_FLOOR)
             xaxis_kw["range"] = [
                 min(-box, photo_center_pre[0] - box),
                 max(box, photo_center_pre[0] + box)]
@@ -4801,8 +5057,8 @@ def build_galaxy_figure(scene: dict) -> object:
             zaxis_kw["range"] = [-box * 0.6, box * 0.6]
             aspect_kw = dict(aspectmode="manual",
                              aspectratio=dict(x=1.0, y=1.0, z=0.55))
-        elif pc_mag < 10.0:     # target 1-10 kly
-            box = max(pc_mag * 2.2, 4.0)   # ±4 kly floor
+        elif pc_mag < ADAPTIVE_BOX_MID_UNITS:         # target 1-10 kly
+            box = max(pc_mag * 2.2, ADAPTIVE_BOX_MID_FLOOR)
             xaxis_kw["range"] = [
                 min(-box, photo_center_pre[0] - box),
                 max(box, photo_center_pre[0] + box)]
@@ -4833,9 +5089,9 @@ def build_galaxy_figure(scene: dict) -> object:
         pc_mag_init = math.sqrt(photo_center_pre[0] ** 2
                                 + photo_center_pre[1] ** 2
                                 + photo_center_pre[2] ** 2)
-        if pc_mag_init < 1.0:        # ≤ 1 kly target
+        if pc_mag_init < ADAPTIVE_BOX_SUBKLY_UNITS:   # ≤ 1 kly target
             initial_eye = dict(x=0.55, y=0.55, z=0.35)
-        elif pc_mag_init < 10.0:     # 1-10 kly target
+        elif pc_mag_init < ADAPTIVE_BOX_MID_UNITS:    # 1-10 kly target
             initial_eye = dict(x=0.95, y=0.95, z=0.6)
 
     fig.update_layout(
@@ -4857,16 +5113,13 @@ def build_galaxy_figure(scene: dict) -> object:
                     groupclick="toggleitem"),
         margin=dict(l=0, r=0, b=0, t=40),
     )
-    # P4.12 — reset metric so a subsequent call (or an unrelated
-    # scale_dist invocation in the data pipeline) sees the default.
-    _ACTIVE_DISTANCE_METRIC = _prev_metric
     return fig
 
 
 # ---------------------------------------------------------------------------
 # Matplotlib fallback renderer (static PNG)
 # ---------------------------------------------------------------------------
-def render_matplotlib_galaxy(scene: dict, out_path: str,
+def render_matplotlib_galaxy(scene: "SceneSpec", out_path: str,
                              width: int = 1400, height: int = 1000,
                              dpi: int = 150) -> None:
     mode: ViewMode = scene["mode"]
@@ -5059,16 +5312,21 @@ _CAMERA_BOOTSTRAP_JS = r"""
         } catch (e) {}
     });
 
+    // All Python→JS values arrive through ONE json.dumps-generated
+    // config object.  Single injection point = no per-value escaping
+    // hazards, and json.dumps guarantees valid JS literals (the old
+    // multi-placeholder .replace() chain plus %-formatting caused an
+    // "unsupported format character" crash once already).
+    var CFG = __GV3D_CONFIG__;
     // Photo centre in **scene world coordinates**.  Null when no photo
-    // has been projected yet (e.g. WCS failure).  Injected from Python.
-    var PHOTO = __PHOTO_CENTER__;
-    // P2.6 — arm centroids in scene coords, keyed by arm name.
-    // Used by presetCamera('arm:<name>') to fly to that arm.
-    // Empty object in cosmic mode (arms collapse to nothing there).
-    var ARMS = __ARMS__;
+    // has been projected yet (e.g. WCS failure).
+    var PHOTO = CFG.photo;
+    // Arm centroids in scene coords, keyed by arm name.  Used by
+    // presetCamera('arm:<name>').  Empty object in cosmic mode.
+    var ARMS = CFG.arms;
     // View mode ("galactic"/"cosmic") so the scale-bar knows how to
     // translate scene units → light-years.
-    var MODE = __MODE__;
+    var MODE = CFG.mode;
     // Default eye for the "reset" preset — mirrors build_galaxy_figure's
     // initial scene.camera.eye so Reset goes back to the exact startup
     // view even after axis ranges have been shrunk by the zoom trick.
@@ -5564,9 +5822,15 @@ _CAMERA_BOOTSTRAP_JS = r"""
         var mag = Math.sqrt(e.x*e.x + e.y*e.y + e.z*e.z);
         // Linear ramp: full opacity at |eye| >= 1.6, zero at <= 0.5.
         var alpha;
-        if (mag >= 1.6)      { alpha = 1.0; }
-        else if (mag <= 0.5) { alpha = 0.0; }
-        else                 { alpha = (mag - 0.5) / 1.1; }
+        // Thresholds come from Python's ARM_FADE_EYE_* constants
+        // via the CFG object — single source of truth.
+        var fadeFull = CFG.armFadeFull || 1.6;
+        var fadeZero = CFG.armFadeZero || 0.5;
+        if (mag >= fadeFull)      { alpha = 1.0; }
+        else if (mag <= fadeZero) { alpha = 0.0; }
+        else {
+            alpha = (mag - fadeZero) / (fadeFull - fadeZero);
+        }
         // Skip the restyle if the change is too small to see —
         // restyle is not free and we get called on every relayout.
         if (Math.abs(alpha - _lastArmAlpha) < 0.02) { return; }
@@ -5956,30 +6220,27 @@ _CAMERA_BOOTSTRAP_JS = r"""
 """
 
 
-def _arms_json_for_js(mode: ViewMode | None) -> str:
-    """Return a JSON literal mapping arm names to their midpoint
-    scene-space (x, y, z) so the JS preset code can fly the camera
-    to a named arm.  Galactic mode only — in cosmic mode the arms
-    collapse to nothing.
+def _arms_dict_for_js(mode: ViewMode | None) -> dict:
+    """Arm-name → midpoint scene-space [x, y, z] mapping for the JS
+    ``presetCamera('arm:<name>')`` fly-to feature.  Galactic mode
+    only — in cosmic mode the arms collapse to nothing, so an empty
+    dict disables the feature cleanly.
     """
     if mode is not ViewMode.GALACTIC:
-        return "{}"
-    parts = []
+        return {}
+    arms: dict = {}
     for arm in SPIRAL_ARMS:
         try:
             pts = arm_scene_points(arm, ViewMode.GALACTIC, n_pts=80)
             xs, ys, zs = pts["x"], pts["y"], pts["z"]
             if not xs:
                 continue
-            mx = sum(xs) / len(xs)
-            my = sum(ys) / len(ys)
-            mz = sum(zs) / len(zs)
-            # Escape any embedded quote in the name (defensive).
-            name = arm["name"].replace('"', '\\"')
-            parts.append(f'"{name}":[{mx:.4f},{my:.4f},{mz:.4f}]')
+            arms[arm["name"]] = [round(sum(xs) / len(xs), 4),
+                                 round(sum(ys) / len(ys), 4),
+                                 round(sum(zs) / len(zs), 4)]
         except Exception:
             continue
-    return "{" + ",".join(parts) + "}"
+    return arms
 
 
 def _inject_camera_bootstrap(html_content: str,
@@ -5991,32 +6252,35 @@ def _inject_camera_bootstrap(html_content: str,
     preset button during page load would no-op because ``window.gv3d``
     didn't exist yet.
 
-    ``mode`` is forwarded so the browser-side scale bar knows whether
-    the scene uses galactic-linear (1 unit = 1 kly) or cosmic
-    linear-then-log (1 unit = 100 kly up to 10 units, log beyond)
-    distance scaling.
+    All dynamic values travel through ONE ``json.dumps``-generated
+    config object (``__GV3D_CONFIG__``) — a single injection point
+    with guaranteed-valid JS literals, replacing the old per-value
+    ``.replace()`` chain.
     """
-    if photo_center_xyz is None:
-        photo_json = "null"
-    else:
+    photo_val = None
+    if photo_center_xyz is not None:
         try:
-            px, py, pz = (float(photo_center_xyz[0]),
-                          float(photo_center_xyz[1]),
-                          float(photo_center_xyz[2]))
-            photo_json = f"[{px:.6f}, {py:.6f}, {pz:.6f}]"
+            photo_val = [round(float(photo_center_xyz[0]), 6),
+                         round(float(photo_center_xyz[1]), 6),
+                         round(float(photo_center_xyz[2]), 6)]
         except Exception:
-            photo_json = "null"
+            photo_val = None
     if mode is ViewMode.COSMIC:
-        mode_json = '"cosmic"'
-    elif mode is ViewMode.GALACTIC:
-        mode_json = '"galactic"'
+        mode_val = "cosmic"
     else:
-        # Best-effort fallback: most scenes are galactic.
-        mode_json = '"galactic"'
-    snippet = (_CAMERA_BOOTSTRAP_JS
-               .replace("__PHOTO_CENTER__", photo_json)
-               .replace("__MODE__", mode_json)
-               .replace("__ARMS__", _arms_json_for_js(mode)))
+        # Galactic, or best-effort fallback (most scenes are galactic).
+        mode_val = "galactic"
+    config = {
+        "photo": photo_val,
+        "mode": mode_val,
+        "arms": _arms_dict_for_js(mode),
+        # LOD-fade thresholds for arms/disk-stars — single source of
+        # truth is the Python constants block.
+        "armFadeFull": ARM_FADE_EYE_FULL,
+        "armFadeZero": ARM_FADE_EYE_ZERO,
+    }
+    snippet = _CAMERA_BOOTSTRAP_JS.replace(
+        "__GV3D_CONFIG__", json.dumps(config))
     # Inject just before </body>; fall back to append if the close
     # tag isn't present (pio.to_html should always include one).
     low = html_content.lower()
@@ -6263,8 +6527,8 @@ class _TrackballWidget(QWidget):
         self._pending_del = 0.0
         try:
             self._orbit_cb(daz, delev)
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
     # ---- painting -----------------------------------------------------
     def paintEvent(self, event):  # noqa: N802 (Qt naming)
@@ -6613,7 +6877,7 @@ class NavigationPad(QWidget):
             var lo = mid - newHalf;
             var hi = mid + newHalf;
             // Widen so every must-keep vertex on this axis stays
-            // inside [lo, hi].  Small 2%% pad so points don't sit
+            // inside [lo, hi].  Small 2% pad so points don't sit
             // exactly on the clipping plane (where Plotly's
             // numerical tolerance sometimes still culls them).
             var kmin = keepMin[idx];
@@ -6717,7 +6981,7 @@ class NavigationPad(QWidget):
     }
 
     Plotly.relayout(gd, relayoutArgs);
-})(%f, %f, %f, %s);
+})(__NAV_ARGS__);
 """
     # Inject module-level camera clamps into the JS template so the
     # Python constant is the single source of truth.  Done once at
@@ -6786,12 +7050,18 @@ class NavigationPad(QWidget):
         if not (math.isfinite(daz) and math.isfinite(del_)
                 and math.isfinite(zoom)):
             return
-        js = self._JS_CAMERA % (daz, del_, zoom,
-                                "true" if reset else "false")
+        # .replace() injection instead of %-formatting: the JS body
+        # contains literal '%' characters (comments, CSS strings) and
+        # %-formatting a 6-kB template has already caused one
+        # "unsupported format character" crash.  repr(float) always
+        # yields a valid JS number for finite inputs (guarded above).
+        nav_args = (f"{daz!r}, {del_!r}, {zoom!r}, "
+                    f"{'true' if reset else 'false'}")
+        js = self._JS_CAMERA.replace("__NAV_ARGS__", nav_args)
         try:
             self._run_js(js)
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
     def _orbit(self, daz_deg: float, del_deg: float) -> None:
         self._run(daz_deg, del_deg, 1.0, False)
@@ -6834,7 +7104,7 @@ class Preview3DWidget(QWidget):
         self._clear_children()
         placeholder = QLabel(
             "The 3D map will appear here after rendering.\n"
-            "Press \u201cRender 3D Map\u201d (F5).")
+            "Press “Render 3D Map” (F5).")
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         placeholder.setStyleSheet(
             "color:#888888;font-size:11pt;border:1px dashed #555555;"
@@ -6861,9 +7131,9 @@ class Preview3DWidget(QWidget):
         diag_label.setStyleSheet(
             "color:#ffd27f;font-size:10pt;font-weight:bold;border:0;")
         bl.addWidget(diag_label)
-        button_text = ("Install WebEngine\u2026"
+        button_text = ("Install WebEngine…"
                        if diag["kind"] == "missing"
-                       else "Repair WebEngine\u2026")
+                       else "Repair WebEngine…")
         if WEBENGINE_ERROR:
             err = QLabel(f"Error: {WEBENGINE_ERROR}")
             err.setWordWrap(True)
@@ -6924,8 +7194,8 @@ class Preview3DWidget(QWidget):
                     if message and message.startswith("[GV3D]"):
                         try:
                             outer.js_log.emit(message)
-                        except Exception:
-                            pass
+                        except Exception as _swallowed_exc:
+                            _log_swallowed(_swallowed_exc)
                     # Drop everything else — Plotly/WebEngine emit a lot
                     # of benign chatter we don't want in the Log tab.
 
@@ -6942,8 +7212,8 @@ class Preview3DWidget(QWidget):
         if prev and os.path.isfile(prev):
             try:
                 os.remove(prev)
-            except Exception:
-                pass
+            except Exception as _swallowed_exc:
+                _log_swallowed(_swallowed_exc)
         path = os.path.join(cache_dir,
                             f"scene_{os.getpid()}_{id(self):x}.html")
         with open(path, "w", encoding="utf-8") as f:
@@ -6964,8 +7234,8 @@ class Preview3DWidget(QWidget):
             return
         try:
             view.page().runJavaScript(js)
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
     def show_png(self, path: str) -> None:
         from PyQt6.QtGui import QPixmap
@@ -7013,7 +7283,7 @@ class GalacticView3DWindow(QMainWindow):
         self._last_png_path = ""
         self._last_csv_path = ""
         self._last_figure = None
-        self._last_scene: dict | None = None
+        self._last_scene: SceneSpec | None = None
         # H3 re-entrancy guard.  _update_progress() calls
         # QApplication.processEvents() and TargetPickerDialog.exec()
         # spins a modal loop, so a second F5 or a rapid double-click on
@@ -7122,7 +7392,7 @@ class GalacticView3DWindow(QMainWindow):
 
         layout.addStretch()
 
-        btn_coffee = QPushButton("\u2615  Buy me a Coffee")
+        btn_coffee = QPushButton("☕  Buy me a Coffee")
         _nofocus(btn_coffee)
         btn_coffee.setObjectName("CoffeeButton")
         btn_coffee.setToolTip("Support the development of this tool")
@@ -7784,9 +8054,9 @@ class GalacticView3DWindow(QMainWindow):
             # users can tell which side of the boundary fired.
             trimmed = msg[len("[GV3D]"):].lstrip(" :")
             self._log(f"JS: {trimmed}")
-        except Exception:
+        except Exception as _swallowed_exc:
             # Never let logging throw inside a Qt signal slot.
-            pass
+            _log_swallowed(_swallowed_exc)
 
     def _flush_log_buffer(self) -> None:
         while self._log_buffer:
@@ -7971,10 +8241,10 @@ class GalacticView3DWindow(QMainWindow):
                 }
 
             ch_str = "RGB" if self._img_channels >= 3 else "Mono"
-            wcs_str = ("plate-solved \u2713" if self._is_plate_solved
-                       else "NOT plate-solved \u2717")
+            wcs_str = ("plate-solved ✓" if self._is_plate_solved
+                       else "NOT plate-solved ✗")
             self.lbl_image_info.setText(
-                f"{self._img_width} \u00d7 {self._img_height} px  |  "
+                f"{self._img_width} × {self._img_height} px  |  "
                 f"{ch_str}  |  {wcs_str}")
             self._log(f"Image: {self._img_width}x{self._img_height}, "
                       f"plate_solved={self._is_plate_solved}, "
@@ -8081,18 +8351,66 @@ class GalacticView3DWindow(QMainWindow):
             # buffer that the in-flight render is about to clear.
             return
         self._rendering = True
+        # Snapshot the distance-metric global so an exception anywhere
+        # in the render pipeline can't leak a non-default metric into
+        # subsequent renders (which would silently place everything at
+        # wrong 3D positions).
+        global _ACTIVE_DISTANCE_METRIC
+        _metric_before_render = _ACTIVE_DISTANCE_METRIC
         try:
             self.btn_render.setEnabled(False)
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
         try:
             self._do_render()
         finally:
             self._rendering = False
+            _ACTIVE_DISTANCE_METRIC = _metric_before_render
             try:
                 self.btn_render.setEnabled(True)
-            except Exception:
-                pass
+            except Exception as _swallowed_exc:
+                _log_swallowed(_swallowed_exc)
+
+    def _run_blocking(self, fn, *args, **kwargs):
+        """Run a blocking callable on a worker thread while keeping
+        the Qt UI responsive.
+
+        Spins a local ``QEventLoop`` with a 50 ms ``QTimer`` polling
+        the future — the window keeps repainting, the progress bar
+        animates, and a hung SIMBAD backend can no longer freeze the
+        whole application (the old behaviour: everything ran on the
+        main thread, patched over with ``processEvents()``).
+
+        Re-entrant renders are prevented by the ``self._rendering``
+        guard in ``_on_render``.  Exceptions raised by ``fn``
+        propagate to the caller exactly as if it had been called
+        directly.  Worker-side logging is safe: ``_log`` detects
+        non-main-thread calls and buffers (see ``_flush_log_buffer``).
+
+        Note on sirilpy: only ONE thread talks to Siril at any moment
+        (the main thread merely spins the event loop while waiting),
+        so the socket protocol stays serialized.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+        from PyQt6.QtCore import QEventLoop, QTimer
+        with ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="gv3d_pipeline") as pool:
+            future = pool.submit(fn, *args, **kwargs)
+            loop = QEventLoop()
+            timer = QTimer()
+            timer.setInterval(50)
+
+            def _poll():
+                if future.done():
+                    timer.stop()
+                    loop.quit()
+
+            timer.timeout.connect(_poll)
+            timer.start()
+            loop.exec()
+        # .result() re-raises any exception from the worker.
+        return future.result()
 
     def _do_render(self) -> None:
         self.progress.setVisible(True)
@@ -8111,7 +8429,7 @@ class GalacticView3DWindow(QMainWindow):
             QMessageBox.warning(
                 self, "Not Plate-Solved",
                 "The image is not plate-solved. Please run Plate Solving first.\n\n"
-                "In Siril: Tools \u2192 Astrometry \u2192 Image Plate Solver...")
+                "In Siril: Tools → Astrometry → Image Plate Solver...")
             self._log("ERROR: Image is not plate-solved. Aborting.")
             self.progress.setVisible(False)
             return
@@ -8137,9 +8455,23 @@ class GalacticView3DWindow(QMainWindow):
         self._log(f"Galactic:    l={l_deg:.2f}° b={b_deg:.2f}°, "
                   f"FOV radius {fov_radius_deg:.3f}°")
 
-        # Identify main object
+        # SIMBAD health probe first (worker thread, ≤3 s): when the
+        # backend is down or slow, per-tile query timeouts drop from
+        # 30 s to 10 s so the pipeline fails fast instead of stalling.
+        if self.chk_use_online.isChecked():
+            self._update_progress(20, "Checking SIMBAD health...")
+            try:
+                self._run_blocking(probe_simbad_health,
+                                   log_func=self._log)
+            except Exception as e:
+                self._log(f"SIMBAD probe failed unexpectedly: {e}")
+            self._flush_log_buffer()
+
+        # Identify main object — worker thread so a slow SIMBAD can't
+        # freeze the window.
         self._update_progress(25, "Identifying main object...")
-        obj_name, simbad_result = identify_main_object(
+        obj_name, simbad_result = self._run_blocking(
+            identify_main_object,
             self.siril, self._wcs,
             self._img_width, self._img_height,
             float(center_ra), float(center_dec),
@@ -8168,7 +8500,8 @@ class GalacticView3DWindow(QMainWindow):
         if obj_name:
             self._update_progress(30, "Resolving auto-pick distance...")
             (auto_dist_ly, auto_dist_err,
-             auto_dist_src, auto_dist_conf) = resolve_object_distance(
+             auto_dist_src, auto_dist_conf) = self._run_blocking(
+                resolve_object_distance,
                 obj_name, obj_type, simbad_result, self._cache,
                 use_online=self.chk_use_online.isChecked(),
                 log_func=self._log)
@@ -8180,7 +8513,8 @@ class GalacticView3DWindow(QMainWindow):
         self._update_progress(35, "Collecting SIMBAD candidates...")
         candidates = []
         if self.chk_use_online.isChecked():
-            candidates = collect_simbad_candidates(
+            candidates = self._run_blocking(
+                collect_simbad_candidates,
                 float(center_ra), float(center_dec),
                 fov_radius_deg, log_func=self._log,
                 siril=self.siril,
@@ -8319,7 +8653,8 @@ class GalacticView3DWindow(QMainWindow):
         # group and apply it for the entire render pass.  scale_dist()
         # consults this global; setting it BEFORE corner / pin / texture
         # geometry is built means everything in the scene honours the
-        # metric in 3D, not just the labels.  Reset on the way out.
+        # metric in 3D, not just the labels.  Exception-safe restore
+        # happens in _on_render's finally block — no manual reset here.
         if self.radio_metric_co.isChecked():
             metric_choice = "comoving"
         elif self.radio_metric_ad.isChecked():
@@ -8327,7 +8662,6 @@ class GalacticView3DWindow(QMainWindow):
         else:
             metric_choice = "light-travel"
         global _ACTIVE_DISTANCE_METRIC
-        _saved_metric = _ACTIVE_DISTANCE_METRIC
         _ACTIVE_DISTANCE_METRIC = metric_choice
         if mode is ViewMode.COSMIC and metric_choice != "light-travel":
             self._log(f"Distance metric: {metric_choice} "
@@ -8365,6 +8699,18 @@ class GalacticView3DWindow(QMainWindow):
                 and corners_3d is not None):
             try:
                 photo_max_px = int(self.spin_photo_res.value())
+                # P3 perf — cap texture resolution in cosmic mode.
+                # The photo rectangle occupies far less screen space
+                # there, and the texture mesh is the single biggest
+                # GPU cost in the scene (~230k tris at 480 px).
+                if (mode is ViewMode.COSMIC
+                        and photo_max_px > PHOTO_COSMIC_MAX_PX):
+                    self._log(
+                        f"Photo resolution capped {photo_max_px} → "
+                        f"{PHOTO_COSMIC_MAX_PX} px for cosmic mode "
+                        "(photo is small on screen; full res buys "
+                        "nothing visually but costs GPU time).")
+                    photo_max_px = PHOTO_COSMIC_MAX_PX
                 want_debug_grid = bool(
                     self.chk_pixel_grid_debug.isChecked())
                 img = self._image_data
@@ -8627,30 +8973,34 @@ class GalacticView3DWindow(QMainWindow):
         except Exception as e:
             self._log(f"Depth fan build failed: {e}")
 
-        scene = {
-            "mode": mode,
-            "object_name": obj_name,
-            "object_type": obj_type,
-            "dist_ly": dist_ly,
-            "dist_err_ly": dist_err_ly,
-            "nearest_dist_ly": nearest_dist_ly,
-            "nearest_name": nearest_name,
-            "farthest_dist_ly": farthest_dist_ly,
-            "farthest_name": farthest_name,
-            "dist_source": source,
-            "dist_confidence": confidence,
-            "center_ra": float(center_ra),
-            "center_dec": float(center_dec),
-            "l_deg": l_deg,
-            "b_deg": b_deg,
-            "fov_radius_deg": fov_radius_deg,
-            "photo_corners": corners_3d if self.chk_photo.isChecked() else None,
-            "photo_center_xyz": (photo_center_xyz
-                                 if self.chk_photo.isChecked() else None),
-            "photo_texture_mesh": photo_texture_mesh,
-            "photo_pixel_grid": pixel_grid,
-            "constellation_lines": constellation_lines,
-            "background_pins": (
+        # SceneSpec instead of a plain dict: a typo'd field name here
+        # is now an immediate TypeError instead of a silent .get()
+        # default somewhere downstream.
+        scene = SceneSpec(
+            mode=mode,
+            object_name=obj_name,
+            object_type=obj_type,
+            dist_ly=dist_ly,
+            dist_err_ly=dist_err_ly,
+            nearest_dist_ly=nearest_dist_ly,
+            nearest_name=nearest_name,
+            farthest_dist_ly=farthest_dist_ly,
+            farthest_name=farthest_name,
+            dist_source=source,
+            dist_confidence=confidence,
+            center_ra=float(center_ra),
+            center_dec=float(center_dec),
+            l_deg=l_deg,
+            b_deg=b_deg,
+            fov_radius_deg=fov_radius_deg,
+            photo_corners=(corners_3d
+                           if self.chk_photo.isChecked() else None),
+            photo_center_xyz=(photo_center_xyz
+                              if self.chk_photo.isChecked() else None),
+            photo_texture_mesh=photo_texture_mesh,
+            photo_pixel_grid=pixel_grid,
+            constellation_lines=constellation_lines,
+            background_pins=(
                 build_background_pins(
                     self.siril, self._img_width, self._img_height,
                     corners_3d, float(dist_ly or 0.0),
@@ -8659,22 +9009,17 @@ class GalacticView3DWindow(QMainWindow):
                 if (self.chk_photo.isChecked() and corners_3d is not None
                     and candidates and dist_ly)
                 else []),
-            "show_arms": self.chk_arms.isChecked(),
-            "show_disk": self.chk_disk.isChecked(),
-            "show_neighbors": (self.chk_neighbors.isChecked()
-                               and mode is ViewMode.COSMIC),
-            # P4.10 — galactic-landmarks catalog (open clusters,
-            # globular clusters, nebulae).  Default-on; the legend
-            # entries let users hide individual kinds.
-            "show_landmarks": True,
-            "title": title,
-            "distance_label": dist_label,
-            "arm_hint": arm_hint,
-            "target_arm_membership": target_arm_membership,
-            # P4.12 — recorded so build_galaxy_figure() (and any
-            # subsequent re-render from cache) reuses the same metric.
-            "distance_metric": metric_choice,
-        }
+            show_arms=self.chk_arms.isChecked(),
+            show_disk=self.chk_disk.isChecked(),
+            show_neighbors=(self.chk_neighbors.isChecked()
+                            and mode is ViewMode.COSMIC),
+            show_landmarks=True,
+            title=title,
+            distance_label=dist_label,
+            arm_hint=arm_hint,
+            target_arm_membership=target_arm_membership,
+            distance_metric=metric_choice,
+        )
         self._last_scene = scene
         self._populate_info_tab(scene)
 
@@ -8697,16 +9042,12 @@ class GalacticView3DWindow(QMainWindow):
                 f"photo_center={pc_txt}, "
                 f"toggles=[{', '.join(toggles) or '-'}]."
             )
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
         fig = build_galaxy_figure(scene) if HAS_PLOTLY else None
-        # P4.12 — restore the original metric now that geometry is
-        # done.  build_galaxy_figure already sets/resets internally,
-        # but the data-pipeline calls (build_background_pins, photo
-        # geometry, etc.) ran with the override set above; this is
-        # the matched cleanup point.
-        _ACTIVE_DISTANCE_METRIC = _saved_metric
+        # (Metric restore happens exception-safely in _on_render's
+        # finally block — no inline reset needed here.)
         self._last_figure = fig
         # Trace-count summary: count of Scatter3d + Mesh3d traces in the
         # finished figure.  If a user reports "the photo is missing",
@@ -8718,8 +9059,8 @@ class GalacticView3DWindow(QMainWindow):
                     f"Figure has {len(fig.data)} trace(s); "
                     f"types=[{', '.join(sorted({t.type for t in fig.data}))}]"
                 )
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
         # Prepare paths
         try:
@@ -8756,7 +9097,7 @@ class GalacticView3DWindow(QMainWindow):
         if not rendered:
             if WEBENGINE_ERROR:
                 self._log(f"WebEngine import failed: {WEBENGINE_ERROR}")
-                self._log("Tip: click \u201cRepair WebEngine\u2026\u201d "
+                self._log("Tip: click “Repair WebEngine…” "
                           "on the 3D Map pane.")
             try:
                 self._log("WebEngine unavailable - using matplotlib preview.")
@@ -8823,7 +9164,7 @@ class GalacticView3DWindow(QMainWindow):
             return "Outer Carina direction"
         return f"l = {l_deg:.0f}°"
 
-    def _populate_info_tab(self, scene: dict) -> None:
+    def _populate_info_tab(self, scene: "SceneSpec") -> None:
         mode = scene["mode"]
         dist_ly = scene.get("dist_ly") or 0
         err = scene.get("dist_err_ly") or 0
@@ -8975,12 +9316,12 @@ class GalacticView3DWindow(QMainWindow):
                 loop.quit()
         try:
             view.destroyed.connect(_abort)
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
         try:
             page.destroyed.connect(_abort)
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
         # Watchdog: always fires, but only quits if the loop is still
         # alive (otherwise it's a harmless no-op).
@@ -8996,8 +9337,8 @@ class GalacticView3DWindow(QMainWindow):
             # can't reach live Python state on the next tick.
             try:
                 loop.deleteLater()
-            except Exception:
-                pass
+            except Exception as _swallowed_exc:
+                _log_swallowed(_swallowed_exc)
 
         # View may have been destroyed while we were blocked in exec().
         if not _is_alive(view):
@@ -9120,12 +9461,12 @@ class GalacticView3DWindow(QMainWindow):
 
         try:
             view.destroyed.connect(_abort)
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
         try:
             page.destroyed.connect(_abort)
-        except Exception:
-            pass
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
         def _poll():
             if holder["done"]:
@@ -9161,12 +9502,12 @@ class GalacticView3DWindow(QMainWindow):
         finally:
             try:
                 poll_timer.stop()
-            except Exception:
-                pass
+            except Exception as _swallowed_exc:
+                _log_swallowed(_swallowed_exc)
             try:
                 loop.deleteLater()
-            except Exception:
-                pass
+            except Exception as _swallowed_exc:
+                _log_swallowed(_swallowed_exc)
 
         if not _is_alive(view):
             return None
@@ -9275,12 +9616,12 @@ class GalacticView3DWindow(QMainWindow):
                 if prev_cam_captured:
                     try:
                         fig.update_layout(scene_camera=prev_cam)
-                    except Exception:
+                    except Exception as _swallowed_exc:
                         # Restore-best-effort: the on-screen figure is
                         # already drawn from the cached scene JSON, so a
                         # stale camera on the Python-side Figure object
                         # doesn't break anything visible.
-                        pass
+                        _log_swallowed(_swallowed_exc)
 
         try:
             render_matplotlib_galaxy(
@@ -9410,7 +9751,7 @@ class GalacticView3DWindow(QMainWindow):
     def _show_coffee_dialog(self) -> None:
         BMC_URL = "https://buymeacoffee.com/sramuschkat"
         dlg = QDialog(self)
-        dlg.setWindowTitle("\u2615 Support Svenesis GalacticView 3D")
+        dlg.setWindowTitle("☕ Support Svenesis GalacticView 3D")
         dlg.setMinimumSize(520, 480)
         dlg.setStyleSheet(
             "QDialog{background-color:#1e1e1e;color:#e0e0e0}"
@@ -9422,16 +9763,16 @@ class GalacticView3DWindow(QMainWindow):
 
         header_msg = QLabel(
             "<div style='text-align:center; font-size:12pt; line-height:1.6;'>"
-            "<span style='font-size:48pt;'>\u2615</span><br>"
+            "<span style='font-size:48pt;'>☕</span><br>"
             "<span style='font-size:18pt; font-weight:bold; color:#FFDD00;'>"
             "Buy me a Coffee</span><br><br>"
             "<b style='color:#e0e0e0;'>Enjoying Svenesis GalacticView 3D?</b><br><br>"
             "This tool is free and open source. It's built with love for the "
             "astrophotography community by <b style='color:#88aaff;'>Sven Ramuschkat</b> "
             "(<span style='color:#88aaff;'>svenesis.org</span>).<br><br>"
-            "If GalacticView 3D helped you see your image's place in the Milky Way \u2014 "
+            "If GalacticView 3D helped you see your image's place in the Milky Way — "
             "consider buying me a coffee to keep development going!<br><br>"
-            "<span style='color:#FFDD00;'>\u2615 Every coffee fuels a new feature, "
+            "<span style='color:#FFDD00;'>☕ Every coffee fuels a new feature, "
             "bug fix, or clear-sky night of testing.</span><br>"
             "</div>")
         header_msg.setWordWrap(True)
@@ -9441,7 +9782,7 @@ class GalacticView3DWindow(QMainWindow):
 
         layout.addSpacing(8)
 
-        btn_open = QPushButton("\u2615  Buy me a Coffee  \u2615")
+        btn_open = QPushButton("☕  Buy me a Coffee  ☕")
         btn_open.setStyleSheet(
             "QPushButton{background-color:#FFDD00;color:#000;"
             "font-size:14pt;font-weight:bold;"
@@ -9465,7 +9806,7 @@ class GalacticView3DWindow(QMainWindow):
             f"{BMC_URL}</a><br>"
             f"<span style='font-size:13pt; color:#999;'>"
             f"Thank you for supporting open-source astrophotography tools!<br>"
-            f"Clear skies \u2728</span></div>")
+            f"Clear skies ✨</span></div>")
         footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
         footer.setTextFormat(Qt.TextFormat.RichText)
         footer.setTextInteractionFlags(
@@ -9480,7 +9821,7 @@ class GalacticView3DWindow(QMainWindow):
     # ------------------------------------------------------------------
     def _show_help_dialog(self) -> None:
         dlg = QDialog(self)
-        dlg.setWindowTitle("Svenesis GalacticView 3D \u2014 Help")
+        dlg.setWindowTitle("Svenesis GalacticView 3D — Help")
         dlg.setMinimumSize(800, 600)
         dlg.setStyleSheet(
             "QDialog{background-color:#1e1e1e;color:#e0e0e0}"
@@ -9502,14 +9843,14 @@ class GalacticView3DWindow(QMainWindow):
             "sight that produced it.</p>"
             "<blockquote style='color:#88aaff;'><i>Your photo is not just "
             "anywhere.  It is a window into one specific direction of "
-            "the universe \u2014 and now you can see where.</i></blockquote>"
+            "the universe — and now you can see where.</i></blockquote>"
             "<hr>"
             "<p><b>Requirements:</b></p>"
             "<ul>"
-            "<li><b>Plate-solved image</b> \u2014 the FITS header must "
+            "<li><b>Plate-solved image</b> — the FITS header must "
             "carry a WCS solution.  In Siril: "
-            "<i>Tools \u2192 Astrometry \u2192 Image Plate Solver</i>.</li>"
-            "<li><b>Internet</b> \u2014 SIMBAD provides the target's "
+            "<i>Tools → Astrometry → Image Plate Solver</i>.</li>"
+            "<li><b>Internet</b> — SIMBAD provides the target's "
             "type, distance, and the cone-search candidate list.  "
             "Results are cached locally so re-renders are offline-fast.</li>"
             "<li><b>PyQt6-WebEngine + plotly</b> for the interactive "
@@ -9522,7 +9863,7 @@ class GalacticView3DWindow(QMainWindow):
             "<li>Load a plate-solved image in Siril.</li>"
             "<li>Run this script.</li>"
             "<li>Click <b>Render 3D Map</b> (or press <b>F5</b>).</li>"
-            "<li>The Target Picker opens \u2014 confirm the auto-pick or "
+            "<li>The Target Picker opens — confirm the auto-pick or "
             "choose a different SIMBAD candidate from the cone search.</li>"
             "<li>Drag the scene to orbit, mouse-wheel to zoom, hover any "
             "marker for hover-rich context.</li>"
@@ -9534,7 +9875,7 @@ class GalacticView3DWindow(QMainWindow):
             "<tr><td style='width:160px'><b>Trackball widget</b></td>"
             "<td>Drag (left of the button row) for two-axis orbit, "
             "diagonals supported.  Mouse-wheel over it zooms.</td></tr>"
-            "<tr><td><b>+ / \u2212 / \u27f2</b></td>"
+            "<tr><td><b>+ / − / ⟲</b></td>"
             "<td>Zoom in / out / reset.  Zoom-in stops at the near-clip "
             "plane (logged as <i>capped at near-clip</i>) so the photo "
             "and references stay in frame.</td></tr>"
@@ -9548,11 +9889,11 @@ class GalacticView3DWindow(QMainWindow):
             "<td>Toggle slow auto-rotation.  Also auto-engages after "
             "10 s of inactivity; any input cancels it.</td></tr>"
             "<tr><td><b>R / Home / Esc</b></td>"
-            "<td>Universal &ldquo;get me home&rdquo; \u2014 reset the "
+            "<td>Universal &ldquo;get me home&rdquo; — reset the "
             "camera and any zoomed-in axis ranges.</td></tr>"
             "<tr><td><b>Legend double-click</b></td>"
             "<td>Double-click a spiral-arm legend entry "
-            "(<i>Norma Arm</i>, <i>Scutum-Centaurus</i>\u2026) to fly the "
+            "(<i>Norma Arm</i>, <i>Scutum-Centaurus</i>…) to fly the "
             "camera to that arm.</td></tr>"
             "</table>")
         tabs.addTab(tab1, "Getting Started")
@@ -9641,9 +9982,9 @@ class GalacticView3DWindow(QMainWindow):
             "<ol>"
             f"<li>Local JSON cache ({CACHE_TTL_DAYS}-day TTL)</li>"
             "<li>SIMBAD <i>mesDistance</i> table</li>"
-            "<li>Redshift \u2192 cosmological distance via "
+            "<li>Redshift → cosmological distance via "
             "<code>astropy.cosmology.Planck18</code></li>"
-            "<li>Parallax (\u03c0) where available</li>"
+            "<li>Parallax (π) where available</li>"
             "<li>Type-based median fallback (clearly marked as "
             "estimate)</li>"
             "</ol>"
@@ -9657,8 +9998,8 @@ class GalacticView3DWindow(QMainWindow):
         tab3.setHtml(
             "<h2 style='color:#88aaff;'>Cosmic Mode</h2>"
             "<p>Activated for extragalactic targets "
-            "(distance \u2265 150,000 ly, or SIMBAD type is Galaxy / "
-            "QSO / AGN / Seyfert\u2026).  Earth sits at the origin.  "
+            "(distance ≥ 150,000 ly, or SIMBAD type is Galaxy / "
+            "QSO / AGN / Seyfert…).  Earth sits at the origin.  "
             "Distances use a <b>piecewise scale</b>:</p>"
             "<ul>"
             "<li>Linear inside 1 Mly: 1 scene unit = 100,000 ly.</li>"
@@ -9673,20 +10014,20 @@ class GalacticView3DWindow(QMainWindow):
             "<p>The Scene Elements panel offers three radio buttons "
             "for the distance metric used in cosmic mode:</p>"
             "<ul>"
-            "<li><b>Light-travel</b> (default) \u2014 c \u00d7 lookback "
-            "time.  Matches SIMBAD's redshift\u2192distance "
+            "<li><b>Light-travel</b> (default) — c × lookback "
+            "time.  Matches SIMBAD's redshift→distance "
             "convention.</li>"
-            "<li><b>Comoving</b> \u2014 the proper distance to the "
+            "<li><b>Comoving</b> — the proper distance to the "
             "object <i>now</i>, accounting for cosmic expansion "
             "since the light left.</li>"
-            "<li><b>Angular-diameter</b> \u2014 comoving / (1+z); the "
+            "<li><b>Angular-diameter</b> — comoving / (1+z); the "
             "metric that determines apparent angular size.</li>"
             "</ul>"
             "<p>The HUD label at bottom-left always shows which "
             "metric is active.  Cosmology is "
             "<code>astropy.cosmology.Planck18</code> "
-            "(H<sub>0</sub> \u2248 67.4 km/s/Mpc, "
-            "\u03a9<sub>m</sub> \u2248 0.315, \u03a9<sub>\u039b</sub> \u2248 0.685).</p>"
+            "(H<sub>0</sub> ≈ 67.4 km/s/Mpc, "
+            "Ω<sub>m</sub> ≈ 0.315, Ω<sub>Λ</sub> ≈ 0.685).</p>"
             "<hr>"
             "<h3 style='color:#88aaff;'>Always-on layers</h3>"
             "<ul>"
@@ -9694,8 +10035,8 @@ class GalacticView3DWindow(QMainWindow):
             "10, 50, 100, 500 Mly and 1, 5 Gly.  Three orthogonal "
             "great circles per radius (spherical-shell wireframe).  "
             "Each label includes the equivalent redshift "
-            "(<i>z \u2248 0.07</i> at 1 Gly, etc.).</li>"
-            "<li><b>1 Mly scale boundary</b> \u2014 marks the "
+            "(<i>z ≈ 0.07</i> at 1 Gly, etc.).</li>"
+            "<li><b>1 Mly scale boundary</b> — marks the "
             "linear/log transition.</li>"
             "<li><b>10 neighbour galaxies</b> with hover-rich "
             "descriptions (M31, M33, LMC, SMC, M81, M82, M51, "
@@ -9704,11 +10045,11 @@ class GalacticView3DWindow(QMainWindow):
             "membership, and a one-sentence cultural / scientific "
             "note.</li>"
             "<li><b>CMB last-scattering surface</b> at 13.8 Gly "
-            "(z \u2248 1100).  Wireframe globe \u2014 1 bright equatorial "
+            "(z ≈ 1100).  Wireframe globe — 1 bright equatorial "
             "great circle + 4 latitude rings + 8 meridian arcs.  "
             "Marks the practical edge of the observable "
             "universe.</li>"
-            "<li><b>Local Group sphere</b> (~3 Mly) \u2014 only for "
+            "<li><b>Local Group sphere</b> (~3 Mly) — only for "
             "sub-5-Mly targets, framing your photo as &ldquo;in "
             "our local group&rdquo;.</li>"
             "</ul>"
@@ -9721,12 +10062,12 @@ class GalacticView3DWindow(QMainWindow):
             "Supercluster.  Each at its real (l, b, distance), with "
             "extent matching its core radius and a one-sentence note "
             "(&ldquo;where Zwicky inferred dark matter&rdquo;, "
-            "&ldquo;Great Attractor flow&rdquo;\u2026).</li>"
+            "&ldquo;Great Attractor flow&rdquo;…).</li>"
             "<li><b>Cosmic landmarks</b> (~20 famous objects): "
             "M31, M33, M51, M81/82, M83, M101, M104 Sombrero, "
             "NGC 253, Cartwheel, Hoag's Object, Stephan's Quintet, "
             "Markarian's Chain, 3C 273 (brightest quasar), HUDF "
-            "direction\u2026  Grouped by kind (spiral / dwarf / "
+            "direction…  Grouped by kind (spiral / dwarf / "
             "starburst / AGN / peculiar / group / quasar / "
             "pointer) into 8 toggleable legend entries.</li>"
             "</ul>"
@@ -9736,7 +10077,7 @@ class GalacticView3DWindow(QMainWindow):
             "default-off, paints a translucent procedural Gaussian "
             "noise pattern on the CMB sphere (red-blue colorscale "
             "mimicking the look of real Planck/WMAP maps).  It is "
-            "<i>not</i> real CMB data \u2014 just an evocative visual.  "
+            "<i>not</i> real CMB data — just an evocative visual.  "
             "Toggling it on triggers the scene's autorange to expand "
             "to the CMB radius, so other content gets visually "
             "smaller.</p>")
@@ -9744,10 +10085,10 @@ class GalacticView3DWindow(QMainWindow):
 
         # ---------- Tab 4: Exports, performance, troubleshooting ----------
         _webengine_status = (
-            "yes \u2014 interactive view embedded in this window"
+            "yes — interactive view embedded in this window"
             if HAS_WEBENGINE
-            else "no \u2014 falling back to static PNG + browser")
-        _plotly_status = "yes" if HAS_PLOTLY else "no \u2014 matplotlib only"
+            else "no — falling back to static PNG + browser")
+        _plotly_status = "yes" if HAS_PLOTLY else "no — matplotlib only"
         tab4 = QTextEdit()
         tab4.setReadOnly(True)
         tab4.setHtml(
@@ -9768,27 +10109,27 @@ class GalacticView3DWindow(QMainWindow):
             "</table>"
             "<p>Two convenience buttons in the right panel:</p>"
             "<ul>"
-            "<li><b>Open Output Folder</b> \u2014 reveal the export "
+            "<li><b>Open Output Folder</b> — reveal the export "
             "folder in your file manager.</li>"
-            "<li><b>Open Exported HTML</b> \u2014 open the most-recent "
+            "<li><b>Open Exported HTML</b> — open the most-recent "
             "HTML export in your default browser.</li>"
             "</ul>"
             "<hr>"
             "<h2 style='color:#88aaff;'>Tips &amp; Troubleshooting</h2>"
             "<ul>"
             "<li><b>Scene feels sluggish?</b>  Lower the photo "
-            "resolution (Scene Elements \u2192 Photo resolution) "
-            "from the default \u2014 the textured photo mesh is the "
-            "biggest single GPU cost.  240 px renders ~4\u00d7 faster "
+            "resolution (Scene Elements → Photo resolution) "
+            "from the default — the textured photo mesh is the "
+            "biggest single GPU cost.  240 px renders ~4× faster "
             "than 480 px with mild quality loss.</li>"
             "<li><b>Hide overlays you don't need.</b>  The legend "
             "is grouped (<i>Milky Way</i> / <i>References</i> / "
             "<i>Target</i> / <i>Background</i> / <i>Galaxy "
             "clusters</i> / <i>Cosmic landmarks</i>).  Click any "
-            "entry to toggle, double-click to solo (or \u2014 for "
-            "spiral-arm entries \u2014 to fly to that arm).</li>"
+            "entry to toggle, double-click to solo (or — for "
+            "spiral-arm entries — to fly to that arm).</li>"
             "<li><b>Lost the scene?</b>  Press <b>R</b>, "
-            "<b>Home</b>, or <b>Escape</b>.  Or use the <b>\u27f2</b> "
+            "<b>Home</b>, or <b>Escape</b>.  Or use the <b>⟲</b> "
             "trackball button.  Auto-rotate also kicks in after "
             "10 s of inactivity as an ambient-demo cue.</li>"
             "<li><b>SIMBAD slow / timing out?</b>  CDS occasionally "
@@ -9799,7 +10140,7 @@ class GalacticView3DWindow(QMainWindow):
             "the source if you want fail-fast behaviour during "
             "outages.</li>"
             "<li><b>Photo rectangle invisible.</b>  Astrophoto FOVs "
-            "(typically &lt; 1\u00b0) project to a sub-pixel rectangle "
+            "(typically &lt; 1°) project to a sub-pixel rectangle "
             "at galactic / cosmic scale; the script auto-enlarges "
             "the rectangle around its centroid so it stays "
             "visible.  Orientation and aspect are preserved.</li>"
@@ -9811,7 +10152,7 @@ class GalacticView3DWindow(QMainWindow):
             "<p>For the interactive in-window scene, "
             "<code>PyQt6-WebEngine</code> and <code>plotly</code> "
             "must be installed into Siril's Python environment.  "
-            "<code>astropy \u2265 5</code> is required for the Planck18 "
+            "<code>astropy ≥ 5</code> is required for the Planck18 "
             "cosmology used by the redshift / lookback / metric "
             "conversion code.</p>")
         tabs.addTab(tab4, "Exports &amp; Tips")
