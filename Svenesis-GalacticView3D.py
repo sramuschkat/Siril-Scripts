@@ -1,43 +1,61 @@
 """
 Svenesis GalacticView 3D
-Script Version: 0.9.0
+Script Version: 1.0.0
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
 Contact and support: See repository README and Siril forum / scripts repository.
 
 This script reads the current plate-solved image from Siril, identifies the
-main astronomical object via SIMBAD, and renders the Milky Way as an
-interactive 3D model -- with Earth physically positioned in the Orion Arm
-and the astrophoto itself placed as a textured rectangle pointing in the
-exact viewing direction in space.
+main astronomical object via SIMBAD, and renders where the photo points in
+the universe as an interactive 3D model -- Earth in the Orion Arm, the
+astrophoto as a textured rectangle along the exact line of sight, and the
+target's distance made tangible through story text, scale rings, and a
+cinematic "Journey" flight from Earth to the target.
 
 GalacticView 3D makes spatial orientation visible:
   "Your photo is not just anywhere. It is a window into one specific
    direction of the universe -- and now you can see where."
 
 Two modes, automatically selected from object distance and type:
-- Galactic (< 150.000 ly): 1 unit = 1.000 ly, where inside the Milky Way am I looking?
-- Cosmic   (>= 150.000 ly): 1 unit = 100.000 ly, embedded neighbor galaxies,
-  with compressed log scaling beyond 1 Mly.
+- Galactic (< 150,000 ly): 1 unit = 1,000 ly, linear.  Where inside the
+  Milky Way am I looking?
+- Cosmic   (>= 150,000 ly): 1 unit = 100,000 ly, log-compressed beyond
+  1 Mly.  Neighbor galaxies, cluster halos, CMB boundary.
 
 Data sources:
-- SIMBAD: main-object distance + type (TAP queries)
-- Local JSON cache (~/.config/siril/svenesis_galacticview_cache.json, 90-day TTL)
-- Redshift -> Hubble (H0 = 70 km/s/Mpc) for distant galaxies
+- SIMBAD: main-object distance + type (mesDistance table, TAP queries)
+- Local JSON caches (~/.config/siril/, 90-day distance TTL + 7-day
+  cone-search TTL) -- re-renders of known targets work offline
+- Redshift -> light-travel distance via astropy.cosmology Planck18
+  (linear Hubble fallback only when astropy.cosmology is unavailable)
+- Parallax where reliable (with a redshift consistency check that
+  rejects SIMBAD's noise parallaxes on extragalactic objects)
 - Type-based median fallback (clearly marked as estimate)
 
 Features:
 - Plate-solved image ingestion (same 6-strategy WCS detection as CosmicDepth 3D)
-- Main-object identification from OBJECT keyword / embedded catalog / cone search
-- Distance resolution: cache -> SIMBAD -> redshift -> type-median
-- Full Milky Way scene: 5 spiral arms, galactic disk stars, galactic center,
-  Earth in the Orion Arm, optional neighbor-galaxy overlay (cosmic mode)
+- Main-object identification + SIMBAD cone-search target picker
+- Story card: a human narrative of direction, light age, and scale
+  (with Earth-history anchors and a dinner-plate size analogy)
+- Story / Explorer view styles: clean narrative scene vs. all overlays
+  (landmark catalogs, galaxy-cluster halos, CMB boundary, Local
+  Bubble / Local Group context spheres)
+- Journey mode: cinematic camera flight from Earth to the target along
+  the viewing ray, with live distance / light-age HUD and waypoints
+- Opening pull-back: first render starts at Earth POV, then reveals the map
+- Distance-metric toggle (light-travel / comoving / angular-diameter,
+  Planck18) that physically reorganises the cosmic-mode scene
+- Full Milky Way scene: 5 spiral arms (with camera-distance LOD fade),
+  disk stars, bulge, Sgr A*, Earth reticle, distance rings (flat
+  radar-style, plus one spherical shell at the target's depth)
 - Photo rectangle from four WCS corners, textured with auto-stretched FITS
-- Viewing ray from Earth to the photo center
 - Interactive 3D rendering via Plotly embedded in QWebEngineView
   (falls back to matplotlib 3D if PyQt6-WebEngine is not available)
-- Export as HTML (interactive, standalone), PNG, and CSV coordinate table
+- Export as HTML (interactive, standalone -- includes Journey via the
+  J key), PNG, and CSV coordinate table
+- SIMBAD health probe with fail-fast timeouts during outages;
+  network calls run off the UI thread
 - Dark-themed PyQt6 GUI matching the Svenesis look & feel
 - Persistent settings via QSettings
 
@@ -335,11 +353,11 @@ def convert_distance_for_metric(dist_ly: float, metric: str) -> float:
     try:
         if metric == "comoving":
             d_mpc = float(_COSMO.comoving_distance(z).to(u.Mpc).value)
-            return d_mpc * 3.262e6   # Mpc → ly
+            return d_mpc * MPC_TO_LY
         if metric == "angular-diameter":
             d_mpc = float(
                 _COSMO.angular_diameter_distance(z).to(u.Mpc).value)
-            return d_mpc * 3.262e6
+            return d_mpc * MPC_TO_LY
     except Exception:
         # On numeric failure, return input — better than crashing.
         return dist_ly
@@ -373,6 +391,192 @@ def estimate_z_and_lookback(dist_ly: float
         return (z, lookback_gyr)
     except Exception:
         return (z_linear, lookback_gyr)
+
+
+# ---------------------------------------------------------------------------
+# Story helpers — turn the scene's numbers into a human narrative
+# ---------------------------------------------------------------------------
+# Earth-history anchors (years-ago threshold → phrase).  Used to give
+# the photo's light-travel time a felt meaning: nobody grasps
+# "38.7 Mly", everybody grasps "just after the dinosaurs died out".
+# Ordered ascending; lookback_context_phrase picks the largest
+# threshold ≤ the lookback.
+EARTH_HISTORY_EPOCHS = [
+    (75,            "within a single human lifetime"),
+    (417,           "when Galileo first pointed a telescope "
+                    "at the sky"),
+    (1_300,         "in medieval times"),
+    (2_000,         "in Roman times"),
+    (5_500,         "when the first writing appeared in Mesopotamia"),
+    (12_000,        "at the end of the last Ice Age"),
+    (300_000,       "when anatomically modern humans first appeared"),
+    (2_600_000,     "when the first stone tools were being made"),
+    (20_000_000,    "when the first apes were evolving"),
+    (50_000_000,    "when the ancestors of whales still walked "
+                    "on land"),
+    (66_000_000,    "just after the dinosaurs died out"),
+    (150_000_000,   "when Archaeopteryx flew over Jurassic Earth"),
+    (230_000_000,   "when the first dinosaurs walked the Earth"),
+    (375_000_000,   "when the first animals crawled onto land"),
+    (541_000_000,   "during the Cambrian explosion"),
+    (1_000_000_000, "when Earth's life was still single-celled"),
+    (2_400_000_000, "while oxygen was first filling Earth's "
+                    "atmosphere"),
+    (3_500_000_000, "when life on Earth first began"),
+    (4_500_000_000, "as the Earth itself was forming"),
+]
+
+
+def lookback_context_phrase(years: float) -> str:
+    """Human-history anchor for a light-travel time in years.
+
+    Picks the epoch **nearest in log-distance** and only returns it
+    when the anchor is within a factor of ~2.5 of the lookback —
+    "38.7 million years ago, when stone tools were made" (2.6 Myr)
+    would be off by 15× and worse than saying nothing.  Returns ""
+    when no anchor is honestly close.
+    """
+    if years is None or years <= 0 or not (years == years):
+        return ""
+    if years > 4.6e9:
+        return "before the Sun existed"
+    best_phrase = ""
+    best_logdist = float("inf")
+    ly = math.log10(years)
+    for thresh, phrase in EARTH_HISTORY_EPOCHS:
+        d = abs(ly - math.log10(thresh))
+        if d < best_logdist:
+            best_logdist = d
+            best_phrase = phrase
+    # log10(2.5) ≈ 0.40 — anchor must be within a factor of ~2.5.
+    if best_logdist > 0.40:
+        return ""
+    return best_phrase
+
+
+def format_years_ago(years: float) -> str:
+    """``38_700_000`` → ``"about 38.7 million years ago"``."""
+    if years < 1e4:
+        return f"{years:,.0f} years ago"
+    if years < 1e6:
+        return f"about {years / 1e3:,.0f} thousand years ago"
+    if years < 1e9:
+        return f"about {years / 1e6:,.1f} million years ago"
+    return f"about {years / 1e9:,.2f} billion years ago"
+
+
+def human_scale_analogy(dist_ly: float) -> str:
+    """One sentence mapping the target's distance onto a body-scale
+    model: the Milky Way's 100,000-ly disk shrunk to a 25-cm dinner
+    plate.  Light-years mean nothing to the body; metres down the
+    street do."""
+    if (dist_ly is None or dist_ly <= 0
+            or not (dist_ly == dist_ly)):
+        return ""
+    d_cm = float(dist_ly) * (25.0 / 100_000.0)
+    lead = ("If the Milky Way were a dinner plate (25 cm across), "
+            "your target would ")
+    if d_cm < 100.0:
+        d_mm = d_cm * 10.0
+        if d_mm < 0.5:
+            return (lead + "sit less than a hair's width from "
+                    "Earth's spot on the plate.")
+        if d_cm < 1.0:
+            amount = f"{d_mm:.1f} millimetres"
+        else:
+            amount = f"{d_cm:.1f} centimetres"
+        return (lead + f"sit {amount} from Earth's spot "
+                "on the plate.")
+    d_m = d_cm / 100.0
+    if d_m < 1000.0:
+        if d_m < 10.0:
+            where = "across the room"
+        elif d_m < 200.0:
+            where = "down the street"
+        else:
+            where = "a few blocks away"
+        return (lead + f"be another plate about {d_m:,.0f} metres "
+                f"away — {where}.")
+    d_km = d_m / 1000.0
+    if d_km < 20.0:
+        where = "across town"
+    elif d_km < 300.0:
+        where = "in the next city"
+    else:
+        where = "on the other side of the country"
+    return (lead + f"be a speck {d_km:,.0f} kilometres away — "
+            f"{where}.")
+
+
+def build_story_text(scene) -> str:
+    """2–4 sentence narrative about where the photo points and how
+    old its light is.  Pure function of the SceneSpec — templated,
+    no network.  Returns "" when there isn't enough data to say
+    anything meaningful."""
+    try:
+        obj_name = scene.get("object_name") or "the target"
+        dist_ly = scene.get("dist_ly")
+        l_deg = scene.get("l_deg")
+        b_deg = scene.get("b_deg")
+        arm_hint = scene.get("arm_hint") or ""
+        membership = scene.get("target_arm_membership")
+        parts: list[str] = []
+
+        # 1. Direction.
+        if l_deg is not None and b_deg is not None:
+            if abs(b_deg) < 10.0:
+                b_phrase = ("looking along the plane of the "
+                            "Milky Way")
+            elif b_deg > 0:
+                b_phrase = (f"looking {abs(b_deg):.0f}° above the "
+                            "plane of the Milky Way")
+            else:
+                b_phrase = (f"looking {abs(b_deg):.0f}° below the "
+                            "plane of the Milky Way")
+            parts.append(
+                f"You pointed your telescope toward galactic "
+                f"longitude {l_deg:.0f}°, {b_phrase}."
+            )
+            if arm_hint:
+                parts.append(f"Line of sight: {arm_hint}.")
+
+        # 2. The age of the light.
+        if dist_ly and dist_ly > 0:
+            years = float(dist_ly)
+            context = lookback_context_phrase(years)
+            if years < 3000:
+                year_left = datetime.date.today().year - int(years)
+                sent = (f"The light in this photo left {obj_name} "
+                        f"around the year {year_left}")
+                if context and years >= 75:
+                    sent += f" — {context}"
+                parts.append(sent + ".")
+            else:
+                sent = (f"The light in this photo left {obj_name} "
+                        f"{format_years_ago(years)}")
+                if context:
+                    sent += f" — {context}"
+                parts.append(sent + ".")
+
+        # 3. Physical arm membership.
+        if membership:
+            try:
+                arm_name, _perp = membership
+                parts.append(
+                    f"The target itself sits in the {arm_name}.")
+            except Exception:
+                pass
+
+        # 4. Body-scale analogy.
+        analogy = human_scale_analogy(dist_ly) if dist_ly else ""
+        if analogy:
+            parts.append(analogy)
+
+        return " ".join(parts)
+    except Exception:
+        return ""
+
+
 from astroquery.simbad import Simbad
 
 # astroquery emits NoResultsWarning / deprecation chatter on normal empty
@@ -409,7 +613,7 @@ except Exception:
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "0.9.0"
+VERSION = "1.0.0"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "GalacticView3D"
 LEFT_PANEL_WIDTH = 360
@@ -418,7 +622,12 @@ LEFT_PANEL_WIDTH = 360
 CACHE_DIR = os.path.expanduser("~/.config/siril")
 CACHE_PATH = os.path.join(CACHE_DIR, "svenesis_galacticview_cache.json")
 CACHE_TTL_DAYS = 90
-CACHE_VERSION = 1
+# Bumped 1 → 2 when redshift→distance switched from the linear
+# Hubble law (H0=70) to Planck18 light-travel distance — cached
+# pre-fix values are up to ~12 % wrong at z ≈ 0.15 and must not be
+# served.  A version mismatch cleanly discards both the per-object
+# distance cache and the cone-search cache.
+CACHE_VERSION = 2
 
 # Distance conversions
 PC_TO_LY = 3.26156
@@ -426,7 +635,11 @@ KPC_TO_LY = PC_TO_LY * 1000.0
 MPC_TO_LY = PC_TO_LY * 1_000_000.0
 GPC_TO_LY = PC_TO_LY * 1_000_000_000.0
 C_KM_S = 299_792.458
-HUBBLE_H0 = 70.0
+# Fallback-only Hubble constant (used when astropy.cosmology is
+# unavailable).  Matched to Planck18's H0 so the fallback linear law
+# agrees with the primary cosmology at low z instead of mixing two
+# different Hubble constants in one scene.
+HUBBLE_H0 = 67.4
 
 # Milky Way astronomical constants (distances in light-years)
 EARTH_TO_GC_LY = 26_000          # Earth -> Sgr A*
@@ -447,11 +660,6 @@ GALACTIC_THRESHOLD_LJ = GALACTIC_THRESHOLD_LY
 # The values are the radial eye distance in Plotly scene units.
 NAV_EYE_MIN = 0.35               # closest zoom-in
 NAV_EYE_MAX = 40.0                # farthest zoom-out
-
-# Log-distance window (in decades) used by build_background_pins() to
-# keep "nearby" pins only.  Galactic mode is narrower, cosmic wider.
-LOG_WINDOW_GALACTIC = 0.5        # picked … picked × ~3.16
-LOG_WINDOW_COSMIC = 1.0          # picked … picked × 10
 
 # Photo texture resolution (longest edge, px) — user-overridable from the
 # Scene Elements panel; this is the default fallback.
@@ -560,7 +768,6 @@ class SceneSpec:
     photo_corners: list | None = None
     photo_center_xyz: tuple | None = None
     photo_texture_mesh: dict | None = None
-    photo_pixel_grid: dict | None = None
     constellation_lines: dict | None = None
     background_pins: list = dataclasses.field(default_factory=list)
     show_arms: bool = True
@@ -570,6 +777,9 @@ class SceneSpec:
     show_clusters: bool = True
     show_cosmic_landmarks: bool = True
     show_cmb: bool = True
+    # Local Bubble / Local Group context spheres.  Hidden in the
+    # default "Story" view style; shown in "Explorer".
+    show_context_spheres: bool = True
     title: str = "Svenesis GalacticView 3D"
     distance_label: str = ""
     arm_hint: str = ""
@@ -597,6 +807,13 @@ COSMIC_TYPES = {
     "Seyfert", "Seyfert_1", "Seyfert_2", "QSO", "AGN", "Quasar",
     "LINER", "G", "GiG", "GiP", "IG", "PaG", "SBG", "SyG", "Sy1",
     "Sy2", "GrG", "CGG", "EmG", "H2G", "bCG", "LSB",
+    # SIMBAD *short* otype codes — the TAP interface returns these
+    # rather than the long names above.  All four verified against
+    # real cone-search results (Leo Triplet field): GiC = galaxy in
+    # cluster, LIN = LINER, AG? = possible AGN, rG = radio galaxy.
+    # Without them, such objects had no type-median fallback and
+    # silently vanished from the picker when z/parallax were absent.
+    "GiC", "LIN", "AG?", "rG",
 }
 GALACTIC_TYPES = {
     "HII", "SNR", "PN", "OpC", "GlC", "DkNeb", "RNe", "Neb",
@@ -769,8 +986,8 @@ COSMIC_LANDMARKS = [
      "dist_ly": 500_000_000, "kind": "Galaxy-peculiar"},
     {"name": "Hoag's Object",           "l":  29.4, "b":  73.5,
      "dist_ly": 612_000_000, "kind": "Galaxy-peculiar"},
-    {"name": "NGC 4319 / Markarian 205", "l": 124.3, "b":  29.3,
-     "dist_ly": 350_000_000, "kind": "Galaxy-AGN"},
+    {"name": "Markarian 205",            "l": 125.5, "b":  41.7,
+     "dist_ly": 930_000_000, "kind": "Galaxy-AGN"},
     {"name": "Markarian's Chain (Virgo)", "l": 282.6, "b":  72.1,
      "dist_ly":  54_000_000, "kind": "Galaxy-group"},
     # --- Very distant landmarks (Gly range) ---
@@ -1511,11 +1728,12 @@ def build_distance_rings(mode: ViewMode) -> list[dict]:
         radii_ly = [10_000, 20_000, 30_000, 40_000]
     else:
         center_x = 0.0   # ring centred on Earth for cosmic mode
-        # Densified: each visible decade now has a midpoint, so the
-        # log-compressed scale beyond 1 Mly has more visual cues for
-        # judging distance.  Was [1e6, 1e7, 1e8, 1e9] (4 rings); now
-        # 8 rings with 5×10^n midpoints.
-        radii_ly = [1e6, 5e6, 1e7, 5e7, 1e8, 5e8, 1e9, 5e9]
+        # Decades only.  A denser set (with 5×10^n midpoints) was
+        # tried and rolled back — combined with the spherical-shell
+        # treatment it produced ~40 dotted circles, which humans read
+        # as a cage rather than a scale.  Four clean decades + the
+        # 1 Mly boundary marker communicate the log scale fine.
+        radii_ly = [1e6, 1e7, 1e8, 1e9]
     # 120 vertices / ring (~3° per chord).  Was 240, dropped for
     # performance — at the camera distances people actually use,
     # 120 reads as smooth.  Re-bump to 240 if you see polygon
@@ -2253,14 +2471,23 @@ def collect_simbad_candidates(center_ra: float, center_dec: float,
                            ) -> tuple[float, str]:
         """Return (dist_ly, source_tag) or (nan, '') if unknown.
 
-        Priority: parallax > redshift > object-type median.
+        Priority: parallax > redshift > object-type median — BUT with
+        a consistency check: SIMBAD carries noise parallaxes for many
+        extragalactic objects (sub-mas values with ~100 % errors).
+        When a significant redshift disagrees with the parallax
+        distance by more than 100×, the parallax is noise and the
+        redshift wins.  (This is the IC 2708 case: plx said
+        27,067 ly, z = 0.020 said ~280 Mly — a galaxy, obviously.)
         """
         if plx == plx and plx > 0.1:  # parallax in mas
-            dist_pc = 1000.0 / plx
-            return dist_pc * PC_TO_LY, "plx"
+            plx_ly = (1000.0 / plx) * PC_TO_LY
+            if z == z and abs(z) > 1e-3:
+                z_ly = redshift_to_ly(z)
+                if z_ly > plx_ly * 100.0:
+                    return z_ly, "z"
+            return plx_ly, "plx"
         if z == z and abs(z) > 1e-4:
-            dist_mpc = (abs(z) * C_KM_S) / HUBBLE_H0
-            return dist_mpc * MPC_TO_LY, "z"
+            return redshift_to_ly(z), "z"
         if otype:
             fb = TYPE_DISTANCE_MEDIANS.get(otype)
             if fb is None:
@@ -2907,7 +3134,7 @@ def query_mesdistance(name: str, log_func=None) -> dict | None:
         if tap_res is None or len(tap_res) == 0:
             return None
         best = None
-        best_err = float("inf")
+        best_err_ly = float("inf")
         for row in tap_res:
             dist_val = _safe_float(row["dist"])
             if not (dist_val and dist_val > 0):
@@ -2918,13 +3145,19 @@ def query_mesdistance(name: str, log_func=None) -> dict | None:
             err = max(abs(merr), abs(perr))
             if err == 0:
                 err = dist_val * 0.1
-            if err < best_err:
-                best_err = err
+            # Compare errors in a COMMON unit.  mesDistance rows for
+            # one object can mix pc / kpc / Mpc — a raw-number
+            # comparison would rank "±0.5 Mpc" as better than
+            # "±300 kpc" (0.5 < 300) even though it is 1.6 Mly vs
+            # 0.98 Mly.  Convert to light-years first.
+            err_ly = to_ly(err, unit)
+            if err_ly < best_err_ly:
+                best_err_ly = err_ly
                 bib = (str(row["bib"])
                        if row["bib"] is not None else "")
                 best = {
                     "dist_ly": to_ly(dist_val, unit),
-                    "dist_err_ly": to_ly(err, unit),
+                    "dist_err_ly": err_ly,
                     "bibcode": bib,
                 }
         return best
@@ -2935,8 +3168,28 @@ def query_mesdistance(name: str, log_func=None) -> dict | None:
 
 
 def redshift_to_ly(z: float) -> float:
+    """Light-travel distance (ly) for a redshift.
+
+    Uses Planck18's lookback time × c — the SAME cosmology and the
+    SAME distance definition the rest of the pipeline assumes
+    (``estimate_z_and_lookback`` and the metric converter interpret
+    every ``dist_ly`` as light-travel distance).  The previous
+    implementation used the linear Hubble law ``d = cz/H0`` with
+    H0 = 70, which (a) runs ~10 % high above z ≈ 0.1 and ~40 % high
+    at z = 0.5, and (b) silently mixed two cosmologies in one scene.
+    Linear law kept only as the no-astropy fallback.
+    """
+    z = abs(float(z))
+    if z <= 0 or z != z:
+        return 0.0
+    if _HAS_COSMOLOGY:
+        try:
+            lb_gyr = float(_COSMO.lookback_time(z).to(u.Gyr).value)
+            return lb_gyr * 1e9
+        except Exception:
+            pass
     dist_mpc = (z * C_KM_S) / HUBBLE_H0
-    return dist_mpc * MPC_TO_LY / PC_TO_LY * PC_TO_LY  # = dist_mpc * MPC_TO_LY
+    return dist_mpc * MPC_TO_LY
 
 
 def resolve_object_distance(name: str, obj_type: str,
@@ -2987,8 +3240,7 @@ def resolve_object_distance(name: str, obj_type: str,
                             z = rv / C_KM_S
                         break
             if 0 < z < 0.5:
-                dist_mpc = (z * C_KM_S) / HUBBLE_H0
-                dist_ly = dist_mpc * MPC_TO_LY
+                dist_ly = redshift_to_ly(z)
                 err_ly = dist_ly * 0.15
                 mode = decide_mode(dist_ly, obj_type).value
                 cache.set(name, dist_ly, err_ly,
@@ -3075,69 +3327,6 @@ def prepare_texture_array(image_data: np.ndarray,
         step_x = max(1, w // max_size)
         u8 = u8[::step_y, ::step_x]
     return u8
-
-
-def build_photo_pixel_grid(texture_u8: np.ndarray,
-                           corners: list[tuple[float, float, float]],
-                           ) -> dict | None:
-    """Project a downsampled image onto the photo rectangle as coloured points.
-
-    ``corners`` are in order TL, TR, BR, BL. Returns a dict with lists
-    ``x``, ``y``, ``z``, ``colors`` (hex strings) suitable for a single
-    ``go.Scatter3d`` marker trace. Plotly has no native UV-mapped textures
-    for 3D meshes, so each pixel becomes a tiny coloured marker at its
-    bilinearly interpolated position on the quad.
-    """
-    if (texture_u8 is None or texture_u8.ndim != 3
-            or texture_u8.shape[2] < 3
-            or not corners or len(corners) != 4):
-        return None
-    tl = np.asarray(corners[0], dtype=np.float64)
-    tr = np.asarray(corners[1], dtype=np.float64)
-    br = np.asarray(corners[2], dtype=np.float64)
-    bl = np.asarray(corners[3], dtype=np.float64)
-
-    h, w = texture_u8.shape[:2]
-    # u goes left->right (0..1), v goes top->bottom (0..1)
-    us = (np.arange(w) + 0.5) / w
-    vs = (np.arange(h) + 0.5) / h
-    uu, vv = np.meshgrid(us, vs)  # shape (h, w)
-
-    # Bilinear interpolation across the quad (TL, TR, BR, BL)
-    top = tl[None, None, :] * (1 - uu)[..., None] + tr[None, None, :] * uu[..., None]
-    bot = bl[None, None, :] * (1 - uu)[..., None] + br[None, None, :] * uu[..., None]
-    pts = top * (1 - vv)[..., None] + bot * vv[..., None]  # (h, w, 3)
-
-    # Return numpy arrays (not .tolist()) for x/y/z: Plotly's internal
-    # `_validate_coerce_fraction` has a fast path for numpy numeric
-    # arrays that skips the per-element PyFloat→float unbox that the
-    # list-of-Python-floats path triggers.  At 480×480 that's ~230k
-    # elements per axis saved.
-    xs = np.ascontiguousarray(pts[..., 0].ravel())
-    ys = np.ascontiguousarray(pts[..., 1].ravel())
-    zs = np.ascontiguousarray(pts[..., 2].ravel())
-
-    # Hex conversion hot path.  At PHOTO_DEFAULT_PX=480 this loop runs
-    # ~230k times per render; the naive
-    #   "#{:02x}{:02x}{:02x}".format(r, g, b)
-    # form spends ~200 ms of pure Python formatting.  bytes.hex() does
-    # the hex encoding in one C call, then we slice out 6-char chunks
-    # and prepend "#" — roughly 4-5× faster on measured workloads.
-    # NB: we *tried* a vectorised numpy |S7→<U7 view in an earlier pass;
-    # benchmarking at 230k elements showed it was slightly *slower* than
-    # the CPython list-slice specialisation (~28ms vs ~25ms), and Plotly
-    # iterates string arrays element-by-element during JSON-serialisation
-    # either way.  Keep the list form — it's the fastest we measured.
-    rgb = texture_u8[..., :3].reshape(-1, 3)
-    if rgb.dtype != np.uint8:
-        rgb = rgb.astype(np.uint8, copy=False)
-    else:
-        rgb = np.ascontiguousarray(rgb)
-    hex_flat = rgb.tobytes().hex()
-    colors = ["#" + hex_flat[i:i + 6]
-              for i in range(0, len(hex_flat), 6)]
-    return {"x": xs, "y": ys, "z": zs, "colors": colors,
-            "w": w, "h": h}
 
 
 def build_photo_texture_mesh(corners: list[tuple[float, float, float]],
@@ -3234,7 +3423,7 @@ def build_photo_texture_mesh(corners: list[tuple[float, float, float]],
     if rgb.dtype != np.uint8:
         rgb = rgb.astype(np.uint8, copy=False)
     rgb_flat = np.ascontiguousarray(rgb.reshape(-1, 3))
-    # Same bytes.hex() trick as build_photo_pixel_grid — one C call,
+    # bytes.hex() trick — one C call,
     # then slice into 6-char chunks.
     hex_flat = rgb_flat.tobytes().hex()
     cell_colors = ["#" + hex_flat[i:i + 6]
@@ -3318,11 +3507,9 @@ def build_background_pins(siril, img_w: int, img_h: int,
         return []
 
     # The log-distance upper bound (formerly `picked × 10^N decades`)
-    # has been removed.  Objects arbitrarily far behind the photo now
-    # get pins too — distant background galaxies that previously fell
-    # outside the window are now drawn at their real depth.  The
-    # log_window constants (LOG_WINDOW_COSMIC / LOG_WINDOW_GALACTIC)
-    # remain in the module in case anyone ever wants the cap back.
+    # has been removed: objects arbitrarily far behind the photo get
+    # pins too, so distant background galaxies appear at their real
+    # depth.  (See git history for the old windowed version.)
 
     # ---- Batch WCS pixel pre-compute (B7) ---------------------------
     # If a WCS is available, convert every candidate's (ra, dec) to
@@ -3538,81 +3725,6 @@ def get_photo_corners_3d(siril, w: int, h: int,
              cz + (c[2]-cz) * scale) for c in raw]
 
 
-def build_viewing_ray_cues(photo_center: tuple[float, float, float],
-                           dist_ly: float, mode: ViewMode,
-                           n_gradient: int = 40) -> dict:
-    """Depth cues along the Earth → target line of sight:
-
-      * a gradient of small markers (bright near Earth, dim at the
-        photo plane) so the line reads as depth, not just a line;
-      * log-decade reference ticks (100 ly / 1 kly / 10 kly / ...) with
-        short text labels — the single most informative feature for
-        communicating scale without a dedicated axis.
-
-    Returns a dict of pre-computed arrays:
-      ``grad_x/y/z/colors`` for the gradient markers,
-      ``tick_x/y/z/labels``  for the decade ticks.
-    """
-    px, py, pz = (float(photo_center[0]),
-                  float(photo_center[1]),
-                  float(photo_center[2]))
-    vec = np.array([px, py, pz], dtype=float)
-    mag = float(np.linalg.norm(vec))
-    if mag < 1e-9:
-        return {"grad_x": [], "grad_y": [], "grad_z": [], "grad_colors": [],
-                "tick_x": [], "tick_y": [], "tick_z": [], "tick_labels": []}
-    unit = vec / mag
-
-    # Gradient: t in [0.02, 0.98] so markers don't sit exactly on
-    # Earth or the photo centre and fight with those markers.
-    ts = np.linspace(0.02, 0.98, n_gradient)
-    pts = ts[:, None] * vec[None, :]
-    # Brightness interpolates amber (near) → deep violet (far).
-    # Using the linear t along the ray is the right depth cue: the
-    # user's eye reads the colour transition as "far away".
-    def _blend(t: float) -> str:
-        # (near_rgb) → (far_rgb).  Stay in warm→cool.
-        near = (255, 214, 102)    # warm amber
-        far = (80, 60, 140)       # deep violet
-        r = int(round(near[0] * (1 - t) + far[0] * t))
-        g = int(round(near[1] * (1 - t) + far[1] * t))
-        b = int(round(near[2] * (1 - t) + far[2] * t))
-        return f"rgb({r},{g},{b})"
-    grad_colors = [_blend(float(t)) for t in ts]
-
-    # Log-decade ticks.  We convert each log-decade light-year distance
-    # into a scene-unit distance, then walk along the ray until we pass
-    # the photo's position.
-    if dist_ly and dist_ly > 0:
-        if mode is ViewMode.GALACTIC:
-            decade_ly = [100, 1_000, 10_000]
-        else:
-            decade_ly = [1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9]
-    else:
-        decade_ly = []
-    tick_x, tick_y, tick_z, tick_labels = [], [], [], []
-    for d_ly in decade_ly:
-        d_scene = scale_dist(d_ly, mode)
-        if d_scene >= mag * 0.98:
-            break  # past the photo centre — skip
-        p = unit * d_scene
-        tick_x.append(float(p[0]))
-        tick_y.append(float(p[1]))
-        tick_z.append(float(p[2]))
-        tick_labels.append(_format_ly_label(d_ly))
-
-    return {
-        "grad_x": pts[:, 0].tolist(),
-        "grad_y": pts[:, 1].tolist(),
-        "grad_z": pts[:, 2].tolist(),
-        "grad_colors": grad_colors,
-        "tick_x": tick_x,
-        "tick_y": tick_y,
-        "tick_z": tick_z,
-        "tick_labels": tick_labels,
-    }
-
-
 def _textposition_for(x: float, y: float, z: float) -> str:
     """Pick a Plotly 3D ``textposition`` for a labelled marker that
     biases the label **away from the scene origin** (Earth).  This
@@ -3727,7 +3839,35 @@ def _build_galaxy_figure_impl(scene: "SceneSpec") -> object:
             _phis_3d = np.linspace(0, 2 * math.pi, 120)
             _cos_phi = np.cos(_phis_3d)
             _sin_phi = np.sin(_phis_3d)
-            for ring in rings:
+            _n_rings = max(1, len(rings) - 1)
+            # Which ring (if any) gets the full spherical-shell
+            # treatment?  Only the one nearest the TARGET's distance
+            # (in log space, within half a decade) — so the vertical
+            # circles carry meaning ("your photo is at this depth")
+            # instead of turning the whole grid into a cage of
+            # circles.  All other rings render flat, radar-style.
+            # Galactic mode: never — the GC-centred rings describe
+            # the galactic disk, which IS flat; spherical shells
+            # there were physically misleading (the Earth-centred
+            # amber rings carry the shell in galactic mode instead).
+            _shell_idx = None
+            _tgt_d = scene.get("dist_ly") or 0.0
+            if mode is ViewMode.COSMIC and _tgt_d > 0:
+                _best = None
+                for _i, _rg in enumerate(rings):
+                    _dl = abs(math.log10(float(_rg["r_ly"]))
+                              - math.log10(float(_tgt_d)))
+                    if _best is None or _dl < _best[0]:
+                        _best = (_dl, _i)
+                if _best is not None and _best[0] <= 0.5:
+                    _shell_idx = _best[1]
+            for _ri, ring in enumerate(rings):
+                # Depth cue: nearer rings brighter, farther rings
+                # fainter.  Atmospheric-fading is one of the few
+                # depth signals a flat screen can actually give the
+                # eye; a uniform alpha made the nested shells read
+                # as a flat pattern.
+                _ring_alpha = 0.35 - 0.23 * (_ri / _n_rings)
                 # P1.4 — append redshift + lookback time to cosmic-mode
                 # ring hovers (and the +x labels).  Galactic-mode rings
                 # are well within the Milky Way; z and lookback there
@@ -3748,34 +3888,35 @@ def _build_galaxy_figure_impl(scene: "SceneSpec") -> object:
                 else:
                     cosmic_tag = ""
                     label_tag = ""
-                # Three orthogonal great circles per ring radius:
-                #   • horizontal (z = 0)         ← original
-                #   • vertical, y = 0            ← new (z up, x out)
-                #   • vertical, x = center_x     ← new (z up, y out)
-                # Concatenated into one Scatter3d trace via None
-                # separators — keeps trace count the same as before
-                # while making the rings read as spherical shells.
+                # Flat radar-style circle by default; the target-
+                # depth ring (see _shell_idx above) additionally gets
+                # two vertical great circles so it reads as the
+                # spherical shell your photo sits on.
                 _r_s = ring["r_scene"]
                 _cx_s = ring["center_x"]
-                # Horizontal (z = 0)
                 rxs: list[float | None] = list(ring["x"])
                 rys: list[float | None] = list(ring["y"])
                 rzs: list[float | None] = list(ring["z"])
-                rxs.append(None); rys.append(None); rzs.append(None)
-                # Vertical 1: y = 0 plane, ring spans (x − center_x, z)
-                rxs.extend((_cx_s + _r_s * _cos_phi).tolist())
-                rys.extend([0.0] * len(_phis_3d))
-                rzs.extend((_r_s * _sin_phi).tolist())
-                rxs.append(None); rys.append(None); rzs.append(None)
-                # Vertical 2: x = center_x plane, ring spans (y, z)
-                rxs.extend([_cx_s] * len(_phis_3d))
-                rys.extend((_r_s * _cos_phi).tolist())
-                rzs.extend((_r_s * _sin_phi).tolist())
+                if _ri == _shell_idx:
+                    # Slightly brighter than the flat grid so the
+                    # shell stands out as "this one is about you".
+                    _ring_alpha = min(0.55, _ring_alpha + 0.18)
+                    rxs.append(None); rys.append(None); rzs.append(None)
+                    # Vertical 1: y = 0 plane (x−center vs z)
+                    rxs.extend((_cx_s + _r_s * _cos_phi).tolist())
+                    rys.extend([0.0] * len(_phis_3d))
+                    rzs.extend((_r_s * _sin_phi).tolist())
+                    rxs.append(None); rys.append(None); rzs.append(None)
+                    # Vertical 2: x = center_x plane (y vs z)
+                    rxs.extend([_cx_s] * len(_phis_3d))
+                    rys.extend((_r_s * _cos_phi).tolist())
+                    rzs.extend((_r_s * _sin_phi).tolist())
                 fig.add_trace(go.Scatter3d(
                     x=rxs, y=rys, z=rzs,
                     mode="lines",
-                    line=dict(color="rgba(136,170,200,0.25)",
-                              width=1, dash="dot"),
+                    line=dict(
+                        color=f"rgba(136,170,200,{_ring_alpha:.2f})",
+                        width=1, dash="dot"),
                     name=f"Ring: {ring['label']}",
                     hovertext=(f"{ring['label']} from "
                                + ("Galactic Center"
@@ -3815,22 +3956,12 @@ def _build_galaxy_figure_impl(scene: "SceneSpec") -> object:
         try:
             r_boundary = scale_dist(1e6, mode)   # = 10.0 scene units
             phis = np.linspace(0, 2 * math.pi, 120)
-            cos_b_p = np.cos(phis)
-            sin_b_p = np.sin(phis)
-            n_pts = len(phis)
-            # Three-circle wireframe to match the rest of the
-            # distance-ring set (horizontal + 2 verticals).
-            xs_b: list[float | None] = (r_boundary * cos_b_p).tolist()
-            ys_b: list[float | None] = (r_boundary * sin_b_p).tolist()
-            zs_b: list[float | None] = [0.0] * n_pts
-            xs_b.append(None); ys_b.append(None); zs_b.append(None)
-            xs_b.extend((r_boundary * cos_b_p).tolist())
-            ys_b.extend([0.0] * n_pts)
-            zs_b.extend((r_boundary * sin_b_p).tolist())
-            xs_b.append(None); ys_b.append(None); zs_b.append(None)
-            xs_b.extend([0.0] * n_pts)
-            ys_b.extend((r_boundary * cos_b_p).tolist())
-            zs_b.extend((r_boundary * sin_b_p).tolist())
+            # One flat circle.  It marks a scale change on the
+            # radial grid — one strong line says that better than
+            # a three-circle cage.
+            xs_b = (r_boundary * np.cos(phis)).tolist()
+            ys_b = (r_boundary * np.sin(phis)).tolist()
+            zs_b = [0.0] * len(phis)
             fig.add_trace(go.Scatter3d(
                 x=xs_b, y=ys_b, z=zs_b,
                 mode="lines",
@@ -3931,7 +4062,7 @@ def _build_galaxy_figure_impl(scene: "SceneSpec") -> object:
             scaf_x: list[float | None] = []
             scaf_y: list[float | None] = []
             scaf_z: list[float | None] = []
-            for b_deg in (-60.0, -30.0, 30.0, 60.0):
+            for b_deg in (-45.0, 45.0):
                 b_rad = math.radians(b_deg)
                 cos_b_lat = math.cos(b_rad)
                 z_at_b = ax_z * math.sin(b_rad)
@@ -3939,14 +4070,15 @@ def _build_galaxy_figure_impl(scene: "SceneSpec") -> object:
                 scaf_y.extend((ax_y * cos_b_lat * sin_p).tolist())
                 scaf_z.extend([z_at_b] * n_phi)
                 scaf_x.append(None); scaf_y.append(None); scaf_z.append(None)
-            # Meridian arcs at 0°, 45°, ..., 315° (8 longitudes,
-            # pole-to-pole).  Same trace as the latitudes — Plotly
-            # only sees one polyline trace with gaps.
+            # Meridian arcs at 0°, 90°, 180°, 270° (pole-to-pole).
+            # 4 meridians + 2 latitudes + the bright equator still
+            # read as a globe; the previous 8+4 set contributed to
+            # the "cage of circles" complaint.
             n_b = 40   # was 60 — visually identical, less data
             b_arc = np.linspace(-math.pi / 2.0, math.pi / 2.0, n_b)
             cos_b_arc = np.cos(b_arc)
             sin_b_arc = np.sin(b_arc)
-            for l_deg in (0, 45, 90, 135, 180, 225, 270, 315):
+            for l_deg in (0, 90, 180, 270):
                 l_rad = math.radians(l_deg)
                 scaf_x.extend(
                     (ax_x * cos_b_arc * math.cos(l_rad)).tolist())
@@ -4060,28 +4192,45 @@ def _build_galaxy_figure_impl(scene: "SceneSpec") -> object:
     if scene.get("show_disk", True) and mode is ViewMode.GALACTIC:
         try:
             helio_rings = build_helio_rings(mode)
-            for ring in helio_rings:
-                # Same three-orthogonal-circles treatment as the
-                # GC-centered rings above so the heliocentric ring
-                # set reads as a spherical shell around Earth.
+            _n_helio = max(1, len(helio_rings) - 1)
+            # Same "one meaningful shell" logic as the cosmic rings:
+            # only the Earth-centred ring nearest the target's
+            # distance gets the vertical circles; the rest stay flat.
+            _shell_idx_h = None
+            _tgt_d_h = scene.get("dist_ly") or 0.0
+            if _tgt_d_h > 0:
+                _best_h = None
+                for _i, _rg in enumerate(helio_rings):
+                    _dl = abs(math.log10(float(_rg["r_ly"]))
+                              - math.log10(float(_tgt_d_h)))
+                    if _best_h is None or _dl < _best_h[0]:
+                        _best_h = (_dl, _i)
+                if _best_h is not None and _best_h[0] <= 0.5:
+                    _shell_idx_h = _best_h[1]
+            for _ri, ring in enumerate(helio_rings):
+                # Depth fade — see the GC-centered rings above.
+                _ring_alpha = 0.38 - 0.24 * (_ri / _n_helio)
                 _r_s = ring["r_scene"]
                 _cx_s = ring["center_x"]
                 rxs: list[float | None] = list(ring["x"])
                 rys: list[float | None] = list(ring["y"])
                 rzs: list[float | None] = list(ring["z"])
-                rxs.append(None); rys.append(None); rzs.append(None)
-                rxs.extend((_cx_s + _r_s * _cos_phi).tolist())
-                rys.extend([0.0] * len(_phis_3d))
-                rzs.extend((_r_s * _sin_phi).tolist())
-                rxs.append(None); rys.append(None); rzs.append(None)
-                rxs.extend([_cx_s] * len(_phis_3d))
-                rys.extend((_r_s * _cos_phi).tolist())
-                rzs.extend((_r_s * _sin_phi).tolist())
+                if _ri == _shell_idx_h:
+                    _ring_alpha = min(0.58, _ring_alpha + 0.18)
+                    rxs.append(None); rys.append(None); rzs.append(None)
+                    rxs.extend((_cx_s + _r_s * _cos_phi).tolist())
+                    rys.extend([0.0] * len(_phis_3d))
+                    rzs.extend((_r_s * _sin_phi).tolist())
+                    rxs.append(None); rys.append(None); rzs.append(None)
+                    rxs.extend([_cx_s] * len(_phis_3d))
+                    rys.extend((_r_s * _cos_phi).tolist())
+                    rzs.extend((_r_s * _sin_phi).tolist())
                 fig.add_trace(go.Scatter3d(
                     x=rxs, y=rys, z=rzs,
                     mode="lines",
-                    line=dict(color="rgba(220,180,140,0.30)",
-                              width=1, dash="dot"),
+                    line=dict(
+                        color=f"rgba(220,180,140,{_ring_alpha:.2f})",
+                        width=1, dash="dot"),
                     name=f"Earth ring: {ring['label']}",
                     hovertext=f"{ring['label']} from Earth",
                     hoverinfo="text",
@@ -4433,7 +4582,11 @@ def _build_galaxy_figure_impl(scene: "SceneSpec") -> object:
                 fig.add_trace(go.Mesh3d(
                     x=xs_c, y=ys_c, z=zs_c,
                     i=i_idx, j=j_idx, k=k_idx,
-                    color=cluster["col"], opacity=0.10,
+                    # Depth fade: nearer clusters read stronger.
+                    # Virgo (54 Mly) ≈ 0.13; Shapley (650 Mly) ≈ 0.06.
+                    color=cluster["col"],
+                    opacity=max(0.05, 0.135 - 0.12 * min(
+                        1.0, float(cluster["dist_ly"]) / 1e9)),
                     name=cluster["name"],
                     hovertext=(
                         f"<b>{cluster['name']}</b><br>"
@@ -4461,6 +4614,7 @@ def _build_galaxy_figure_impl(scene: "SceneSpec") -> object:
     dist_ly_lg = scene.get("dist_ly") or 0.0
     if (mode is ViewMode.COSMIC and dist_ly_lg > 0
             and dist_ly_lg <= LOCAL_GROUP_MAX_TARGET_LY
+            and scene.get("show_context_spheres", True)
             and scene.get("show_disk", True)):
         try:
             r_units = scale_dist(LOCAL_GROUP_R_LY, mode)
@@ -4495,6 +4649,7 @@ def _build_galaxy_figure_impl(scene: "SceneSpec") -> object:
     dist_ly_val_bubble = scene.get("dist_ly") or 0.0
     if (mode is ViewMode.GALACTIC and dist_ly_val_bubble > 0
             and dist_ly_val_bubble <= LOCAL_BUBBLE_MAX_TARGET_LY
+            and scene.get("show_context_spheres", True)
             and scene.get("show_disk", True)):
         try:
             r_units = scale_dist(LOCAL_BUBBLE_R_LY, mode)
@@ -4686,18 +4841,15 @@ def _build_galaxy_figure_impl(scene: "SceneSpec") -> object:
         ys = [c[1] for c in corners]
         zs = [c[2] for c in corners]
 
-        # Photo surface — preferred path is a subdivided Mesh3d quad
-        # with per-face colours baked from the downsampled texture.
-        # That's a single WebGL draw call (~5-18k flat-shaded tris)
-        # which reads as a continuous image.
-        #
-        # Legacy path: a Scatter3d pixel cloud at 480 px (~230k markers)
-        # — still available behind the "debug pixel scatter" switch
-        # in Scene Elements so developers can compare.  Hover is
-        # ``skip`` on both because per-pixel hover is meaningless
-        # (identification comes from the outline trace below).
+        # Photo surface — a subdivided Mesh3d quad with per-face
+        # colours baked from the downsampled texture: one WebGL draw
+        # call (~5-18k flat-shaded tris) that reads as a continuous
+        # image.  Hover is ``skip`` because per-pixel hover is
+        # meaningless (identification comes from the outline trace
+        # below).  (A legacy per-pixel Scatter3d cloud renderer —
+        # ~230k markers at 480 px — lived here until v1.0; see git
+        # history.)
         texture_mesh = scene.get("photo_texture_mesh")
-        pixel_grid = scene.get("photo_pixel_grid")
         if texture_mesh:
             try:
                 fig.add_trace(go.Mesh3d(
@@ -4722,28 +4874,9 @@ def _build_galaxy_figure_impl(scene: "SceneSpec") -> object:
                     legendgrouptitle_text="Target",
                 ))
             except Exception:
-                # On failure, fall through to the legacy scatter
-                # (if available) or the translucent fallback.
+                # On failure, fall through to the translucent fallback.
                 texture_mesh = None
-        if texture_mesh is None and pixel_grid:
-            fig.add_trace(go.Scatter3d(
-                x=pixel_grid["x"],
-                y=pixel_grid["y"],
-                z=pixel_grid["z"],
-                mode="markers",
-                marker=dict(
-                    size=pixel_grid.get("marker_size", 3),
-                    color=pixel_grid["colors"],
-                    opacity=1.0,
-                    line=dict(width=0),
-                ),
-                name=f"Photo: {obj_name} (pixels)",
-                hoverinfo="skip",
-                showlegend=True,
-                legendgroup="target",
-                legendgrouptitle_text="Target",
-            ))
-        elif texture_mesh is None and not pixel_grid:
+        if texture_mesh is None:
             # Fallback: translucent Mesh3d fill when no texture is available
             try:
                 fig.add_trace(go.Mesh3d(
@@ -4803,9 +4936,6 @@ def _build_galaxy_figure_impl(scene: "SceneSpec") -> object:
         #   - the scale bar in the top-left HUD,
         #   - and the ray itself, which is just a single clean
         #     dotted line connecting Earth to the photo.
-        # build_viewing_ray_cues() is left in the module — re-enabling
-        # it is a one-line restore if a future user wants the ticks
-        # back.
 
         # Photo-plane halo removed — at certain camera distances it
         # rendered as a too-large yellow blob at the ray-photo
@@ -4866,23 +4996,12 @@ def _build_galaxy_figure_impl(scene: "SceneSpec") -> object:
                 legendgroup="target",
             ))
 
-        # Distance uncertainty was previously drawn as a 41-marker
-        # "cigar" plus a thicker axial line segment along the viewing
-        # ray near the target.  Combined with the dotted ray itself
-        # this read as visual noise.  The numeric uncertainty is now
-        # surfaced in the mid-ray "<object> · <distance> ± <err> ly"
-        # label and in the chosen-target ring's hover text — that's
-        # enough.  Pulled here to keep the ray visually clean; restore
-        # is a single block re-add if anyone wants the cigar back.
-        dist_err_ly_val = scene.get("dist_err_ly") or 0.0
-        dist_ly_center = scene.get("dist_ly") or 0.0
-
-        # (Depth-fan rings removed by request — the tilted heliocentric
-        # circles around the chosen target plus the lighter "nearest"
-        # and "farthest" companion rings are no longer drawn.  Distance
-        # context now lives in the mid-ray label, the dotted distance
-        # rings around Earth / the Galactic Center, and the per-pin
-        # hover info on background sticks.)
+        # (Historical note: a distance-uncertainty "cigar", per-ray
+        # depth cues, and nearest/chosen/farthest depth-fan rings all
+        # lived here once and were removed as visual noise — distance
+        # context now lives in the mid-ray label, the distance rings,
+        # the target-depth shell, and per-pin hovers.  See git
+        # history if any of it is ever wanted back.)
 
     # --- Push-pin depth sticks for background objects ---
     # Objects from the picker with distance > chosen target, drawn at
@@ -5642,6 +5761,274 @@ _CAMERA_BOOTSTRAP_JS = r"""
     });
 
     // -----------------------------------------------------------
+    // Journey mode + opening pull-back
+    // -----------------------------------------------------------
+    // The tool's sense is a first-person fact: a human stood on
+    // Earth and caught ancient light.  Two features make that felt:
+    //   * intro     — first paint starts at Earth POV (the sky they
+    //                 actually saw), then pulls back to reveal the
+    //                 map.  The "Powers of Ten" move.
+    //   * journey() — fly from Earth along the viewing ray to the
+    //                 target with a live distance / light-age HUD
+    //                 and waypoint callouts.  Constant speed in
+    //                 scene units means the light-year speedometer
+    //                 visibly explodes past the 1 Mly log boundary —
+    //                 the scale compression becomes felt.
+    function _fmtYears(y) {
+        if (!isFinite(y) || y <= 0) { return ''; }
+        if (y < 1e4)  { return Math.round(y).toLocaleString() + ' years'; }
+        if (y < 1e6)  { return (y / 1e3).toFixed(0) + ' thousand years'; }
+        if (y < 1e9)  { return (y / 1e6).toFixed(1) + ' million years'; }
+        return (y / 1e9).toFixed(2) + ' billion years';
+    }
+    var _journeyHudEl = null;
+    function _journeyHud() {
+        if (_journeyHudEl) { return _journeyHudEl; }
+        var gd = _plot();
+        var host = (gd && gd.parentElement) || document.body;
+        if (host !== document.body
+                && (!host.style.position
+                    || host.style.position === 'static')) {
+            host.style.position = 'relative';
+        }
+        var d = document.createElement('div');
+        d.style.cssText =
+            'position:absolute;top:14px;left:50%;' +
+            'transform:translateX(-50%);z-index:8;display:none;' +
+            'text-align:center;color:#ffe9b0;pointer-events:none;' +
+            'user-select:none;background:rgba(15,15,22,0.72);' +
+            'border:1px solid rgba(255,210,130,0.35);border-radius:6px;' +
+            'padding:8px 18px;font-family:Arial,sans-serif;' +
+            'text-shadow:0 1px 2px #000;min-width:280px;';
+        var main = document.createElement('div');
+        main.style.cssText = 'font-size:17px;font-weight:bold;';
+        var sub = document.createElement('div');
+        sub.style.cssText = 'font-size:11px;color:#cbd6ea;margin-top:2px;';
+        var wp = document.createElement('div');
+        wp.style.cssText = 'font-size:12px;color:#9fe0b0;margin-top:4px;' +
+                           'font-style:italic;min-height:14px;';
+        d.appendChild(main); d.appendChild(sub); d.appendChild(wp);
+        host.appendChild(d);
+        _journeyHudEl = {root: d, main: main, sub: sub, wp: wp};
+        return _journeyHudEl;
+    }
+    var _journeyAF = null;
+    var _journeyHideId = null;
+    function stopJourney() {
+        if (_journeyAF) {
+            cancelAnimationFrame(_journeyAF);
+            _journeyAF = null;
+            if (typeof _gvlog === 'function') { _gvlog('journey stopped'); }
+        }
+        if (_journeyHideId) { clearTimeout(_journeyHideId); _journeyHideId = null; }
+        if (_journeyHudEl) { _journeyHudEl.root.style.display = 'none'; }
+    }
+    function startJourney() {
+        if (!PHOTO || !CFG.journey || !CFG.journey.targetLy) {
+            if (typeof _gvlog === 'function') {
+                _gvlog('journey unavailable: no photo/distance');
+            }
+            return;
+        }
+        _cancelAll();
+        stopJourney();
+        var gd = _plot();
+        var b = _box();
+        if (!gd || !b) { return; }
+        var P = PHOTO;
+        var total = Math.sqrt(P[0]*P[0] + P[1]*P[1] + P[2]*P[2]);
+        if (total < 1e-9) { return; }
+        var DUR = 11000;
+        var wps = (CFG.journey.waypoints || []).slice();
+        var wpIdx = 0;
+        var hud = _journeyHud();
+        hud.root.style.display = 'block';
+        hud.wp.textContent = '';
+        var start = performance.now();
+        if (typeof _gvlog === 'function') {
+            _gvlog('journey: Earth → '
+                   + (CFG.journey.targetName || 'target'));
+        }
+        // Camera geometry: a DOLLY along the proven Earth-POV
+        // sight-line.  Earth POV (eye at Earth's camera position,
+        // center on the photo) demonstrably renders on this Plotly
+        // build — so the journey reuses exactly that configuration
+        // and only moves the eye along it.  Two earlier attempts
+        // failed: first-person flight (eye ON the ray) hit Plotly's
+        // near-clip culling as |eye−center| → 0; an invented
+        // "tracking shot" (center = moving cursor) put the look-at
+        // outside the reliable envelope and blanked the scene in
+        // Story mode.  Dollying the known-good configuration
+        // inherits its rendering behaviour by construction.
+        var photoC = toCam(b, P[0], P[1], P[2]);
+        var earthC = toCam(b, 0, 0, 0);
+        var rayC = {x: photoC.x - earthC.x,
+                    y: photoC.y - earthC.y,
+                    z: photoC.z - earthC.z};
+        var L = Math.sqrt(rayC.x*rayC.x + rayC.y*rayC.y
+                          + rayC.z*rayC.z);
+        if (L < 1e-6) { return; }
+        var dC = {x: rayC.x/L, y: rayC.y/L, z: rayC.z/L};
+        // Perpendicular (camera space) for a gentle mid-flight
+        // sideways drift — zero at start and end, so we begin
+        // exactly on the Earth-POV sight-line and arrive centred.
+        var pC;
+        if (Math.abs(dC.z) < 0.95) {
+            pC = {x: -dC.y, y: dC.x, z: 0};
+        } else {
+            pC = {x: 0, y: -dC.z, z: dC.y};
+        }
+        var pL = Math.sqrt(pC.x*pC.x + pC.y*pC.y + pC.z*pC.z) || 1;
+        pC = {x: pC.x/pL, y: pC.y/pL, z: pC.z/pL};
+        // Remaining eye→photo separation runs L → SEP_END; SEP_END
+        // stays safely above the ~0.35 near-clip threshold and
+        // never exceeds the ray itself.
+        var SEP_END = Math.min(Math.max(0.45, L * 0.5), 1.0);
+        SEP_END = Math.min(SEP_END, L * 0.95);
+        if (typeof _gvlog === 'function') {
+            _gvlog('journey geometry: L=' + L.toFixed(3)
+                   + ' sepEnd=' + SEP_END.toFixed(3));
+        }
+        function frame(now) {
+            var t = Math.min(1, (now - start) / DUR);
+            var e = t * t * (3 - 2 * t);   // smoothstep
+            var s = L + (SEP_END - L) * e;   // eye→photo separation
+            var side = 0.18 * Math.sin(Math.PI * e);
+            var eyeC = {
+                x: photoC.x - dC.x*s + pC.x*side,
+                y: photoC.y - dC.y*s + pC.y*side,
+                z: photoC.z - dC.z*s + pC.z*side,
+            };
+            try {
+                Plotly.relayout(gd, {
+                    'scene.camera.eye': eyeC,
+                    'scene.camera.center': photoC,
+                    'scene.camera.up': {x: 0, y: 0, z: 1},
+                });
+            } catch (err) { /* view torn down mid-journey */ }
+            // HUD distance: fraction of the ray covered → world
+            // units → light-years (inverse of scale_dist).
+            var f = Math.max(0, Math.min(1, (L - s) / L));
+            var u = total * f;
+            var ly = _unitsToLy(u);
+            var isLT = (CFG.metric || 'light-travel') === 'light-travel';
+            hud.main.textContent = _fmtLy(ly) + ' from Earth'
+                + (isLT ? '' : ' (' + CFG.metric + ')');
+            // ly == years holds ONLY for light-travel distance; in
+            // comoving / angular-diameter view the age line would be
+            // wrong by up to ~3x at Gly scales, so it is omitted.
+            hud.sub.textContent = isLT
+                ? ('the light in your photo passed this point '
+                   + _fmtYears(ly) + ' ago')
+                : 'switch to light-travel metric for light-age';
+            while (wpIdx < wps.length && ly >= wps[wpIdx][0]) {
+                hud.wp.textContent = '✦ ' + wps[wpIdx][1];
+                wpIdx++;
+            }
+            if (t < 1) {
+                _journeyAF = requestAnimationFrame(frame);
+            } else {
+                _journeyAF = null;
+                hud.main.textContent = 'You have arrived — '
+                    + (CFG.journey.targetName || 'target');
+                hud.sub.textContent = _fmtLy(CFG.journey.targetLy)
+                    + ' from home · press R to fly back';
+                hud.wp.textContent = '';
+                _journeyHideId = setTimeout(function() {
+                    _journeyHideId = null;
+                    if (_journeyHudEl) {
+                        _journeyHudEl.root.style.display = 'none';
+                    }
+                }, 6000);
+            }
+        }
+        _journeyAF = requestAnimationFrame(frame);
+    }
+
+    // Opening pull-back: snap to Earth POV, hold a beat, then fly
+    // out to the default view.  Cancelled by any deliberate input.
+    var _introActive = false;
+    function _runIntro(attempt) {
+        if (!CFG.intro || !PHOTO) { return; }
+        attempt = attempt || 0;
+        var tgt = presetCamera('earth_pov');
+        if (!tgt) {
+            if (attempt < 10) {
+                setTimeout(function() { _runIntro(attempt + 1); }, 300);
+            }
+            return;
+        }
+        _introActive = true;
+        if (typeof _gvlog === 'function') {
+            _gvlog('intro: Earth POV → pull-back');
+        }
+        snapTo(tgt);
+        setTimeout(function() {
+            if (!_introActive) { return; }
+            flyToTarget(presetCamera('reset'), 3500);
+            setTimeout(function() { _introActive = false; }, 3600);
+        }, 1400);
+    }
+    setTimeout(function() { _runIntro(0); }, 700);
+
+    // Story toast — the one paragraph of *meaning*, surfaced over
+    // the 3D pane where the eyes actually are (the Info tab keeps
+    // the permanent copy).  Appears as the intro pull-back reveals
+    // the map; click to dismiss; auto-fades after 18 s.
+    if (CFG.story) {
+        setTimeout(function() {
+            try {
+                var gd0 = _plot();
+                var host = (gd0 && gd0.parentElement) || document.body;
+                if (host !== document.body
+                        && (!host.style.position
+                            || host.style.position === 'static')) {
+                    host.style.position = 'relative';
+                }
+                var d = document.createElement('div');
+                d.style.cssText =
+                    'position:absolute;bottom:56px;left:50%;' +
+                    'transform:translateX(-50%);z-index:9;' +
+                    'max-width:640px;background:rgba(18,22,32,0.88);' +
+                    'border-left:3px solid #88aaff;border-radius:6px;' +
+                    'padding:10px 30px 10px 14px;color:#dfe7f5;' +
+                    'font:italic 13px Georgia,serif;line-height:1.45;' +
+                    'cursor:pointer;text-shadow:0 1px 2px #000;';
+                d.textContent = CFG.story;
+                var x = document.createElement('span');
+                x.textContent = '✕';
+                x.style.cssText =
+                    'position:absolute;top:5px;right:9px;' +
+                    'font:bold 12px Arial;color:#8899bb;';
+                d.appendChild(x);
+                d.title = 'Click to dismiss';
+                d.addEventListener('click', function() {
+                    if (d.parentElement) {
+                        d.parentElement.removeChild(d);
+                    }
+                });
+                host.appendChild(d);
+                setTimeout(function() {
+                    if (d.parentElement) {
+                        d.parentElement.removeChild(d);
+                    }
+                }, 18000);
+            } catch (e) { /* toast is decorative */ }
+        }, 2500);
+    }
+
+    // Deliberate input cancels intro + journey (mousemove alone
+    // deliberately does NOT — brushing the mouse shouldn't abort an
+    // 11-second journey).
+    ['mousedown', 'wheel', 'touchstart', 'keydown'].forEach(
+        function(evt) {
+            window.addEventListener(evt, function() {
+                if (_introActive) { _cancelAll(); _introActive = false; }
+                stopJourney();
+            }, {passive: true, capture: true});
+        });
+
+    // -----------------------------------------------------------
     // Scale bar overlay (context-sensitive ruler)
     // -----------------------------------------------------------
     // Draws a floating HTML bar pinned to the top-left of the plot
@@ -5693,6 +6080,24 @@ _CAMERA_BOOTSTRAP_JS = r"""
         else                  nice = 10;
         return nice * base;
     }
+    // Live camera accessor.  During mouse-driven interaction Plotly
+    // gl3d updates ONLY the internal WebGL scene camera; the
+    // _fullLayout / layout copies are synced on relayout events —
+    // which gl3d batches or skips entirely for drags and wheel
+    // zooms.  Polling the layout copy therefore watches a value
+    // that never changes until something (like the R reset) calls
+    // Plotly.relayout.  scene._scene.getCamera() returns the truth.
+    function _liveCamera(gd) {
+        try {
+            var s3 = gd._fullLayout.scene._scene;
+            if (s3 && typeof s3.getCamera === 'function') {
+                return s3.getCamera();
+            }
+        } catch (e) { /* fall through to layout copy */ }
+        var sc = gd._fullLayout && gd._fullLayout.scene;
+        return (sc && sc.camera) || null;
+    }
+
     var _scaleBar = null;
     function _ensureScaleBar() {
         if (_scaleBar) { return _scaleBar; }
@@ -5747,7 +6152,8 @@ _CAMERA_BOOTSTRAP_JS = r"""
         // Camera distance correction: further away → bar represents
         // more units at the same pixel width.  Use eye magnitude in
         // scene-normalised coordinates as a cheap proxy.
-        var cam = sc.camera && sc.camera.eye;
+        var _lc = _liveCamera(gd);
+        var cam = _lc && _lc.eye;
         var camMag = cam ? Math.sqrt(cam.x*cam.x + cam.y*cam.y
                                      + cam.z*cam.z) : 1.5;
         var target_units = width_units * 0.12 * (camMag / 1.5);
@@ -5816,7 +6222,7 @@ _CAMERA_BOOTSTRAP_JS = r"""
             _armIdx = _findArmTraces(gd);
         }
         if (!_armIdx || _armIdx.length === 0) { return; }
-        var cam = gd._fullLayout.scene.camera;
+        var cam = _liveCamera(gd);
         if (!cam || !cam.eye) { return; }
         var e = cam.eye;
         var mag = Math.sqrt(e.x*e.x + e.y*e.y + e.z*e.z);
@@ -5893,8 +6299,9 @@ _CAMERA_BOOTSTRAP_JS = r"""
         var h = document.getElementById('gv3d-hint');
         if (!h) { return; }
         var gd = _plot();
-        if (!gd || !gd.layout || !gd.layout.scene) { return; }
-        var e = gd.layout.scene.camera && gd.layout.scene.camera.eye;
+        if (!gd || !gd._fullLayout || !gd._fullLayout.scene) { return; }
+        var _lc = _liveCamera(gd);
+        var e = _lc && _lc.eye;
         if (!e) { return; }
         var mag = Math.sqrt(e.x*e.x + e.y*e.y + e.z*e.z);
         var state = (mag < 0.6) ? 'deep' : 'normal';
@@ -5921,6 +6328,67 @@ _CAMERA_BOOTSTRAP_JS = r"""
     window.addEventListener('resize', function() {
         updateScaleBar();
     });
+
+    // -----------------------------------------------------------
+    // Overlay poller — the event path above is NOT sufficient
+    // -----------------------------------------------------------
+    // Plotly 3D batches or entirely skips plotly_relayout events
+    // during mouse-driven camera drags (the same quirk that broke
+    // the old corner gizmo, fixed then with exactly this pattern).
+    // Result: the scale bar / zoom hint / arm fade froze until
+    // something called Plotly.relayout programmatically (e.g. the
+    // R reset).  A per-frame poller diffs the camera eye and x-range
+    // in _fullLayout and refreshes the overlays only when they
+    // actually changed — idle cost is two dict reads per paint.
+    var _ovLastEye = null;
+    var _ovLastXr = null;
+    var _liveCamChecked = false;
+    function _overlayPollTick() {
+        // Re-arm first so an exception can't stop the loop.
+        requestAnimationFrame(_overlayPollTick);
+        var gd = _plot();
+        if (!gd || !gd._fullLayout || !gd._fullLayout.scene) { return; }
+        var sc = gd._fullLayout.scene;
+        if (!_liveCamChecked) {
+            // One-time diagnostic: the overlay updates lean on the
+            // plotly.js internal scene._scene.getCamera().  If a
+            // future Plotly upgrade removes it, this line turns a
+            // silent regression (frozen scale bar during mouse
+            // interaction) into a one-glance diagnosis in the Log.
+            _liveCamChecked = true;
+            var _hasLive = false;
+            try {
+                _hasLive = !!(sc._scene
+                              && typeof sc._scene.getCamera === 'function');
+            } catch (e2) {}
+            if (typeof _gvlog === 'function') {
+                _gvlog('live camera API: '
+                       + (_hasLive
+                          ? 'available'
+                          : 'MISSING — overlays update on relayout '
+                            + 'events only'));
+            }
+        }
+        var _lc = _liveCamera(gd);
+        var e = _lc && _lc.eye;
+        var xr = sc.xaxis && sc.xaxis.range;
+        if (!e || !xr) { return; }
+        var moved =
+            !_ovLastEye
+            || Math.abs(e.x - _ovLastEye.x) > 1e-9
+            || Math.abs(e.y - _ovLastEye.y) > 1e-9
+            || Math.abs(e.z - _ovLastEye.z) > 1e-9
+            || !_ovLastXr
+            || xr[0] !== _ovLastXr[0]
+            || xr[1] !== _ovLastXr[1];
+        if (!moved) { return; }
+        _ovLastEye = {x: +e.x, y: +e.y, z: +e.z};
+        _ovLastXr = [xr[0], xr[1]];
+        updateScaleBar();
+        _updateZoomHint();
+        _updateArmFade();
+    }
+    requestAnimationFrame(_overlayPollTick);
 
     // Pulse the "Viewing ray" trace — brighter, thicker, and solid
     // for ~1 s, then restore the dotted amber line.  Fired when we
@@ -6002,6 +6470,10 @@ _CAMERA_BOOTSTRAP_JS = r"""
         if (_flyAF) { cancelAnimationFrame(_flyAF); _flyAF = null; }
         stopAutoRotate();
         _cancelPulse();
+        // Preset clicks / resets also abort an in-flight journey.
+        // (Function declarations hoist, so this forward reference
+        // is safe.)
+        try { stopJourney(); } catch (e) { /* not defined yet */ }
     }
 
     // Lightweight logger: anything tagged '[GV3D]' is captured by the
@@ -6037,6 +6509,12 @@ _CAMERA_BOOTSTRAP_JS = r"""
             if (on) { startAutoRotate(); } else { stopAutoRotate(); }
         },
         setIdleMs: function(ms) { _IDLE_MS = +ms || 10000; _kickIdle(); },
+        // World-space photo centre (or null) — the navpad's
+        // magnifier zoom uses it as the focus point so deep zoom
+        // dives toward the photo instead of the origin.
+        photoCenter: PHOTO,
+        // Journey mode — fly the light path from Earth to target.
+        journey: function() { startJourney(); },
         // P2.6 — public API for "fly to spiral arm".
         flyToArm: function(armName) {
             _cancelAll();
@@ -6120,6 +6598,12 @@ _CAMERA_BOOTSTRAP_JS = r"""
         if (!tgt) { _gvlog('reset: no target'); return; }
         _gvlog('reset view' + (animated ? ' (animated)' : ' (snap)'));
         stopAutoRotate();
+        // Clear the navpad magnifier so the wheel-revert guard and
+        // subsequent zooms start from a clean state.
+        try {
+            var gdz = _plot();
+            if (gdz) { gdz.__gv3d_rangeZoom = 1.0; }
+        } catch (ez) {}
         // Restore axis ranges FIRST, so the camera reset that follows
         // lands in the correct axis frame.  Reuse whichever cache is
         // populated (NavigationPad caches to __navpad_origRanges; our
@@ -6176,6 +6660,14 @@ _CAMERA_BOOTSTRAP_JS = r"""
             ev.preventDefault();
             _resetView(true);
         }
+        // J → Journey.  Makes the exported standalone HTML fully
+        // self-contained: the Qt-side 🚀 button doesn't exist there,
+        // but the journey code does.
+        if (k === 'j' || k === 'J') {
+            _gvlog('journey key: J');
+            ev.preventDefault();
+            startJourney();
+        }
     }, {capture: true});
 
     function _ensureHint() {
@@ -6204,7 +6696,7 @@ _CAMERA_BOOTSTRAP_JS = r"""
         h.style.pointerEvents = 'auto';
         h.style.cursor = 'pointer';
         h.style.userSelect = 'none';
-        h.title = 'Click or press R / Home / Esc to return to the default view';
+        h.title = 'Click or press R / Home / Esc to return to the default view.  Press J for the Journey flight to the target';
         h.addEventListener('click', function() { _resetView(true); });
         host.appendChild(h);
     }
@@ -6243,9 +6735,36 @@ def _arms_dict_for_js(mode: ViewMode | None) -> dict:
     return arms
 
 
+def _journey_waypoints(dist_ly) -> list:
+    """Waypoint callouts for the Journey animation: radii from Earth
+    (light-years) paired with a short phrase, filtered to those the
+    camera will actually cross on its way to the target."""
+    if not dist_ly or dist_ly != dist_ly or dist_ly <= 0:
+        return []
+    all_wp = [
+        (LOCAL_BUBBLE_R_LY, "leaving the Local Bubble"),
+        (EARTH_TO_GC_LY, "passing the Galactic Center's distance"),
+        (GALAXY_RADIUS_LY, "leaving the Milky Way's disk"),
+        (160_000.0, "passing the Magellanic Clouds"),
+        (1_000_000.0, "one million light-years — space is now "
+                      "log-compressed"),
+        (2_537_000.0, "passing Andromeda's distance"),
+        (LOCAL_GROUP_R_LY, "leaving the Local Group"),
+        (54_000_000.0, "passing the Virgo Cluster's distance"),
+        (321_000_000.0, "passing the Coma Cluster's distance"),
+        (1_000_000_000.0, "one billion light-years from home"),
+    ]
+    return [[r, label] for r, label in all_wp
+            if r < float(dist_ly) * 0.9]
+
+
 def _inject_camera_bootstrap(html_content: str,
                              photo_center_xyz,
-                             mode: ViewMode | None = None) -> str:
+                             mode: ViewMode | None = None,
+                             dist_ly: float | None = None,
+                             obj_name: str = "",
+                             intro: bool = True,
+                             story: str = "") -> str:
     """Splice the camera-preset/animation ``<script>`` into a Plotly
     HTML page just before ``</body>``.  Injecting inline (instead of
     runJavaScript-after-load) eliminates a race where a click on a
@@ -6270,6 +6789,9 @@ def _inject_camera_bootstrap(html_content: str,
     else:
         # Galactic, or best-effort fallback (most scenes are galactic).
         mode_val = "galactic"
+    _d = (float(dist_ly)
+          if (dist_ly and dist_ly == dist_ly and dist_ly > 0)
+          else None)
     config = {
         "photo": photo_val,
         "mode": mode_val,
@@ -6278,6 +6800,23 @@ def _inject_camera_bootstrap(html_content: str,
         # truth is the Python constants block.
         "armFadeFull": ARM_FADE_EYE_FULL,
         "armFadeZero": ARM_FADE_EYE_ZERO,
+        # Opening pull-back: start at Earth POV (the sky the human
+        # actually saw), then reveal the map.  Only meaningful when
+        # a photo is projected.
+        "intro": bool(intro and photo_val),
+        # Story toast text ("" disables the toast).
+        "story": str(story or ""),
+        # Active distance metric — the journey HUD's light-age line
+        # ("the light passed this point N years ago") is only true
+        # when scene distances ARE light-travel distances.
+        "metric": _ACTIVE_DISTANCE_METRIC,
+        # Journey mode: fly from Earth along the viewing ray to the
+        # target with a live distance/lookback HUD and waypoints.
+        "journey": {
+            "targetLy": _d,
+            "targetName": str(obj_name or ""),
+            "waypoints": _journey_waypoints(_d),
+        },
     }
     snippet = _CAMERA_BOOTSTRAP_JS.replace(
         "__GV3D_CONFIG__", json.dumps(config))
@@ -6697,6 +7236,7 @@ class NavigationPad(QWidget):
                             + '(autorange + camera defaults)');
             }
         } catch (logErr) {}
+        gd.__gv3d_rangeZoom = 1.0;
         Plotly.relayout(gd, {
             'scene.camera.eye': {x:1.6, y:1.6, z:1.0},
             'scene.camera.up': {x:0, y:0, z:1},
@@ -6743,21 +7283,29 @@ class NavigationPad(QWidget):
     //      falls outside the FOV frustum, producing the broken
     //      partial-arm stubs seen in recent screenshots.
     //
-    // The honest fix is to stop zooming past the near clip on
-    // zoom-IN.  The camera hits MIN_R and further zoom-in presses
-    // become no-ops.  For zoom-OUT we still want range expansion
-    // (so the user can pull back far enough to see distant neighbor
-    // galaxies), so the MAX_R branch keeps the old behavior.
+    // The fix that finally works — the MAGNIFIER: on zoom-IN past
+    // the near clip, keep the eye pinned at MIN_R and instead
+    // shrink the axis ranges around the PHOTO (the thing the user
+    // is diving toward).  Shrinking around the look-target keeps it
+    // in view by construction — the historical bug was shrinking
+    // around the origin while the user stared at the photo, which
+    // culled exactly what they were looking at.  Content outside
+    // the shrinking window falls away progressively, which is what
+    // a magnifier does.  Zoom-OUT first un-shrinks the window back
+    // toward the original ranges, then resumes normal eye dolly
+    // (symmetric in/out).  MAX_R keeps the old expansion behavior.
     var MIN_R = __NAV_EYE_MIN__;
     var MAX_R = __NAV_EYE_MAX__;
     var desiredR = r * zoom;
     var rangeFactor = 1.0;
-    var zoomCapped = false;
-    if (desiredR < MIN_R) {
-        // Zoom-in capped at near clip.  No range shrink — we accept
-        // Plotly's natural zoom limit rather than fight it.
+    var curMag = gd.__gv3d_rangeZoom || 1.0;
+    var newMag = null;   // set → apply magnifier ranges this tick
+    if (zoom > 1.0 && curMag < 0.9995) {
+        // Deep-zoomed and zooming out: restore the window first.
+        newMag = Math.min(1.0, curMag * zoom);
+    } else if (desiredR < MIN_R) {
         r = MIN_R;
-        zoomCapped = true;
+        newMag = Math.max(1e-6, curMag * (desiredR / MIN_R));
     } else if (desiredR > MAX_R) {
         rangeFactor = desiredR / MAX_R;   // >1 → expand ranges (zoom out more)
         r = MAX_R;
@@ -6775,14 +7323,39 @@ class NavigationPad(QWidget):
         'scene.camera.center': ctr
     };
 
-    if (zoomCapped) {
-        try {
-            if (typeof _gvlog === 'function') {
-                _gvlog('zoom-in capped at near-clip (r=MIN_R=' +
-                       MIN_R.toFixed(3) + ') — use mode switch to ' +
-                       'Galactic or rotate for more detail');
-            }
-        } catch (cappedErr) {}
+    if (newMag !== null) {
+        // Magnifier: recompute ranges from the ORIGINAL render-time
+        // ranges, shrunk by newMag around the focus point (photo
+        // centre when a photo exists, Earth otherwise).
+        var oR = gd.__navpad_origRanges || {};
+        var focus = (window.gv3d && window.gv3d.photoCenter)
+                    || [0, 0, 0];
+        var axmap = {x: 'xaxis', y: 'yaxis', z: 'zaxis'};
+        var fi = {x: focus[0], y: focus[1], z: focus[2]};
+        var applied = false;
+        for (var axk in axmap) {
+            var orng = oR[axk];
+            if (!orng) { continue; }
+            var T = fi[axk];
+            relayoutArgs['scene.' + axmap[axk] + '.range'] = [
+                T + (orng[0] - T) * newMag,
+                T + (orng[1] - T) * newMag,
+            ];
+            relayoutArgs['scene.' + axmap[axk] + '.autorange'] = false;
+            applied = true;
+        }
+        if (applied) {
+            gd.__gv3d_rangeZoom = newMag;
+            try {
+                if (typeof _gvlog === 'function') {
+                    _gvlog('magnifier: ' + (1.0 / newMag).toFixed(1)
+                           + 'x window around '
+                           + ((window.gv3d && window.gv3d.photoCenter)
+                              ? 'photo' : 'Earth')
+                           + ' (R resets)');
+                }
+            } catch (magErr) {}
+        }
     }
 
     if (rangeFactor !== 1.0) {
@@ -6937,6 +7510,12 @@ class NavigationPad(QWidget):
                 }
             }
             if (!touched) { return; }
+            // Magnifier mode: the navpad shrinks ranges ON PURPOSE.
+            // While it is engaged, leave the ranges alone — the R
+            // reset (autorange) is the escape hatch.
+            if (gd.__gv3d_rangeZoom && gd.__gv3d_rangeZoom < 0.9995) {
+                return;
+            }
             var scW = scene();
             if (!scW) { return; }
             var orig = gd.__navpad_origRanges;
@@ -7030,9 +7609,13 @@ class NavigationPad(QWidget):
             row.addWidget(b)
             return b
 
-        _add("+", "Zoom in",
+        _add("+", "Zoom in.  Past the camera limit the view keeps "
+                   "magnifying around the photo (magnifier mode) — "
+                   "content outside the window falls away; press "
+                   "R / ⟲ to reset.",
              lambda: self._zoom(self._ZOOM_FACTOR))
-        _add("−", "Zoom out",
+        _add("−", "Zoom out.  Un-magnifies first if magnifier mode "
+                  "is active, then pulls the camera back.",
              lambda: self._zoom(1.0 / self._ZOOM_FACTOR))
         _add("⟲", "Reset camera to default view",
              self._reset)
@@ -7284,11 +7867,14 @@ class GalacticView3DWindow(QMainWindow):
         self._last_csv_path = ""
         self._last_figure = None
         self._last_scene: SceneSpec | None = None
+        # Opening pull-back plays once per target (not per render) —
+        # see the render path for the gate.
+        self._intro_played_for: str | None = None
         # H3 re-entrancy guard.  _update_progress() calls
         # QApplication.processEvents() and TargetPickerDialog.exec()
         # spins a modal loop, so a second F5 or a rapid double-click on
         # "Render 3D Map" can re-enter _on_render() while the first
-        # call still holds _image_data / _wcs / _pixel_grid_cache
+        # call still holds _image_data / _wcs / _photo_mesh_cache
         # references.  The flag + disabled button are a belt-and-
         # braces guard.
         self._rendering = False
@@ -7302,7 +7888,7 @@ class GalacticView3DWindow(QMainWindow):
                                  "header_str": ""}
         # Photo-texture pixel grid is ~150-230k markers; only rebuild
         # when image bytes, resolution, or photo corners change.
-        self._pixel_grid_cache: dict = {"key": None, "grid": None}
+        self._photo_mesh_cache: dict = {"key": None, "mesh": None}
 
         self.init_ui()
         self._load_settings()
@@ -7452,6 +8038,54 @@ class GalacticView3DWindow(QMainWindow):
         group = QGroupBox("Scene Elements")
         layout = QVBoxLayout(group)
 
+        # View style — the human-first switch.  "Story" keeps only
+        # the thread that matters (Earth → viewing ray → photo →
+        # target, plus the galaxy itself and its scale rings);
+        # "Explorer" turns on every reference overlay (landmark
+        # catalogs, cluster halos, CMB boundary, context spheres).
+        lbl_style = QLabel("View style:")
+        lbl_style.setStyleSheet("color:#888; font-size:10pt;")
+        layout.addWidget(lbl_style)
+        self.radio_view_story = QRadioButton("Story (clean, cinematic)")
+        self.radio_view_story.setChecked(True)
+        self.radio_view_story.setToolTip(
+            "<b>Story view</b><br><br>"
+            "Shows only what carries the narrative: Earth, the "
+            "viewing ray, your photo, the target, the Milky Way "
+            "structure, and the distance rings.  Landmark catalogs, "
+            "cluster halos, the CMB boundary, and the Local "
+            "Bubble / Local Group spheres are hidden.<br><br>"
+            "The quiet, dark view that makes the journey from your "
+            "backyard to the target legible at a glance.")
+        _nofocus(self.radio_view_story)
+        self.radio_view_explorer = QRadioButton(
+            "Explorer (all overlays)")
+        self.radio_view_explorer.setToolTip(
+            "<b>Explorer view</b><br><br>"
+            "Everything on: galactic + cosmic landmark catalogs, "
+            "galaxy-cluster halos, the CMB observable-universe "
+            "boundary, and the Local Bubble / Local Group context "
+            "spheres.  Individual layers can still be toggled from "
+            "the in-plot legend.")
+        _nofocus(self.radio_view_explorer)
+        self.view_style_grp = QButtonGroup(self)
+        self.view_style_grp.addButton(self.radio_view_story)
+        self.view_style_grp.addButton(self.radio_view_explorer)
+        layout.addWidget(self.radio_view_story)
+        layout.addWidget(self.radio_view_explorer)
+
+        self.chk_intro = QCheckBox("Opening pull-back animation")
+        self.chk_intro.setChecked(True)
+        self.chk_intro.setToolTip(
+            "<b>Opening pull-back</b><br><br>"
+            "After a render, the camera starts at Earth's point of "
+            "view — the sky as you actually saw it — holds a "
+            "moment, then pulls back to reveal the whole map.<br><br>"
+            "Plays once per target (re-rendering the same object "
+            "skips it).  Any click / scroll / key cancels it.")
+        _nofocus(self.chk_intro)
+        layout.addWidget(self.chk_intro)
+
         self.chk_arms = QCheckBox("Spiral arms (5)")
         self.chk_arms.setChecked(True)
         self.chk_arms.setToolTip(
@@ -7518,7 +8152,10 @@ class GalacticView3DWindow(QMainWindow):
         # distance now), angular-diameter (apparent-size distance).
         # Galactic mode ignores the setting since the metrics are
         # identical at sub-Mly distances.
-        from PyQt6.QtWidgets import QButtonGroup, QRadioButton
+        # (QRadioButton / QButtonGroup come from the module-level
+        # import — a function-local import here would shadow the
+        # names for the WHOLE function scope and break any use of
+        # them earlier in this method: UnboundLocalError.)
         lbl_metric = QLabel("Distance metric (cosmic mode):")
         lbl_metric.setStyleSheet("color:#888; font-size:10pt;")
         layout.addWidget(lbl_metric)
@@ -7598,11 +8235,13 @@ class GalacticView3DWindow(QMainWindow):
             "<b>Photo resolution (longest axis)</b><br><br>"
             "Controls how many pixels the astrophoto is downsampled to "
             "before being projected onto the 3D photo rectangle.<br><br>"
-            "Plotly 3D has no UV-mapped textures on meshes, so each "
-            "pixel of the downsampled image becomes one WebGL "
-            "<code>Scatter3d</code> marker. The spinbox to the right "
-            "sets the <i>longest</i>-axis size; the other axis is "
-            "scaled to preserve the photo's aspect ratio.<br><br>"
+            "Plotly 3D has no UV-mapped textures on meshes, so the "
+            "image is baked into a subdivided <code>Mesh3d</code> "
+            "quad — roughly two triangles per downsampled pixel. "
+            "The spinbox sets the <i>longest</i>-axis size; the other "
+            "axis preserves the photo's aspect ratio.  Higher = "
+            "sharper but more GPU load (auto-capped in cosmic "
+            "mode).<br><br>"
             "Only active while <i>Photo rectangle + viewing ray</i> is "
             "checked.")
         photo_res_row.addWidget(lbl_photo_res)
@@ -7639,33 +8278,12 @@ class GalacticView3DWindow(QMainWindow):
         # image, clean export).  The scatter grid is kept behind this
         # switch for A/B comparison and because some power-users want
         # true per-pixel control of marker size.
-        self.chk_pixel_grid_debug = QCheckBox(
-            "Debug: per-pixel scatter grid (slow)")
-        self.chk_pixel_grid_debug.setChecked(False)
-        self.chk_pixel_grid_debug.setToolTip(
-            "<b>Legacy per-pixel scatter renderer</b><br><br>"
-            "When <b>off</b> (the default), the photo is drawn as a "
-            "subdivided <code>Mesh3d</code> with per-face colours "
-            "baked from the texture — a single WebGL draw call that "
-            "reads as a continuous image.<br><br>"
-            "When <b>on</b>, each pixel becomes a <code>Scatter3d</code> "
-            "marker (150–230k at 480 px). Slower, more GPU-heavy, and "
-            "reads as a pointillist cloud rather than a photo — but "
-            "useful for A/B comparison or if you want to see exactly "
-            "which pixels sampled where on the 3D plane.")
-        _nofocus(self.chk_pixel_grid_debug)
-        pixel_grid_row = QHBoxLayout()
-        pixel_grid_row.setContentsMargins(20, 0, 0, 0)
-        pixel_grid_row.addWidget(self.chk_pixel_grid_debug)
-        pixel_grid_row.addStretch(1)
-        layout.addLayout(pixel_grid_row)
 
         # Grey out the spinbox and debug toggle when the photo itself
         # is disabled.
         def _sync_photo_res_enabled(checked: bool) -> None:
             self.spin_photo_res.setEnabled(bool(checked))
             lbl_photo_res.setEnabled(bool(checked))
-            self.chk_pixel_grid_debug.setEnabled(bool(checked))
 
         self.chk_photo.toggled.connect(_sync_photo_res_enabled)
         _sync_photo_res_enabled(self.chk_photo.isChecked())
@@ -7676,6 +8294,12 @@ class GalacticView3DWindow(QMainWindow):
         group = QGroupBox("Main Object")
         layout = QFormLayout(group)
         layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        # Compact: the default QFormLayout spacing makes six short
+        # rows eat a third of the panel.  Tight margins + 2 px row
+        # spacing halve the group's height without losing anything.
+        layout.setContentsMargins(8, 4, 8, 6)
+        layout.setVerticalSpacing(2)
+        layout.setHorizontalSpacing(8)
 
         self.lbl_obj_name = QLabel("—")
         self.lbl_obj_name.setStyleSheet("color:#e0e0e0;font-weight:bold;")
@@ -7688,45 +8312,47 @@ class GalacticView3DWindow(QMainWindow):
         self.lbl_obj_dist.setStyleSheet("color:#88aaff;")
         layout.addRow("Distance:", self.lbl_obj_dist)
 
+        # Source / Galactic l,b / Looking-toward rows were removed
+        # for compactness — the same facts live in the Info tab and
+        # the story card.  The labels stay alive (hidden, no layout)
+        # so the render path's setText calls keep working unchanged.
         self.lbl_obj_source = QLabel("—")
-        self.lbl_obj_source.setStyleSheet("color:#aaaaaa;font-size:9pt;")
-        layout.addRow("Source:", self.lbl_obj_source)
-
         self.lbl_obj_gal = QLabel("—")
-        self.lbl_obj_gal.setStyleSheet("color:#aaaaaa;font-size:9pt;")
-        layout.addRow("Galactic l, b:", self.lbl_obj_gal)
-
         self.lbl_obj_arm = QLabel("—")
-        self.lbl_obj_arm.setStyleSheet("color:#aaaaaa;font-size:9pt;")
-        layout.addRow("Looking toward:", self.lbl_obj_arm)
 
         parent_layout.addWidget(group)
 
     def _build_data_group(self, parent_layout: QVBoxLayout) -> None:
         group = QGroupBox("Data Sources")
         layout = QVBoxLayout(group)
+        layout.setContentsMargins(8, 4, 8, 6)
+        layout.setSpacing(2)
 
+        # Everything on one row: online toggle, cache-clear button,
+        # cache counter.  The tooltips carry the explanations, so the
+        # group needs no more height than a single control line.
+        row = QHBoxLayout()
+        row.setSpacing(6)
         self.chk_use_online = QCheckBox("Query SIMBAD online")
         self.chk_use_online.setChecked(True)
         self.chk_use_online.setToolTip(
             "Query SIMBAD for the main object's distance and type.\n"
             "Disable to work offline using only the local cache.")
         _nofocus(self.chk_use_online)
-        layout.addWidget(self.chk_use_online)
-
-        cache_row = QHBoxLayout()
-        self.btn_clear_cache = QPushButton("Clear Distance Cache")
-        self.btn_clear_cache.setStyleSheet("font-size:8pt;padding:4px")
+        row.addWidget(self.chk_use_online)
+        row.addStretch(1)
+        self.btn_clear_cache = QPushButton("Clear cache")
+        self.btn_clear_cache.setStyleSheet("font-size:8pt;padding:3px 8px")
         _nofocus(self.btn_clear_cache)
         self.btn_clear_cache.setToolTip(
             "Discard all cached distance measurements.\n"
             "Next render will re-query SIMBAD.")
         self.btn_clear_cache.clicked.connect(self._on_clear_cache)
-        cache_row.addWidget(self.btn_clear_cache)
+        row.addWidget(self.btn_clear_cache)
         self.lbl_cache_info = QLabel(self._cache_info_text())
         self.lbl_cache_info.setStyleSheet("color:#888888;font-size:8pt")
-        cache_row.addWidget(self.lbl_cache_info, 1)
-        layout.addLayout(cache_row)
+        row.addWidget(self.lbl_cache_info)
+        layout.addLayout(row)
 
         parent_layout.addWidget(group)
 
@@ -7748,10 +8374,13 @@ class GalacticView3DWindow(QMainWindow):
     def _build_output_group(self, parent_layout: QVBoxLayout) -> None:
         group = QGroupBox("Output")
         layout = QVBoxLayout(group)
+        layout.setContentsMargins(8, 4, 8, 6)
+        layout.setSpacing(2)
 
         name_layout = QHBoxLayout()
+        name_layout.setSpacing(6)
         name_label = QLabel("Filename:")
-        name_label.setFixedWidth(100)
+        name_label.setFixedWidth(70)
         name_layout.addWidget(name_label)
         self.edit_filename = QLineEdit("galactic_view_3d")
         self.edit_filename.setToolTip(
@@ -7761,8 +8390,9 @@ class GalacticView3DWindow(QMainWindow):
         layout.addLayout(name_layout)
 
         dpi_layout = QHBoxLayout()
+        dpi_layout.setSpacing(6)
         dpi_label = QLabel("PNG DPI:")
-        dpi_label.setFixedWidth(100)
+        dpi_label.setFixedWidth(70)
         dpi_layout.addWidget(dpi_label)
         self.spin_dpi = QSpinBox()
         self.spin_dpi.setRange(72, 300)
@@ -7926,6 +8556,31 @@ class GalacticView3DWindow(QMainWindow):
                     "Default isometric view.",
                     "reset")
 
+        # Journey mode — the emotional core of the tool: fly from
+        # Earth along the viewing ray to the target, with a live
+        # distance / light-age HUD and waypoint callouts.
+        self.btn_journey = QPushButton("🚀 Journey", parent=right)
+        self.btn_journey.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_journey.setFixedHeight(_PRESET_BTN_HEIGHT)
+        self.btn_journey.setStyleSheet(NAV_BUTTON_STYLE)
+        self.btn_journey.setToolTip(
+            "<b>Journey to the target</b><br><br>"
+            "Fly the camera from Earth along your photo's line of "
+            "sight, all the way out to the target — with a live "
+            "counter showing how far you are and how long ago the "
+            "light in your photo passed that point, plus waypoint "
+            "callouts (leaving the Local Bubble, leaving the Milky "
+            "Way, passing Andromeda…).<br><br>"
+            "Takes about 11 seconds.  Click / scroll / any key "
+            "aborts.  Press <b>R</b> afterwards to fly home.")
+        self.btn_journey.clicked.connect(self._start_journey)
+        # Disabled until a render provides both a projected photo
+        # and a resolved distance — a click that silently does
+        # nothing is worse than a greyed-out button.
+        self.btn_journey.setEnabled(False)
+        btn_row.addWidget(self.btn_journey, 0,
+                          Qt.AlignmentFlag.AlignVCenter)
+
         # Auto-rotate toggle.  A checkable button so its state stays in
         # sync with what the JS side is doing.  NAV_BUTTON_STYLE gives
         # the :checked state a clearly distinct fill + border, so the
@@ -7972,7 +8627,12 @@ class GalacticView3DWindow(QMainWindow):
         main = QWidget()
         self.setCentralWidget(main)
         layout = QHBoxLayout(main)
-        layout.addWidget(self._build_left_panel())
+        # Keep a reference so the whole control panel can be locked
+        # during a render (the worker-thread wait spins a local event
+        # loop, so without this the window stays fully interactive —
+        # including exports that would run against half-built state).
+        self._left_panel = self._build_left_panel()
+        layout.addWidget(self._left_panel)
         layout.addWidget(self._build_right_panel(), 1)
         self.setWindowTitle("Svenesis GalacticView 3D")
         self.setStyleSheet(DARK_STYLESHEET)
@@ -7990,8 +8650,6 @@ class GalacticView3DWindow(QMainWindow):
         self.chk_photo.setChecked(st.value("show_photo", True, type=bool))
         self.spin_photo_res.setValue(
             int(st.value("photo_res_px", PHOTO_DEFAULT_PX)))
-        self.chk_pixel_grid_debug.setChecked(
-            st.value("pixel_grid_debug", False, type=bool))
         self.chk_use_online.setChecked(
             st.value("use_online", True, type=bool))
         self.spin_dpi.setValue(int(st.value("dpi", 150)))
@@ -8002,6 +8660,20 @@ class GalacticView3DWindow(QMainWindow):
             self.radio_cosmic.setChecked(True)
         else:
             self.radio_auto.setChecked(True)
+        view_style = str(st.value("view_style", "story"))
+        if view_style == "explorer":
+            self.radio_view_explorer.setChecked(True)
+        else:
+            self.radio_view_story.setChecked(True)
+        metric = str(st.value("distance_metric", "light-travel"))
+        if metric == "comoving":
+            self.radio_metric_co.setChecked(True)
+        elif metric == "angular-diameter":
+            self.radio_metric_ad.setChecked(True)
+        else:
+            self.radio_metric_lt.setChecked(True)
+        self.chk_intro.setChecked(
+            st.value("intro_enabled", True, type=bool))
 
     def _save_settings(self) -> None:
         st = self._settings
@@ -8010,11 +8682,18 @@ class GalacticView3DWindow(QMainWindow):
         st.setValue("show_neighbors", self.chk_neighbors.isChecked())
         st.setValue("show_photo", self.chk_photo.isChecked())
         st.setValue("photo_res_px", int(self.spin_photo_res.value()))
-        st.setValue("pixel_grid_debug",
-                    self.chk_pixel_grid_debug.isChecked())
         st.setValue("use_online", self.chk_use_online.isChecked())
         st.setValue("dpi", self.spin_dpi.value())
         st.setValue("mode_override", self._current_mode_override())
+        st.setValue("view_style",
+                    "explorer" if self.radio_view_explorer.isChecked()
+                    else "story")
+        st.setValue("distance_metric",
+                    "comoving" if self.radio_metric_co.isChecked()
+                    else "angular-diameter"
+                    if self.radio_metric_ad.isChecked()
+                    else "light-travel")
+        st.setValue("intro_enabled", self.chk_intro.isChecked())
 
     def closeEvent(self, event) -> None:
         self._save_settings()
@@ -8358,7 +9037,10 @@ class GalacticView3DWindow(QMainWindow):
         global _ACTIVE_DISTANCE_METRIC
         _metric_before_render = _ACTIVE_DISTANCE_METRIC
         try:
-            self.btn_render.setEnabled(False)
+            # Lock the whole control panel, not just the Render
+            # button — the responsive-UI event loop would otherwise
+            # let exports / mode switches run mid-pipeline.
+            self._left_panel.setEnabled(False)
         except Exception as _swallowed_exc:
             _log_swallowed(_swallowed_exc)
         try:
@@ -8367,7 +9049,7 @@ class GalacticView3DWindow(QMainWindow):
             self._rendering = False
             _ACTIVE_DISTANCE_METRIC = _metric_before_render
             try:
-                self.btn_render.setEnabled(True)
+                self._left_panel.setEnabled(True)
             except Exception as _swallowed_exc:
                 _log_swallowed(_swallowed_exc)
 
@@ -8684,16 +9366,12 @@ class GalacticView3DWindow(QMainWindow):
         photo_center_xyz = gal_to_xyz(l_deg, b_deg,
                                       scale_dist(placeholder_dist_ly, mode))
 
-        # --- Photo texture (primary + debug) -----------------------------
-        # Primary path: a subdivided Mesh3d quad with per-face colours
-        # baked from the downsampled image.  One WebGL draw call,
-        # reads as a continuous photo.
-        #
-        # Debug path (opt-in via chk_pixel_grid_debug): the legacy
-        # per-pixel Scatter3d cloud.  Useful for A/B comparison but
-        # slow and visually pointillist.
+        # --- Photo texture -----------------------------------------
+        # A subdivided Mesh3d quad with per-face colours baked from
+        # the downsampled image.  One WebGL draw call, reads as a
+        # continuous photo.  (The legacy per-pixel Scatter3d debug
+        # renderer was removed in v1.0 — see git history.)
         photo_texture_mesh = None
-        pixel_grid = None
         if (self.chk_photo.isChecked()
                 and self._image_data is not None
                 and corners_3d is not None):
@@ -8711,8 +9389,6 @@ class GalacticView3DWindow(QMainWindow):
                         "(photo is small on screen; full res buys "
                         "nothing visually but costs GPU time).")
                     photo_max_px = PHOTO_COSMIC_MAX_PX
-                want_debug_grid = bool(
-                    self.chk_pixel_grid_debug.isChecked())
                 img = self._image_data
 
                 def _cheap_fingerprint(a: np.ndarray) -> int:
@@ -8738,9 +9414,7 @@ class GalacticView3DWindow(QMainWindow):
                     except Exception:
                         return 0
 
-                # Shared cache key for both mesh + scatter — both are
-                # derived from the same tex + corners, so a single
-                # fingerprint invalidates both.
+                # Cache key for the texture mesh.
                 cache_key = (
                     tuple(img.shape),
                     int(img.nbytes),
@@ -8752,22 +9426,14 @@ class GalacticView3DWindow(QMainWindow):
                         for c in corners_3d
                     ),
                 )
-                cached = self._pixel_grid_cache
+                cached = self._photo_mesh_cache
                 cached_mesh = cached.get("mesh")
-                cached_grid = cached.get("grid")
                 if cached.get("key") == cache_key and cached_mesh:
                     photo_texture_mesh = cached_mesh
                     self._log(
                         f"Photo texture mesh: reused cached quad "
                         f"({photo_texture_mesh['nx']}x"
                         f"{photo_texture_mesh['ny']} cells).")
-                    if want_debug_grid and cached_grid:
-                        pixel_grid = cached_grid
-                        self._log(
-                            f"Photo pixel grid (debug): reused cached "
-                            f"({pixel_grid['w']}x{pixel_grid['h']}, "
-                            f"{pixel_grid['w']*pixel_grid['h']:,} "
-                            f"markers).")
 
                 if photo_texture_mesh is None:
                     tex = prepare_texture_array(
@@ -8781,33 +9447,13 @@ class GalacticView3DWindow(QMainWindow):
                             f"{photo_texture_mesh['ny']} cells "
                             f"({2*photo_texture_mesh['nx']*photo_texture_mesh['ny']:,} "
                             f"triangles).")
-                    # Rebuild (or invalidate) debug grid alongside.
-                    if want_debug_grid:
-                        pixel_grid = build_photo_pixel_grid(tex, corners_3d)
-                        if pixel_grid:
-                            longest = max(pixel_grid["w"],
-                                          pixel_grid["h"])
-                            if longest >= 320:
-                                pixel_grid["marker_size"] = 2
-                            elif longest >= 160:
-                                pixel_grid["marker_size"] = 3
-                            else:
-                                pixel_grid["marker_size"] = 4
-                            self._log(
-                                f"Photo pixel grid (debug): "
-                                f"{pixel_grid['w']}x{pixel_grid['h']} "
-                                f"({pixel_grid['w']*pixel_grid['h']:,} "
-                                f"markers, "
-                                f"size={pixel_grid['marker_size']}).")
-                    self._pixel_grid_cache = {
+                    self._photo_mesh_cache = {
                         "key": cache_key,
                         "mesh": photo_texture_mesh,
-                        "grid": pixel_grid,
                     }
             except Exception as exc:
                 self._log(f"Photo texture build failed: {exc}")
                 photo_texture_mesh = None
-                pixel_grid = None
 
         # Update GUI object info panel
         self.lbl_obj_name.setText(obj_name)
@@ -8976,6 +9622,12 @@ class GalacticView3DWindow(QMainWindow):
         # SceneSpec instead of a plain dict: a typo'd field name here
         # is now an immediate TypeError instead of a silent .get()
         # default somewhere downstream.
+        explorer_view = self.radio_view_explorer.isChecked()
+        if not explorer_view:
+            self._log("View style: Story (clean) — landmark catalogs, "
+                      "cluster halos, CMB boundary and context spheres "
+                      "hidden.  Switch to Explorer in Scene Elements "
+                      "for all overlays.")
         scene = SceneSpec(
             mode=mode,
             object_name=obj_name,
@@ -8998,7 +9650,6 @@ class GalacticView3DWindow(QMainWindow):
             photo_center_xyz=(photo_center_xyz
                               if self.chk_photo.isChecked() else None),
             photo_texture_mesh=photo_texture_mesh,
-            photo_pixel_grid=pixel_grid,
             constellation_lines=constellation_lines,
             background_pins=(
                 build_background_pins(
@@ -9013,7 +9664,14 @@ class GalacticView3DWindow(QMainWindow):
             show_disk=self.chk_disk.isChecked(),
             show_neighbors=(self.chk_neighbors.isChecked()
                             and mode is ViewMode.COSMIC),
-            show_landmarks=True,
+            # View style (Story vs Explorer): Story keeps the
+            # narrative thread only; Explorer switches on every
+            # reference overlay.
+            show_landmarks=explorer_view,
+            show_clusters=explorer_view,
+            show_cosmic_landmarks=explorer_view,
+            show_cmb=explorer_view,
+            show_context_spheres=explorer_view,
             title=title,
             distance_label=dist_label,
             arm_hint=arm_hint,
@@ -9022,6 +9680,19 @@ class GalacticView3DWindow(QMainWindow):
         )
         self._last_scene = scene
         self._populate_info_tab(scene)
+        # Journey availability follows the scene: needs a projected
+        # photo (ray geometry) and a resolved distance (HUD math).
+        try:
+            _journey_ok = bool(scene.get("photo_center_xyz")
+                               and scene.get("dist_ly"))
+            self.btn_journey.setEnabled(_journey_ok)
+            if not _journey_ok:
+                self.btn_journey.setToolTip(
+                    "<b>Journey unavailable for this render</b><br>"
+                    "Needs the photo rectangle (WCS projection) and "
+                    "a resolved target distance.")
+        except Exception as _swallowed_exc:
+            _log_swallowed(_swallowed_exc)
 
         # Scene summary in the log — one clean line per render with
         # everything needed to diagnose "the scene looked wrong" reports
@@ -9085,9 +9756,22 @@ class GalacticView3DWindow(QMainWindow):
                 # QWebEngineView.  Inline injection avoids the race
                 # where a button click during load-in-flight would
                 # dispatch JS that found no window.gv3d.
+                # Intro pull-back: only when enabled AND the
+                # target changed since the last render — the fourth
+                # replay of the same animation is annoyance, not
+                # delight.
+                _tgt_key = scene.get("object_name") or "?"
+                _play_intro = (self.chk_intro.isChecked()
+                               and _tgt_key != self._intro_played_for)
                 html_content = _inject_camera_bootstrap(
                     html_content, scene.get("photo_center_xyz"),
-                    mode=scene.get("mode"))
+                    mode=scene.get("mode"),
+                    dist_ly=scene.get("dist_ly"),
+                    obj_name=scene.get("object_name") or "",
+                    intro=_play_intro,
+                    story=build_story_text(scene))
+                if _play_intro:
+                    self._intro_played_for = _tgt_key
                 self.preview_widget.show_html(html_content)
                 self._log("Rendered interactive Plotly view (QWebEngineView).")
                 rendered = True
@@ -9119,7 +9803,10 @@ class GalacticView3DWindow(QMainWindow):
                                                include_plotlyjs="cdn")
                     html_content = _inject_camera_bootstrap(
                         html_content, scene.get("photo_center_xyz"),
-                        mode=scene.get("mode"))
+                        mode=scene.get("mode"),
+                        dist_ly=scene.get("dist_ly"),
+                        obj_name=scene.get("object_name") or "",
+                        story=build_story_text(scene))
                     with open(self._last_html_path, "w",
                               encoding="utf-8") as f:
                         f.write(html_content)
@@ -9168,7 +9855,24 @@ class GalacticView3DWindow(QMainWindow):
         mode = scene["mode"]
         dist_ly = scene.get("dist_ly") or 0
         err = scene.get("dist_err_ly") or 0
-        html = [
+        # Story card first — the one paragraph of *meaning* before
+        # the data fields.  This is the text people screenshot.
+        story = build_story_text(scene)
+        story_html = []
+        if story:
+            story_html = [
+                "<div style='background:#232b3a; border-left:3px "
+                "solid #88aaff; padding:10px 14px; margin-bottom:"
+                "12px; font-size:11pt; line-height:1.5;'>"
+                f"<i>{story}</i></div>",
+            ]
+            # Also surface it in the log so it lands in bug reports
+            # and can be copied as plain text.
+            try:
+                self._log(f"Story: {story}")
+            except Exception:
+                pass
+        html = story_html + [
             "<h2 style='color:#88aaff;'>Scene Overview</h2>",
             "<table cellpadding='6'>",
             f"<tr><td><b>Object</b></td><td>{scene['object_name']}</td></tr>",
@@ -9221,8 +9925,14 @@ class GalacticView3DWindow(QMainWindow):
                             if self._last_scene else None)
             scene_mode = (self._last_scene.get("mode")
                           if self._last_scene else None)
-            html_str = _inject_camera_bootstrap(html_str, photo_center,
-                                                mode=scene_mode)
+            html_str = _inject_camera_bootstrap(
+                html_str, photo_center, mode=scene_mode,
+                dist_ly=(self._last_scene.get("dist_ly")
+                         if self._last_scene else None),
+                obj_name=(self._last_scene.get("object_name") or ""
+                          if self._last_scene else ""),
+                story=(build_story_text(self._last_scene)
+                       if self._last_scene else ""))
             with open(self._last_html_path, "w", encoding="utf-8") as f:
                 f.write(html_str)
             self._log(f"Exported HTML: {self._last_html_path}")
@@ -9531,6 +10241,59 @@ class GalacticView3DWindow(QMainWindow):
                 f"({e}).")
             return None
 
+    def _append_story_caption(self, png_path: str) -> None:
+        """Append the story paragraph as a caption band under a PNG.
+
+        The HTML overlays (scale bar, story toast) exist only in the
+        live page — every PNG path (Plotly.toImage, kaleido,
+        matplotlib) renders the bare figure.  Baking the story into
+        the exported file keeps the most shareable sentence of the
+        app attached to the most shareable artifact.  Failures are
+        logged and non-fatal: a bare PNG beats no PNG.
+        """
+        try:
+            if self._last_scene is None:
+                return
+            story = build_story_text(self._last_scene)
+            if not story:
+                return
+            import textwrap
+            from PIL import Image, ImageDraw, ImageFont
+            img = Image.open(png_path).convert("RGB")
+            font_px = max(14, img.width // 75)
+            font = None
+            for name in ("Arial.ttf", "DejaVuSans.ttf",
+                         "Helvetica.ttc"):
+                try:
+                    font = ImageFont.truetype(name, font_px)
+                    break
+                except Exception:
+                    continue
+            if font is None:
+                font = ImageFont.load_default()
+                font_px = 11
+            probe = ImageDraw.Draw(img)
+            avg_w = max(5.0,
+                        probe.textlength("abcdefghij", font=font) / 10.0)
+            margin = max(12, img.width // 70)
+            chars = max(30, int((img.width - 2 * margin) / avg_w))
+            lines = textwrap.wrap(story, width=chars)
+            line_h = font_px + 6
+            band_h = margin * 2 + line_h * len(lines)
+            out = Image.new("RGB", (img.width, img.height + band_h),
+                            (10, 10, 14))
+            out.paste(img, (0, 0))
+            d = ImageDraw.Draw(out)
+            y = img.height + margin
+            for ln in lines:
+                d.text((margin, y), ln, fill=(223, 231, 245),
+                       font=font)
+                y += line_h
+            out.save(png_path)
+            self._log("PNG: story caption appended.")
+        except Exception as e:
+            self._log(f"PNG caption skipped: {e}")
+
     def _on_export_png(self) -> None:
         if self._last_scene is None:
             return
@@ -9558,6 +10321,7 @@ class GalacticView3DWindow(QMainWindow):
             try:
                 with open(self._last_png_path, "wb") as f:
                     f.write(png_bytes)
+                self._append_story_caption(self._last_png_path)
                 self._log(
                     f"Exported PNG via WebEngine/Plotly.toImage: "
                     f"{self._last_png_path}")
@@ -9602,6 +10366,7 @@ class GalacticView3DWindow(QMainWindow):
                     format="png",
                     width=base_width, height=base_height,
                     scale=px_scale)
+                self._append_story_caption(self._last_png_path)
                 self._log(f"Exported PNG via Plotly/kaleido: "
                           f"{self._last_png_path}")
                 QMessageBox.information(
@@ -9626,6 +10391,7 @@ class GalacticView3DWindow(QMainWindow):
         try:
             render_matplotlib_galaxy(
                 self._last_scene, self._last_png_path, dpi=dpi)
+            self._append_story_caption(self._last_png_path)
             self._log(f"Exported PNG (matplotlib fallback): "
                       f"{self._last_png_path}")
             QMessageBox.information(
@@ -9667,6 +10433,24 @@ class GalacticView3DWindow(QMainWindow):
                             f"{sc['fov_radius_deg']:.4f}"])
                 w.writerow(["view_mode", sc["mode"].value])
                 w.writerow(["viewing_direction", sc.get("arm_hint", "")])
+                # Cosmology context: redshift, lookback time, and
+                # which distance metric the 3D positions used.
+                _d = sc.get("dist_ly") or 0.0
+                if _d > 0:
+                    _z, _lb = estimate_z_and_lookback(float(_d))
+                    w.writerow(["redshift_estimate", f"{_z:.6f}"])
+                    w.writerow(["lookback_time_gyr", f"{_lb:.6f}"])
+                w.writerow(["distance_metric",
+                            sc.get("distance_metric", "light-travel")])
+                w.writerow(["cosmology",
+                            "Planck18" if _HAS_COSMOLOGY
+                            else f"linear H0={HUBBLE_H0:g}"])
+                _arm_m = sc.get("target_arm_membership")
+                if _arm_m:
+                    w.writerow(["target_arm", _arm_m[0]])
+                _story = build_story_text(sc)
+                if _story:
+                    w.writerow(["story", _story])
                 w.writerow([])
                 w.writerow(["photo_corner", "x", "y", "z"])
                 corners = sc.get("photo_corners") or []
@@ -9707,6 +10491,18 @@ class GalacticView3DWindow(QMainWindow):
             self.preview_widget.run_js(js)
         except Exception as e:
             self._log(f"Camera preset '{preset_name}' failed: {e}")
+
+    def _start_journey(self) -> None:
+        """Kick off the in-browser Journey animation via window.gv3d."""
+        js = (
+            "try {"
+            "  if (window.gv3d && window.gv3d.journey) { window.gv3d.journey(); }"
+            "} catch (e) { console.warn('gv3d.journey failed', e); }"
+        )
+        try:
+            self.preview_widget.run_js(js)
+        except Exception as e:
+            self._log(f"Journey failed to start: {e}")
 
     def _toggle_auto_rotate(self, on: bool) -> None:
         """Toggle the in-browser auto-rotation animation."""
@@ -9865,6 +10661,12 @@ class GalacticView3DWindow(QMainWindow):
             "<li>Click <b>Render 3D Map</b> (or press <b>F5</b>).</li>"
             "<li>The Target Picker opens — confirm the auto-pick or "
             "choose a different SIMBAD candidate from the cone search.</li>"
+            "<li>Watch the <b>opening pull-back</b>: the view starts at "
+            "Earth's point of view, then reveals the map.  The "
+            "<b>story card</b> appears over the scene (and stays in "
+            "the Info tab).</li>"
+            "<li>Press <b>🚀 Journey</b> (or the <b>J</b> key) to fly "
+            "the light path from Earth to your target.</li>"
             "<li>Drag the scene to orbit, mouse-wheel to zoom, hover any "
             "marker for hover-rich context.</li>"
             "<li>Export as HTML / PNG / CSV when ready.</li>"
@@ -9876,9 +10678,11 @@ class GalacticView3DWindow(QMainWindow):
             "<td>Drag (left of the button row) for two-axis orbit, "
             "diagonals supported.  Mouse-wheel over it zooms.</td></tr>"
             "<tr><td><b>+ / − / ⟲</b></td>"
-            "<td>Zoom in / out / reset.  Zoom-in stops at the near-clip "
-            "plane (logged as <i>capped at near-clip</i>) so the photo "
-            "and references stay in frame.</td></tr>"
+            "<td>Zoom in / out / reset.  Zooming in past the camera "
+            "limit switches to <b>magnifier mode</b>: the view keeps "
+            "magnifying around the photo without limit while distant "
+            "content falls out of the window.  Zoom-out un-magnifies "
+            "first; R / ⟲ resets everything.</td></tr>"
             "<tr><td><b>Earth POV</b></td>"
             "<td>Fly to Earth's position, looking along the line of "
             "sight to the target.  The viewing ray pulses on arrival.</td></tr>"
@@ -9888,6 +10692,14 @@ class GalacticView3DWindow(QMainWindow):
             "<tr><td><b>Spin</b></td>"
             "<td>Toggle slow auto-rotation.  Also auto-engages after "
             "10 s of inactivity; any input cancels it.</td></tr>"
+            "<tr><td><b>🚀 Journey / J</b></td>"
+            "<td>An ~11-second cinematic flight from Earth along the "
+            "viewing ray to the target, with a live distance / "
+            "light-age counter and waypoint callouts (leaving the "
+            "Local Bubble, leaving the Milky Way, passing "
+            "Andromeda…).  Any click / scroll / key aborts; press "
+            "R afterwards to fly home.  The button is greyed out "
+            "when no photo or distance is available.</td></tr>"
             "<tr><td><b>R / Home / Esc</b></td>"
             "<td>Universal &ldquo;get me home&rdquo; — reset the "
             "camera and any zoomed-in axis ranges.</td></tr>"
@@ -9895,7 +10707,27 @@ class GalacticView3DWindow(QMainWindow):
             "<td>Double-click a spiral-arm legend entry "
             "(<i>Norma Arm</i>, <i>Scutum-Centaurus</i>…) to fly the "
             "camera to that arm.</td></tr>"
-            "</table>")
+            "</table>"
+            "<hr>"
+            "<h3 style='color:#88aaff;'>View Styles &amp; Story</h3>"
+            "<ul>"
+            "<li><b>Story view</b> (default) keeps only the narrative "
+            "thread: Earth, viewing ray, photo, target, galaxy "
+            "structure, distance rings.</li>"
+            "<li><b>Explorer view</b> adds every reference overlay: "
+            "landmark catalogs, galaxy-cluster halos, the CMB "
+            "observable-universe boundary, and the Local Bubble / "
+            "Local Group context spheres.  Switch in Scene "
+            "Elements.</li>"
+            "<li>The <b>story card</b> — direction, light age "
+            "anchored to Earth history, arm membership, and a "
+            "dinner-plate scale analogy — shows as a dismissible "
+            "toast over the 3D view, in the Info tab, in CSV "
+            "exports, and as a caption band on PNG exports.</li>"
+            "<li>The <b>opening pull-back</b> plays once per target; "
+            "disable it in Scene Elements.  View style, distance "
+            "metric, and this toggle persist across sessions.</li>"
+            "</ul>")
         tabs.addTab(tab1, "Getting Started")
 
         tab2 = QTextEdit()
@@ -9935,12 +10767,15 @@ class GalacticView3DWindow(QMainWindow):
             "<li><b>Galactic-plane mesh</b> — translucent radial "
             "gradient.  Auto-suppressed when arms are visible "
             "(the arms already imply the disk).</li>"
-            "<li><b>Distance rings</b> in two sets, both rendered as "
-            "three orthogonal great circles per radius "
-            "(spherical-shell wireframe):"
+            "<li><b>Distance rings</b> in two sets, drawn flat "
+            "(radar-style) — except the one ring nearest your "
+            "target's distance, which gains two vertical "
+            "circles so it reads as the spherical shell your "
+            "photo sits on:"
             "<ul>"
             "<li>Cool blue, GC-centred at 10 / 20 / 30 / 40 kly "
-            "(Milky-Way structural reference).</li>"
+            "(Milky-Way structural reference; always flat — "
+            "the galactic disk is flat).</li>"
             "<li>Warm amber, Earth-centred at 1 / 5 / 10 / 25 kly "
             "(&ldquo;how far from us&rdquo;).</li>"
             "</ul></li>"
@@ -9948,12 +10783,12 @@ class GalacticView3DWindow(QMainWindow):
             "target, anchored at the target's distance shell so the "
             "photo rectangle sits inside the constellation outline.</li>"
             "<li><b>Local Bubble</b> (translucent ~400-ly sphere) for "
-            "very nearby targets (≤ 2 kly).  The supernova-"
-            "carved cavity around the Solar System.</li>"
+            "very nearby targets (≤ 2 kly) — Explorer view "
+            "only.</li>"
             "</ul>"
             "<hr>"
             "<h3 style='color:#88aaff;'>Galactic landmarks "
-            "(legend toggle)</h3>"
+            "(Explorer view)</h3>"
             "<p>Curated catalog of ~20 famous in-galaxy objects "
             "(Pleiades, Hyades, Beehive, Orion Nebula, M42, M13, "
             "Veil, Lagoon, Trifid, Eagle, Carina, Helix, Omega "
@@ -9980,7 +10815,10 @@ class GalacticView3DWindow(QMainWindow):
             "<hr>"
             "<h3 style='color:#88aaff;'>Distance Resolution</h3>"
             "<ol>"
-            f"<li>Local JSON cache ({CACHE_TTL_DAYS}-day TTL)</li>"
+            f"<li>Local JSON cache ({CACHE_TTL_DAYS}-day TTL).  "
+            "Cone-search candidate lists are cached separately for "
+            f"{CONESEARCH_TTL_DAYS} days, so re-renders of a known "
+            "target work fully offline.</li>"
             "<li>SIMBAD <i>mesDistance</i> table</li>"
             "<li>Redshift → cosmological distance via "
             "<code>astropy.cosmology.Planck18</code></li>"
@@ -10031,9 +10869,11 @@ class GalacticView3DWindow(QMainWindow):
             "<hr>"
             "<h3 style='color:#88aaff;'>Always-on layers</h3>"
             "<ul>"
-            "<li><b>8 distance rings</b> centred on Earth at 1, 5, "
-            "10, 50, 100, 500 Mly and 1, 5 Gly.  Three orthogonal "
-            "great circles per radius (spherical-shell wireframe).  "
+            "<li><b>4 distance rings</b> centred on Earth at 1, 10, "
+            "100 Mly and 1 Gly, drawn flat (radar-style).  The "
+            "ring nearest your target's distance is brighter and "
+            "gains two vertical circles — the shell your photo "
+            "sits on.  "
             "Each label includes the equivalent redshift "
             "(<i>z ≈ 0.07</i> at 1 Gly, etc.).</li>"
             "<li><b>1 Mly scale boundary</b> — marks the "
@@ -10044,19 +10884,17 @@ class GalacticView3DWindow(QMainWindow):
             "distance, redshift, lookback time, type, group "
             "membership, and a one-sentence cultural / scientific "
             "note.</li>"
-            "<li><b>CMB last-scattering surface</b> at 13.8 Gly "
-            "(z ≈ 1100).  Wireframe globe — 1 bright equatorial "
-            "great circle + 4 latitude rings + 8 meridian arcs.  "
-            "Marks the practical edge of the observable "
-            "universe.</li>"
-            "<li><b>Local Group sphere</b> (~3 Mly) — only for "
-            "sub-5-Mly targets, framing your photo as &ldquo;in "
-            "our local group&rdquo;.</li>"
             "</ul>"
             "<hr>"
-            "<h3 style='color:#88aaff;'>Cosmic landmarks &amp; "
-            "clusters (legend toggle)</h3>"
+            "<h3 style='color:#88aaff;'>Explorer view adds</h3>"
             "<ul>"
+            "<li><b>CMB last-scattering surface</b> at 13.8 Gly "
+            "(z ≈ 1100).  Wireframe globe — 1 bright equatorial "
+            "great circle + 2 latitude rings + 4 meridian arcs.  "
+            "The practical edge of the observable universe.</li>"
+            "<li><b>Local Group sphere</b> (~3 Mly) — for sub-5-Mly "
+            "targets, framing your photo as &ldquo;in our local "
+            "group&rdquo;.</li>"
             "<li><b>Galaxy clusters</b> (translucent halos): Virgo, "
             "Fornax, Centaurus, Coma, Perseus, Hercules, Shapley "
             "Supercluster.  Each at its real (l, b, distance), with "
@@ -10095,17 +10933,21 @@ class GalacticView3DWindow(QMainWindow):
             "<h2 style='color:#88aaff;'>Exports</h2>"
             "<table cellpadding='4' style='width:100%'>"
             "<tr><td style='width:80px'><b>HTML</b></td>"
-            "<td>Standalone, fully interactive Plotly scene.  "
-            "Self-contained (Plotly bundled inline).  Works "
-            "offline.  Open in any modern browser.</td></tr>"
+            "<td>Standalone, fully interactive Plotly scene — "
+            "including the story toast and Journey mode (press "
+            "<b>J</b>).  Self-contained (Plotly bundled inline).  "
+            "Works offline.  Open in any modern browser.</td></tr>"
             "<tr><td><b>PNG</b></td>"
-            "<td>Static snapshot via <code>kaleido</code>; falls "
-            "back to a matplotlib renderer if kaleido isn't "
-            "available.</td></tr>"
+            "<td>Snapshot of your current camera angle, with the "
+            "story text appended as a caption band under the "
+            "image.  Captured from the live view; falls back to "
+            "<code>kaleido</code> / matplotlib.</td></tr>"
             "<tr><td><b>CSV</b></td>"
             "<td>Object name, type, distance, galactic coordinates, "
-            "viewing direction, and the four photo-rectangle "
-            "corners in 3D scene units.</td></tr>"
+            "viewing direction, redshift, lookback time, distance "
+            "metric, cosmology, arm membership, the story text, and "
+            "the four photo-rectangle corners in 3D scene "
+            "units.</td></tr>"
             "</table>"
             "<p>Two convenience buttons in the right panel:</p>"
             "<ul>"
@@ -10122,7 +10964,10 @@ class GalacticView3DWindow(QMainWindow):
             "from the default — the textured photo mesh is the "
             "biggest single GPU cost.  240 px renders ~4× faster "
             "than 480 px with mild quality loss.</li>"
-            "<li><b>Hide overlays you don't need.</b>  The legend "
+            "<li><b>Scene too busy?</b>  Switch to the <b>Story</b> "
+            "view style in Scene Elements — it keeps only the "
+            "narrative thread.  For finer control: "
+            "the legend "
             "is grouped (<i>Milky Way</i> / <i>References</i> / "
             "<i>Target</i> / <i>Background</i> / <i>Galaxy "
             "clusters</i> / <i>Cosmic landmarks</i>).  Click any "
@@ -10130,8 +10975,9 @@ class GalacticView3DWindow(QMainWindow):
             "spiral-arm entries — to fly to that arm).</li>"
             "<li><b>Lost the scene?</b>  Press <b>R</b>, "
             "<b>Home</b>, or <b>Escape</b>.  Or use the <b>⟲</b> "
-            "trackball button.  Auto-rotate also kicks in after "
-            "10 s of inactivity as an ambient-demo cue.</li>"
+            "trackball button.  <b>J</b> starts the Journey.  "
+            "Auto-rotate kicks in after 10 s of inactivity as an "
+            "ambient-demo cue.</li>"
             "<li><b>SIMBAD slow / timing out?</b>  CDS occasionally "
             "has outages.  The script logs <i>SIMBAD tile "
             "timeout</i> and proceeds without that tile's "
@@ -10155,7 +11001,7 @@ class GalacticView3DWindow(QMainWindow):
             "<code>astropy ≥ 5</code> is required for the Planck18 "
             "cosmology used by the redshift / lookback / metric "
             "conversion code.</p>")
-        tabs.addTab(tab4, "Exports &amp; Tips")
+        tabs.addTab(tab4, "Exports && Tips")
 
         layout.addWidget(tabs)
         btn = QPushButton("Close")

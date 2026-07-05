@@ -28,7 +28,7 @@ GPL-3.0-or-later
 | [Svenesis Annotate Image](#svenesis-annotate-image) | Annotate plate-solved images with catalog objects, coordinate grids, and export as PNG/TIFF/JPEG. | [Guide](Instructions/Svenesis-AnnotateImage-Instructions.md) · [DE](Instructions/Svenesis-AnnotateImage-Instructions_de.md) | ✨ |
 | [Svenesis Blink Comparator](#svenesis-blink-comparator) | Animate a folder of FITS frames for rapid visual inspection and data-driven frame selection — statistics table, scatter plot, batch reject, file-based rejection workflow. | [Guide](Instructions/Svenesis-BlinkComparator-Instructions.md) · [DE](Instructions/Svenesis-BlinkComparator-Instructions_de.md) | ✨ |
 | [Svenesis CosmicDepth 3D](#svenesis-cosmicdepth-3d) | Render catalogued objects from a plate-solved image as a rotatable 3D scene — image plane with push-pin depth sticks, SIMBAD distances, stretched-log/linear/hybrid scaling, HTML/PNG/CSV export. | [Guide](Instructions/Svenesis-CosmicDepth3D-Instructions.md) · [DE](Instructions/Svenesis-CosmicDepth3D-Instructions_de.md) | ✨ |
-| [Svenesis GalacticView 3D](#svenesis-galacticview-3d) | Place your astrophoto inside an interactive 3D Milky Way — Earth in the Orion Arm, the photo as a textured rectangle pointing in the exact viewing direction, automatic Galactic / Cosmic mode based on object distance. | — | — |
+| [Svenesis GalacticView 3D](#svenesis-galacticview-3d) | See where your astrophoto points in the universe — interactive 3D scene with the photo along its true line of sight, an auto-generated story card, a cinematic Journey flight from Earth to the target, and Story / Explorer view styles. Automatic Galactic / Cosmic mode, Planck18 cosmology. | [Guide](Instructions/Svenesis-GalacticView3D-Instructions.md) · [DE](Instructions/Svenesis-GalacticView3D-Instructions_de.md) | — |
 | [Svenesis Gradient Analyzer](#svenesis-gradient-analyzer) | Analyze background gradients with heatmaps, diagnostics, and tool recommendations. | [Guide](Instructions/Svenesis-GradientAnalyzer-Instructions.md) · [DE](Instructions/Svenesis-GradientAnalyzer-Instructions_de.md) | ✨ |
 | [Svenesis Multiple Histogram Viewer](#svenesis-multiple-histogram-viewer) | View linear and stretched images with RGB histograms, 3D surface plots, and detailed statistics. | [Guide](Instructions/Svenesis-MultipleHistogramViewer-Instructions.md) · [DE](Instructions/Svenesis-MultipleHistogramViewer-Instructions_de.md) | ✨ |
 | [Svenesis Satellite Trail Cleaner](#svenesis-satellite-trail-cleaner) | Per-frame satellite & aircraft trail detection and inpainting on FITS / XISF / TIFF / RAW subs — STScI's Median Radon Transform (`findsat_mrt`) detection, six inpaint methods with automatic per-frame recommendation, sky-noise matching, format-preserving round-trip, interactive line picker, parallel batch pipeline. | [Guide](Instructions/Svenesis-SatelliteTrailCleaner-Instructions.md) · [DE](Instructions/Svenesis-SatelliteTrailCleaner-Instructions_de.md) | — |
@@ -408,11 +408,11 @@ All exports are written to Siril's working directory with a timestamp appended t
 
 ## Svenesis GalacticView 3D
 
-**File:** `Svenesis-GalacticView3D.py` (v0.9.0)
+**File:** `Svenesis-GalacticView3D.py` (v1.0.0) — **[Detailed Instructions](Instructions/Svenesis-GalacticView3D-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-GalacticView3D-Instructions_de.md)**
 
-> ⚠️ Pre-release (0.9.0) — public preview, not yet submitted to the official Siril Script Repository.
+> ⚠️ Public preview — not yet submitted to the official Siril Script Repository.
 
-Reads the current plate-solved image from Siril, identifies the main astronomical object via SIMBAD, and renders the Milky Way as an interactive 3D model — with Earth physically positioned in the Orion Arm and the astrophoto itself placed as a textured rectangle pointing in the exact viewing direction in space. GalacticView 3D answers a question that no other tool answers: *"My photo is not just anywhere — it is a window into one specific direction of the universe. Where exactly?"*
+Reads the current plate-solved image from Siril, identifies the main astronomical object via SIMBAD, and renders **where your photo points in the universe** as an interactive 3D model — Earth in the Orion Arm, the astrophoto as a textured rectangle along the exact line of sight, and the target's distance made tangible through a story card, scale rings, and a cinematic **Journey** flight from Earth to the target. GalacticView 3D answers a question that no other tool answers: *"My photo is not just anywhere — it is a window into one specific direction of the universe. Where exactly?"*
 
 ### Screenshots
 
@@ -422,67 +422,72 @@ Reads the current plate-solved image from Siril, identifies the main astronomica
 
 ### Features
 
+#### The human experience
+
+- **Opening pull-back** — the first render of a target starts at Earth's point of view (the sky as you saw it), holds a beat, then pulls back to reveal the whole map. Plays once per target; can be disabled in Scene Elements.
+- **🚀 Journey mode** — a ~11-second cinematic camera flight from Earth along your photo's line of sight out to the target, with a live HUD counter (*"38.7 Mly from Earth — the light in your photo passed this point 38.7 million years ago"*) and waypoint callouts (leaving the Local Bubble, leaving the Milky Way, passing Andromeda, …). Also available via the **J** key — including in exported HTML.
+- **Story card** — an auto-generated narrative shown over the 3D view and in the Info tab: where you pointed, how old the light is (anchored to Earth history: *"…just after the dinosaurs died out"*), which spiral arm the target sits in, and a dinner-plate scale analogy. Included in CSV exports and baked into PNG exports as a caption.
+- **Story / Explorer view styles** — Story (default) keeps only the narrative thread: Earth, viewing ray, photo, target, galaxy structure, distance rings. Explorer adds every reference overlay: landmark catalogs, galaxy-cluster halos, the CMB observable-universe boundary, Local Bubble / Local Group context spheres.
+
 #### Two automatic view modes
 
-- **Galactic mode** (object distance < 150,000 ly): 1 unit = 1,000 ly. Shows the Milky Way's spiral arms, galactic disk, central bulge, and Earth in the Orion Arm — answering *"where inside our galaxy am I looking?"*
-- **Cosmic mode** (object distance ≥ 150,000 ly): 1 unit = 100,000 ly. Adds neighbouring galaxies (LMC, SMC, M31, M33, …) with compressed log scaling beyond 1 Mly so the far-galaxy tail stays readable.
-- Mode is selected automatically from the resolved object distance and SIMBAD type — no manual toggling required.
+- **Galactic mode** (object distance < 150,000 ly): 1 unit = 1,000 ly, linear. Spiral arms (with camera-distance fade), disk stars, bulge, Sgr A*, Earth reticle with orbital-motion arrow, GC-centred and Earth-centred distance rings, constellation stick figure at the target's depth, Local Bubble for nearby targets, and a curated in-galaxy landmark catalog (Pleiades, M42, M13, Veil, Carina, …).
+- **Cosmic mode** (≥ 150,000 ly): 1 unit = 100,000 ly, log-compressed beyond 1 Mly (boundary marked). Neighbour galaxies with hover-rich descriptions, galaxy-cluster halos (Virgo, Coma, Perseus, Shapley, …), a cosmic landmark catalog, and the CMB last-scattering surface at 13.8 Gly as a wireframe globe.
+- Mode is selected automatically from the resolved distance and SIMBAD type; override any time.
+
+#### Distance & cosmology
+
+- **Priority chain:** local JSON cache (90-day TTL) → SIMBAD `mesDistance` table → redshift → **Planck18 light-travel distance** (`astropy.cosmology`; H₀ ≈ 67.4) → parallax where reliable → type-median fallback (clearly labelled).
+- **Parallax sanity check** — SIMBAD's noise parallaxes on extragalactic objects are rejected when a significant redshift disagrees by >100×.
+- **Distance-metric toggle** — view the cosmic scene in light-travel, comoving, or angular-diameter distance; the 3D positions physically reorganise and the HUD always states the active metric.
+- **Distance rings** drawn flat (radar-style) with depth fading; the one ring nearest your target's distance becomes a spherical shell — *"your photo sits at this depth."*
+- **Offline-friendly** — cone-search results are cached 7 days; re-renders of known targets need no network. A SIMBAD health probe shortens timeouts during outages, and all network calls run off the UI thread.
 
 #### Photo placement in 3D space
 
-- **Plate-solved WCS ingestion** with the same 6-strategy WCS detection used by CosmicDepth 3D (FITS dict, header string, `pix2radec` sampling, file-on-disk fallback).
-- **Photo as a textured rectangle:** the four image corners are converted from RA/Dec to galactic coordinates and the FITS data is auto-stretched and applied as a Plotly surface texture.
-- **Viewing ray** drawn from Earth to the photo centre — the line literally shows where you were pointing your telescope.
-- **Photo distance** is the resolved distance to the main object identified in the image.
-
-#### Distance resolution
-
-- **Priority chain:** local JSON cache (90-day TTL) → SIMBAD `mesDistance` table → redshift × Hubble law (H₀ = 70 km/s/Mpc) → SIMBAD object-type median fallback (clearly labelled as *Type median*).
-- **Distance cache** in `~/.config/siril/svenesis_galacticview_cache.json` — re-rendering the same field is near-instant.
-- **Cosmological corrections** — for distant galaxies the redshift → distance conversion accounts for lookback time so cosmic-mode positions are physically meaningful.
-
-#### Galactic scene composition
-
-- **5 spiral arms** (Perseus, Sagittarius, Scutum-Centaurus, Norma, and the Orion Spur) rendered as smooth 3D curves with name labels in galactic mode.
-- **Galactic disk** populated with ~500 stars and a central bulge (~180 stars) for depth perception.
-- **Earth in the Orion Arm** — placed at the correct heliocentric position (~26,000 ly from the galactic centre).
-- **Distance rings** around the galactic centre and around Earth as scale references.
-- **Compass rose** anchored to the scene showing galactic north and the direction towards the galactic centre.
-- **Constellation lines** for the relevant region around the photo centre (galactic mode).
-- **Neighbour galaxies** in cosmic mode — embedded LMC/SMC/M31/M33/etc. as labelled markers.
+- **Plate-solved WCS ingestion** with the same 6-strategy WCS detection used by CosmicDepth 3D.
+- **Photo as a textured rectangle:** four image corners converted RA/Dec → galactic, FITS auto-stretched and applied as the surface texture (resolution configurable; auto-capped in cosmic mode for performance).
+- **Viewing ray** from Earth to the photo centre — the line literally shows where your telescope pointed.
+- **Background depth sticks** — SIMBAD objects behind your target are drawn at their true distance and connected radially to their exact pixel position on the photo.
 
 #### Interactive 3D rendering
 
-- **Plotly-in-QWebEngineView** with full drag-to-rotate, scroll-to-zoom, hover-for-details — the same embedded 3D approach as CosmicDepth 3D.
-- **Matplotlib 3D fallback** if `PyQt6-WebEngine` is not available (or ABI-mismatched against Siril's bundled PyQt6); the app keeps working but drops the live rotation.
-- **Dark-themed PyQt6 GUI** matching the rest of the Svenesis suite.
-- **Persistent settings** via `QSettings` — view mode, last target, render preferences are remembered across sessions.
+- **Plotly-in-QWebEngineView**: drag-to-rotate, scroll-to-zoom, hover-for-details, camera presets (Earth POV / Top / Side / Iso), trackball + zoom pad, auto-rotate, rescue keys (R / Home / Esc), double-click a spiral-arm legend entry to fly to that arm.
+- **Live scale ruler** and context-aware zoom hints that track the camera in real time.
+- **Matplotlib 3D fallback** if `PyQt6-WebEngine` is unavailable.
+- **Dark-themed PyQt6 GUI**; view style, distance metric, and all scene toggles persist via `QSettings`.
 
 #### Target picker
 
-- When the main object cannot be uniquely identified (e.g. wide field with multiple bright SIMBAD candidates), a **target picker dialog** lists the candidates with type, magnitude, and distance so you can choose the actual photographic subject.
+- A **target picker dialog** lists all SIMBAD cone-search candidates with type, magnitude, distance (with source hint: z / π / type), size in photo, and offset — so you choose the actual photographic subject. Candidates can be exported as JSON.
 
 #### Export
 
-- **HTML** — standalone, fully interactive Plotly scene (shareable, opens in any browser).
-- **PNG** — high-resolution snapshot of the current camera angle.
-- **CSV** — coordinate table of all scene elements (Earth, photo corners, identified object, neighbour galaxies) in galactic XYZ.
+- **HTML** — standalone, fully interactive Plotly scene including the Journey (**J** key) and story toast.
+- **PNG** — high-resolution snapshot of the current camera angle, with the story text appended as a caption band.
+- **CSV** — scene metadata including redshift, lookback time, distance metric, cosmology, arm membership, the story text, and photo-corner coordinates.
 
 ### Requirements
 
 - Siril 1.4+ with Python script support
 - sirilpy (bundled with Siril)
-- numpy, PyQt6, matplotlib, astropy, astroquery, plotly, kaleido (installed automatically via `s.ensure_installed`)
+- numpy, PyQt6, matplotlib, astropy, astroquery, plotly, Pillow, kaleido, requests (installed automatically via `s.ensure_installed`)
 - PyQt6-WebEngine — probed at startup; if missing or ABI-mismatched the script falls back to a static matplotlib view
-- Internet connection for the initial SIMBAD queries (subsequent renders use the local distance cache)
+- Internet connection for the initial SIMBAD queries (subsequent renders use the local caches)
 
 ### Usage
 
 1. Load an image in Siril and **plate-solve** it (Tools → Astrometry → Image Plate Solver).
 2. Run **Svenesis GalacticView 3D** from Siril: **Processing → Scripts** (or your Scripts menu).
-3. The script identifies the main object and resolves its distance; if it asks, pick the correct target from the dialog.
-4. The scene renders automatically — Galactic or Cosmic mode is chosen for you. Drag to rotate, scroll to zoom.
-5. Use **Export HTML / PNG / CSV** to share or archive the view.
+3. Confirm (or change) the identified target in the picker dialog.
+4. Watch the opening pull-back reveal where your photo sits; read the story card.
+5. Press **🚀 Journey** (or **J**) to fly the light path from Earth to your target.
+6. Switch **Story ↔ Explorer** in Scene Elements for the clean narrative view or the full reference map.
+7. Use **Export HTML / PNG / CSV** to share or archive the view.
+
+### Development
+
+- `tests/test_galacticview.py` (pure-function tests) and `tests/js_harness.mjs` (embedded-JS camera/overlay tests) run with plain `python3` / `node` — no Siril required.
 
 ---
 
