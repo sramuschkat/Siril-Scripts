@@ -30,6 +30,7 @@ GPL-3.0-or-later
 | [Svenesis CosmicDepth 3D](#svenesis-cosmicdepth-3d) | Render catalogued objects from a plate-solved image as a rotatable 3D scene — image plane with push-pin depth sticks, SIMBAD distances, stretched-log/linear/hybrid scaling, HTML/PNG/CSV export. | [Guide](Instructions/Svenesis-CosmicDepth3D-Instructions.md) · [DE](Instructions/Svenesis-CosmicDepth3D-Instructions_de.md) | ✨ |
 | [Svenesis CosmicView 3D](#svenesis-cosmicview-3d) | See where your astrophoto points in the universe — interactive 3D scene with the photo along its true line of sight, an auto-generated story card, a cinematic Journey flight from Earth to the target, and Story / Explorer view styles. Automatic Galactic / Cosmic mode, Planck18 cosmology. | [Guide](Instructions/Svenesis-CosmicView3D-Instructions.md) · [DE](Instructions/Svenesis-CosmicView3D-Instructions_de.md) | — |
 | [Svenesis Gradient Analyzer](#svenesis-gradient-analyzer) | Analyze background gradients with heatmaps, diagnostics, and tool recommendations. | [Guide](Instructions/Svenesis-GradientAnalyzer-Instructions.md) · [DE](Instructions/Svenesis-GradientAnalyzer-Instructions_de.md) | ✨ |
+| [Svenesis ImageMono Train](#svenesis-imagemono-train) | Point it at one N.I.N.A. target folder and get finished colour: discovers the light frames per optical filter, stacks a master for each, aligns the channels onto a common grid, and combines them (LRGB / RGB / SHO / HOO / HaRGB) with background extraction and photometric colour calibration. Writes a processing report and a step-by-step post-processing guide. | — | — |
 | [Svenesis Multiple Histogram Viewer](#svenesis-multiple-histogram-viewer) | View linear and stretched images with RGB histograms, 3D surface plots, and detailed statistics. | [Guide](Instructions/Svenesis-MultipleHistogramViewer-Instructions.md) · [DE](Instructions/Svenesis-MultipleHistogramViewer-Instructions_de.md) | ✨ |
 | [Svenesis Satellite Trail Cleaner](#svenesis-satellite-trail-cleaner) | Per-frame satellite & aircraft trail detection and inpainting on FITS / XISF / TIFF / RAW subs — STScI's Median Radon Transform (`findsat_mrt`) detection, six inpaint methods with automatic per-frame recommendation, sky-noise matching, format-preserving round-trip, interactive line picker, parallel batch pipeline. | [Guide](Instructions/Svenesis-SatelliteTrailCleaner-Instructions.md) · [DE](Instructions/Svenesis-SatelliteTrailCleaner-Instructions_de.md) | — |
 
@@ -590,6 +591,83 @@ Reads the current image from Siril, divides it into a configurable grid of tiles
 3. Adjust grid resolution and sigma in the left panel, select a threshold preset, then click **Analyze** (or press F5).
 4. Review the heatmap, profiles, and metrics across the 9 tabs. Check the recommendations for the suggested tool and parameters.
 5. Apply the recommended extraction in Siril, then click **Analyze** (F5) again to re-analyze and compare before/after.
+
+---
+
+## Svenesis ImageMono Train
+
+**File:** `Svenesis-ImageMono-Train.py` (v1.1.0)
+
+> ⚠️ Public preview — not yet submitted to the official Siril Script Repository.
+
+Turns a single N.I.N.A. capture folder into a finished colour image without ever touching the Siril command line. Point it at the root folder of one target: it walks the tree, reads every FITS header, groups the light frames by their `FILTER` keyword, tells you exactly what it found, then stacks a master per filter, aligns all channels onto one common pixel grid, and combines them into a calibrated colour image. Built for a **monochrome camera behind a filter wheel** — frames are never debayered.
+
+> *"Load a whole night of L R G B (or Ha / OIII / SII) into one folder, press one button, and walk away with per-channel masters and a colour image."*
+
+### Features
+
+#### Discovery — you only pick a folder
+
+- **Header-first, folder-fallback:** the `FILTER`, `IMAGETYP` and `OBJECT` keywords are the source of truth; the N.I.N.A. schema `DATE\IMAGETYPE\TARGETNAME\FILTER\…` is used only as a fallback. Darks / flats / bias are ignored.
+- Reads **Rice-compressed `.fits.fz`** directly (N.I.N.A.'s *Add .fz extension*), and the same filter spread over several nights is pooled into one stack.
+- Reports every filter with its **frame count, total integration time, exposure, gain and sensor temperature** before anything is processed.
+- Warns when the folder holds **more than one target** (picked the date folder by mistake) and skips its own results folder while scanning.
+
+#### Stacking — adaptive, not one-size-fits-all
+
+- **Rejection chosen per filter from the frame count:** percentile clipping ≤ 4 frames, Winsorized sigma 5–20, linear fit > 20 — sigma methods need a population to work.
+- **Weighted-FWHM frame weighting**, additive+scaling normalisation, 32-bit output, optional rejection maps.
+- **Frame quality filters** (weighted FWHM, roundness, star count, background) in *% best* or *k-sigma* mode — applied at registration time so rejected frames are never re-projected. Only from **20 frames** per filter: below that, losing a sub costs more signal-to-noise than the worst frame costs sharpness.
+- **Blank / black frame detection** — all-zero, dead-flat or corrupt frames are dropped before they break registration.
+- Optional drizzle, per-sub or per-channel background extraction, plate-solve registration with distortion master.
+
+#### Colour — the full way to a calibrated image
+
+- **Cross-filter alignment:** every master is re-registered onto one common grid (`-framing=min`), so the channels are **pixel-identical** and combine cleanly.
+- **Palettes:** LRGB · RGB · SHO (Hubble) · HOO · HaRGB, auto-detected from the filters found — and only ever a palette whose three channels can actually be filled. Channel mapping is editable.
+- **Narrowband is normalised first:** SHO/HOO channels are linear-matched to the Ha reference, so a Hubble-palette stack does not come out green.
+- **Luminance stays separate** for LRGB — per Siril's guidance, L is combined *after* stretching, because baking it in linearly skews the photometry and weakens colour. A one-step "quick LRGB" remains available.
+- **Auto-finish** on the composite: plate-solve → background extraction → Photometric Colour Calibration (broadband only, with a local-Gaia fallback) → SCNR. The result is saved **linear**, ready for your own stretch.
+
+#### Output that explains itself
+
+```
+output/
+├─ TARGET_RGB.fit        the finished colour image (linear, calibrated)
+├─ masters/
+│   ├─ TARGET_FILTER.fit            aligned — use these to combine
+│   └─ TARGET_FILTER_fullframe.fit  full, uncropped stack
+├─ output.md             what the script did, step by step
+├─ todo.md               step-by-step final-processing guide
+└─ _work/                intermediates — safe to delete
+```
+
+- **`output.md`** is a full processing report: filters found, frames *found vs. actually stacked*, integration time, the rejection algorithm used per channel, every option that took effect, and the auto-finish steps that really ran.
+- **`todo.md`** is a palette-specific guide for the creative part — stretching, colour balance, and (for LRGB) the final luminance combine, with the concrete Siril menu paths.
+
+#### Comfort
+
+- **Presets:** *Quick look* / *Balanced* / *Final*, plus save & load complete configurations as `.json`.
+- **Master reuse:** full (skip stacking and alignment — try another palette in seconds) or partial (stack only the filters that are missing). What is skipped, and why, is always logged.
+- Closing the window mid-run asks first and stops cleanly after the current step; finished masters are kept.
+
+### Requirements
+
+- Siril 1.4+ with Python script support
+- sirilpy (bundled with Siril)
+- PyQt6, astropy, numpy (installed automatically via `s.ensure_installed`)
+- Internet connection *or* a local Gaia catalog for Photometric Colour Calibration — without either, the composite is still produced, just uncalibrated
+
+### Usage
+
+1. Run **Svenesis ImageMono Train** from Siril: **Processing → Scripts** (or your Scripts menu). No image needs to be loaded.
+2. Click **Select Target Folder…** and pick the root folder of **one** target.
+3. Review the discovered filters, frame counts and integration times.
+4. Pick a **Preset** (or adjust the options), choose a **Palette** — or leave it on *Auto*.
+5. Press **Stack All Filters** and watch the Log tab.
+6. Open `output/` — the colour image is loaded in Siril automatically; read **`todo.md`** for the remaining, creative steps.
+
+> **Lights only:** this release does not apply darks / flats / bias. Without flats expect some vignetting and dust shadows — calibrate beforehand, or keep master-calibrated lights in the folder, for the cleanest result.
 
 ---
 
