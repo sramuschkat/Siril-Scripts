@@ -305,19 +305,123 @@ Scheitert die Two-Pass-Registrierung, weicht der Lauf auf einfaches `register` a
 
 ## 9. Paletten & Kanalzuordnung
 
-### Die Paletten
+### Zuerst: was die vier Dropdowns sind
 
-| Palette | Zuordnung | Hinweise |
-|---|---|---|
-| **LRGB** | R=Rot, G=Grün, B=Blau, L=Luminanz | L wird standardmäßig *nach* dem Strecken kombiniert (siehe §10) |
-| **RGB** | R=Rot, G=Grün, B=Blau | Ohne Luminanz |
-| **SHO** | R=SII, G=Ha, B=OIII | Die Hubble-Palette |
-| **HOO** | R=Ha, G=OIII, B=OIII | Zwei Filter genügen — OIII speist Grün und Blau |
-| **HaRGB** | R=Rot + Ha-Beimischung, G=Grün, B=Blau | Einstellbare **Ha → Rot**-Stärke; Farbkalibrierung entfällt (siehe §10) |
+Das Panel zeigt **L / R / G / B** — das ist die *Kanalzuordnung*: welches gestackte Master in welchem Farbkanal landet. Es ist **keine** Liste „Filter, die diese Palette verwendet". Zwei Dinge liest man deshalb leicht falsch:
 
-**Auto** schlägt eine Palette aus den gefundenen Filtern vor, und immer nur eine, deren drei Kanäle sich tatsächlich füllen lassen. Breitband gewinnt, wenn es vollständig ist, weil es natürliche Farbe liefert — für den gemappten Look manuell auf SHO / HOO / HaRGB wechseln. Jeder Kanal lässt sich über die Dropdowns überschreiben.
+- **Nicht jede Palette füllt alle vier.** RGB, SHO und HOO lassen **L** leer, weil sie keinen Luminanzkanal haben. Ein aufgenommener Luminanz-Filter wird dann schlicht nicht gelesen.
+- **Ein Filter kann verwendet werden, ohne zugeordnet zu sein.** Genau hier beißt HaRGB: Ha wird ins Rot *eingemischt* statt einem Kanal zugewiesen — und hat deshalb überhaupt kein Dropdown (siehe unten).
 
-Wählst du eine Palette, die deine Filter nicht füllen können — SHO ohne SII-Filter ist der klassische Fall —, sagt das Skript das **bei der Auswahl**, nicht erst nach einem vollen Lauf. Es weigert sich in dieser Lage außerdem, Filter zu überspringen, damit du am Ende trotzdem verwertbare Master hast.
+Alles, was die Dropdowns *zeigen*, lässt sich von Hand überschreiben.
+
+---
+
+### LRGB — die Standard-Breitbandpalette
+
+| | |
+|---|---|
+| **Zuordnung** | R = Rot · G = Grün · B = Blau · **L = Luminanz** |
+| **Braucht** | Rot, Grün, Blau. Luminanz optional — aber sie ist der Sinn von LRGB |
+| **Ausgabedatei** | `TARGET_RGB.fit` — plus das getrennt gehaltene L-Master |
+
+Die Luminanz ist bewusst **nicht** Teil des Komposits. Sirils empfohlene Reihenfolge lautet: nur R/G/B komponieren, dieses lineare RGB farbkalibrieren, strecken, L separat strecken und beides **zuletzt** kombinieren. Deshalb heißt die Datei `_RGB`, obwohl du LRGB gewählt hast — der Name gibt wieder, was tatsächlich drinsteckt. `todo.md` hat dann einen Teil B (Luminanz) und einen Teil C (Kombination).
+
+Schalte **Quick linear LRGB** ein, um L stattdessen schon bei der Komposition einzubacken. Die Datei heißt dann `_LRGB`, und §10 erklärt, was dich das an Farbgenauigkeit kostet.
+
+---
+
+### RGB — Breitband ohne Luminanz
+
+| | |
+|---|---|
+| **Zuordnung** | R = Rot · G = Grün · B = Blau (**L bleibt leer**) |
+| **Braucht** | Rot, Grün, Blau |
+| **Ausgabedatei** | `TARGET_RGB.fit` |
+
+Identisch mit LRGB, nur ohne die Luminanz-Behandlung. Hast du einen Luminanz-Filter und wählst RGB, wird dieser Filter gar nicht gelesen — und mit *Stack only the filters this palette uses* nicht einmal gestackt. Nimm diese Palette, wenn du kein L hast oder das RGB für sich willst.
+
+---
+
+### SHO — die Hubble-Palette
+
+| | |
+|---|---|
+| **Zuordnung** | **R = SII** · **G = Ha** · **B = OIII** (L bleibt leer) |
+| **Braucht** | alle drei Schmalbandfilter |
+| **Ausgabedatei** | `TARGET_SHO.fit` |
+
+Alle drei Kanäle sind normal zugeordnet — in dieser Hinsicht ist SHO die geradlinigste Palette. Es ist zugleich die, die am häufigsten ohne die passenden Daten gewählt wird: **ohne SII-Filter hat der Rot-Kanal keine Quelle**, und das Skript sagt das im Moment der Auswahl, nicht erst nach einem vollen Lauf.
+
+Ha ist bei den meisten Objekten weit stärker als SII und OIII, die rohe Kombination wird also grün. Zwei Mechanismen fangen das ab, und §10 erklärt, warum du immer nur einen davon nutzen solltest: **Normalize narrowband channels** oder SPCC im Narrowband-Modus.
+
+---
+
+### HOO — zwei Filter, drei Kanäle
+
+| | |
+|---|---|
+| **Zuordnung** | **R = Ha** · **G = OIII** · **B = OIII** (L bleibt leer) |
+| **Braucht** | Ha und OIII — mehr nicht |
+| **Ausgabedatei** | `TARGET_HOO.fit` |
+
+Beachte, dass **OIII zweimal vorkommt**: es speist Grün und Blau. Deshalb genügen zwei Filter, und deshalb liest der Kompositionsschritt dasselbe Master dreimal.
+
+Eine Folge davon sollte man kennen, weil sie im Log alarmierend aussieht — SPCC meldet den Blau/Grün-Fit als:
+
+```
+Image B/G = 1.000000 + 0.000000 * Catalog B/G (sigma: 0.000000)
+```
+
+Das ist kein Fehlschlag. Blau und Grün *sind* dasselbe Bild, ihr Verhältnis ist also überall exakt 1, und es gibt nichts zu fitten. Aussagekräftig ist bei einem HOO-Komposit allein die **R/G**-Zeile.
+
+---
+
+### HaRGB — Breitband mit Ha-Beimischung
+
+| | |
+|---|---|
+| **Zuordnung** | R = Rot · G = Grün · B = Blau · L = Luminanz |
+| **Zusätzlich** | das **Ha-Master wird ins Rot eingemischt**, mit der Stärke **Ha → Rot** |
+| **Braucht** | Rot, Grün, Blau — *und* einen Ha-Filter, der nicht zugeordnet wird |
+| **Ausgabedatei** | `TARGET_HaRGB.fit` (oder `TARGET_RGB.fit`, wenn kein Ha gefunden wurde) |
+
+**Das ist die Palette, bei der die Dropdowns in die Irre führen.** HaRGB behält die gewöhnliche Breitbandzuordnung — R, G, B, L genau wie bei LRGB — und mischt Ha *obendrauf* ins Rot:
+
+```
+R' = 1 − (1 − R) · (1 − k · Ha)        k = „Ha → Rot" / 100
+```
+
+Ein Screen-Blend: er hebt den Rot-Kanal dort an, wo Ha stark ist, ohne je über 1 hinauszugehen. Weil Ha keinen Kanal *ersetzt*, hat es kein eigenes Dropdown — das Skript findet es automatisch über die Filterrolle unter den ausgerichteten Mastern, und das Log nennt das gewählte:
+
+```
+HaRGB will blend HA into Red — Ha is an admixture, not a mapped channel.
+HaRGB: blending HA into Red at 50% (PixelMath).
+```
+
+Trägt keiner deiner Filter eine Ha-Rolle, sagt die Auswahl von HaRGB das jetzt sofort; ohne diese Prüfung liefe der Durchgang komplett durch und erzeugte stillschweigend ein einfaches RGB.
+
+Zwei weitere Besonderheiten:
+
+- **Für HaRGB entfällt die Farbkalibrierung.** Mit Ha im Rot-Kanal beschreibt die Sternphotometrie diesen Kanal nicht mehr, jede photometrische Kalibrierung würde also das Falsche messen. Das gespeicherte Komposit wird als *unkalibriert* gekennzeichnet — gleiche es von Hand ab.
+- **Die Luminanz bleibt trotzdem getrennt**, genau wie bei LRGB, und wird nach dem Strecken kombiniert.
+
+---
+
+### Auto
+
+**Auto** schlägt eine Palette aus den gefundenen Filtern vor, und immer nur eine, deren drei Kanäle sich tatsächlich füllen lassen:
+
+| Gefundene Filter | Auto wählt |
+|---|---|
+| R, G, B **und** L | LRGB |
+| R, G, B | RGB |
+| SII, Ha, OIII | SHO |
+| Ha, OIII | HOO |
+| weniger | RGB, und der Kompositionsschritt benennt, was fehlt |
+
+Breitband gewinnt, wenn es vollständig ist, weil es natürliche Farbe liefert. HaRGB wird nie automatisch vorgeschlagen — es verändert den Rot-Kanal absichtlich und bleibt deshalb immer eine bewusste Wahl. Für den gemappten Look manuell auf SHO / HOO / HaRGB wechseln.
+
+Wählst du eine Palette, die deine Filter nicht füllen können, sagt das Skript das **bei der Auswahl**, nicht erst nach einem vollen Lauf. Es weigert sich in dieser Lage außerdem, Filter zu überspringen, damit du am Ende trotzdem verwertbare Master hast.
 
 ### Kanalübergreifende Ausrichtung
 

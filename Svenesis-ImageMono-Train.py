@@ -88,6 +88,24 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 CHANGELOG:
 1.4.0 - Per-palette stacking, and a report that matches the run
+      - The Help dialog links the full manual (EN / DE) on GitHub.  The
+        tabs are a quick reference and stay that way; the link sits in a
+        QLabel because QTextEdit does not open links
+      - The Palettes tab now says what the four dropdowns are -- the
+        channel mapping, not a list of filters the palette uses.  Both
+        misreadings that follow are named: RGB / SHO / HOO leave L empty,
+        and HaRGB blends Ha into Red instead of mapping it, so it has no
+        dropdown at all.  HOO also explains its own "B/G = 1.0 + 0.0,
+        sigma 0.0" line, which looks like a failed fit and is simply the
+        consequence of Blue and Green being the same image
+      - HaRGB is checked for the filter that defines it.  Ha is blended
+        into Red rather than mapped to a channel, so the "can this palette
+        be filled?" test -- which looks at R/G/B -- reported an Ha-less
+        HaRGB as perfectly fillable.  The run then went all the way
+        through and quietly composed plain RGB.  Selecting HaRGB now says
+        either which filter will be blended, or that none carries an Ha
+        role.  The "Ha -> Red" tooltip explains why Ha has no dropdown of
+        its own
       - "Finish: calibrated composite saved" was printed unconditionally,
         two log entries after "colour calibration skipped for HaRGB
         (Ha-boosted Red)".  The same claim went into the report as "Saved
@@ -609,6 +627,13 @@ DRIZZLE_MIN_FRAMES = 40
 # filter-wheel rig as one-shot colour).
 #   Camera:  Player One Ares-M Pro (IMX533 mono)
 #   Filters: Antlia LRGB V-Pro  +  Antlia 4.5 nm Edge SHO
+# The full manual, in both languages.  Linked from the Help dialog --
+# the tabs there are a quick reference and deliberately stay shorter.
+_DOCS_BASE = ("https://github.com/sramuschkat/Siril-Scripts/blob/main/"
+              "Instructions/Svenesis-ImageMono-Train-Instructions")
+DOCS_URL_EN = f"{_DOCS_BASE}.md"
+DOCS_URL_DE = f"{_DOCS_BASE}_de.md"
+
 DEFAULT_SPCC_SENSOR = "Sony IMX411/455/461/533/571"
 DEFAULT_SPCC_RFILTER = "Antlia R"
 DEFAULT_SPCC_GFILTER = "Antlia G"
@@ -5014,6 +5039,14 @@ class ImageMonoTrainWindow(QMainWindow):
         # Ha blend strength (HaRGB only): how strongly Ha is mixed into Red.
         self.row_ha = QHBoxLayout()
         self.lbl_ha = QLabel("Ha → Red:")
+        self.lbl_ha.setToolTip(
+            "How strongly the Ha master is screen-blended into the Red "
+            "channel: 1-(1-R)*(1-k*Ha).\n\n"
+            "Ha does not appear in the four channel dropdowns because it "
+            "does not replace a channel — HaRGB keeps the ordinary "
+            "R/G/B/L mapping and mixes Ha into Red on top of it.  The Ha "
+            "master is found automatically by filter role; the Log names "
+            "which one it picked.")
         self.row_ha.addWidget(self.lbl_ha)
         self.spin_ha = QSpinBox()
         self.spin_ha.setRange(0, 100)
@@ -5472,6 +5505,23 @@ class ImageMonoTrainWindow(QMainWindow):
                 + (f"Choose {better}, " if better != palette else "")
                 + "map the channel by hand, or the run will stack the "
                 "masters and then skip the colour image.", LogColor.SALMON)
+        # Ha is what makes HaRGB HaRGB, but it is blended into Red rather
+        # than mapped to a channel -- so the check above, which only looks
+        # at R/G/B, cannot notice that it is missing.  Without this, the
+        # run would go all the way through and quietly produce plain RGB.
+        if (palette == "HaRGB" and self.chk_compose.isChecked()
+                and not _first_with_role(filters, "ha")):
+            self._log(
+                "HaRGB has no Ha filter to blend — none of the discovered "
+                "filters carries an Ha role, so the run would compose plain "
+                "RGB and name the file accordingly.  Ha is mixed into Red "
+                "at the strength above; it is not one of the four channel "
+                "dropdowns.", LogColor.SALMON)
+        elif palette == "HaRGB" and self.chk_compose.isChecked():
+            self._log(
+                f"HaRGB will blend {_first_with_role(filters, 'ha')} into "
+                "Red — Ha is an admixture, not a mapped channel, which is "
+                "why it has no dropdown of its own.", LogColor.BLUE)
 
     def _build_output_group(self, parent_layout: QVBoxLayout) -> None:
         group = QGroupBox("Output")
@@ -6992,6 +7042,24 @@ class ImageMonoTrainWindow(QMainWindow):
             "files.  <b>Auto-finish</b> = plate-solve → "
             "background → (PCC) → SCNR → save linear.</p>"
 
+            "<hr><h3 style='color:#88aaff;'>First: what the four dropdowns "
+            "are</h3>"
+            "<p>The <b>L / R / G / B</b> fields are the <i>channel "
+            "mapping</i> — which stacked master ends up in which colour "
+            "channel.  They are not a list of \u201cfilters this palette "
+            "uses\u201d, and two things follow from that:</p>"
+            "<ul>"
+            "<li><b>Not every palette fills all four.</b>  RGB, SHO and HOO "
+            "leave <b>L</b> empty — they have no luminance channel, so a "
+            "Luminance filter you shot is simply not read (and with "
+            "<i>Stack only the filters this palette uses</i> not even "
+            "stacked).</li>"
+            "<li><b>A filter can be used without being mapped.</b>  HaRGB is "
+            "the case: Ha is blended <i>into</i> Red rather than assigned to "
+            "a channel, so it has no dropdown at all.  The Log names the Ha "
+            "master it picked.</li>"
+            "</ul>"
+
             "<hr><h3 style='color:#88aaff;'>LRGB &nbsp;<span style='color:#888;"
             "font-weight:normal'>(default, broadband + luminance)</span></h3>"
             "<p><b>Mapping:</b> R=Red&nbsp; G=Green&nbsp; B=Blue&nbsp; "
@@ -7045,6 +7113,12 @@ class ImageMonoTrainWindow(QMainWindow):
             "rgbcomp  Ha  OIII_nbnorm  OIII_nbnorm  -out=TARGET_HOO\n"
             "platesolve → subsky → (PCC skipped) → rmgreen → save</pre>"
             "<p><b>Output:</b> <tt>TARGET_HOO.fit</tt> (linear).</p>"
+            "<p><b>OIII feeds Green and Blue</b>, which is why two filters "
+            "are enough — and why SPCC reports "
+            "<tt>B/G = 1.000000 + 0.000000 … sigma 0.000000</tt>.  That is "
+            "not a failure: Blue and Green <i>are</i> the same image, so "
+            "their ratio is exactly 1 everywhere and there is nothing to "
+            "fit.  Only the <b>R/G</b> line carries information here.</p>"
 
             "<hr><h3 style='color:#88aaff;'>HaRGB &nbsp;<span style='color:#888;"
             "font-weight:normal'>(Ha-enhanced broadband)</span></h3>"
@@ -7054,6 +7128,13 @@ class ImageMonoTrainWindow(QMainWindow):
             "<b>Ha → Red</b> strength you set, then composed like RGB.  Values "
             "are in [0,1] so the blend stays bounded.  PCC is skipped (the "
             "Red channel is no longer photometric).</p>"
+            "<p><b>Why is Ha not in the filter fields?</b>  Because it does "
+            "not replace a channel.  HaRGB keeps the ordinary R/G/B/L "
+            "mapping and mixes Ha in on top of it, so there is nothing to "
+            "map.  The Ha master is found by filter role among the aligned "
+            "masters; selecting the palette tells you which one it will use, "
+            "or that none of your filters carries an Ha role — in which case "
+            "the run would compose plain RGB.</p>"
             "<pre style='color:#aaddaa'>pm \"1-(1-$R$)*(1-k*$Ha$)\"  → "
             "TARGET_RED_Ha      (k = Ha→Red %)\n"
             "rgbcomp  TARGET_RED_Ha  G  B  -out=TARGET_HaRGB\n"
@@ -7177,6 +7258,22 @@ class ImageMonoTrainWindow(QMainWindow):
         tabs.addTab(tab3, "Output && Tips")
 
         layout.addWidget(tabs)
+
+        # These tabs are the quick reference; the manual goes deeper (per
+        # palette, per option, troubleshooting).  QTextEdit does not open
+        # links, so the pointer lives in a QLabel that does.
+        docs = QLabel(
+            "<div style='text-align:center;'>"
+            "<span style='color:#888;'>Full manual: </span>"
+            f"<a style='color:#88aaff;' href='{DOCS_URL_EN}'>English</a>"
+            "<span style='color:#888;'> · </span>"
+            f"<a style='color:#88aaff;' href='{DOCS_URL_DE}'>Deutsch</a>"
+            "</div>")
+        docs.setTextFormat(Qt.TextFormat.RichText)
+        docs.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction)
+        docs.setOpenExternalLinks(True)
+        layout.addWidget(docs)
 
         btn_close = QPushButton("Close")
         _nofocus(btn_close)

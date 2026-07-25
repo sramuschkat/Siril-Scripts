@@ -305,19 +305,123 @@ If two-pass registration fails, the run falls back to single-pass `register`, wh
 
 ## 9. Palettes & Channel Mapping
 
-### The palettes
+### First: what the four dropdowns are
 
-| Palette | Mapping | Notes |
-|---|---|---|
-| **LRGB** | R=Red, G=Green, B=Blue, L=Luminance | L is combined *after* stretching by default (see §10) |
-| **RGB** | R=Red, G=Green, B=Blue | No luminance |
-| **SHO** | R=SII, G=Ha, B=OIII | The Hubble palette |
-| **HOO** | R=Ha, G=OIII, B=OIII | Two filters are enough — OIII feeds both Green and Blue |
-| **HaRGB** | R=Red + Ha blend, G=Green, B=Blue | Adjustable **Ha → Red** strength; colour calibration is skipped (see §10) |
+The panel shows **L / R / G / B** — that is the *channel mapping*: which stacked master ends up in which colour channel. It is not a list of "filters this palette uses". Two things are therefore easy to misread:
 
-**Auto** proposes a palette from the filters found, and only ever one whose three channels can actually be filled. Broadband wins when it is complete, because it gives natural colour — switch to SHO / HOO / HaRGB manually for the mapped look. Every channel can be overridden with the dropdowns.
+- **Not every palette fills all four.** RGB, SHO and HOO leave **L** empty, because they have no luminance channel. A Luminance filter you shot is then simply not read.
+- **A filter can be used without being mapped.** HaRGB is the case where this bites: it is blended into Red rather than assigned to a channel, so it has no dropdown at all (see below).
 
-If you pick a palette the filters cannot fill — SHO without an SII filter is the classic case — the script says so **when you choose it**, not after a full run. It also refuses to skip filters in that situation, so you still end up with usable masters.
+Everything the dropdowns *do* show can be overridden by hand.
+
+---
+
+### LRGB — the standard broadband palette
+
+| | |
+|---|---|
+| **Mapping** | R = Red · G = Green · B = Blue · **L = Luminance** |
+| **Needs** | Red, Green, Blue. Luminance optional but that is the point of LRGB |
+| **Output file** | `TARGET_RGB.fit` — plus the L master, kept separate |
+
+The luminance is deliberately **not** part of the composite. Siril's recommended order is: compose R/G/B only, colour-calibrate that linear RGB, stretch it, stretch L on its own, and combine them **last**. That is why the file is called `_RGB` even though you selected LRGB — the name reflects what is actually inside it. `todo.md` then has a Part B (luminance) and a Part C (combine).
+
+Switch **Quick linear LRGB** on to bake L in during composition instead. The file is then called `_LRGB`, and §10 explains what it costs you in colour accuracy.
+
+---
+
+### RGB — broadband without luminance
+
+| | |
+|---|---|
+| **Mapping** | R = Red · G = Green · B = Blue (**L stays empty**) |
+| **Needs** | Red, Green, Blue |
+| **Output file** | `TARGET_RGB.fit` |
+
+Identical to LRGB minus the luminance handling. If you have a Luminance filter and pick RGB, that filter is not read at all — and with *Stack only the filters this palette uses* on, it is not even stacked. Choose this when you have no L, or when you want the RGB alone.
+
+---
+
+### SHO — the Hubble palette
+
+| | |
+|---|---|
+| **Mapping** | **R = SII** · **G = Ha** · **B = OIII** (L stays empty) |
+| **Needs** | all three narrowband filters |
+| **Output file** | `TARGET_SHO.fit` |
+
+All three channels are mapped normally — SHO is the most straightforward palette in that sense. It is also the one people most often select without the data for it: **without an SII filter the Red channel has no source**, and the script says so the moment you pick the palette rather than after a full run.
+
+Ha is far stronger than SII and OIII in most objects, so the raw combination comes out green. Two mechanisms deal with that, and §10 explains why you should use only one at a time: **Normalize narrowband channels**, or SPCC in narrowband mode.
+
+---
+
+### HOO — two filters, three channels
+
+| | |
+|---|---|
+| **Mapping** | **R = Ha** · **G = OIII** · **B = OIII** (L stays empty) |
+| **Needs** | Ha and OIII — that is all |
+| **Output file** | `TARGET_HOO.fit` |
+
+Note that **OIII appears twice**: it feeds Green and Blue. That is why two filters are enough, and why the composition step reads the same master three times.
+
+One consequence is worth knowing, because it looks alarming in the log: SPCC reports the Blue/Green fit as
+
+```
+Image B/G = 1.000000 + 0.000000 * Catalog B/G (sigma: 0.000000)
+```
+
+That is not a failure. Blue and Green *are* the same image, so their ratio is exactly 1 everywhere and there is nothing to fit. Only the **R/G** line carries information for a HOO composite.
+
+---
+
+### HaRGB — broadband with an Ha admixture
+
+| | |
+|---|---|
+| **Mapping** | R = Red · G = Green · B = Blue · L = Luminance |
+| **Plus** | the **Ha master is blended into Red**, at the **Ha → Red** strength |
+| **Needs** | Red, Green, Blue — *and* an Ha filter, which is not mapped |
+| **Output file** | `TARGET_HaRGB.fit` (or `TARGET_RGB.fit` if no Ha was found) |
+
+**This is the palette where the dropdowns mislead.** HaRGB keeps the ordinary broadband mapping — R, G, B, L exactly as in LRGB — and mixes Ha into the Red channel *on top of it*:
+
+```
+R' = 1 − (1 − R) · (1 − k · Ha)        k = "Ha → Red" / 100
+```
+
+A screen blend, so it brightens the Red channel where Ha is strong without ever exceeding 1. Because Ha does not *replace* a channel, it has no dropdown of its own — the script finds it automatically by filter role among the aligned masters, and the Log names the one it picked:
+
+```
+HaRGB will blend HA into Red — Ha is an admixture, not a mapped channel.
+HaRGB: blending HA into Red at 50% (PixelMath).
+```
+
+If none of your filters carries an Ha role, selecting HaRGB now says so immediately; without that check the run would go all the way through and quietly produce plain RGB.
+
+Two further specifics:
+
+- **Colour calibration is skipped for HaRGB.** With Ha blended into Red, star photometry no longer describes that channel, so any photometric calibration would be measuring the wrong thing. The saved composite is labelled *uncalibrated* — balance it by hand.
+- **The luminance is still kept separate**, exactly as in LRGB, and combined after stretching.
+
+---
+
+### Auto
+
+**Auto** proposes a palette from the filters found, and only ever one whose three channels can actually be filled:
+
+| Filters found | Auto picks |
+|---|---|
+| R, G, B **and** L | LRGB |
+| R, G, B | RGB |
+| SII, Ha, OIII | SHO |
+| Ha, OIII | HOO |
+| anything less | RGB, and the composition step names what is missing |
+
+Broadband wins when it is complete, because it gives natural colour. HaRGB is never proposed automatically — it changes the Red channel deliberately, so it is always an explicit choice. Switch to SHO / HOO / HaRGB by hand for the mapped look.
+
+If you pick a palette the filters cannot fill, the script says so **when you choose it**, not after a full run. It also refuses to skip filters in that situation, so you still end up with usable masters.
 
 ### Cross-filter alignment
 
