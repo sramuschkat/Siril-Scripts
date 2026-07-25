@@ -30,7 +30,7 @@ GPL-3.0-or-later
 | [Svenesis CosmicDepth 3D](#svenesis-cosmicdepth-3d) | Render catalogued objects from a plate-solved image as a rotatable 3D scene — image plane with push-pin depth sticks, SIMBAD distances, stretched-log/linear/hybrid scaling, HTML/PNG/CSV export. | [Guide](Instructions/Svenesis-CosmicDepth3D-Instructions.md) · [DE](Instructions/Svenesis-CosmicDepth3D-Instructions_de.md) | ✨ |
 | [Svenesis CosmicView 3D](#svenesis-cosmicview-3d) | See where your astrophoto points in the universe — interactive 3D scene with the photo along its true line of sight, an auto-generated story card, a cinematic Journey flight from Earth to the target, and Story / Explorer view styles. Automatic Galactic / Cosmic mode, Planck18 cosmology. | [Guide](Instructions/Svenesis-CosmicView3D-Instructions.md) · [DE](Instructions/Svenesis-CosmicView3D-Instructions_de.md) | — |
 | [Svenesis Gradient Analyzer](#svenesis-gradient-analyzer) | Analyze background gradients with heatmaps, diagnostics, and tool recommendations. | [Guide](Instructions/Svenesis-GradientAnalyzer-Instructions.md) · [DE](Instructions/Svenesis-GradientAnalyzer-Instructions_de.md) | ✨ |
-| [Svenesis ImageMono Train](#svenesis-imagemono-train) | Point it at one N.I.N.A. target folder and get finished colour: discovers the light frames per optical filter, calibrates them with whatever darks, flats and bias it finds, stacks a master for each, aligns the channels onto a common grid, and combines them (LRGB / RGB / SHO / HOO / HaRGB) with background extraction and photometric colour calibration. Writes a processing report and a step-by-step post-processing guide. | — | — |
+| [Svenesis ImageMono Train](#svenesis-imagemono-train) | Point it at one N.I.N.A. target folder and get finished colour: discovers the light frames per optical filter, calibrates them with whatever darks, flats and bias it finds, stacks a master for each, aligns the channels onto a common grid, and combines them (LRGB / RGB / SHO / HOO / HaRGB) with background extraction and sensor-aware colour calibration (SPCC, including narrowband, with the sensor and filter names checked against Siril's own database). Writes a processing report and a step-by-step post-processing guide. | — | — |
 | [Svenesis Multiple Histogram Viewer](#svenesis-multiple-histogram-viewer) | View linear and stretched images with RGB histograms, 3D surface plots, and detailed statistics. | [Guide](Instructions/Svenesis-MultipleHistogramViewer-Instructions.md) · [DE](Instructions/Svenesis-MultipleHistogramViewer-Instructions_de.md) | ✨ |
 | [Svenesis Satellite Trail Cleaner](#svenesis-satellite-trail-cleaner) | Per-frame satellite & aircraft trail detection and inpainting on FITS / XISF / TIFF / RAW subs — STScI's Median Radon Transform (`findsat_mrt`) detection, six inpaint methods with automatic per-frame recommendation, sky-noise matching, format-preserving round-trip, interactive line picker, parallel batch pipeline. | [Guide](Instructions/Svenesis-SatelliteTrailCleaner-Instructions.md) · [DE](Instructions/Svenesis-SatelliteTrailCleaner-Instructions_de.md) | — |
 
@@ -596,7 +596,7 @@ Reads the current image from Siril, divides it into a configurable grid of tiles
 
 ## Svenesis ImageMono Train
 
-**File:** `Svenesis-ImageMono-Train.py` (v1.2.0)
+**File:** `Svenesis-ImageMono-Train.py` (v1.3.0)
 
 > ⚠️ Public preview — not yet submitted to the official Siril Script Repository.
 
@@ -628,11 +628,14 @@ Siril computes **Lc = (L − D) / (F − O)**. Everything is optional: the scrip
 
 #### Stacking — adaptive, not one-size-fits-all
 
-- **Rejection chosen per filter from the frame count:** percentile clipping ≤ 4 frames, Winsorized sigma 5–20, linear fit > 20 — sigma methods need a population to work.
-- **Weighted-FWHM frame weighting**, additive+scaling normalisation, 32-bit output, optional rejection maps.
+- **Rejection chosen per filter from the frame count:** percentile clipping ≤ 4 frames, Winsorized sigma 5–20, linear fit 21–49, **GESDT** from 50 — sigma methods need a population to work, and GESDT only pays off on large stacks. A build that does not know GESDT falls back to linear fit and says so.
+- **Selectable frame weighting** — weighted FWHM (default), **noise** (the better choice for narrowband, where a sparse star field would otherwise be penalised for the filter rather than for the frame) or star count. Plus additive+scaling normalisation, 32-bit output, optional rejection maps.
 - **Frame quality filters** (weighted FWHM, roundness, star count, background) in *% best* (1–100) or *k-sigma* (1–10) mode — applied at registration time so rejected frames are never re-projected. The value boxes follow the mode, so a percentage can never be silently reinterpreted as a sigma multiple. Only from **20 frames** per filter: below that, losing a sub costs more signal-to-noise than the worst frame costs sharpness.
 - **Blank / black frame detection** — all-zero, dead-flat or corrupt frames are dropped before they break registration.
-- Optional drizzle, per-sub or per-channel background extraction, plate-solve registration with distortion master.
+- **Frames lost at registration are counted.** A sub without enough detectable stars (clouds, haze) cannot be aligned and Siril excludes it. The script counts what Siril really exported, so the rejection algorithm is chosen for the frames that actually get integrated — a real run lost 3 of 6 OIII frames and would otherwise have used Winsorized sigma on the surviving 3, which rejects nothing.
+- **Background extraction** per channel and per sub. The masters and the composite can optionally use an **RBF** model, which follows a gradient that changes direction across the frame where a degree-1 polynomial can only tilt it one way; the per-sub pass stays polynomial, per Siril's guidance.
+- Optional drizzle — with a guardrail: it needs **dithered** subs and enough of them, so below ~40 frames the log and the report warn that it will likely add noise instead of resolution.
+- Plate-solve registration with distortion master.
 
 #### Colour — the full way to a calibrated image
 
@@ -640,7 +643,11 @@ Siril computes **Lc = (L − D) / (F − O)**. Everything is optional: the scrip
 - **Palettes:** LRGB · RGB · SHO (Hubble) · HOO · HaRGB, auto-detected from the filters found — and only ever a palette whose three channels can actually be filled. Two filters are enough for HOO (OIII feeds both Green and Blue). Channel mapping is editable.
 - **Narrowband is normalised first:** SHO/HOO channels are linear-matched to the Ha reference, so a Hubble-palette stack does not come out green.
 - **Luminance stays separate** for LRGB — per Siril's guidance, L is combined *after* stretching, because baking it in linearly skews the photometry and weakens colour. A one-step "quick LRGB" remains available.
-- **Auto-finish** on the composite: plate-solve → background extraction → Photometric Colour Calibration (broadband only, with a local-Gaia fallback) → SCNR. The result is saved **linear**, ready for your own stretch.
+- **Auto-finish** on the composite: plate-solve → background extraction → colour calibration → SCNR. The result is saved **linear**, ready for your own stretch.
+- **SPCC instead of PCC.** Spectrophotometric Colour Calibration accounts for your sensor's and filters' response curves — Siril's own documentation calls it the more accurate method and PCC obsolete, and for a mono rig behind a filter wheel that distinction matters. On real data the difference is visible in the fit itself: the catalogue-vs-image slope went from ~3.0 (OSC assumptions) to ~0.95 once the mono sensor and filters were described.
+- **Names are checked before the run.** A sensor or filter name Siril does not recognise is *not* an error for it — it quietly substitutes something else. `IMX533`, for instance, exists only in the OSC tables, so a filter-wheel rig gets calibrated as a colour camera, silently. The script reads the SPCC database Siril itself uses (read-only, located via sirilpy) and reports a name that is missing, ambiguous, or only a partial match. A database it cannot find means *cannot check*, never *invalid*.
+- **Pre-filled for the author's rig** — Player One Ares-M Pro (IMX533 mono) with Antlia LRGB V-Pro and 4.5 nm Edge SHO filters. Overwrite the fields for your own kit (they are remembered), or change the `DEFAULT_SPCC_*` constants near the top of the script.
+- **Narrowband gets calibrated too.** SHO and HOO run SPCC in narrowband mode, describing each mapped channel by its emission line (Ha 656.3, OIII 500.7, SII 671.6 nm) plus your filter bandwidth (fractional values like 4.5 nm are supported) — previously these palettes had no colour calibration at all. The chain degrades step by step: SPCC with details → bare SPCC → PCC → local Gaia → report it plainly. HaRGB stays excluded, because its Ha-boosted Red makes star photometry invalid.
 
 #### Output that explains itself
 
@@ -660,20 +667,27 @@ output/
 - **`output.md`** is a full processing report: filters found, frames *found vs. actually stacked*, integration time, the rejection algorithm used per channel, which calibration master went into which filter, every option that took effect, and the auto-finish steps that really ran.
 - **`todo.md`** is a palette-specific guide for the creative part — stretching, colour balance, and (for LRGB) the final luminance combine, with the concrete Siril menu paths.
 
-Both documents describe **what actually happened**, not the usual case: a filter that was skipped, that failed, or that an abort never reached is shown as such instead of being given a frame count; predicted counts are marked as estimates (`≈`) or upper bounds (`≤`, k-sigma); and `todo.md` only calls the colour "already PCC-calibrated" when photometric calibration really ran.
+Both documents describe **what actually happened**, not the usual case:
+
+- A filter that was skipped, that failed, or that an abort never reached is shown as such instead of being given a frame count.
+- Predicted counts are marked as estimates (`≈`) or upper bounds (`≤`, k-sigma) — never printed as if they had been measured.
+- The rejection algorithm named is the one that really ran, so a fallback cannot hide behind the preferred one.
+- "Did the quality filters apply?" is answered from what registration was actually told, not re-derived afterwards from a frame count that registration may have changed.
+- An astrometric solution the composite *inherited* from plate-solved masters is distinguished from one computed for it.
+- `todo.md` only calls the colour "already calibrated" when photometric calibration really ran, and only calls narrowband channels "normalized" when that option was on.
 
 #### Comfort
 
 - **Presets:** *Quick look* / *Balanced* / *Final*, plus save & load complete configurations as `.json`.
 - **Master reuse:** full (skip stacking and alignment — try another palette in seconds) or partial (stack only the filters that are missing). What is skipped, and why, is always logged.
-- Closing the window mid-run asks first and stops cleanly after the current step; finished masters are kept.
+- **Stopping means stopping.** Closing the window mid-run asks first, then finishes the current filter and stops there — alignment, plate-solving, the colour image and the `_work/` cleanup are all skipped, because a composite built from half the channels is not the image you asked for. The finished masters are kept, and log, report and dialog say *stopped*, not *done*. Re-run with **Reuse existing masters** to continue where it left off.
 
 ### Requirements
 
 - Siril 1.4+ with Python script support
 - sirilpy (bundled with Siril)
 - PyQt6, astropy, numpy (installed automatically via `s.ensure_installed`)
-- Internet connection *or* a local Gaia catalog for Photometric Colour Calibration — without either, the composite is still produced, just uncalibrated
+- Internet connection *or* a local Gaia catalog for colour calibration (SPCC / PCC) — without either, the composite is still produced, just uncalibrated
 
 ### Usage
 
@@ -681,7 +695,7 @@ Both documents describe **what actually happened**, not the usual case: a filter
 2. Click **Select Target Folder…** and pick the root folder of **one** target.
 3. *(Optional)* Set a **Library** folder holding your reusable darks and bias — it is remembered between runs. Session flats are found automatically next to your lights.
 4. Review the discovered filters, frame counts, integration times and what calibration was found.
-5. Pick a **Preset** (or adjust the options), choose a **Palette** — or leave it on *Auto*.
+5. Pick a **Preset** (or adjust the options), choose a **Palette** — or leave it on *Auto*. Check the **SPCC** fields under *Auto-finish*: they are pre-filled for one particular rig, so put your own sensor and filter names there (the Log tells you if a name does not match Siril's database).
 6. Press **Stack All Filters** and watch the Log tab.
 7. Open `output/` — the colour image is loaded in Siril automatically; read **`todo.md`** for the remaining, creative steps.
 

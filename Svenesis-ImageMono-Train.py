@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.2.0
+Script Version: 1.3.0
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -52,9 +52,11 @@ What it does:
   HaRGB.  Narrowband channels are normalised to Ha first; for LRGB the
   luminance is kept separate so it can be combined after stretching
   (Siril's recommended order).
-- Auto-finish on the composite: plate-solve, background extraction,
-  Photometric Colour Calibration (broadband only) and SCNR -- leaving a
-  calibrated, still-linear result.
+- Auto-finish on the composite: plate-solve, background extraction, colour
+  calibration and SCNR -- leaving a calibrated, still-linear result.
+- Sensor- and filter-aware colour calibration (SPCC), including a
+  narrowband mode that calibrates SHO / HOO by emission-line wavelength;
+  degrades step by step to plain PCC and a local Gaia catalog.
 - Blank/black frame rejection, adaptive pixel rejection, weighted-FWHM
   frame weighting, optional drizzle, quality filtering and rejection maps.
 - One-click option presets (Quick look / Balanced / Final).
@@ -71,9 +73,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.2.0
+# Script Version: 1.3.0
 # Siril Version: 1.4.0
-# Python Module Version: 1.2.0
+# Python Module Version: 1.3.0
 # Script Category: preprocessing
 # Script Description: Point it at a N.I.N.A. target folder; it discovers the
 #   light frames per optical filter, calibrates them with whatever darks,
@@ -85,6 +87,126 @@ SPDX-License-Identifier: GPL-3.0-or-later
 # Script Author: Sven Ramuschkat
 
 CHANGELOG:
+1.3.0 - Colour calibration, rejection and background modelling
+      - SPCC (Spectrophotometric Colour Calibration) replaces PCC as the
+        preferred method: it accounts for the sensor's and filters'
+        response curves, which plain PCC cannot.  Optional sensor / filter
+        names; blank falls back to Siril's own preferences
+      - SHO and HOO are colour-calibrated for the first time, via SPCC's
+        narrowband mode using each line's wavelength (Ha 656.3, OIII 500.7,
+        SII 671.6 nm) and a configurable filter bandwidth.  PCC is never
+        attempted there -- star photometry does not describe mapped
+        emission lines
+      - The whole chain degrades one step at a time and never aborts the
+        finish: SPCC with details -> bare SPCC -> PCC -> PCC with a local
+        Gaia catalog -> report it plainly.  HaRGB stays excluded (its Red
+        channel carries blended Ha)
+      - GESDT rejection from 50 frames, where Siril documents it as
+        outperforming linear-fit clipping.  Its parameters are NOT sigmas
+        (max rejected fraction / significance), and a build that does not
+        know the token falls back to linear fit instead of losing the stack
+      - Frame weighting is selectable: weighted FWHM (default), noise or
+        star count.  Noise is the better choice for narrowband, where
+        wFWHM penalises a sparse star field for the filter, not the frame
+      - Optional RBF background model for the masters and the composite --
+        it follows a gradient that changes direction across the frame,
+        which a degree-1 polynomial cannot.  The per-sub pass stays
+        polynomial, per Siril's guidance.  Falls back automatically
+      - Drizzle now warns when it runs on fewer than 40 frames: it needs
+        many dithered subs to fill the finer grid, and below that it adds
+        noise instead of resolution
+      - The report names the rejection algorithm that really ran, so a
+        fallback cannot hide behind the preferred one
+      - SPCC sensor and filter names are validated against the SPCC
+        database Siril itself uses.  A wrong name is not an error for
+        Siril -- it quietly substitutes something else, which is how a
+        real run calibrated a mono filter-wheel rig as one-shot colour:
+        "IMX533" exists only under osc_sensors, while the mono entry for
+        the same chip is "Sony IMX411/455/461/533/571".  The script now
+        reports a name that is missing from the mono table, names the OSC
+        trap, lists candidates, and recognises a loose match as such.  A
+        database it cannot find means "cannot check", never "invalid"
+      - The rig defaults are seeded into the stored settings once, because
+        a QSettings default only applies to a key that is ABSENT -- anyone
+        who had already run the script had these saved as empty strings,
+        so the new values would never have appeared.  Guarded by a flag, so
+        clearing the fields afterwards still means "use Siril's own SPCC
+        configuration"
+      - The SPCC rig fields ship pre-filled for a Player One Ares-M Pro
+        (IMX533 mono) with Antlia LRGB V-Pro and 4.5 nm Edge SHO filters,
+        as DEFAULT_SPCC_* constants near the top of the script.  A test
+        checks them against Siril's own database, so a typo there cannot
+        ship silently
+      - The narrowband bandwidth accepts fractional values.  It was an
+        integer box, which made the common 3.5 / 4.5 / 6.5 nm filter specs
+        impossible to enter -- an Antlia 4.5nm Edge set could not be
+        described at all.  .json presets learned the new widget type
+      - "Quick linear LRGB" is flagged when it runs into a photometric
+        calibration: baking L in lifts the bright end, so more stars
+        saturate and drop out of the fit (measured on one dataset:
+        1107 -> 1531 stars excluded, 69 -> 522 of them saturated, R/G fit
+        sigma 0.61 -> 0.77)
+      - The SPCC database location is asked for via sirilpy
+        (get_siril_userdatadir) instead of only guessing per-platform
+        paths, which would miss a Flatpak / Snap / Store build entirely.
+        The guesses remain as a fallback, the read stays read-only, and a
+        database that cannot be found still means "cannot check"
+      - Stopping a run now really stops it.  The abort only ended the
+        stacking loop; alignment, plate-solving, colour composition and the
+        auto-finish then ran on regardless -- up to half a minute of work,
+        part of it against a photometry server, to build a colour image
+        from an incomplete channel set, immediately after announcing that
+        we were stopping.  Everything downstream is skipped, _work/ is
+        never deleted, and log, report, status line and dialog say
+        "stopped" instead of "All done"
+      - Fixes from a further audit pass:
+        * "did the quality filters fire?" is answered from what
+          registration was actually told, recorded before it runs.  Once
+          registration started dropping frames (see above), the report
+          re-derived the answer from the survivor count and could claim
+          they had not applied when they had -- 22 staged with filters,
+          19 surviving, and the threshold is 20.  -filter-included had the
+          same flaw
+        * an SPCC name matching several database entries lists all of
+          them instead of naming an arbitrary member of a set as "likely";
+          the message was not even stable between runs
+        * the Windows branch of the SPCC database search no longer builds
+          a relative path when LOCALAPPDATA is unset
+      - The report distinguishes an astrometric solution the composite
+        INHERITED from the plate-solved masters (rgbcomp copies their
+        header, so Siril's platesolve is then a no-op) from one that was
+        computed here.  It used to claim "Plate-solved the composite" in
+        both cases
+      - SPCC arguments are quoted as a WHOLE, flag included:
+        "-rfilter=Antlia R", not -rfilter="Antlia R".  sirilpy joins the
+        arguments into one command line and Siril re-splits it shell-style,
+        so quoting only the value splits inside it and the command aborts
+        with "Invalid argument IMX411/455/461/533/571"".  The spcc command
+        is echoed to the log, right above Siril's own line saying what it
+        ended up using
+      - Frames that REGISTRATION drops are now counted.  A sub without
+        enough detectable stars (clouds, haze) simply fails to align and
+        Siril excludes it -- the script kept using the staged count, so it
+        picked the rejection algorithm for frames that were not there.  A
+        real run lost 3 of 6 OIII frames and got winsorized sigma clipping
+        on the surviving 3, which rejected 0.000%; percentile clipping is
+        what 3 frames call for.  The count now comes from the files Siril
+        actually exported, and the log says how many were lost and why
+      - "Building calibration masters..." is no longer announced when no
+        calibration frames were found: the payload always carries its four
+        kind keys, so the old emptiness test was true even for an empty set
+      - Fixes found while auditing the above:
+        * the GESDT retry now fires for GESDT only.  As first written it
+          triggered on ANY stack failure, swapping percentile or winsorized
+          for linear fit on an unrelated error -- and, with rejection
+          switched off, silently turning it back on
+        * a palette that can only be calibrated by SPCC now reports
+          "not attempted" when SPCC is switched off, instead of "FAILED",
+          which blamed the tooling for a setting
+        * a failed plate-solve is reported once, not twice
+        * .json presets carry the SPCC sensor and filter names (they
+          describe the rig, not the machine), and a widget type the loader
+          cannot set counts as ignored instead of as applied
 1.2.0 - Calibration: darks, flats, dark-flats and bias
       - Calibration frames are discovered alongside the lights instead of
         being discarded: flats grouped per filter, darks and bias grouped
@@ -244,8 +366,9 @@ from astropy.io import fits
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout,
     QWidget, QLabel, QPushButton, QMessageBox, QGroupBox,
-    QCheckBox, QComboBox, QSpinBox, QSizePolicy, QDialog,
-    QTextEdit, QTabWidget, QScrollArea, QProgressBar,
+    QCheckBox, QComboBox, QSpinBox, QDoubleSpinBox, QSizePolicy,
+    QDialog,
+    QLineEdit, QTextEdit, QTabWidget, QScrollArea, QProgressBar,
     QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView,
 )
@@ -256,7 +379,7 @@ from PyQt6.QtGui import QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -331,6 +454,48 @@ FILTER_MIN_FRAMES = 20
 
 # Warn when the quality filters throw away more than this share of a set.
 FILTER_WARN_FRACTION = 0.15
+
+# From this many frames the Generalized Extreme Studentized Deviate Test
+# outperforms linear-fit clipping (Siril's documentation puts the crossover
+# at "more than 50 images").
+GESDT_MIN_FRAMES = 50
+
+# Drizzle redistributes each sub's flux onto a finer grid, so it needs many
+# dithered frames to fill that grid evenly.  Below this count the coverage
+# gets patchy and the result is noisier than the plain stack -- warn instead
+# of silently producing a worse master.
+DRIZZLE_MIN_FRAMES = 40
+
+# Default rig description for SPCC, pre-filled into the UI.  These are the
+# author's own filters and camera; change them here to match yours.  The
+# names must exist in Siril's MONO tables -- see the Calibration help tab,
+# and note that a chip is often listed under a different name there than in
+# the OSC tables (the IMX533 mono entry is the family string below, while
+# plain "IMX533" resolves to an OSC sensor and would make SPCC calibrate a
+# filter-wheel rig as one-shot colour).
+#   Camera:  Player One Ares-M Pro (IMX533 mono)
+#   Filters: Antlia LRGB V-Pro  +  Antlia 4.5 nm Edge SHO
+DEFAULT_SPCC_SENSOR = "Sony IMX411/455/461/533/571"
+DEFAULT_SPCC_RFILTER = "Antlia R"
+DEFAULT_SPCC_GFILTER = "Antlia G"
+DEFAULT_SPCC_BFILTER = "Antlia B"
+# Narrowband filters have no named entries in Siril's database, so the
+# bandwidth plus the fixed line wavelengths below IS the whole description.
+DEFAULT_NB_BANDWIDTH = 4.5
+
+# Rest wavelengths of the narrowband lines, in nanometres.  These are
+# physical constants, not settings -- SPCC's narrowband mode needs them to
+# know what each mapped channel actually contains.
+HA_NM = 656.3
+OIII_NM = 500.7
+SII_NM = 671.6
+
+# UI label -> Siril's `-weight=` token.  Order is the combo box order.
+WEIGHT_TOKENS = {
+    "Weighted FWHM": "wfwhm",
+    "Noise": "noise",
+    "Number of stars": "nbstars",
+}
 
 # One-click option profiles.  "Custom" is selected automatically as soon as
 # the user changes any individual option, so the combo never lies about what
@@ -501,6 +666,25 @@ def _read_header(path: str):
     except Exception as exc:
         _log_swallowed(exc)
         return None
+
+
+def _has_wcs(path: str) -> bool:
+    """True if the file already carries an astrometric solution.
+
+    `rgbcomp` copies the header metadata of its inputs, so a composite
+    built from plate-solved masters arrives already solved and Siril's
+    `platesolve` answers "Nothing will be done".  The command succeeds
+    either way, so the only way to report honestly which of the two
+    happened is to look before calling it.
+
+    Unreadable header -> False, i.e. "assume it needs solving": running
+    platesolve unnecessarily costs a second, claiming a solution that is
+    not there would mislead.
+    """
+    header = _read_header(path)
+    if header is None:
+        return False
+    return any(k in header for k in ("CTYPE1", "CRVAL1", "CD1_1"))
 
 
 def _clean_token(value) -> str:
@@ -1045,6 +1229,23 @@ class StackWorker(QThread):
         # The report must quote these, not the discovered counts -- blank
         # frames and the quality filters both shrink the set on the way in.
         self._stacked_counts: dict = {}
+        # The rejection algorithm that really ran, per filter.  Recomputing
+        # it in the report would hide a fallback (see _stack).
+        self._rej_labels: dict = {}
+        # filter -> (frame count the quality filters were decided on,
+        # whether they were actually handed to seqapplyreg).  Recording it
+        # is not optional: registration can drop frames afterwards, so the
+        # count in _stacked_counts is no longer the one the decision was
+        # made on, and re-deriving from it flips the answer.
+        self._qf_decision: dict = {}
+        # Set when drizzle ran on a set too small to fill its finer grid.
+        self._drizzle_warned = False
+        # Siril's data directory, asked for once (None = not asked yet).
+        self._spcc_root_cache: str | None = None
+        # Set when the user stopped the run.  Everything downstream of
+        # stacking is then skipped: the channel set is incomplete, so a
+        # colour image built from it would not be the image they asked for.
+        self._aborted = False
         # Collision-free filename token per filter (see _build_filter_tokens).
         self._ftok = self._build_filter_tokens()
 
@@ -1178,6 +1379,23 @@ class StackWorker(QThread):
             args.append(f"{flag}={value}{suffix}")
         return args
 
+    def _count_seq_frames(self, process_dir: str, seq: str) -> int:
+        """How many frames a Siril sequence really holds on disk.
+
+        Siril numbers its exports ``<seq>_00001.fit``, ``<seq>_00002.fit``
+        ... and simply leaves out the ones it could not process, so counting
+        the files is an exact answer where parsing the console output would
+        be guesswork.  Returns 0 when the directory cannot be read, which
+        callers must treat as "unknown", never as "none".
+        """
+        pat = re.compile(re.escape(seq) + r"_\d+" + re.escape(self._ext) + "$",
+                         re.IGNORECASE)
+        try:
+            return sum(1 for f in os.listdir(process_dir) if pat.match(f))
+        except OSError as exc:
+            _log_swallowed(exc)
+            return 0
+
     def _register(self, seq: str) -> str:
         """Register the sequence; return the resulting sequence name."""
         drizzle = self._opts.get("drizzle", 1)
@@ -1194,6 +1412,17 @@ class StackWorker(QThread):
             apply_args += [f"-scale={drizzle}", "-drizzle",
                            "-pixfrac=1.0", "-kernel=square"]
         n_in = self._current_n_frames
+        if drizzle and drizzle > 1 and n_in < DRIZZLE_MIN_FRAMES:
+            # Drizzle spreads each sub's flux over a finer grid; without
+            # enough dithered frames that grid stays unevenly filled and the
+            # master ends up noisier than an undrizzled one.
+            self._emit(
+                f"  Drizzle {drizzle}x on only {n_in} frame(s): drizzle "
+                f"wants roughly {DRIZZLE_MIN_FRAMES}+ *dithered* subs to "
+                "fill the finer grid evenly.  Below that it usually adds "
+                "noise instead of resolution — consider turning it off.",
+                LogColor.SALMON)
+            self._drizzle_warned = True
         qfilters = self._quality_filter_args(n_in)
         if qfilters:
             apply_args += qfilters
@@ -1273,37 +1502,64 @@ class StackWorker(QThread):
             return n_frames
         return max(1, int(n_frames * keep / 100))
 
-    def _stack(self, seq: str, out_name: str, n_frames: int) -> None:
+    def _stack(self, seq: str, out_name: str, n_frames: int,
+               filt: str = "") -> None:
         # Choose rejection for the number of frames that will really be
         # integrated, not the number that was staged.
         n_eff = self._effective_frame_count(n_frames)
         rej_tokens, rej_label = _rejection_args(
             n_eff, self._opts.get("rejection", True))
-        args = ["stack", seq] + rej_tokens
-        args += ["-norm=addscale"]
-        if self._opts.get("output_norm", True):
-            args += ["-output_norm"]
 
-        # Frame weighting by weighted-FWHM lifts the sharpest subs -- only
-        # meaningful once there are a few frames left to weight.
-        if self._opts.get("weighting", True) and n_eff >= 3:
-            args += ["-weight=wfwhm"]
+        def _tail() -> list:
+            """Everything after the rejection tokens (identical on retry)."""
+            args = ["-norm=addscale"]
+            if self._opts.get("output_norm", True):
+                args += ["-output_norm"]
+            # Frame weighting lifts the better subs -- only meaningful once
+            # there are a few frames left to weight.
+            if self._opts.get("weighting", True) and n_eff >= 3:
+                args += [f"-weight={_weight_token(self._opts)}"]
+            # Frame quality filtering already happened at registration time
+            # (see _quality_filter_args), so the sequence handed to stack
+            # only contains the frames that passed; -filter-included keeps
+            # it that way.  Ask what registration was TOLD, not what
+            # `n_frames` would imply -- registration may have dropped
+            # frames since, and re-deriving would flip the answer.
+            _n, fired = self._qf_decision.get(
+                filt, (n_frames, bool(self._quality_filter_args(n_frames))))
+            if fired:
+                args += ["-filter-included"]
+            if self._opts.get("rejmap", False):
+                args += ["-rejmap"]
+            return args + ["-32b", f"-out={out_name}"]
 
-        # Frame quality filtering already happened at registration time
-        # (see _quality_filter_args), so the sequence handed to stack only
-        # contains the frames that passed; -filter-included keeps it that way.
-        if self._quality_filter_args(n_frames):
-            args += ["-filter-included"]
-
-        if self._opts.get("rejmap", False):
-            args += ["-rejmap"]
-
-        args += ["-32b", f"-out={out_name}"]
+        args = ["stack", seq] + rej_tokens + _tail()
         n_txt = (f"n={n_frames}" if n_eff == n_frames
                  else f"n≈{n_eff} of {n_frames} after filtering")
         self._emit(f"  Rejection: {rej_label} ({n_txt})", LogColor.BLUE)
         self._emit("  " + " ".join(args), LogColor.BLUE)
-        self._cmd(*args)
+        try:
+            self._cmd(*args)
+        except (CommandError, DataError, SirilError) as exc:
+            # GESDT is the newest of the rejection algorithms, so a Siril
+            # build that does not know the token would fail the whole
+            # filter.  Retry once with the tier below rather than lose the
+            # stack.  Every other failure re-raises untouched: it is far
+            # more likely a real problem than an unknown token, and quietly
+            # switching algorithms would hide it.
+            fallback = _rejection_fallback(rej_tokens)
+            if fallback is None:
+                raise
+            fb_tokens, fb_label = fallback
+            self._emit(
+                f"  Rejection '{rej_label}' was refused ({exc}); retrying "
+                f"with {fb_label}.", LogColor.SALMON)
+            rej_label = fb_label
+            self._cmd(*(["stack", seq] + fb_tokens + _tail()))
+        # The report must name the algorithm that really ran, not the one
+        # that was preferred.
+        if filt:
+            self._rej_labels[filt] = rej_label
 
     # -- per-filter stacking ---------------------------------------------
     # -- calibration ------------------------------------------------------
@@ -1451,7 +1707,8 @@ class StackWorker(QThread):
 
     def _build_calib_masters(self) -> None:
         """Build every master the run can use, once, before stacking starts."""
-        if not self._opts.get("calibrate", True) or not self._calib:
+        if not self._opts.get("calibrate", True) or not any(
+                (self._calib or {}).values()):
             return
         c = self._calib
         self._masters = {KIND_BIAS: None, KIND_DARKFLAT: None,
@@ -1605,6 +1862,7 @@ class StackWorker(QThread):
             # mid-flight, so we stop between filters -- the last finished
             # master stays valid.
             if self.isInterruptionRequested():
+                self._aborted = True
                 self._emit("Aborted by user — stopping after the current "
                            "filter.", LogColor.SALMON)
                 break
@@ -1676,17 +1934,44 @@ class StackWorker(QThread):
                     seq = f"bkg_{seq}"
 
                 self._current_n_frames = n_linked
-                self._stacked_counts[filt] = (
-                    n_linked, self._effective_frame_count(n_linked))
+                # Record what seqapplyreg is about to be told, before
+                # registration can change the frame count under us.
+                self._qf_decision[filt] = (
+                    n_linked, bool(self._quality_filter_args(n_linked)))
                 self._emit("  Registering frames...", LogColor.BLUE)
                 seq = self._register(seq)
+
+                # Registration itself can drop frames -- a sub with no
+                # detectable stars (clouds, a passing veil) simply fails to
+                # match and Siril excludes it.  Counting the files it really
+                # exported is the only reliable number: everything after
+                # this point (rejection tier, weighting, the report) must be
+                # based on what is actually going into the stack, not on
+                # what went in at the top.
+                n_reg = self._count_seq_frames(
+                    os.path.join(work, "process"), seq)
+                if n_reg and n_reg < n_linked:
+                    lost = n_linked - n_reg
+                    self._emit(
+                        f"  Registration dropped {lost} of {n_linked} "
+                        f"frame(s) — {n_reg} will be integrated. Frames "
+                        "without enough detectable stars (clouds, haze) "
+                        "cannot be aligned.", LogColor.SALMON)
+                    if n_reg < MIN_STACK_FRAMES:
+                        self._emit(
+                            f"  Only {n_reg} frame(s) left for {filt}: too "
+                            "few for outlier rejection to mean much. Treat "
+                            "this channel as provisional.", LogColor.SALMON)
+                n_stack = n_reg or n_linked
+                self._stacked_counts[filt] = (
+                    n_stack, self._effective_frame_count(n_stack))
 
                 # Full-frame (uncropped) per-channel master.  Kept in
                 # masters/ as *_fullframe; the aligned/cropped version is
                 # produced later by _align_masters as TARGET_FILTER.fit.
                 out_name = f"{_safe(self._target)}_{self._tok(filt)}_fullframe"
                 self._emit("  Integrating...", LogColor.BLUE)
-                self._stack(seq, out_name, n_linked)
+                self._stack(seq, out_name, n_stack, filt)
 
                 produced = os.path.join(work, "process",
                                         f"{out_name}{self._ext}")
@@ -1853,8 +2138,12 @@ class StackWorker(QThread):
             # filters both shrink the set, and the rejection algorithm was
             # chosen for that smaller number.
             staged, effective = self._stacked_counts.get(filt, (n, n))
-            _tok, rej_label = _rejection_args(
-                effective, opts.get("rejection", True))
+            # Prefer what _stack recorded: recomputing would hide a
+            # rejection fallback.
+            rej_label = self._rej_labels.get(filt)
+            if not rej_label:
+                _tok, rej_label = _rejection_args(
+                    effective, opts.get("rejection", True))
             # Integration time must follow the frames that were really
             # integrated, not the ones that were merely found.
             exp_used = exp * effective / n if n else 0.0
@@ -1887,8 +2176,10 @@ class StackWorker(QThread):
         if any_reduced:
             A("")
             A("> The **Stacked** column is lower than **Found** where blank "
-              "frames were dropped or the quality filters removed subs.  The "
-              "rejection algorithm was chosen for that smaller number.")
+              "frames were dropped, **registration could not align a sub** "
+              "(too few detectable stars — clouds or haze), or the quality "
+              "filters removed frames.  The rejection algorithm was chosen "
+              "for that smaller number.")
         if any_estimated:
             A("")
             A("> Counts marked **≈** are what the quality filters are "
@@ -1902,6 +2193,15 @@ class StackWorker(QThread):
             A(f"> ⚠️ **{self._blank_skipped} blank/black frame(s)** were "
               "detected and left out of the stack (all-zero or dead-flat — "
               "e.g. a failed download or a closed flap).")
+        if self._aborted:
+            A("")
+            A("> 🛑 **This run was stopped before it finished.** The masters "
+              "listed above are complete and usable; the remaining filters "
+              "were never stacked, and channel alignment, plate-solving and "
+              "the colour image were skipped deliberately — combining an "
+              "incomplete channel set would not have produced the image you "
+              "asked for. Re-run with **Reuse existing masters** to stack "
+              "only what is missing and then compose.")
         if reused:
             A("")
             A("> ℹ️ **Masters were reused** from a previous run — the stacking "
@@ -1993,17 +2293,20 @@ class StackWorker(QThread):
                 # Inferring it from a shrunken frame count instead is wrong
                 # in k-sigma mode, where the surviving count cannot be
                 # predicted and therefore always equals the staged one.
-                counts = self._stacked_counts
-                applied = [f for f, (st, _ef) in counts.items()
-                           if self._quality_filter_args(st)]
+                # _qf_decision records what registration was actually told,
+                # and the count it was told it for.  _stacked_counts holds
+                # what SURVIVED registration, which is a different number
+                # and would give a different -- wrong -- answer here.
+                qfd = self._qf_decision
+                applied = [f for f, (_n, fired) in qfd.items() if fired]
                 if applied:
                     where = (f"They applied to {', '.join(sorted(applied))} "
                              "(the filters with enough frames).")
-                elif not counts:
+                elif not qfd:
                     where = ("No channel was stacked this run, so they did "
                              "not run either.")
-                elif all(st < FILTER_MIN_FRAMES
-                         for st, _ef in counts.values()):
+                elif all(n < FILTER_MIN_FRAMES
+                         for n, _fired in qfd.values()):
                     where = (f"They did **not** apply this run — no filter "
                              f"reached {FILTER_MIN_FRAMES} frames, and on "
                              "shorter sets losing a sub costs more "
@@ -2031,25 +2334,51 @@ class StackWorker(QThread):
             drz_txt = (f" Drizzle **{drz}×** upscaling was applied."
                        if drz and drz > 1 else "")
             A(N() + f" {frm}{drz_txt}")
+            if self._drizzle_warned:
+                A(f"    - ⚠️ Drizzle ran on fewer than {DRIZZLE_MIN_FRAMES} "
+                  "frames. It spreads each sub's flux over a finer grid, so "
+                  "it needs many *dithered* subs to fill that grid evenly — "
+                  "below that it usually adds noise instead of resolution. "
+                  "Compare against an undrizzled run before keeping this.")
             A(N() + " **Integration** (`stack`):")
             A("    - **Rejection** is chosen automatically from each filter's "
               "frame count (see the table above) — percentile clipping for "
-              "few frames, Winsorized sigma for more, linear-fit for large "
-              "sets. Sigma-based methods need enough frames to work, so "
-              "few-frame channels use gentler percentile clipping.")
+              "few frames, Winsorized sigma for more, linear-fit beyond that, "
+              f"and GESDT from {GESDT_MIN_FRAMES} frames, where the test has "
+              "enough data to outperform the rest. Sigma-based methods need "
+              "a population to work, so few-frame channels use gentler "
+              "percentile clipping.")
             A("    - **Normalization:** additive + scaling — matches the "
               "background level and brightness of every sub before averaging.")
-            A("    - **Weighting:** by weighted-FWHM — sharper subs contribute "
-              "more.")
+            if opts.get("weighting", True):
+                wm = opts.get("weight_method", "Weighted FWHM")
+                why = {
+                    "Weighted FWHM": "sharpness scaled by the star count, so "
+                                     "sharper subs contribute more",
+                    "Noise": "measured background noise, so the cleanest subs "
+                             "contribute more — the better choice for "
+                             "star-poor narrowband fields",
+                    "Number of stars": "detected star count, so the most "
+                                       "transparent subs contribute more",
+                }.get(wm, "sharper subs contribute more")
+                A(f"    - **Weighting:** {wm} (`-weight="
+                  f"{_weight_token(opts)}`) — {why}.")
+            else:
+                A("    - **Weighting:** off — every sub contributed equally.")
             A("    - **Bit depth:** 32-bit float"
               + (", output-normalized." if opts.get("output_norm", True)
                  else "."))
             if opts.get("bg_master", True):
+                how = ("RBF" if opts.get("bg_rbf") else "polynomial, degree 1")
                 A(N()
-                  + " **Background extraction** (`subsky`, degree 1) — the sky "
+                  + f" **Background extraction** (`subsky`, {how}) — the sky "
                   "gradient was removed from each finished master while still "
                   "linear (gradients differ per filter, so this works better "
-                  "per channel than once on the colour image).")
+                  "per channel than once on the colour image)."
+                  + (" RBF was used because it can follow a gradient that "
+                     "changes direction across the frame, which a "
+                     "first-degree polynomial cannot."
+                     if opts.get("bg_rbf") else ""))
             A("")
             A("→ saved as `masters/<TARGET>_<FILTER>_fullframe.fit`.")
             A("")
@@ -2184,8 +2513,9 @@ class StackWorker(QThread):
         # already calibrated" when auto-finish was off, or when PCC could not
         # reach a catalog, would make them skip a step they still need.
         steps = self._finish_steps
-        pcc_done = any(s.startswith("Photometric Colour Calibration")
-                       for s in steps)
+        # Only the success line starts with "Colour calibration: " -- the
+        # FAILED and skipped variants must not read as done.
+        pcc_done = any(s.startswith("Colour calibration: ") for s in steps)
         bg_done = any(s.startswith("Extracted the background gradient")
                       for s in steps)
         nb_done = bool(composite and palette in ("SHO", "HOO")
@@ -2235,7 +2565,8 @@ class StackWorker(QThread):
               "stretching.")
             if pcc_done:
                 A("2. **White balance.** The colour is already "
-                  "**PCC-calibrated** — leave the white balance as it is.")
+                  "**photometrically calibrated** — leave the white balance "
+                  "as it is.")
             elif palette == "HaRGB":
                 A("2. **White balance.** PCC was **not** applied (the Red "
                   "channel carries Ha, so star photometry is invalid). Set the "
@@ -2310,6 +2641,11 @@ class StackWorker(QThread):
           + (" *(optional)*" if bg_done else "")
           + " — *Image Processing → Background Extraction* (degree 1) if a "
           "gradient remains.")
+        if pcc_done:
+            A("   - The channels were additionally **colour-calibrated with "
+              "SPCC in narrowband mode**, using each line's wavelength — so "
+              "the starting balance is physical, not just normalized. Trust "
+              "it as your baseline before you start pushing the palette.")
         A("3. **Stretch.** *Histogram* or *GHS*. Keep the background neutral "
           "and dark.")
         A("4. **Colour balance** to the look you want (the classic Hubble "
@@ -2393,7 +2729,11 @@ class StackWorker(QThread):
                         LogColor.GREEN)
                 # Calibration masters are built once for the whole run, not
                 # per filter -- darks and bias are shared across channels.
-                if self._opts.get("calibrate", True) and self._calib:
+                # `_calib` always carries the four kind keys, so it is
+                # truthy even when every group is empty -- test the groups,
+                # or the run announces a calibration step it never takes.
+                if (self._opts.get("calibrate", True)
+                        and any(self._calib.values())):
                     self.progress.emit(4, "Building calibration masters...")
                     self._emit("Building calibration masters…", LogColor.GREEN)
                     self._build_calib_masters()
@@ -2406,8 +2746,14 @@ class StackWorker(QThread):
                 # alignment even if the user left that box unchecked.
                 final_paths = dict(results)
                 want_compose = self._opts.get("compose", False)
-                do_align = (self._opts.get("align_filters", True)
-                            or want_compose)
+                # After an abort, only some channels exist.  Aligning and
+                # composing them would spend another half-minute -- part of
+                # it on a photometry server -- to produce a colour image
+                # that is missing filters, right after telling the user we
+                # were stopping.  Keep the finished masters and stop.
+                do_align = (not self._aborted
+                            and (self._opts.get("align_filters", True)
+                                 or want_compose))
                 if do_align and len(results) >= 2:
                     self.progress.emit(78, "Aligning filters to each other...")
                     if (want_compose
@@ -2423,7 +2769,8 @@ class StackWorker(QThread):
             want_compose = self._opts.get("compose", False)
 
             # Optional: plate-solve the final masters so they carry a WCS.
-            if self._opts.get("platesolve_master", False):
+            if (self._opts.get("platesolve_master", False)
+                    and not self._aborted):
                 n_m = max(1, len(final_paths))
                 for i, (filt, path) in enumerate(list(final_paths.items())):
                     self.progress.emit(
@@ -2438,7 +2785,7 @@ class StackWorker(QThread):
             # both Green and Blue.  Demanding three filters here would
             # refuse the most common narrowband pair outright -- _compose
             # validates the actual channel mapping and says what is missing.
-            if want_compose and len(final_paths) >= 2:
+            if want_compose and len(final_paths) >= 2 and not self._aborted:
                 self.progress.emit(90, "Composing colour image...")
                 composite = self._compose(final_paths)
                 composite_load = composite
@@ -2446,6 +2793,13 @@ class StackWorker(QThread):
                     self.progress.emit(
                         94, "Finishing composite (background + colour)...")
                     composite_load = self._finish_composite(composite)
+            elif want_compose and self._aborted:
+                self._emit(
+                    "Colour composition skipped — the run was stopped, so "
+                    "the channel set is incomplete. The masters that "
+                    "finished are in masters/; re-run with 'Reuse existing "
+                    "masters' to stack only what is missing.",
+                    LogColor.SALMON)
             elif want_compose:
                 self._emit(
                     "Colour composition skipped: a colour image needs at "
@@ -2468,7 +2822,8 @@ class StackWorker(QThread):
             # Optional: drop the intermediates now that everything worked.
             # Only on success, and only when at least one master survived --
             # never delete the evidence of a run that produced nothing.
-            if self._opts.get("cleanup_work", False) and final_paths:
+            if (self._opts.get("cleanup_work", False) and final_paths
+                    and not self._aborted):
                 work_root = os.path.join(self._out_dir, WORK_DIRNAME)
                 try:
                     # Siril may still hold the last sequence open in there.
@@ -2482,10 +2837,10 @@ class StackWorker(QThread):
                         "masters in masters/ are untouched, so master reuse "
                         "still works next time.", LogColor.BLUE)
 
-            self.progress.emit(100, "Done.")
+            self.progress.emit(100, "Stopped." if self._aborted else "Done.")
             self.finished.emit(
                 {"results": final_paths, "errors": errors,
-                 "aligned": did_align,
+                 "aligned": did_align, "aborted": self._aborted,
                  "composite": composite,
                  "finished": bool(composite and self._opts.get("finish", True)),
                  "preview": (composite_load
@@ -2728,15 +3083,246 @@ class StackWorker(QThread):
         self._emit(f"  Rejection map(s) -> {QA_DIRNAME}/"
                    f"{', '.join(sorted(names))}", LogColor.GREEN)
 
+    def _spcc_args(self, palette: str) -> list:
+        """Build the `spcc` arguments for this palette.
+
+        SPCC is sensor- and filter-aware, which is exactly what a mono rig
+        behind a filter wheel needs -- and its narrowband mode is the only
+        way to colour-calibrate an SHO / HOO composite at all, because
+        ordinary star photometry is meaningless once the "colours" are
+        mapped emission lines.
+
+        Names must come from Siril's MONO tables.  They are easy to get
+        wrong in a way that produces no error at all: "IMX533" exists only
+        under osc_sensors, so Siril matched it there and calibrated the
+        image as one-shot colour -- the wrong spectral model for a filter
+        wheel.  The mono entry for the same chip is called
+        "Sony IMX411/455/461/533/571".  Every name is therefore checked
+        against the local SPCC database and mismatches are reported with
+        the candidates, instead of failing silently at run time.
+
+        Quoting rule, learned the hard way: the quotes go around the WHOLE
+        argument, flag included -- `"-rfilter=Antlia R"`, not
+        `-rfilter="Antlia R"`.  sirilpy joins the arguments with spaces into
+        one command line, and Siril re-splits it shell-style; with the
+        quotes around the value only, the split happens at the space inside
+        it and the run dies on `Invalid argument IMX411/455/461/533/571"`.
+        """
+        args: list = []
+        if palette in ("SHO", "HOO"):
+            # Wavelengths are physics, not preference.  Bandwidth depends on
+            # the user's filter set, so that one is configurable.
+            bw = float(self._opts.get("nb_bandwidth", 7))
+            r, g, b = ((SII_NM, HA_NM, OIII_NM) if palette == "SHO"
+                       else (HA_NM, OIII_NM, OIII_NM))
+            args += ["-narrowband",
+                     f"-rwl={r:g}", f"-gwl={g:g}", f"-bwl={b:g}",
+                     f"-rbw={bw:g}", f"-gbw={bw:g}", f"-bbw={bw:g}"]
+            return args
+        sensor = (self._opts.get("spcc_sensor") or "").strip()
+        if not sensor:
+            return args
+        self._check_spcc_name(sensor, "mono_sensors", "sensor")
+        args.append(f'"-monosensor={sensor}"')
+        filters = [(self._opts.get(k) or "").strip()
+                   for k in ("spcc_rfilter", "spcc_gfilter", "spcc_bfilter")]
+        for flag, val in zip(("-rfilter", "-gfilter", "-bfilter"), filters):
+            if val:
+                self._check_spcc_name(val, "mono_filters", "filter")
+                args.append(f'"{flag}={val}"')
+        if not all(filters):
+            self._emit(
+                "  SPCC: no filter transmission curves given, so only the "
+                "sensor response is modelled. Filling in all three filter "
+                "names describes the rig completely.", LogColor.SALMON)
+        return args
+
+    def _spcc_root(self) -> str:
+        """Siril's own data directory, or "" if it will not say.
+
+        Asking beats guessing: a packaged build (Flatpak, Snap, Microsoft
+        Store) puts its data somewhere none of the hard-coded paths would
+        find.  Cached because the answer cannot change mid-run, and wrapped
+        because an older sirilpy may not have the call at all -- in which
+        case the guesses still apply.
+        """
+        if self._spcc_root_cache is None:
+            try:
+                self._spcc_root_cache = str(
+                    self.siril.get_siril_userdatadir() or "")
+            except Exception as exc:
+                _log_swallowed(exc)
+                self._spcc_root_cache = ""
+        return self._spcc_root_cache
+
+    def _check_spcc_name(self, name: str, table: str, what: str) -> None:
+        """Warn if `name` is not in Siril's local SPCC table.
+
+        A wrong name is not an error for Siril -- it just quietly uses
+        something else, which is how a mono rig ends up calibrated as
+        one-shot colour.  Checking against the database it will consult
+        turns that into a message before the run rather than a puzzle
+        afterwards.
+        """
+        names = _spcc_catalog(table, self._spcc_root())
+        if not names or name in names:
+            return                      # unknown DB, or an exact hit
+        # Siril matches loosely, so a substring hit will probably work.
+        # Sort them: `names` is a set, and naming an arbitrary member as
+        # "the" match would be a different answer on a different run.  With
+        # several candidates the choice is Siril's, not ours -- list them
+        # instead of picking one and calling it likely.
+        near = sorted(n for n in names if name.lower() in n.lower())
+        if len(near) == 1:
+            self._emit(
+                f"  SPCC: {what} '{name}' is not an exact entry; Siril "
+                f"should resolve it to '{near[0]}'.", LogColor.BLUE)
+            return
+        if near:
+            self._emit(
+                f"  SPCC: {what} '{name}' matches {len(near)} entries "
+                f"({', '.join(near)}) — Siril picks one of them, and which "
+                "is up to it. Enter the full name to be sure.",
+                LogColor.SALMON)
+            return
+        sample = ", ".join(sorted(names)[:6])
+        self._emit(
+            f"  SPCC: {what} '{name}' is not in Siril's {table} table — it "
+            "will be ignored, and a name that only exists in the OSC tables "
+            "makes SPCC calibrate as one-shot colour. Known entries include: "
+            f"{sample}…", LogColor.SALMON)
+
+    def _colour_calibrate(self, palette: str) -> None:
+        """Colour-calibrate the loaded composite, best method first.
+
+        The chain degrades one step at a time and never aborts the finish:
+        SPCC with sensor/filter details -> bare SPCC (Siril's configured
+        defaults) -> PCC -> PCC against a local Gaia catalog -> give up and
+        say so.  HaRGB is excluded from photometric methods entirely: its
+        Red channel carries blended Ha, so the star colours are no longer
+        physical.
+        """
+        if palette == "HaRGB":
+            self._finish_steps.append(
+                "Colour calibration skipped (HaRGB: the Red channel carries "
+                "blended Ha, so star photometry is invalid) — balance the "
+                "colour manually.")
+            self._emit(
+                "  Finish: colour calibration skipped for HaRGB (Ha-boosted "
+                "Red); balance the channels manually.", LogColor.BLUE)
+            return
+
+        if palette == "LRGB" and self._opts.get("quick_lrgb"):
+            # Baking L in linearly lifts the bright end, so more stars
+            # saturate and drop out of the photometric fit.  Measured on one
+            # dataset: excluded stars 1107 -> 1531, of which "pixel out of
+            # range" 69 -> 522, and the R/G fit sigma 0.61 -> 0.77.
+            self._emit(
+                "  Note: 'Quick linear LRGB' bakes the luminance in before "
+                "this calibration, which pushes stars into saturation and "
+                "measurably weakens the colour solution. Turning it off "
+                "calibrates the RGB alone and combines L after stretching.",
+                LogColor.SALMON)
+
+        narrowband = palette in ("SHO", "HOO")
+        attempts: list = []
+        if self._opts.get("use_spcc", True):
+            detailed = self._spcc_args(palette)
+            if detailed:
+                # Name only what was really passed, so a mismatch between
+                # what we sent and what Siril reports using is visible.
+                what = ("narrowband mode" if narrowband
+                        else "mono sensor + filters")
+                attempts.append((["spcc"] + detailed, f"SPCC ({what})"))
+            # Bare SPCC still beats PCC -- but only if SPCC has been run
+            # from Siril's own dialog before, because that is where those
+            # defaults come from ("not ... guessable from previous use").
+            # On a fresh install it simply fails and the chain moves on.
+            attempts.append((["spcc"], "SPCC (Siril's configured defaults)"))
+        if not narrowband:
+            # PCC assumes broadband R/G/B star colours; on a narrowband
+            # palette it would "calibrate" against photometry that does not
+            # describe these channels at all.
+            attempts.append((["pcc"], "PCC (NOMAD catalog)"))
+            attempts.append((["pcc", "-catalog=localgaia"],
+                             "PCC (local Gaia catalog)"))
+
+        last = None
+        for cmd, label in attempts:
+            # Echo the exact command.  Siril's own log reports which sensor
+            # and filters it ENDED UP using, so having ours next to it is
+            # what turns "SPCC ran" into "SPCC ran with what I asked for".
+            self._emit("  " + " ".join(cmd), LogColor.BLUE)
+            try:
+                self._cmd(*cmd)
+            except (CommandError, DataError, SirilError) as exc:
+                last = exc
+                self._emit(f"  Finish: {label} did not run ({exc}).",
+                           LogColor.SALMON)
+                continue
+            self._finish_steps.append(f"Colour calibration: {label}.")
+            self._emit(f"  Finish: colour calibration done — {label}.",
+                       LogColor.GREEN)
+            return
+
+        if not attempts:
+            # Nothing was even tried: SPCC is switched off and this palette
+            # has no valid non-SPCC method.  Saying "FAILED" would blame the
+            # tooling for what is simply a setting.
+            self._finish_steps.append(
+                f"Colour calibration not attempted — {palette} can only be "
+                "calibrated by SPCC (narrowband mode), and SPCC is switched "
+                "off.  The colour is NOT calibrated.")
+            self._emit(
+                f"  Finish: no colour calibration for {palette} — it needs "
+                "SPCC's narrowband mode, which is switched off.",
+                LogColor.SALMON)
+            return
+
+        why = (" — narrowband calibration needs SPCC with a Gaia "
+               "spectrophotometry catalog" if narrowband else "")
+        self._finish_steps.append(
+            f"Colour calibration FAILED{why} — the colour is NOT calibrated; "
+            "set the white balance manually.")
+        self._emit(
+            f"  Finish: no colour calibration succeeded ({last}){why}; "
+            "composite left uncalibrated.", LogColor.SALMON)
+
+    def _subsky(self, where: str) -> str:
+        """Run subsky on the loaded image; return what was used, for the log.
+
+        RBF models a gradient that changes direction across the frame far
+        better than a first-degree polynomial, which is why it is offered
+        for the finished masters and the composite.  It is NOT offered for
+        the individual subs: Siril's guidance is a degree-1 polynomial
+        there, and that is what seqsubsky keeps doing.
+
+        Falls back to the polynomial if RBF is refused, so an older build
+        cannot cost the user the background extraction altogether.
+        """
+        if self._opts.get("bg_rbf", False):
+            smooth = float(self._opts.get("bg_smooth", 50)) / 100.0
+            try:
+                self._cmd("subsky", "-rbf", "-samples=20",
+                          f"-smooth={smooth:g}")
+                return f"RBF (smoothing {smooth:g})"
+            except (CommandError, DataError, SirilError) as exc:
+                self._emit(
+                    f"  {where}: RBF background extraction was refused "
+                    f"({exc}); using the degree-1 polynomial instead.",
+                    LogColor.SALMON)
+        self._cmd("subsky", "1", "-samples=20")
+        return "polynomial, degree 1"
+
     def _bg_extract_master(self, path: str) -> None:
         """Background-extract a single linear per-filter master, in place."""
         ext = self._ext
         base = path[:-len(ext)] if path.lower().endswith(ext.lower()) else path
         try:
             self._cmd("load", f'"{path}"')
-            self._cmd("subsky", "1", "-samples=20")
+            how = self._subsky("master")
             self._cmd("save", f'"{base}"')
-            self._emit("  Background extracted (per-channel master).",
+            self._emit(f"  Background extracted ({how}, per-channel master).",
                           LogColor.GREEN)
         except (CommandError, DataError, SirilError) as exc:
             self._emit(
@@ -2747,9 +3333,9 @@ class StackWorker(QThread):
         """Background-extract + colour-calibrate the composite in place.
 
         Runs, all resiliently (a failing step logs and is skipped, never
-        aborts): plate-solve (PCC needs a WCS), background extraction,
-        Photometric Colour Calibration, and SCNR green removal.  The
-        calibrated *linear* result is saved over the composite.  If a
+        aborts): plate-solve (every colour calibration method needs a WCS),
+        background extraction, colour calibration and SCNR green removal.
+        The calibrated *linear* result is saved over the composite.  If a
         stretched preview is requested, an autostretched copy is written
         alongside as ``*_preview`` and returned for loading.  Returns the
         path that should be loaded into Siril.
@@ -2764,75 +3350,56 @@ class StackWorker(QThread):
                           LogColor.SALMON)
             return path
 
-        # Plate-solve so PCC has astrometry (rgbcomp output may lack a WCS).
+        # Plate-solve: every colour calibration method needs astrometry, and
+        # rgbcomp output may carry no WCS.  When "Plate-solve final masters"
+        # was on, rgbcomp copies their solution into the composite and this
+        # call is a no-op -- worth distinguishing, because "we solved it
+        # here" and "it arrived solved" are different facts.
+        inherited = _has_wcs(path)
         solved = True
         try:
             self._cmd("platesolve")
-            self._finish_steps.append("Plate-solved the composite.")
+            if inherited:
+                self._finish_steps.append(
+                    "Astrometry (WCS) was inherited from the plate-solved "
+                    "masters via rgbcomp — no new solve was needed.")
+                self._emit(
+                    "  Finish: composite already carries the masters' "
+                    "astrometry; plate-solve skipped.", LogColor.BLUE)
+            else:
+                self._finish_steps.append("Plate-solved the composite.")
         except (CommandError, DataError, SirilError) as exc:
+            # Only note the failure here; the consequence is reported once,
+            # below, so the two do not say the same thing twice.
             solved = False
-            self._finish_steps.append("Plate-solve failed (colour "
-                                      "calibration skipped).")
+            self._finish_steps.append("Plate-solve failed.")
             self._emit(
                 f"  Finish: plate-solve failed ({exc}); skipping colour "
                 "calibration.", LogColor.SALMON)
 
-        # Background / gradient extraction on the COMBINED image, before PCC.
-        # Even with per-channel extraction, the freshly-combined RGB carries
-        # its own residual gradient, and PCC explicitly wants a flat
-        # background ("correct the image gradient first") for an accurate
-        # colour solution -- so this runs regardless of the per-channel pass.
+        # Background / gradient extraction on the COMBINED image, before the
+        # colour calibration.  Even with per-channel extraction, the freshly
+        # combined RGB carries its own residual gradient, and the photometric
+        # methods explicitly want a flat background ("correct the image
+        # gradient first") -- so this runs regardless of the per-channel pass.
         try:
-            self._cmd("subsky", "1", "-samples=20")
+            how = self._subsky("composite")
             self._finish_steps.append(
-                "Extracted the background gradient (subsky, degree 1).")
-            self._emit("  Finish: composite background extracted "
-                          "(pre-PCC).", LogColor.GREEN)
+                f"Extracted the background gradient (subsky, {how}).")
+            self._emit(f"  Finish: composite background extracted ({how}, "
+                          "before colour calibration).", LogColor.GREEN)
         except (CommandError, DataError, SirilError) as exc:
             self._emit(
                 f"  Finish: composite background extraction skipped ({exc}).",
                 LogColor.SALMON)
 
-        # Photometric Colour Calibration -- ONLY for true broadband (LRGB/RGB).
-        # PCC calibrates real star colours against a photometric catalog; on
-        # a narrowband palette (SHO/HOO) the "colours" are mapped emission
-        # lines, and on HaRGB the Red channel is Ha-boosted -- in both cases
-        # the photometry is invalid, so PCC is skipped.
         palette = self._opts.get("compose_palette", "RGB")
-        is_broadband = palette in ("LRGB", "RGB")
-        if solved and is_broadband:
-            try:
-                self._cmd("pcc")
-                self._finish_steps.append(
-                    "Photometric Colour Calibration (PCC, NOMAD catalog).")
-                self._emit("  Finish: photometric colour calibration done.",
-                              LogColor.GREEN)
-            except (CommandError, DataError, SirilError) as exc:
-                # Default catalog (NOMAD) is online; retry with the local
-                # Gaia catalog, which works offline if it is installed.
-                try:
-                    self._cmd("pcc", "-catalog=localgaia")
-                    self._finish_steps.append(
-                        "Photometric Colour Calibration (PCC, local Gaia).")
-                    self._emit(
-                        "  Finish: photometric colour calibration done "
-                        "(local Gaia).", LogColor.GREEN)
-                except (CommandError, DataError, SirilError) as exc2:
-                    self._finish_steps.append(
-                        "PCC FAILED (no reachable catalog) — colour NOT "
-                        "calibrated; set white balance manually.")
-                    self._emit(
-                        f"  Finish: PCC failed ({exc2}) — no reachable "
-                        "photometry catalog; composite left uncalibrated.",
-                        LogColor.SALMON)
-        elif not is_broadband:
-            why = ("Ha-boosted Red" if palette == "HaRGB"
-                   else "mapped emission lines")
+        if solved:
+            self._colour_calibrate(palette)
+        else:
             self._finish_steps.append(
-                f"PCC skipped ({palette}: {why}) — balance colour manually.")
-            self._emit(
-                f"  Finish: PCC skipped for {palette} ({why}); balance the "
-                "channels manually.", LogColor.BLUE)
+                "Colour calibration skipped — the composite could not be "
+                "plate-solved, and every method needs astrometry.")
 
         # SCNR green removal (mono-narrowband / RGB both benefit).
         try:
@@ -2997,8 +3564,9 @@ def _rejection_args(n: int, enabled: bool) -> tuple[list[str], str]:
     Sigma-based methods (winsorized, linear fit) need enough frames to
     estimate a reliable per-pixel distribution; with only a handful of
     subs they reject poorly or over-aggressively.  Siril's guidance --
-    and general practice -- is percentile clipping for small sets and
-    winsorized / linear-fit for larger ones.  Returns ``(tokens, label)``.
+    and general practice -- is percentile clipping for small sets,
+    winsorized / linear-fit for medium ones, and GESDT once the stack is
+    large enough for the test to have power.  Returns ``(tokens, label)``.
     """
     if not enabled:
         return ["rej", "none"], "no rejection"
@@ -3007,7 +3575,111 @@ def _rejection_args(n: int, enabled: bool) -> tuple[list[str], str]:
         return ["rej", "percentile", "0.2", "0.1"], "percentile 0.2/0.1"
     if n <= 20:
         return ["rej", "winsorized", "3", "3"], "winsorized 3/3"
-    # Large sets: linear fit handles residual gradients between subs well.
+    if n < GESDT_MIN_FRAMES:
+        # Linear fit handles residual gradients between subs well.
+        return ["rej", "linear", "3", "3"], "linear fit 3/3"
+    # Generalized Extreme Studentized Deviate Test.  Siril documents it as
+    # performing excellently past ~50 frames.  Its two parameters are NOT
+    # sigmas: the first caps the fraction of the stack that may be
+    # rejected, the second is the significance threshold.
+    return (["rej", "g", "0.3", "0.05"],
+            "GESDT 0.3 max-reject / 0.05 significance")
+
+
+_SPCC_CACHE: dict = {}
+
+
+def _spcc_catalog(table: str, hint: str = "") -> set:
+    """Names in one of Siril's local SPCC tables, or an empty set.
+
+    Siril keeps its SPCC data as a checked-out git repository of JSON
+    files, one per filter set or sensor family, each holding entries with a
+    ``name``.  This reads it READ-ONLY and for one purpose: telling the
+    user that a name is wrong *before* SPCC silently substitutes something
+    else -- the failure mode that made a mono rig calibrate as one-shot
+    colour.  The calibration itself never uses these names; they go to
+    Siril, which does its own lookup.
+
+    ``hint`` is Siril's own data directory, asked for via sirilpy.  It is
+    tried first because it is the only authoritative answer; the paths
+    below are guesses that break if Siril moves its data or the user runs
+    a packaged build.
+
+    An empty set means "database not found", which callers must treat as
+    "cannot check", never as "name is invalid".
+    """
+    key = (table, hint)
+    if key in _SPCC_CACHE:
+        return _SPCC_CACHE[key]
+    home = os.path.expanduser("~")
+    roots = []
+    if hint:
+        # The database sits either directly in Siril's data directory or
+        # one level up, depending on the platform's layout.
+        roots += [os.path.join(hint, "siril-spcc-database"),
+                  os.path.join(os.path.dirname(hint.rstrip(os.sep)),
+                               "siril-spcc-database")]
+    roots += [
+        # macOS
+        os.path.join(home, "Library", "Application Support",
+                     "org.siril.Siril", "siril-spcc-database"),
+        # Linux / XDG
+        os.path.join(home, ".local", "share", "siril-spcc-database"),
+        os.path.join(home, ".config", "siril", "siril-spcc-database"),
+    ]
+    # Windows -- only when the variable is actually set: joining onto ""
+    # would yield a RELATIVE path and probe whatever happens to sit beside
+    # the current working directory.
+    appdata = os.environ.get("LOCALAPPDATA")
+    if appdata:
+        roots.append(os.path.join(appdata, "siril", "siril-spcc-database"))
+    names: set = set()
+    for root in roots:
+        d = os.path.join(root, table)
+        if not os.path.isabs(d) or not os.path.isdir(d):
+            continue
+        for fn in os.listdir(d):
+            if not fn.lower().endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(d, fn), "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+            except (OSError, ValueError) as exc:
+                _log_swallowed(exc)
+                continue
+            for item in (data if isinstance(data, list) else [data]):
+                if isinstance(item, dict) and item.get("name"):
+                    names.add(str(item["name"]))
+        if names:
+            break
+    _SPCC_CACHE[key] = names
+    return names
+
+
+def _weight_token(opts: dict) -> str:
+    """Siril's ``-weight=`` value for the chosen weighting method.
+
+    wFWHM is FWHM *scaled by the star count*, which is the right default
+    for broadband but systematically penalises a sparse narrowband field;
+    noise weighting is the usual answer there.  Unknown labels fall back to
+    wFWHM rather than emitting an argument Siril would reject.
+    """
+    return WEIGHT_TOKENS.get(opts.get("weight_method", ""), "wfwhm")
+
+
+def _rejection_fallback(tokens: list) -> tuple[list[str], str] | None:
+    """A retry for a rejection Siril may not know, or None.
+
+    ONLY GESDT qualifies: its `g` token is newer than the rest, so an older
+    build can refuse it outright.  Every other tier -- including "no
+    rejection" -- must be returned unchanged, because a stack can fail for
+    a hundred unrelated reasons (bad sequence, full disk) and silently
+    retrying with a *different algorithm* would both mask the real error
+    and, with rejection switched off, re-enable something the user
+    deliberately turned off.
+    """
+    if tokens[:2] != ["rej", "g"]:
+        return None
     return ["rej", "linear", "3", "3"], "linear fit 3/3"
 
 
@@ -3433,13 +4105,31 @@ class ImageMonoTrainWindow(QMainWindow):
         _nofocus(self.chk_rejection)
         layout.addWidget(self.chk_rejection)
 
-        self.chk_weighting = QCheckBox("Frame weighting (weighted FWHM)")
+        self.chk_weighting = QCheckBox("Frame weighting")
         self.chk_weighting.setChecked(True)
         self.chk_weighting.setToolTip(
-            "Weight sharper sub-exposures higher during integration "
-            "(-weight=wfwhm).  Improves SNR when frame quality varies.")
+            "Weight the better sub-exposures higher during integration.  "
+            "Improves SNR when frame quality varies.")
         _nofocus(self.chk_weighting)
         layout.addWidget(self.chk_weighting)
+
+        wrow = QHBoxLayout()
+        wrow.addWidget(QLabel("by:"))
+        self.cmb_weight = QComboBox()
+        self.cmb_weight.addItems(list(WEIGHT_TOKENS.keys()))
+        self.cmb_weight.setToolTip(
+            "• Weighted FWHM — sharpness scaled by the star count.  The best "
+            "default for broadband (L R G B).\n"
+            "• Noise — weights by measured background noise.  Better for "
+            "narrowband (Ha / OIII / SII): those fields hold far fewer "
+            "stars, so wFWHM penalises them for the filter, not the "
+            "frame.\n"
+            "• Number of stars — weights purely by detected stars; useful "
+            "when transparency varied a lot during the night.")
+        _nofocus(self.cmb_weight)
+        self.chk_weighting.toggled.connect(self.cmb_weight.setEnabled)
+        wrow.addWidget(self.cmb_weight, 1)
+        layout.addLayout(wrow)
 
         # --- frame quality filters --------------------------------------
         # Applied at registration time (seqapplyreg), so rejected frames are
@@ -3563,11 +4253,49 @@ class ImageMonoTrainWindow(QMainWindow):
         _nofocus(self.chk_bg_master)
         layout.addWidget(self.chk_bg_master)
 
+        self.chk_bg_rbf = QCheckBox("     use RBF instead of a polynomial")
+        self.chk_bg_rbf.setChecked(False)
+        self.chk_bg_rbf.setToolTip(
+            "Model the background with radial basis functions rather than a "
+            "first-degree polynomial.\n"
+            "RBF follows gradients that change direction or strength across "
+            "the frame (several light domes, a moon gradient crossing a "
+            "light-pollution one); a degree-1 polynomial can only tilt the "
+            "whole frame one way.\n"
+            "Applies to the per-channel masters and the colour composite. "
+            "The per-sub pass stays polynomial — that is Siril's "
+            "recommendation for individual frames.\n"
+            "Falls back to the polynomial automatically if your Siril "
+            "refuses it.")
+        _nofocus(self.chk_bg_rbf)
+        self.chk_bg_master.toggled.connect(self.chk_bg_rbf.setEnabled)
+        layout.addWidget(self.chk_bg_rbf)
+
+        srow = QHBoxLayout()
+        srow.addWidget(QLabel("     RBF smoothing:"))
+        self.spin_bg_smooth = QSpinBox()
+        self.spin_bg_smooth.setRange(0, 100)
+        self.spin_bg_smooth.setValue(50)
+        self.spin_bg_smooth.setSuffix(" %")
+        self.spin_bg_smooth.setFixedWidth(80)
+        self.spin_bg_smooth.setToolTip(
+            "How rigid the RBF surface is.  Higher = smoother, follows only "
+            "the large-scale gradient (safer around nebulosity); "
+            "lower = follows smaller local variations.  50% is Siril's "
+            "default.")
+        _nofocus(self.spin_bg_smooth)
+        self.chk_bg_rbf.toggled.connect(self.spin_bg_smooth.setEnabled)
+        self.spin_bg_smooth.setEnabled(False)
+        srow.addWidget(self.spin_bg_smooth)
+        srow.addStretch()
+        layout.addLayout(srow)
+
         self.chk_bg_extract = QCheckBox("Background extraction per sub-frame")
         self.chk_bg_extract.setChecked(False)
         self.chk_bg_extract.setToolTip(
-            "Run seqsubsky on every individual light before registration. "
-            "Rarely needed — prefer 'per channel' above.  Off by default.")
+            "Run seqsubsky (degree 1) on every individual light before "
+            "registration.  Rarely needed — prefer 'per channel' above.  "
+            "Off by default.")
         _nofocus(self.chk_bg_extract)
         layout.addWidget(self.chk_bg_extract)
 
@@ -3704,9 +4432,99 @@ class ImageMonoTrainWindow(QMainWindow):
             "the green cast — leaving a calibrated (still linear) result.")
         _nofocus(self.chk_finish)
         self.chk_finish.toggled.connect(
-            lambda on: self.chk_finish_stretch.setEnabled(
-                on and self.chk_compose.isChecked()))
+            lambda _on: self._on_compose_toggled(
+                self.chk_compose.isChecked()))
         layout.addWidget(self.chk_finish)
+
+        self.chk_spcc = QCheckBox("     use SPCC (sensor- and filter-aware)")
+        self.chk_spcc.setChecked(True)
+        self.chk_spcc.setToolTip(
+            "Spectrophotometric Colour Calibration takes your sensor's and "
+            "filters' response curves into account, which plain PCC cannot "
+            "— Siril's documentation calls SPCC the more accurate method "
+            "and PCC obsolete.\n"
+            "It also brings the only colour calibration that works for "
+            "SHO / HOO at all (narrowband mode, using each line's "
+            "wavelength).\n"
+            "Falls back to plain PCC automatically if SPCC is unavailable.")
+        _nofocus(self.chk_spcc)
+        self.chk_spcc.toggled.connect(
+            lambda _on: self._on_compose_toggled(
+                self.chk_compose.isChecked()))
+        layout.addWidget(self.chk_spcc)
+
+        self.lbl_spcc = QLabel(
+            "     Mono sensor and filters (pre-filled; clear them to use "
+            "Siril's own SPCC settings):")
+        self.lbl_spcc.setStyleSheet("color:#888888;font-size:9pt;")
+        self.lbl_spcc.setWordWrap(True)
+        layout.addWidget(self.lbl_spcc)
+
+        self.edit_spcc_sensor = QLineEdit()
+        self.edit_spcc_sensor.setText(DEFAULT_SPCC_SENSOR)
+        self.edit_spcc_sensor.setPlaceholderText(
+            "Mono sensor, e.g. Sony IMX411/455/461/533/571")
+        self.edit_spcc_sensor.setToolTip(
+            "Pre-filled for a Player One Ares-M Pro (IMX533 mono).\n"
+            "Your sensor as named in Siril's MONO table.  Watch out: many "
+            "chips appear under a different name there than in the OSC "
+            "table.  The IMX533 mono entry is\n"
+            "    Sony IMX411/455/461/533/571\n"
+            "while plain 'IMX533' only exists as an OSC sensor — entering "
+            "that makes SPCC calibrate as one-shot colour, silently and "
+            "with no error.\n"
+            "The script checks your entry against the database Siril "
+            "actually uses and says in the Log if it does not match.\n"
+            "Leave everything blank to use Siril's own SPCC configuration.")
+        layout.addWidget(self.edit_spcc_sensor)
+
+        frow = QHBoxLayout()
+        self.edit_spcc_r = QLineEdit(DEFAULT_SPCC_RFILTER)
+        self.edit_spcc_r.setPlaceholderText("R filter, e.g. Baader R")
+        self.edit_spcc_g = QLineEdit(DEFAULT_SPCC_GFILTER)
+        self.edit_spcc_g.setPlaceholderText("G filter")
+        self.edit_spcc_b = QLineEdit(DEFAULT_SPCC_BFILTER)
+        self.edit_spcc_b.setPlaceholderText("B filter")
+        for w in (self.edit_spcc_r, self.edit_spcc_g, self.edit_spcc_b):
+            w.setToolTip(
+                "Pre-filled with the Antlia LRGB V-Pro set.\n"
+                "Filter names from Siril's mono table, e.g.:\n"
+                "  Antlia R / G / B · Baader R / G / B\n"
+                "  Chroma Red / Green / Blue · Optolong Red / Green / Blue\n"
+                "  Astronomik Typ 2 c Red / Green / Blue\n"
+                "  ZWO Optimized for CMOS Red / Green / Blue\n"
+                "  Astrodon Red (E series) / Red (I series) / ...\n"
+                "Give all three to describe the rig completely; the script "
+                "checks each one against Siril's database.\n"
+                "Ignored for narrowband palettes, which are described by "
+                "wavelength instead.")
+            frow.addWidget(w, 1)
+        layout.addLayout(frow)
+
+        nrow = QHBoxLayout()
+        nrow.addWidget(QLabel("     Narrowband filter bandwidth:"))
+        # Fractional bandwidths are the norm, not the exception: 3.5, 4.5
+        # and 6.5 nm are all common filter specs, so an integer box would
+        # make them unenterable.
+        self.spin_nb_bw = QDoubleSpinBox()
+        self.spin_nb_bw.setDecimals(1)
+        self.spin_nb_bw.setSingleStep(0.5)
+        self.spin_nb_bw.setRange(0.5, 50.0)
+        self.spin_nb_bw.setValue(DEFAULT_NB_BANDWIDTH)
+        self.spin_nb_bw.setSuffix(" nm")
+        self.spin_nb_bw.setFixedWidth(85)
+        self.spin_nb_bw.setToolTip(
+            "The bandwidth of your Ha / OIII / SII filters, used by SPCC's "
+            "narrowband mode.  Typical values are 3, 3.5, 4.5, 6 or 7 nm — "
+            "take it from your filter's spec sheet.  Pre-filled with 4.5 "
+            "for the Antlia Edge SHO set.\n"
+            "Siril has no named entries for narrowband filters, so this "
+            "number plus the fixed line wavelengths (Ha 656.3, OIII 500.7, "
+            "SII 671.6 nm) IS the whole filter description.")
+        _nofocus(self.spin_nb_bw)
+        nrow.addWidget(self.spin_nb_bw)
+        nrow.addStretch()
+        layout.addLayout(nrow)
 
         self.chk_finish_stretch = QCheckBox("     + save stretched preview")
         self.chk_finish_stretch.setChecked(False)
@@ -3767,10 +4585,12 @@ class ImageMonoTrainWindow(QMainWindow):
         """Every persisted option widget, keyed by its settings name.
 
         Used by the .json preset export/import so a saved preset covers every
-        option, not just the handful a built-in profile sets.  Paths are
-        deliberately absent: the calibration library lives on one machine,
-        and baking it into a shared preset would point someone else's run at
-        a folder that does not exist.
+        option, not just the handful a built-in profile sets.  Filesystem
+        paths are deliberately absent: the calibration library lives on one
+        machine, and baking it into a shared preset would point someone
+        else's run at a folder that does not exist.  Rig descriptions (the
+        SPCC sensor and filter names) are included -- those travel with the
+        recipe, not with the machine.
         """
         w = {
             "filter_mode": self.cmb_filter_mode,
@@ -3788,6 +4608,17 @@ class ImageMonoTrainWindow(QMainWindow):
             "platesolve_reg": self.chk_platesolve_reg,
             "disto_master": self.chk_disto,
             "drizzle": self.cmb_drizzle,
+            "weight_method": self.cmb_weight,
+            "bg_rbf": self.chk_bg_rbf,
+            "bg_smooth": self.spin_bg_smooth,
+            "use_spcc": self.chk_spcc,
+            "nb_bandwidth": self.spin_nb_bw,
+            # Rig-specific, not machine-specific: exactly what someone would
+            # want to hand over together with the rest of the recipe.
+            "spcc_sensor": self.edit_spcc_sensor,
+            "spcc_rfilter": self.edit_spcc_r,
+            "spcc_gfilter": self.edit_spcc_g,
+            "spcc_bfilter": self.edit_spcc_b,
             "copy": self.chk_copy,
             "align_filters": self.chk_align_filters,
             "reuse_masters": self.chk_reuse,
@@ -3815,10 +4646,14 @@ class ImageMonoTrainWindow(QMainWindow):
         for key, w in self._all_setting_widgets().items():
             if isinstance(w, QCheckBox):
                 data["settings"][key] = bool(w.isChecked())
+            elif isinstance(w, QDoubleSpinBox):
+                data["settings"][key] = float(w.value())
             elif isinstance(w, QSpinBox):
                 data["settings"][key] = int(w.value())
             elif isinstance(w, QComboBox):
                 data["settings"][key] = w.currentText()
+            elif isinstance(w, QLineEdit):
+                data["settings"][key] = w.text().strip()
         try:
             with open(path, "w", encoding="utf-8") as fh:
                 json.dump(data, fh, indent=2)
@@ -3865,6 +4700,8 @@ class ImageMonoTrainWindow(QMainWindow):
                 try:
                     if isinstance(w, QCheckBox):
                         w.setChecked(bool(value))
+                    elif isinstance(w, QDoubleSpinBox):
+                        w.setValue(float(value))
                     elif isinstance(w, QSpinBox):
                         w.setValue(int(value))
                     elif isinstance(w, QComboBox):
@@ -3874,6 +4711,14 @@ class ImageMonoTrainWindow(QMainWindow):
                         else:
                             unknown += 1
                             continue
+                    elif isinstance(w, QLineEdit):
+                        w.setText(str(value).strip())
+                    else:
+                        # A widget type this loader cannot set.  Counting it
+                        # as applied would report a setting as restored that
+                        # was silently dropped.
+                        unknown += 1
+                        continue
                     applied += 1
                 except (TypeError, ValueError):
                     unknown += 1
@@ -3924,7 +4769,14 @@ class ImageMonoTrainWindow(QMainWindow):
                   self.cmb_map_green, self.cmb_map_blue, self.chk_nb_norm,
                   self.chk_quick_lrgb, self.chk_finish):
             w.setEnabled(on)
-        self.chk_finish_stretch.setEnabled(on and self.chk_finish.isChecked())
+        # Everything below auto-finish only means anything while it runs.
+        fin = on and self.chk_finish.isChecked()
+        self.chk_finish_stretch.setEnabled(fin)
+        self.chk_spcc.setEnabled(fin)
+        spcc = fin and self.chk_spcc.isChecked()
+        for w in (self.lbl_spcc, self.edit_spcc_sensor, self.edit_spcc_r,
+                  self.edit_spcc_g, self.edit_spcc_b, self.spin_nb_bw):
+            w.setEnabled(spcc)
 
     def _populate_compose_combos(self) -> None:
         """Refill the channel combos with the discovered filters."""
@@ -4083,11 +4935,50 @@ class ImageMonoTrainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # SETTINGS
     # ------------------------------------------------------------------
+    def _seed_rig_defaults(self) -> None:
+        """Write the shipped rig description into the stored settings once.
+
+        A QSettings default only applies to a key that is ABSENT.  Anyone
+        who ran an earlier version already has these keys saved -- as empty
+        strings, and with the old 7 nm bandwidth -- so the new defaults
+        would never appear no matter what fallback is passed.
+
+        Seeding is guarded by a flag, so it happens exactly once: after
+        that the fields are the user's to change, and clearing them keeps
+        working as "use Siril's own SPCC configuration".
+        """
+        st = self._settings
+        if st.value("spcc_seeded", False, type=bool):
+            return
+        for key, val in (("spcc_sensor", DEFAULT_SPCC_SENSOR),
+                         ("spcc_rfilter", DEFAULT_SPCC_RFILTER),
+                         ("spcc_gfilter", DEFAULT_SPCC_GFILTER),
+                         ("spcc_bfilter", DEFAULT_SPCC_BFILTER),
+                         ("nb_bandwidth", DEFAULT_NB_BANDWIDTH)):
+            st.setValue(key, val)
+        st.setValue("spcc_seeded", True)
+
     def _load_settings(self) -> None:
         st = self._settings
+        self._seed_rig_defaults()
         self.chk_skip_blank.setChecked(st.value("skip_blank", True, type=bool))
         self.chk_rejection.setChecked(st.value("rejection", True, type=bool))
         self.chk_weighting.setChecked(st.value("weighting", True, type=bool))
+        self.cmb_weight.setCurrentText(
+            str(st.value("weight_method", "Weighted FWHM")))
+        self.chk_bg_rbf.setChecked(st.value("bg_rbf", False, type=bool))
+        self.spin_bg_smooth.setValue(int(st.value("bg_smooth", 50)))
+        self.chk_spcc.setChecked(st.value("use_spcc", True, type=bool))
+        self.edit_spcc_sensor.setText(
+            str(st.value("spcc_sensor", DEFAULT_SPCC_SENSOR)))
+        self.edit_spcc_r.setText(
+            str(st.value("spcc_rfilter", DEFAULT_SPCC_RFILTER)))
+        self.edit_spcc_g.setText(
+            str(st.value("spcc_gfilter", DEFAULT_SPCC_GFILTER)))
+        self.edit_spcc_b.setText(
+            str(st.value("spcc_bfilter", DEFAULT_SPCC_BFILTER)))
+        self.spin_nb_bw.setValue(
+            float(st.value("nb_bandwidth", DEFAULT_NB_BANDWIDTH)))
         # Mode BEFORE the values: it decides the spin boxes' range, and a
         # percentage restored into a k-sigma range would be clamped to 10.
         self.cmb_filter_mode.setCurrentText(
@@ -4147,6 +5038,15 @@ class ImageMonoTrainWindow(QMainWindow):
         st.setValue("skip_blank", self.chk_skip_blank.isChecked())
         st.setValue("rejection", self.chk_rejection.isChecked())
         st.setValue("weighting", self.chk_weighting.isChecked())
+        st.setValue("weight_method", self.cmb_weight.currentText())
+        st.setValue("bg_rbf", self.chk_bg_rbf.isChecked())
+        st.setValue("bg_smooth", int(self.spin_bg_smooth.value()))
+        st.setValue("use_spcc", self.chk_spcc.isChecked())
+        st.setValue("spcc_sensor", self.edit_spcc_sensor.text().strip())
+        st.setValue("spcc_rfilter", self.edit_spcc_r.text().strip())
+        st.setValue("spcc_gfilter", self.edit_spcc_g.text().strip())
+        st.setValue("spcc_bfilter", self.edit_spcc_b.text().strip())
+        st.setValue("nb_bandwidth", float(self.spin_nb_bw.value()))
         st.setValue("f_wfwhm_val", int(self.spin_keep.value()))
         st.setValue("filter_mode", self.cmb_filter_mode.currentText())
         st.setValue("f_wfwhm_on", self.chk_f_wfwhm.isChecked())
@@ -4531,6 +5431,15 @@ class ImageMonoTrainWindow(QMainWindow):
             "skip_blank": self.chk_skip_blank.isChecked(),
             "rejection": self.chk_rejection.isChecked(),
             "weighting": self.chk_weighting.isChecked(),
+            "weight_method": self.cmb_weight.currentText(),
+            "bg_rbf": self.chk_bg_rbf.isChecked(),
+            "bg_smooth": int(self.spin_bg_smooth.value()),
+            "use_spcc": self.chk_spcc.isChecked(),
+            "spcc_sensor": self.edit_spcc_sensor.text().strip(),
+            "spcc_rfilter": self.edit_spcc_r.text().strip(),
+            "spcc_gfilter": self.edit_spcc_g.text().strip(),
+            "spcc_bfilter": self.edit_spcc_b.text().strip(),
+            "nb_bandwidth": float(self.spin_nb_bw.value()),
             "filter_mode": self.cmb_filter_mode.currentText(),
             "f_wfwhm_on": self.chk_f_wfwhm.isChecked(),
             "f_wfwhm_val": int(self.spin_keep.value()),
@@ -4627,17 +5536,21 @@ class ImageMonoTrainWindow(QMainWindow):
         finished = payload.get("finished", False)
         preview = payload.get("preview")
         separate_lum = payload.get("separate_lum")
+        aborted = payload.get("aborted", False)
         self._set_left_enabled(True)
         self.progress.setValue(100)
 
         n_ok = len(results)
         n_err = len(errors)
         self.lbl_header.setText(
-            f"Done: {n_ok} master(s) written"
+            ("Stopped: " if aborted else "Done: ")
+            + f"{n_ok} master(s) written"
             + (", cross-filter aligned" if aligned else "")
             + (", colour composite" if composite else "")
             + (f", {n_err} filter(s) failed." if n_err else "."))
-        self._set_status(f"Finished: {n_ok} ok, {n_err} failed.")
+        self._set_status(
+            (f"Stopped: {n_ok} master(s) finished before the abort."
+             if aborted else f"Finished: {n_ok} ok, {n_err} failed."))
 
         out_root = os.path.join(self._root, STACKS_DIRNAME)
         ok_rows = "".join(
@@ -4687,17 +5600,30 @@ class ImageMonoTrainWindow(QMainWindow):
             + (f"<h3 style='color:#ff8888;'>Skipped / failed</h3>"
                f"<ul>{err_rows}</ul>" if err_rows else ""))
 
-        self._log(f"All done: {n_ok} master(s) written, {n_err} failed."
-                  + (f" Composite: {os.path.basename(composite)}"
-                     if composite else ""), LogColor.GREEN)
+        if aborted:
+            # "All done" after the user pressed stop would be a plain lie.
+            self._log(
+                f"Stopped by request: {n_ok} master(s) were finished and "
+                "kept. Re-run with 'Reuse existing masters' to stack the "
+                "rest and compose.", LogColor.SALMON)
+        else:
+            self._log(f"All done: {n_ok} master(s) written, {n_err} failed."
+                      + (f" Composite: {os.path.basename(composite)}"
+                         if composite else ""), LogColor.GREEN)
         if results:
             QMessageBox.information(
                 self, "ImageMono Train",
-                f"Stacked {n_ok} filter(s) successfully.\n\n"
-                + ("Cross-filter aligned masters are in masters/.\n"
-                   if aligned else "")
-                + (f"Colour composite: {os.path.basename(composite)} "
-                   "(loaded in Siril).\n" if composite else "")
+                (f"Stopped after {n_ok} filter(s).\n\n"
+                 "Those masters are complete and kept. The remaining "
+                 "filters were not stacked, and alignment and the colour "
+                 "image were skipped.\n\nRe-run with 'Reuse existing "
+                 "masters' to continue where this left off.\n"
+                 if aborted else
+                 f"Stacked {n_ok} filter(s) successfully.\n\n"
+                 + ("Cross-filter aligned masters are in masters/.\n"
+                    if aligned else "")
+                 + (f"Colour composite: {os.path.basename(composite)} "
+                    "(loaded in Siril).\n" if composite else ""))
                 + f"\nOutput folder:\n{out_root}")
 
     # ------------------------------------------------------------------
@@ -4906,13 +5832,20 @@ class ImageMonoTrainWindow(QMainWindow):
             "<tr><td><b>seqapplyreg</b></td>"
             "<td>Applies the registration.  <i>min</i> framing (default) "
             "crops the ragged stacking edges; <i>max</i> keeps the full "
-            "field.  Drizzle when selected.</td></tr>"
+            "field.  Drizzle when selected.<br>"
+            "A sub without enough detectable stars (clouds, haze) cannot be "
+            "matched and Siril leaves it out here.  The script counts the "
+            "frames Siril really exported, so everything downstream — the "
+            "rejection tier, the weighting, the report — follows the number "
+            "that is actually integrated, and the log says how many were "
+            "lost and why.</td></tr>"
             "<tr><td><b>stack</b></td>"
-            "<td>Rejection integration with additive+scaling "
-            "normalisation, weighted-FWHM weighting and 32-bit output.</td></tr>"
+            "<td>Rejection integration with additive+scaling normalisation, "
+            "your chosen frame weighting and 32-bit output.</td></tr>"
             "<tr><td><b>subsky</b> (per channel)</td>"
             "<td>Background / gradient removed from each linear master "
-            "before the channels are combined.</td></tr>"
+            "before the channels are combined — degree-1 polynomial, or RBF "
+            "when you enable it.</td></tr>"
             "<tr><td><b>align filters</b> <i>(optional)</i></td>"
             "<td>All per-filter masters are re-registered onto one shared "
             "grid (min framing → identical size) so the channels overlay "
@@ -4929,7 +5862,15 @@ class ImageMonoTrainWindow(QMainWindow):
             "<ul>"
             "<li><b>≤ 4 frames</b> → percentile clipping (0.2 / 0.1)</li>"
             "<li><b>5 – 20 frames</b> → Winsorized sigma (3σ / 3σ)</li>"
-            "<li><b>&gt; 20 frames</b> → linear-fit clipping (3σ / 3σ)</li>"
+            f"<li><b>21 – {GESDT_MIN_FRAMES - 1} frames</b> → linear-fit "
+            "clipping (3σ / 3σ) — handles gradients between subs well</li>"
+            f"<li><b>≥ {GESDT_MIN_FRAMES} frames</b> → <b>GESDT</b> "
+            "(Generalized Extreme Studentized Deviate Test), which Siril "
+            "documents as excelling on large stacks.  Its two numbers are "
+            "<i>not</i> sigmas: <tt>0.3</tt> caps the fraction of the stack "
+            "that may be rejected, <tt>0.05</tt> is the significance "
+            "threshold.  If your Siril build does not know it, the run "
+            "falls back to linear fit and says so.</li>"
             "</ul>"
             "<h3 style='color:#88aaff;'>Stacking Options</h3>"
             "<ul>"
@@ -4944,8 +5885,14 @@ class ImageMonoTrainWindow(QMainWindow):
             "<li><b>Pixel rejection (auto)</b> — removes hot pixels, "
             "cosmics and trails; algorithm adapts to frame count. "
             "Recommended.</li>"
-            "<li><b>Frame weighting (wFWHM)</b> — weights sharper subs "
-            "higher for better SNR.</li>"
+            "<li><b>Frame weighting</b> — lets the better subs contribute "
+            "more, for better SNR.  Pick the criterion in the <b>by:</b> "
+            "box: <i>Weighted FWHM</i> (sharpness scaled by star count — "
+            "the right default for L R G B), <i>Noise</i> (measured "
+            "background noise — the better choice for <b>narrowband</b>, "
+            "where a sparse star field would otherwise be penalised for the "
+            "filter rather than for the frame), or <i>Number of stars</i> "
+            "(when transparency varied a lot).</li>"
             "<li><b>Frame quality filters</b> — drop bad subs "
             "<i>before</i> they are registered.  Tick any of "
             "<b>Weighted FWHM</b> (softness), <b>Roundness</b> (guiding "
@@ -4963,12 +5910,33 @@ class ImageMonoTrainWindow(QMainWindow):
             "removing the worst frame gains — a real 8→6 frame test raised "
             "the background noise by 19%.  Above the threshold the log warns "
             "when the filters drop more than 15% of a set.</li>"
+            "<li><b>Crop stacking edges (min framing)</b> — keep only the "
+            "area every sub covers, so the master has no ragged, "
+            "low-signal border.  Dithering offsets the subs by a few "
+            "pixels, so this costs a thin strip (a real run: 3008&nbsp;px "
+            "→ 2991&nbsp;px).  Off keeps the full field with partly "
+            "exposed edges.  This is a framing choice inside "
+            "<tt>seqapplyreg</tt>, not a crop applied afterwards — the "
+            "script never trims to taste, that belongs in "
+            "<tt>todo.md</tt>.</li>"
             "<li><b>Output normalization</b> — normalises the final "
             "frame's background level.</li>"
             "<li><b>Save rejection map</b> — QA artifact of what was "
             "rejected.</li>"
-            "<li><b>Background extraction</b> — flattens gradients "
-            "per sub before registration.</li>"
+            "<li><b>Background extraction per channel</b> — flattens the "
+            "gradient on each finished, still-linear master.  Tick <b>use "
+            "RBF instead of a polynomial</b> when the gradient changes "
+            "direction or strength across the frame (several light domes, a "
+            "moon gradient crossing a light-pollution one): a degree-1 "
+            "polynomial can only tilt the whole frame one way, RBF follows "
+            "the shape.  <b>RBF smoothing</b> sets how rigid that surface "
+            "is — higher stays on the large scale and is safer around "
+            "nebulosity.  Falls back to the polynomial if your Siril "
+            "refuses RBF.</li>"
+            "<li><b>Background extraction per sub-frame</b> — flattens "
+            "gradients on every light before registration.  Stays a "
+            "degree-1 polynomial deliberately: that is Siril's "
+            "recommendation for individual frames.</li>"
             "<li><b>Register via plate solving</b> — WCS-based "
             "registration (also aligns filters to each other for free).  "
             "<b>+ use distortion master</b> adds <tt>-disto=master</tt> so "
@@ -4982,14 +5950,29 @@ class ImageMonoTrainWindow(QMainWindow):
             "<li><b>💾 / 📂 next to the preset</b> — save the complete "
             "configuration to a <tt>.json</tt> file, or load one back "
             "(handy to share a recipe or keep one per target type).</li>"
-            "<li><b>Drizzle</b> — 2× / 3× upsampling; needs "
-            "well-dithered subs and makes much larger files.</li>"
+            "<li><b>Drizzle</b> — 2× / 3× upsampling.  It redistributes each "
+            "sub's flux onto a finer grid, which only works if the subs were "
+            "<b>dithered</b> during acquisition and there are enough of "
+            f"them: below about <b>{DRIZZLE_MIN_FRAMES} frames</b> the grid "
+            "stays unevenly filled and the master usually comes out noisier "
+            "than an undrizzled one.  The log and the report warn when that "
+            "happens.  Also makes much larger files.</li>"
             "<li><b>Copy frames</b> — copy instead of symlink, for "
             "drives where symlinks are not permitted.</li>"
             "<li><b>Align filters (LRGB)</b> — put all masters on one "
             "shared grid; writes the aligned masters to masters/.</li>"
             "<li><b>Plate-solve final masters</b> — tag each master with "
-            "a WCS solution.</li>"
+            "a WCS solution, for later annotation or mosaicking.  "
+            "<tt>rgbcomp</tt> then copies that solution into the colour "
+            "image, so the finish step finds it already solved and skips "
+            "its own plate-solve; the report says which of the two "
+            "happened.</li>"
+            "<li><b>Load final stack into Siril</b> — open the result when "
+            "the run ends (the colour image if one was made, otherwise the "
+            "last master).  Turn it off for unattended batches.</li>"
+            "<li><b>Clear log before each run</b> — empty the Log tab when "
+            "stacking starts, so what you see belongs to this run only.  "
+            "Siril's own console keeps everything either way.</li>"
             "</ul>"
             "<hr>"
             "<h3 style='color:#88aaff;'>Colour Composition</h3>"
@@ -5059,23 +6042,101 @@ class ImageMonoTrainWindow(QMainWindow):
             "cleaned up automatically — each step is resilient (a failure "
             "is logged and skipped, never fatal):</p>"
             "<ol>"
-            "<li><b>Plate-solve</b> the colour image (needed for PCC).</li>"
+            "<li><b>Plate-solve</b> the colour image — every colour "
+            "calibration method needs astrometry.</li>"
             "<li><b>Background extraction</b> (subsky) to flatten "
             "gradients.</li>"
-            "<li><b>Photometric Colour Calibration</b> (pcc) for neutral, "
-            "physically-correct star colours.</li>"
+            "<li><b>Colour calibration</b> — see the chain below.</li>"
             "<li><b>SCNR</b> green-cast removal.</li>"
             "</ol>"
+            "<h3 style='color:#88aaff;'>Colour calibration: SPCC, then PCC"
+            "</h3>"
+            "<p><b>SPCC</b> (Spectrophotometric Colour Calibration) takes "
+            "your <i>sensor's and filters' response curves</i> into account; "
+            "Siril's own documentation calls it the more accurate method and "
+            "PCC obsolete.  For a mono rig behind a filter wheel that "
+            "distinction matters — plain PCC assumes generic broadband "
+            "R/G/B.</p>"
+            "<p><b>Narrowband gets calibrated too.</b>  With SHO or HOO the "
+            "script runs SPCC in <b>narrowband mode</b>, describing each "
+            "mapped channel by its emission line — Ha 656.3, OIII 500.7, "
+            "SII 671.6 nm — plus the bandwidth you set.  Ordinary star "
+            "photometry is meaningless there, so PCC is never attempted for "
+            "these palettes; without SPCC they stay uncalibrated, as "
+            "before.</p>"
+            "<p>The chain degrades one step at a time and never aborts the "
+            "finish:</p>"
+            "<ol>"
+            "<li><b>SPCC</b> with your sensor / filter names (or the "
+            "narrowband wavelengths)</li>"
+            "<li><b>SPCC</b> bare — uses whatever is configured in Siril's "
+            "own preferences</li>"
+            "<li><b>PCC</b> (NOMAD catalog) — broadband palettes only</li>"
+            "<li><b>PCC</b> against a local Gaia catalog — works offline</li>"
+            "<li>give up, and say so plainly in the report and in "
+            "<tt>todo.md</tt></li>"
+            "</ol>"
+            "<p>The sensor and filter fields are optional, but the names "
+            "must come from Siril's <b>mono</b> tables — and several chips "
+            "are listed there under a different name than in the OSC "
+            "tables.  The IMX533 is the classic trap: the mono entry is "
+            "<tt>Sony IMX411/455/461/533/571</tt>, while plain "
+            "<tt>IMX533</tt> exists <i>only</i> as an OSC sensor, so "
+            "entering that makes SPCC calibrate your filter-wheel data as "
+            "though it came from a colour camera — silently, with no "
+            "error.</p>"
+            "<p><b>Quoting matters.</b>  Siril re-splits the command line "
+            "shell-style, so the quotes have to wrap the <i>whole</i> "
+            "argument — <tt>\"-rfilter=Antlia R\"</tt>, not "
+            "<tt>-rfilter=\"Antlia R\"</tt>, which aborts with "
+            "<i>Invalid argument</i>.  The script does this for you; the "
+            "exact line it sends is printed in the Log.</p>"
+            "<p>Bare <tt>spcc</tt> without any arguments only works once "
+            "you have run SPCC from Siril's own dialog at least once — that "
+            "is where those defaults come from.  On a fresh install it "
+            "fails and the chain falls through to PCC.</p>"
+            "<p>The script reads the SPCC database Siril actually uses and "
+            "reports in the Log when a name does not match, listing "
+            "candidates.  Leave the fields blank to use your own Siril SPCC "
+            "configuration.</p>"
+            "<p>Three outcomes, all before the run reaches SPCC:</p>"
+            "<ul>"
+            "<li><b>exact hit</b> — nothing is said, the name goes through "
+            "as typed;</li>"
+            "<li><b>one partial match</b> — the Log names what Siril should "
+            "resolve it to (<tt>IMX411</tt> → "
+            "<tt>Sony IMX411/455/461/533/571</tt>);</li>"
+            "<li><b>several matches or none</b> — the candidates are listed, "
+            "or you are told the name is absent from the mono table.  The "
+            "script never picks one for you: which of several Siril takes "
+            "is Siril's decision.</li>"
+            "</ul>"
+            "<p style='color:#888;'>The check reads Siril's own SPCC "
+            "database, read-only, at the location sirilpy reports.  If it "
+            "cannot be found the check is simply skipped — a database the "
+            "script cannot see means <i>cannot check</i>, never <i>invalid "
+            "name</i>.  The calibration itself never uses this data: the "
+            "names go to Siril, which does its own lookup.</p>"
+            "<p>The fields come <b>pre-filled</b> for the rig this script "
+            "was written on — a <b>Player One Ares-M Pro</b> (IMX533 mono) "
+            "with <b>Antlia LRGB V-Pro</b> and <b>Antlia 4.5&nbsp;nm Edge "
+            "SHO</b> filters:</p>"
+            "<pre style='color:#aaddaa'>sensor  Sony IMX411/455/461/533/571\n"
+            "R G B   Antlia R · Antlia G · Antlia B\n"
+            "NB bw   4.5 nm</pre>"
+            "<p>Different kit?  Overwrite them — your entries are "
+            "remembered — or change the <tt>DEFAULT_SPCC_*</tt> constants "
+            "near the top of the script.  Either way the names are checked "
+            "against Siril's database before the run.</p>"
+            "<p><b>HaRGB is excluded</b> from photometric calibration "
+            "entirely: its Red channel carries blended Ha, so the star "
+            "colours are no longer physical.  Balance it by hand.</p>"
             "<p>The result stays <b>linear</b> — saved over the composite, "
             "ready for your own stretch.  Tick <b>+ save stretched "
             "preview</b> to also get an autostretched "
             "<span style='font-family:monospace;color:#aaddaa;'>"
             "TARGET_PALETTE_preview</span> for a quick look; the linear "
-            "file is left untouched for serious processing.</p>"
-            "<p style='color:#888;'>PCC needs its photometry catalog "
-            "reachable (online, or a local Gaia catalog installed).  If it "
-            "can't reach one, calibration is skipped and the composite is "
-            "still saved.</p>")
+            "file is left untouched for serious processing.</p>")
         tabs.addTab(tab2, "The Pipeline")
 
         tab_cal = QTextEdit()
@@ -5337,8 +6398,22 @@ class ImageMonoTrainWindow(QMainWindow):
             "skipped and why.</li>"
             "<li>Re-running is safe: existing outputs are overwritten.  Turn "
             "reuse OFF after changing stacking options or adding frames.</li>"
-            "<li>Closing the window mid-run asks first, then stops cleanly "
-            "after the current step — finished masters are kept.</li>"
+            "<li><b>Stopping really stops.</b>  Closing the window mid-run "
+            "asks first, then finishes the current filter and stops there.  "
+            "Channel alignment, plate-solving, the colour image and the "
+            "<tt>_work/</tt> cleanup are all skipped — a composite built "
+            "from half the channels is not the image you asked for, and the "
+            "intermediates of an interrupted run are exactly what you want "
+            "to keep.  The finished masters stay; log, report and dialog "
+            "say <i>stopped</i>, not <i>done</i>.  Re-run with <b>Reuse "
+            "existing masters</b> to carry on from there.</li>"
+            "<li><b>The report only claims what happened.</b>  A filter that "
+            "was skipped, failed, or that the abort never reached gets no "
+            "invented frame count; a predicted count is marked <b>≈</b> "
+            "(quality filters) or <b>≤</b> (k-sigma, where the number is "
+            "unknowable in advance); the rejection algorithm named is the "
+            "one that really ran; and <tt>todo.md</tt> only calls the "
+            "colour calibrated when a calibration actually succeeded.</li>"
             "</ul>"
             "<hr>"
             "<p style='color:#888;'>Svenesis ImageMono Train "
