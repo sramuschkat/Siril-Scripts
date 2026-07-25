@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.1.0
+Script Version: 1.2.0
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -30,13 +30,19 @@ Built for a mono rig:
 What it does:
 - Folder picker for the target's root folder (files usually arrive there
   automatically via a Dropbox sync from the remote rig PC).
-- Recursive discovery: reads FITS headers, keeps only LIGHT frames, and
-  groups them by optical filter across any number of dates / sessions.
+- Recursive discovery: reads FITS headers, groups the LIGHT frames by
+  optical filter across any number of dates / sessions, and collects the
+  DARK / FLAT / DARK-FLAT / BIAS frames for calibration.
+- Calibration (all of it optional and additive): session flats per filter,
+  darks and bias from a reusable library folder, matched on header
+  signature.  Masters are built, cached and reused automatically;
+  Lc = (L - D) / (F - O), with bias applied only when no dark is used.
 - A clear "here is what I found" report: every filter, its frame count,
   total integration time, exposure, gain and sensor temperature, shown
   before anything is stacked.
 - Per-filter integration, following the proven Naztronomy Mono_PP command
-  sequence: link/convert -> (optional background extraction) ->
+  sequence: link/convert -> (optional calibration) ->
+  (optional background extraction) ->
   2-pass star registration (or plate-solve registration) -> apply
   registration -> rejection integration, with the rejection algorithm
   chosen automatically from the frame count.
@@ -65,19 +71,106 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.1.0
+# Script Version: 1.2.0
 # Siril Version: 1.4.0
-# Python Module Version: 1.1.0
+# Python Module Version: 1.2.0
 # Script Category: preprocessing
 # Script Description: Point it at a N.I.N.A. target folder; it discovers the
-#   light frames per optical filter, integrates one master stack for each
-#   filter (mono, never debayered), aligns the channels onto a common grid
+#   light frames per optical filter, calibrates them with whatever darks,
+#   flats and bias it finds, integrates one master stack for each filter
+#   (mono, never debayered), aligns the channels onto a common grid
 #   and combines them into a colour image (LRGB / RGB / SHO / HOO / HaRGB)
 #   with background extraction and photometric colour calibration.  Writes a
 #   Markdown processing report and a post-processing guide alongside.
 # Script Author: Sven Ramuschkat
 
 CHANGELOG:
+1.2.0 - Calibration: darks, flats, dark-flats and bias
+      - Calibration frames are discovered alongside the lights instead of
+        being discarded: flats grouped per filter, darks and bias grouped
+        by signature (exposure, gain, temperature, binning, dimensions)
+      - Reusable DARK / BIAS library folder, remembered between runs;
+        session flats are found next to the lights, including the old
+        N.I.N.A. layout where they sit beside the target folder
+      - Masters are built automatically (a group of exactly one file is
+        adopted as a ready-made master), cached in output/calib/ under
+        descriptive header-derived names, and reused on later runs
+      - Flats are offset-corrected before stacking: real bias / dark-flat,
+        else Siril's synthetic offset, else raw -- never a hard failure
+      - Matching runs on FITS headers with exact exposure/gain/binning/size
+        and a +/-2 C temperature window; a non-matching dark is reported
+        and skipped rather than applied
+      - Bias is never applied together with a dark (the dark already
+        contains the offset): Lc = (L - D) / (F - O)
+      - Optional cosmetic correction (-cc=dark) and "match flats to the
+        same night" for rigs that were rebuilt between sessions
+      - The processing report lists every master used, per filter, and the
+        "no calibration" note is now only printed when that is true
+      - XISF files found during the scan are reported instead of silently
+        vanishing; .fts.fz added to the recognised FITS extensions
+      - Fixes found by auditing the calibration path:
+        * darks are grouped by temperature as well, so a -10 C and a -20 C
+          set can no longer be averaged into one physically wrong master
+          (bias stays unsplit -- it is temperature-independent)
+        * a library holding sets with and without a GAIN keyword no longer
+          crashes the run when the signatures are sorted
+        * master names now carry everything the grouping distinguishes
+          (binning, flat date restriction), so the cache cannot hand back
+          the wrong master; a remaining tie is broken and logged
+        * "match flats to the same night" is no longer silently ignored on
+          the second run
+        * a filter mixing two exposures is reported -- the dark matches
+          only one of them
+      - Colour composition needs two masters again instead of three, so an
+        Ha + OIII night can actually produce the HOO image it auto-detects
+      - Calibration folders beside the target (the classic N.I.N.A. layout)
+        are found again: the segment match was case-sensitive and never
+        matched N.I.N.A.'s upper-case FLAT / DARK folders
+      - Reporting and UI state, from a second audit pass:
+        * reused filters are shown as "reused" instead of being given a
+          frame count and a rejection algorithm from a run that never
+          happened this time
+        * frame counts the quality filters only predict are marked as
+          estimates
+        * clearing the library also drops what was found in it, instead of
+          quietly keeping those darks in play
+        * the library is scanned regardless of the "Apply calibration"
+          switch, so toggling it after an analysis cannot leave the set of
+          discovered masters incomplete
+        * a failed analysis no longer leaves the previous folder's
+          calibration frames and multiple-target warning behind
+        * loading a .json preset now updates the calibration sub-options'
+          enabled state
+      - Only calibration frames are taken from outside the target folder:
+        a light frame in the library or a neighbouring calibration folder
+        used to be stacked into the target (and to trigger a bogus
+        "several objects" warning).  It is now counted and reported
+      - The analysis states how many files came from the target and how
+        many from the library, instead of adding them all up under the
+        target's path
+      - The quality-filter spin boxes follow their mode: 1..100 for
+        "% best", 1..10 for k-sigma.  A percentage left behind after a mode
+        switch used to be read as a sigma multiple, which rejects nothing
+        while the panel looks armed
+      - The frame table in output.md only quotes a count for filters that
+        really produced a master this run: one that was skipped for too few
+        usable frames, that failed mid-pipeline, or that an abort never
+        reached used to be listed as fully stacked, with a rejection
+        algorithm that never ran.  A pipe inside a Siril error message no
+        longer tears the table apart
+      - k-sigma frame counts are marked as an upper bound (the number of
+        frames beyond k sigma is Siril's call and cannot be predicted),
+        instead of being printed as if nothing had been dropped
+      - "Did the quality filters fire?" is answered from the arguments that
+        were really emitted, not from a shrunken frame count: in k-sigma
+        mode the report claimed they had not run at all, and when they were
+        skipped because of the settings (100%, or too few frames left) it
+        blamed the frame count instead
+      - todo.md now describes what actually ran instead of the usual case:
+        it no longer claims the colour is "already PCC-calibrated" when
+        auto-finish was off or no photometry catalog was reachable, no
+        longer claims narrowband channels were normalised when that option
+        was off, and says plainly when no colour image was produced at all
 1.1.0 - Colour composition, reporting and robustness
       - Colour composition via rgbcomp: LRGB / RGB / SHO / HOO / HaRGB,
         with automatic palette detection and manual channel mapping
@@ -115,6 +208,7 @@ CHANGELOG:
 from __future__ import annotations
 
 import os
+import re
 import sys
 import json
 import math
@@ -162,7 +256,7 @@ from PyQt6.QtGui import QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -182,9 +276,20 @@ STACKS_DIRNAME = "output"
 #       helpers/                  compose helpers (_nbnorm, _RED_Ha)
 MASTERS_DIRNAME = "masters"
 WORK_DIRNAME = "_work"
+# Quality-assurance artefacts (rejection maps) that would otherwise be
+# buried in _work/ and deleted with it.
+QA_DIRNAME = "qa"
+# Calibration masters built for / used by this run.
+CALIB_DIRNAME = "calib"
 
 # Recognised FITS containers.  ``.fz`` variants are Rice-compressed FITS.
-FITS_EXTS = (".fit", ".fits", ".fts", ".fit.fz", ".fits.fz")
+FITS_EXTS = (".fit", ".fits", ".fts", ".fit.fz", ".fits.fz", ".fts.fz")
+
+# Formats Siril could open but this script deliberately does not handle:
+# astropy cannot read their headers, so exposure / gain / temperature -- and
+# with them the whole calibration matching -- would be unavailable.  They are
+# reported rather than silently ignored.
+UNSUPPORTED_EXTS = (".xisf",)
 
 # Header IMAGETYP values that mean "science frame".  N.I.N.A. writes
 # "LIGHT"; some pipelines write "Light Frame".  Matched case-insensitively
@@ -193,6 +298,19 @@ LIGHT_TOKENS = ("light",)
 
 # Frame types we must never treat as lights, even if a FILTER is present.
 CALIB_TOKENS = ("dark", "flat", "bias", "offset")
+
+# Frame kinds the calibration pipeline knows.  Order matters in _inspect:
+# "dark flat" / "flatdark" must be tested before plain "dark" and "flat".
+KIND_LIGHT = "light"
+KIND_DARK = "dark"
+KIND_FLAT = "flat"
+KIND_DARKFLAT = "darkflat"
+KIND_BIAS = "bias"
+
+# How closely a library master must match the frames it calibrates.
+# Exposure and gain must be exact; the cooled setpoint is allowed to drift a
+# little, because CCD-TEMP is a measurement and wobbles by tenths of a degree.
+CALIB_TEMP_TOLERANCE_C = 2.0
 
 # Placeholder for frames without a FILTER keyword (e.g. an OSC-style
 # capture accidentally dropped in, or a broadband run with no wheel).
@@ -393,17 +511,168 @@ def _clean_token(value) -> str:
     return txt
 
 
+def _object_key(name: str) -> str:
+    """Comparison key for OBJECT names, ignoring spelling variations.
+
+    "M 101", "M101" and "m-101" are the same target typed three ways --
+    something that happens easily across nights, since the name is free text
+    in N.I.N.A. and SIMBAD hands it out with a space.  Warning about those as
+    "different objects" would be a false alarm; "M101" vs "M51" still is one.
+    """
+    return re.sub(r"[\s_-]+", "", (name or "").strip().lower())
+
+
+def _classify_kind(imagetyp: str) -> str | None:
+    """Map an IMAGETYP header value to a frame kind.
+
+    Substring matching is right here: the keyword is a type name, so
+    "Light Frame", "Flat Field" and "Dark Frame" must all be recognised.
+    Order matters -- "DARKFLAT" / "FLATDARK" / "Dark Flat" contain both
+    "dark" and "flat", so the combined form is tested first or a dark-flat
+    would be mistaken for a plain dark.  Returns None for anything
+    unrecognised, so odd files are skipped rather than guessed at.
+    """
+    h = (imagetyp or "").lower()
+    if not h:
+        return None
+    has_dark = "dark" in h
+    has_flat = "flat" in h
+    if has_dark and has_flat:
+        return KIND_DARKFLAT
+    if has_flat:
+        return KIND_FLAT
+    if has_dark:
+        return KIND_DARK
+    if "bias" in h or "offset" in h:
+        return KIND_BIAS
+    if any(t in h for t in LIGHT_TOKENS):
+        return KIND_LIGHT
+    return None
+
+
+def _classify_path(parts: list) -> str | None:
+    """Fallback classification from the folder names, for files with no
+    IMAGETYP keyword.
+
+    Matches WHOLE path segments, never substrings: a target called
+    "Dark-Nebula" or "Flaming-Star" must not turn its lights into darks.
+    N.I.N.A. writes the image type as its own folder ("LIGHT", "FLAT",
+    "DARKFLAT" ...), so an exact segment match is both safe and sufficient.
+    """
+    # Lower-cased: N.I.N.A. writes the type folder in capitals ("LIGHT",
+    # "FLAT"), so a case-sensitive comparison would never match.
+    seg = {p.strip().lower().replace(" ", "").replace("-", "").replace("_", "")
+           for p in parts}
+    if seg & {"darkflat", "flatdark", "darkflats", "flatdarks"}:
+        return KIND_DARKFLAT
+    if seg & {"flat", "flats"}:
+        return KIND_FLAT
+    if seg & {"dark", "darks"}:
+        return KIND_DARK
+    if seg & {"bias", "biases", "offset", "offsets"}:
+        return KIND_BIAS
+    if seg & {"light", "lights"}:
+        return KIND_LIGHT
+    return None
+
+
+_DATE_SEGMENT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
+
+
+def _path_date(path: str) -> str:
+    """The session date encoded in the path, or "" if there is none.
+
+    N.I.N.A. writes a `YYYY-MM-DD` folder per night, which is what pairs a
+    set of flats with the lights they belong to.  The deepest matching
+    segment wins, so a date in a parent folder cannot mask a more specific
+    one further down.
+    """
+    for seg in reversed(os.path.normpath(path).split(os.sep)):
+        if _DATE_SEGMENT_RE.match(seg):
+            return seg[:10]
+    return ""
+
+
+def _calib_signature(info: dict, with_temp: bool = False) -> tuple:
+    """Grouping key for darks / bias: what must agree to share a master.
+
+    ``with_temp`` splits the groups by sensor temperature as well, and is
+    required for DARKS: dark current is a function of temperature, so
+    averaging a -10 C and a -20 C frame into one master produces a dark that
+    is correct for neither.  BIAS is read-noise only and essentially
+    temperature-independent, so splitting it would just make each master
+    noisier for nothing.
+
+    The temperature is rounded to a whole degree.  Cooled setpoints are
+    integers and CCD-TEMP wobbles by tenths, so a session lands in one
+    bucket; two genuinely different setpoints land in two.
+    """
+    temp = info.get("temp_v")
+    return (round(float(info.get("exp_s") or 0.0), 3),
+            info.get("gain_v"),
+            info.get("binning", 1),
+            info.get("dims"),
+            (round(float(temp)) if with_temp and temp is not None else None))
+
+
+def _sig_sort_key(sig) -> tuple:
+    """Total order over signature tuples, tolerating missing values.
+
+    A signature carries ``None`` wherever the header said nothing, and
+    ``sorted()`` cannot compare ``None`` with a number -- it raises
+    TypeError, which would take down the whole run.  Missing values sort
+    last; within a position the types are homogeneous, so the value itself
+    is only ever compared against its own kind.
+    """
+    return tuple((v is None, 0 if v is None else v) for v in sig)
+
+
+def _signature_matches(master: dict, target: dict) -> bool:
+    """True if `master` may calibrate frames described by `target`.
+
+    Exposure, gain, binning and image size must agree exactly; the cooled
+    setpoint may drift a little because CCD-TEMP is a measurement.  A missing
+    gain, temperature or size is treated as "unknown, don't block" -- refusing
+    a usable master because a keyword is absent would be worse than using it.
+    Exposure is the exception: `_inspect` reports an unreadable EXPTIME as
+    0.0, and 0 s vs 120 s is exactly the mismatch that must not slip through,
+    so an unknown exposure blocks the match.
+    """
+    if master.get("dims") and target.get("dims") \
+            and master["dims"] != target["dims"]:
+        return False
+    if master.get("binning", 1) != target.get("binning", 1):
+        return False
+    for key in ("gain_v",):
+        mv, tv = master.get(key), target.get(key)
+        if mv is not None and tv is not None and mv != tv:
+            return False
+    me, te = master.get("exp_s"), target.get("exp_s")
+    if me is not None and te is not None:
+        if abs(float(me) - float(te)) > 0.01:
+            return False
+    mt, tt = master.get("temp_v"), target.get("temp_v")
+    if mt is not None and tt is not None:
+        if abs(float(mt) - float(tt)) > CALIB_TEMP_TOLERANCE_C:
+            return False
+    return True
+
+
 def _inspect(path: str) -> dict:
     """Read a FITS header ONCE and return everything discovery needs.
 
-    Returns a dict with ``is_light`` / ``filter`` / ``object`` plus the
-    display fields (``exp`` / ``gain`` / ``temp``) and the numeric exposure
-    (``exp_s``) used for the integration-time totals.  Merging classification
+    Returns ``kind`` (light / dark / flat / darkflat / bias / None), the
+    filter and object, the display fields (``exp`` / ``gain`` / ``temp``) and
+    the *numeric* metadata used for calibration matching (``exp_s``,
+    ``gain_v``, ``temp_v``, ``binning``, ``dims``).  Merging classification
     and summary into a single pass halves the header reads, which matters on
     a cloud-synced folder with hundreds of frames.
+
+    ``is_light`` is kept as a convenience alias for ``kind == "light"``.
     """
-    out = {"is_light": False, "filter": NO_FILTER, "object": "",
-           "exp": "", "gain": "", "temp": "", "exp_s": 0.0}
+    out = {"kind": None, "is_light": False, "filter": NO_FILTER, "object": "",
+           "exp": "", "gain": "", "temp": "", "exp_s": 0.0,
+           "gain_v": None, "temp_v": None, "binning": 1, "dims": None}
     header = _read_header(path)
     parts = [p.lower() for p in os.path.normpath(path).split(os.sep)]
 
@@ -412,7 +681,7 @@ def _inspect(path: str) -> dict:
 
     out["object"] = _clean_token(header.get("OBJECT"))
 
-    # A 3-channel (colour) image is never a mono light — e.g. a colour
+    # A 3-channel (colour) image is never a mono frame — e.g. a colour
     # composite that ended up in the tree.  Reject it outright.
     try:
         if (int(header.get("NAXIS", 0)) >= 3
@@ -422,18 +691,24 @@ def _inspect(path: str) -> dict:
     except (ValueError, TypeError):
         pass
 
-    imagetyp = _clean_token(header.get("IMAGETYP"))
-    it_low = imagetyp.lower()
-    if it_low:
-        is_light = any(t in it_low for t in LIGHT_TOKENS)
-        if any(t in it_low for t in CALIB_TOKENS):
-            is_light = False
-    else:
-        # No IMAGETYP -> trust the N.I.N.A. folder convention.
-        is_light = any(t in parts for t in LIGHT_TOKENS)
-        if any(t in parts for t in CALIB_TOKENS):
-            is_light = False
-    out["is_light"] = is_light
+    try:
+        out["dims"] = (int(header.get("NAXIS1", 0)),
+                       int(header.get("NAXIS2", 0)))
+    except (ValueError, TypeError):
+        pass
+    for key in ("XBINNING", "BINNING", "XBIN"):
+        if key in header:
+            try:
+                out["binning"] = int(float(header[key]))
+            except (ValueError, TypeError):
+                pass
+            break
+
+    # IMAGETYP is authoritative; the N.I.N.A. folder names are the fallback
+    # for files that carry no type keyword.
+    out["kind"] = (_classify_kind(_clean_token(header.get("IMAGETYP")))
+                   or _classify_path(parts))
+    out["is_light"] = out["kind"] == KIND_LIGHT
 
     filt = _clean_token(header.get("FILTER"))
     if not filt:
@@ -454,13 +729,15 @@ def _inspect(path: str) -> dict:
             break
     if "GAIN" in header:
         try:
-            out["gain"] = f"G{int(float(header['GAIN']))}"
+            out["gain_v"] = int(float(header["GAIN"]))
+            out["gain"] = f"G{out['gain_v']}"
         except (ValueError, TypeError):
             pass
-    for key in ("CCD-TEMP", "CCD_TEMP"):
+    for key in ("CCD-TEMP", "CCD_TEMP", "SET-TEMP"):
         if key in header:
             try:
-                out["temp"] = f"{float(header[key]):.0f}C"
+                out["temp_v"] = float(header[key])
+                out["temp"] = f"{out['temp_v']:.0f}C"
             except (ValueError, TypeError):
                 pass
             break
@@ -561,22 +838,80 @@ class AnalyzeWorker(QThread):
     finished = pyqtSignal(dict)     # {"groups": {...}, "target": str, "total": int}
     failed = pyqtSignal(str)
 
-    def __init__(self, root: str):
+    def __init__(self, root: str, library: str = ""):
         super().__init__()
         self._root = root
+        self._library = library
+
+    def _scan(self, root: str) -> tuple[list, int]:
+        """Collect FITS paths under `root`; also count unsupported files."""
+        found, skipped = [], 0
+        for dirpath, dirs, files in os.walk(root):
+            # Prune our own output folder so previously-generated masters,
+            # composites and work files are never re-ingested as lights.
+            dirs[:] = [d for d in dirs if d != STACKS_DIRNAME]
+            for name in files:
+                if name.startswith("."):
+                    continue
+                if _is_fits(name):
+                    found.append(os.path.join(dirpath, name))
+                elif name.lower().endswith(UNSUPPORTED_EXTS):
+                    skipped += 1
+        return found, skipped
+
+    def _sibling_calib_paths(self) -> list:
+        """Find calibration frames stored BESIDE the target folder.
+
+        Covers the classic N.I.N.A. layout `DATE\\IMAGETYPE\\TARGET\\FILTER`,
+        where FLAT/DARKFLAT sit next to LIGHT rather than inside the selected
+        target folder.  Walks up at most three levels and stops at the first
+        level that actually holds a calibration folder, so it can never reach
+        far enough to hoover up other nights or other targets wholesale.
+        """
+        out: list = []
+        cur = os.path.normpath(self._root)
+        for _ in range(3):
+            parent = os.path.dirname(cur)
+            if not parent or parent == cur:
+                break
+            try:
+                entries = os.listdir(parent)
+            except OSError:
+                break
+            hits = [os.path.join(parent, d) for d in entries
+                    if _classify_path([d]) in
+                    (KIND_FLAT, KIND_DARKFLAT, KIND_DARK, KIND_BIAS)
+                    and os.path.isdir(os.path.join(parent, d))]
+            if hits:
+                for h in hits:
+                    found, _ = self._scan(h)
+                    out.extend(found)
+                break               # first level with calibration wins
+            cur = parent
+        return out
 
     def run(self) -> None:
         try:
-            all_fits = []
-            for dirpath, dirs, files in os.walk(self._root):
-                # Prune our own output folder so previously-generated masters,
-                # composites and work files are never re-ingested as lights.
-                dirs[:] = [d for d in dirs if d != STACKS_DIRNAME]
-                for name in files:
-                    if name.startswith("."):
-                        continue
-                    if _is_fits(name):
-                        all_fits.append(os.path.join(dirpath, name))
+            all_fits, unsupported = self._scan(self._root)
+            in_target = set(all_fits)
+
+            # Calibration frames may live beside the target (old layout) and,
+            # for darks / bias, in the central library.
+            extra = self._sibling_calib_paths()
+            if self._library and os.path.isdir(self._library):
+                lib_found, lib_skipped = self._scan(self._library)
+                extra += lib_found
+                unsupported += lib_skipped
+            # Frames from outside the target tree may ONLY contribute
+            # calibration.  A library or sibling folder holding anything
+            # tagged LIGHT would otherwise be stacked into this target --
+            # and its OBJECT name would raise a bogus multiple-target
+            # warning on top.
+            outside = set()
+            for p in extra:
+                if p not in in_target:
+                    all_fits.append(p)
+                    outside.add(p)
 
             total = len(all_fits)
             if total == 0:
@@ -586,8 +921,14 @@ class AnalyzeWorker(QThread):
                 return
 
             groups: dict[str, dict] = {}
+            # Calibration frames, grouped so a master can be built per set:
+            #   flats / darkflats -> by filter (they are filter-specific)
+            #   darks / bias      -> by signature (exp, gain, binning, dims)
+            calib: dict[str, dict] = {KIND_FLAT: {}, KIND_DARKFLAT: {},
+                                      KIND_DARK: {}, KIND_BIAS: {}}
             objects: set[str] = set()
             target = ""
+            stray_lights = 0
             for i, path in enumerate(sorted(all_fits)):
                 if self.isInterruptionRequested():
                     return              # window is closing; drop the scan
@@ -596,7 +937,28 @@ class AnalyzeWorker(QThread):
                         int(5 + 90 * (i + 1) / total),
                         f"Reading headers... {i + 1}/{total}")
                 info = _inspect(path)          # one header read per file
-                if not info["is_light"]:
+                kind = info["kind"]
+
+                if kind in calib:
+                    # Flats belong to a filter; darks/bias to a signature --
+                    # darks additionally split by temperature (see
+                    # _calib_signature).
+                    key = (info["filter"] if kind in (KIND_FLAT, KIND_DARKFLAT)
+                           else _calib_signature(
+                               info, with_temp=(kind == KIND_DARK)))
+                    grp = calib[kind].setdefault(
+                        key, {"files": [], "info": info,
+                              "date": _path_date(path)})
+                    grp["files"].append(path)
+                    continue
+
+                if kind != KIND_LIGHT:
+                    continue
+                if path in outside:
+                    # A light frame in the library or a sibling calibration
+                    # folder: not part of this target's data, so it is
+                    # counted and dropped, never stacked.
+                    stray_lights += 1
                     continue
                 if info["object"]:
                     if not target:
@@ -607,9 +969,14 @@ class AnalyzeWorker(QThread):
                     objects.add(info["object"])
                 g = groups.setdefault(
                     info["filter"],
-                    {"files": [], "sample": {}, "exp_total": 0.0})
+                    {"files": [], "sample": {}, "exp_total": 0.0,
+                     "info": info, "dates": set(), "exps": set()})
                 g["files"].append(path)
                 g["exp_total"] = g.get("exp_total", 0.0) + info["exp_s"]
+                g["dates"].add(_path_date(path))
+                # Dark matching uses ONE representative frame per filter, so
+                # a filter holding two different exposures has to be flagged.
+                g["exps"].add(round(float(info["exp_s"]), 3))
                 if not g["sample"]:
                     g["sample"] = {"exp": info["exp"], "gain": info["gain"],
                                    "temp": info["temp"]}
@@ -623,11 +990,17 @@ class AnalyzeWorker(QThread):
 
             if not target:
                 target = os.path.basename(os.path.normpath(self._root))
+            for g in groups.values():
+                g["dates"] = sorted(d for d in g["dates"] if d)
+                g["exps"] = sorted(g["exps"])
 
             self.progress.emit(100, "Analysis complete.")
             self.finished.emit(
                 {"groups": groups, "target": target, "total": total,
-                 "objects": sorted(objects)})
+                 "in_target": len(in_target), "outside": len(outside),
+                 "stray_lights": stray_lights,
+                 "objects": sorted(objects), "calib": calib,
+                 "unsupported": unsupported})
         except Exception as exc:      # worker must never crash the app
             self.failed.emit(f"{exc}\n\n{traceback.format_exc()}")
 
@@ -642,7 +1015,8 @@ class StackWorker(QThread):
     failed = pyqtSignal(str)
 
     def __init__(self, siril, groups: dict, target: str,
-                 out_dir: str, ext: str, opts: dict):
+                 out_dir: str, ext: str, opts: dict,
+                 calib: dict | None = None):
         super().__init__()
         self.siril = siril
         self._groups = groups
@@ -650,6 +1024,13 @@ class StackWorker(QThread):
         self._out_dir = out_dir
         self._ext = ext or ".fit"
         self._opts = opts
+        # Calibration frames found by the analysis, grouped by kind.
+        self._calib = calib or {}
+        # Built masters: {kind: {key: path}} plus a note of where each came
+        # from, so the report can be honest about what was applied.
+        self._masters: dict = {}
+        # filter -> human-readable list of the masters applied to it.
+        self._calib_notes: dict = {}
         # Set by _compose when L is kept separate (correct LRGB path).
         self._separate_lum = None
         # Human-readable record of what the finish step actually did, for the
@@ -806,8 +1187,12 @@ class StackWorker(QThread):
         framing = "min" if self._opts.get("crop_edges", True) else "max"
         apply_args = ["seqapplyreg", seq, f"-framing={framing}"]
         if drizzle and drizzle > 1:
-            apply_args += ["-drizzle", f"-scale={drizzle}", "-pixfrac=1.0",
-                           "-kernel=square"]
+            # Documented order: -scale= is a top-level option and comes
+            # BEFORE -drizzle, whose own sub-options are -pixfrac / -kernel /
+            # -flat.  Passing -scale inside the drizzle group risks being
+            # parsed as an unknown drizzle argument.
+            apply_args += [f"-scale={drizzle}", "-drizzle",
+                           "-pixfrac=1.0", "-kernel=square"]
         n_in = self._current_n_frames
         qfilters = self._quality_filter_args(n_in)
         if qfilters:
@@ -868,6 +1253,13 @@ class StackWorker(QThread):
         Derived from the arguments _quality_filter_args() really emits, so a
         filter that was dropped there (too few frames left, 100%, k-sigma)
         can never shrink the count here -- the two must not disagree.
+
+        This is an UPPER bound, not a prediction.  With several percentage
+        filters active the survivors are those that pass all of them, which
+        is at most the strictest one alone -- hence `min`.  With k-sigma it
+        returns the full count, because how many frames lie beyond k sigma
+        is Siril's call.  Callers must present the result as a bound (the
+        report marks it with a tilde or a <=), never as a measurement.
         """
         keep = 100
         for arg in self._quality_filter_args(n_frames):
@@ -914,6 +1306,284 @@ class StackWorker(QThread):
         self._cmd(*args)
 
     # -- per-filter stacking ---------------------------------------------
+    # -- calibration ------------------------------------------------------
+    def _calib_dir(self) -> str:
+        d = os.path.join(self._out_dir, CALIB_DIRNAME)
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def _master_name(self, kind: str, info: dict, filt: str = "",
+                     suffix: str = "") -> str:
+        """Descriptive master filename, built from the frame's own header.
+
+        The matching itself runs on headers, but a name like
+        `M101_RED_-10C_120s_G100_flat` makes the folder readable at a glance
+        -- borrowed from Naztronomy-Mono_PP, where it proved its worth.
+
+        The name must distinguish everything the grouping distinguishes:
+        two groups that collapse onto one name would make the second reuse
+        the first one's cached file, i.e. calibrate with the wrong master.
+        Binning is therefore part of the name whenever it is not 1, and
+        `suffix` carries anything the caller needs to keep apart (the flat
+        date restriction, or a tie-break between otherwise identical sets).
+        """
+        bits = [_safe(self._target)]
+        if filt and filt != NO_FILTER:
+            bits.append(_safe(filt))
+        if info.get("temp"):
+            bits.append(_safe(info["temp"]))
+        if info.get("exp"):
+            bits.append(_safe(info["exp"]))
+        if info.get("gain"):
+            bits.append(_safe(info["gain"]))
+        if int(info.get("binning", 1) or 1) != 1:
+            bits.append(f"bin{int(info['binning'])}")
+        bits.append(kind)
+        if suffix:
+            bits.append(_safe(suffix))
+        return "_".join(b for b in bits if b)
+
+    def _stack_calib_group(self, kind: str, grp: dict, out_name: str,
+                           bias_master: str = "") -> str | None:
+        """Turn one calibration group into a master; return its path.
+
+        Three shapes are handled:
+          * exactly one file  -> it already IS the master (Naztronomy's rule);
+            no stacking, just adopt it.
+          * flats             -> calibrated against bias/dark-flat when one is
+            available, then stacked with multiplicative normalisation.
+          * darks / bias      -> plain stack, no normalisation.
+        Returns None (and logs) if anything goes wrong -- calibration must
+        never abort a run.
+        """
+        files = grp.get("files") or []
+        dest = os.path.join(self._calib_dir(), out_name + self._ext)
+        if os.path.exists(dest):
+            self._emit(f"  Reusing master {kind}: {os.path.basename(dest)}",
+                       LogColor.GREEN)
+            return dest
+
+        if len(files) == 1:
+            # A single frame is a ready-made master, not something to stack.
+            try:
+                shutil.copy2(files[0], dest)
+                self._emit(
+                    f"  {kind}: single file treated as a ready master "
+                    f"({os.path.basename(files[0])}).", LogColor.BLUE)
+                return dest
+            except OSError as exc:
+                self._emit(f"  {kind}: could not copy master ({exc}).",
+                           LogColor.SALMON)
+                return None
+
+        work = os.path.join(self._out_dir, WORK_DIRNAME, "calib", out_name)
+        stage = os.path.join(work, kind)
+        if os.path.isdir(work):
+            shutil.rmtree(work, ignore_errors=True)
+        os.makedirs(stage, exist_ok=True)
+        staged = 0
+        for i, src in enumerate(files):
+            try:
+                dst = os.path.join(stage, f"{i:04d}_{os.path.basename(src)}")
+                if os.path.lexists(dst):
+                    os.remove(dst)
+                try:
+                    os.symlink(os.path.abspath(src), dst)
+                except (OSError, NotImplementedError):
+                    shutil.copy2(src, dst)
+                staged += 1
+            except Exception as exc:
+                _log_swallowed(exc)
+        if staged < 2:
+            self._emit(f"  {kind}: only {staged} usable frame(s), skipped.",
+                       LogColor.SALMON)
+            return None
+
+        try:
+            self._cmd("cd", f'"{stage}"')
+            self._cmd("link", kind, "-out=../process")
+            self._cmd("cd", "../process")
+            seq = kind
+            if kind in (KIND_FLAT,):
+                # Flats must be offset-corrected before normalising, else the
+                # division carries the sensor pedestal into the lights.
+                if bias_master:
+                    self._cmd("calibrate", kind, f"-bias={bias_master}")
+                    seq = f"pp_{kind}"
+                    self._emit("    flats offset-corrected with "
+                               f"{os.path.basename(bias_master)}",
+                               LogColor.BLUE)
+                else:
+                    # No bias / dark-flat: fall back to Siril's synthetic
+                    # offset, and if even that is refused, stack raw.
+                    try:
+                        self._cmd("calibrate", kind, '-bias="=64*$OFFSET"')
+                        seq = f"pp_{kind}"
+                        self._emit("    flats offset-corrected with a "
+                                   "synthetic bias (=64*$OFFSET)",
+                                   LogColor.BLUE)
+                    except (CommandError, DataError, SirilError):
+                        self._emit("    no bias available — flats stacked "
+                                   "uncorrected.", LogColor.SALMON)
+                norm = "-norm=mul"
+            else:
+                norm = "-nonorm"
+            self._cmd("stack", seq, "rej", "3", "3", norm,
+                      "-out=" + out_name)
+            produced = os.path.join(work, "process", out_name + self._ext)
+            if not os.path.exists(produced):
+                self._emit(f"  {kind}: stacking produced no master.",
+                           LogColor.RED)
+                return None
+            shutil.copy2(produced, dest)
+            self._emit(f"  Built master {kind} from {staged} frames -> "
+                       f"{os.path.basename(dest)}", LogColor.GREEN)
+            return dest
+        except (CommandError, DataError, SirilError) as exc:
+            self._emit(f"  {kind}: master build failed ({exc}).", LogColor.RED)
+            return None
+        finally:
+            try:
+                self._cmd("cd", f'"{self._out_dir}"')
+                self._cmd("close")
+            except (CommandError, DataError, SirilError):
+                pass
+
+    def _build_calib_masters(self) -> None:
+        """Build every master the run can use, once, before stacking starts."""
+        if not self._opts.get("calibrate", True) or not self._calib:
+            return
+        c = self._calib
+        self._masters = {KIND_BIAS: None, KIND_DARKFLAT: None,
+                         KIND_DARK: {}, KIND_FLAT: {}}
+
+        # 1) Bias and dark-flat first: the flats need one of them.
+        for kind in (KIND_BIAS, KIND_DARKFLAT):
+            groups = c.get(kind) or {}
+            if not groups:
+                continue
+            # Bias keys are signature tuples that may contain None, which
+            # plain sorted() refuses to compare; dark-flat keys are filter
+            # names.  _sig_sort_key handles both.
+            key = sorted(groups, key=lambda k: _sig_sort_key(k)
+                         if isinstance(k, tuple) else ((False, k),))[0]
+            if len(groups) > 1:
+                self._emit(
+                    f"  {kind}: {len(groups)} sets found, using the first.",
+                    LogColor.SALMON)
+            grp = groups[key]
+            self._masters[kind] = self._stack_calib_group(
+                kind, grp, self._master_name(kind, grp["info"]))
+
+        # Dark-flats are the better offset reference for flats; bias is the
+        # fallback.  (Both carry the pedestal; the dark-flat also carries the
+        # flat exposure's dark signal.)
+        flat_offset = self._masters.get(KIND_DARKFLAT) or \
+            self._masters.get(KIND_BIAS) or ""
+
+        # 2) One master flat per filter.  Optionally restricted to the nights
+        #    the lights of that filter were actually taken.
+        by_date = self._opts.get("flats_by_date", False)
+        for filt, grp in (c.get(KIND_FLAT) or {}).items():
+            use = dict(grp)
+            # The restriction must reach the master's NAME as well: without
+            # it a per-night master and a pooled one share a filename, and
+            # the cache would hand back the pooled one -- silently ignoring
+            # the option the user just switched on.
+            night_tag = ""
+            if by_date:
+                nights = set((self._groups.get(filt) or {}).get("dates") or [])
+                if nights:
+                    kept = [p for p in grp["files"] if _path_date(p) in nights]
+                    dropped = len(grp["files"]) - len(kept)
+                    if kept and dropped:
+                        use = dict(grp, files=kept)
+                        night_tag = "-".join(sorted(nights))
+                        self._emit(
+                            f"  {filt}: using {len(kept)} flat(s) from the "
+                            f"matching night(s); {dropped} from other dates "
+                            "ignored.", LogColor.BLUE)
+                    elif not kept:
+                        self._emit(
+                            f"  {filt}: no flats from the same night — "
+                            "falling back to all available flats.",
+                            LogColor.SALMON)
+            m = self._stack_calib_group(
+                KIND_FLAT, use,
+                self._master_name(KIND_FLAT, grp["info"], filt, night_tag),
+                flat_offset)
+            if m:
+                self._masters[KIND_FLAT][filt] = m
+
+        # 3) One master dark per signature.  Two signatures that render to
+        #    the same filename would share a cache entry, so the collision is
+        #    broken deterministically (sorted order) instead of silently.
+        claimed: dict = {}
+        for sig in sorted((c.get(KIND_DARK) or {}), key=_sig_sort_key):
+            grp = c[KIND_DARK][sig]
+            name = self._master_name(KIND_DARK, grp["info"])
+            n = claimed.get(name, 0) + 1
+            claimed[name] = n
+            if n > 1:
+                self._emit(
+                    f"  dark: a second set shares the name {name} — storing "
+                    f"it as {name}_{n}.", LogColor.SALMON)
+                name = f"{name}_{n}"
+            m = self._stack_calib_group(KIND_DARK, grp, name)
+            if m:
+                self._masters[KIND_DARK][sig] = (m, grp["info"])
+
+    def _calibrate_args(self, filt: str, light_info: dict) -> list:
+        """Build the `calibrate` arguments for one filter, or [] for none."""
+        if not self._opts.get("calibrate", True) or not self._masters:
+            return []
+        args: list = []
+        used: list = []
+
+        dark = None
+        for _sig, (path, info) in (self._masters.get(KIND_DARK) or {}).items():
+            if _signature_matches(info, light_info):
+                dark = path
+                break
+        if dark:
+            args.append(f"-dark={dark}")
+            used.append(f"dark={os.path.basename(dark)}")
+            # The match was made against ONE representative light.  If the
+            # filter mixes exposures, the dark is right for only some of
+            # them -- say so rather than let it pass unnoticed.
+            exps = (self._groups.get(filt) or {}).get("exps") or []
+            if len(exps) > 1:
+                self._emit(
+                    f"  {filt}: frames use {len(exps)} different exposures "
+                    f"({', '.join(f'{e:g}s' for e in exps)}); the dark "
+                    f"matches {light_info.get('exp') or 'the first frame'} "
+                    "only. Stack the exposures separately for a clean "
+                    "result.", LogColor.SALMON)
+            if self._opts.get("cosmetic", True):
+                args += ["-cc=dark", "3", "3"]
+        elif self._masters.get(KIND_DARK):
+            self._emit(
+                f"  {filt}: no dark matches these lights (exposure, gain, "
+                "temperature, binning or image size differ) — continuing "
+                "without one.", LogColor.SALMON)
+
+        flat = (self._masters.get(KIND_FLAT) or {}).get(filt)
+        if flat:
+            args.append(f"-flat={flat}")
+            used.append(f"flat={os.path.basename(flat)}")
+
+        # Bias goes to the lights ONLY when no dark is used: a master dark
+        # already contains the offset, so subtracting bias as well would
+        # remove it twice.  Lc = (L - D) / (F - O).
+        if not dark and self._masters.get(KIND_BIAS):
+            bias = self._masters[KIND_BIAS]
+            args.append(f"-bias={bias}")
+            used.append(f"bias={os.path.basename(bias)}")
+
+        if used:
+            self._calib_notes[filt] = ", ".join(used)
+        return args
+
     def _stack_all_filters(self, reuse: dict | None = None
                            ) -> tuple[dict, dict, str | None]:
         """Stack every discovered filter into a per-filter master.
@@ -979,13 +1649,26 @@ class StackWorker(QThread):
                 self._cmd("cd", f'"{lights_dir}"')
 
                 # FITS (incl. Rice-compressed .fits.fz) -> link is instant;
-                # anything else needs convert.
+                # anything else needs convert.  Discovery only ever yields
+                # FITS_EXTS today, so the convert branch is dead in practice
+                # -- it is kept deliberately, so that widening FITS_EXTS to a
+                # raw format does not silently produce a broken `link`.
                 conv = "link" if _is_fits_like(_fits_ext(files[0])) \
                     else "convert"
                 self._cmd(conv, "lights", "-out=../process")
                 self._cmd("cd", "../process")
 
                 seq = "lights"
+                # Calibration comes first: everything downstream (background,
+                # registration, stacking) should work on corrected pixels.
+                cal_args = self._calibrate_args(
+                    filt, self._groups[filt].get("info") or {})
+                if cal_args:
+                    self._emit("  Calibrating: calibrate lights "
+                               + " ".join(cal_args), LogColor.BLUE)
+                    self._cmd("calibrate", seq, *cal_args)
+                    seq = f"pp_{seq}"
+
                 if self._opts.get("bg_extract", False):
                     self._emit("  Extracting background gradient...",
                                LogColor.BLUE)
@@ -1020,6 +1703,12 @@ class StackWorker(QThread):
                     # finished colour image.
                     if self._opts.get("bg_master", True):
                         self._bg_extract_master(final)
+                    # Rescue the rejection maps: Siril writes them next to
+                    # the stack output inside _work/, which the user never
+                    # opens and which "Delete _work/" removes.
+                    if self._opts.get("rejmap", False):
+                        self._collect_rejmaps(
+                            os.path.join(work, "process"), out_name)
                     results[filt] = final
                     last_result = final
                     self._emit(
@@ -1110,6 +1799,12 @@ class StackWorker(QThread):
           "time. |")
         A("| `output.md` | This report — what the script did, step by step. |")
         A("| `todo.md` | Step-by-step guide for the final image processing. |")
+        if self._calib_notes:
+            A(f"| `{CALIB_DIRNAME}/` | The calibration masters that were "
+              "built and applied. |")
+        if opts.get("rejmap"):
+            A(f"| `{QA_DIRNAME}/` | Rejection maps — which pixels the "
+              "integration threw away. |")
         A("")
         A("---")
         A("")
@@ -1122,11 +1817,38 @@ class StackWorker(QThread):
         total = 0
         total_exp = 0.0
         any_reduced = False
+        any_estimated = False
+        # Filters whose master came from an earlier run: nothing was staged,
+        # filtered or integrated for them THIS time, so quoting a frame count
+        # and a rejection algorithm here would describe a run that did not
+        # happen.
+        reused_set = (set(self._groups) if reused
+                      else set(partial_reuse or ()))
+        # A filter only has a frame count worth quoting if it actually came
+        # out of this run.  Filters that were skipped (too few usable
+        # frames), that failed mid-pipeline, or that the abort never reached
+        # leave no _stacked_counts entry -- and the old fallback then
+        # reported them as fully stacked.
+        produced = set(final_paths or ())
+        k_sigma = opts.get("filter_mode") == "k-sigma"
         for filt in sorted(self._groups):
             g = self._groups[filt]
             n = len(g.get("files", []))
             total += n
             exp = g.get("exp_total", 0.0)
+            if filt in reused_set:
+                total_exp += exp
+                A(f"| {filt} | {n} | _reused_ | {_format_duration(exp)} "
+                  "| _(earlier run)_ |")
+                continue
+            if filt not in produced:
+                # A Siril message may contain a pipe, which would tear the
+                # Markdown table apart.
+                why = (errors.get(filt)
+                       or "not reached — the run was stopped").replace(
+                           "|", "\\|")
+                A(f"| {filt} | {n} | _none_ | — | _{why}_ |")
+                continue
             # Quote what was really integrated: blank frames and the quality
             # filters both shrink the set, and the rejection algorithm was
             # chosen for that smaller number.
@@ -1136,9 +1858,21 @@ class StackWorker(QThread):
             # Integration time must follow the frames that were really
             # integrated, not the ones that were merely found.
             exp_used = exp * effective / n if n else 0.0
-            if effective != n:
+            if k_sigma and self._quality_filter_args(staged):
+                # k-sigma rejects "everything beyond k standard deviations":
+                # how many frames that is only Siril knows, so the count is
+                # an upper bound, never a measurement.
                 any_reduced = True
-                used = f"**{effective}**"
+                any_estimated = True
+                used = f"**≤{effective}**"
+            elif effective != n:
+                any_reduced = True
+                # Blank removal is a fact; what the quality filters keep is
+                # Siril's call and may differ by a frame, so mark it as an
+                # estimate rather than stating it as measured.
+                est = effective < staged
+                any_estimated = any_estimated or est
+                used = f"**{'≈' if est else ''}{effective}**"
             else:
                 used = str(effective)
             total_exp += exp_used
@@ -1147,12 +1881,22 @@ class StackWorker(QThread):
         A("")
         A(f"**Total:** {total} light frame(s) found across "
           f"{len(self._groups)} filter(s) — "
-          f"**{_format_duration(total_exp)}** actually integrated.")
+          f"**{_format_duration(total_exp)}** integrated"
+          + (" (reused masters counted with the frames they were built from)."
+             if reused_set else "."))
         if any_reduced:
             A("")
             A("> The **Stacked** column is lower than **Found** where blank "
               "frames were dropped or the quality filters removed subs.  The "
               "rejection algorithm was chosen for that smaller number.")
+        if any_estimated:
+            A("")
+            A("> Counts marked **≈** are what the quality filters are "
+              "expected to keep; Siril decides frame by frame, so the real "
+              "number can differ by one or two.  A **≤** marks a k-sigma "
+              "filter, where how many frames fall outside k standard "
+              "deviations is not predictable at all — that column is an "
+              "upper bound, and so is the integration time beside it.")
         if self._blank_skipped:
             A("")
             A(f"> ⚠️ **{self._blank_skipped} blank/black frame(s)** were "
@@ -1182,8 +1926,17 @@ class StackWorker(QThread):
             A("For **every filter**, the raw lights were turned into one "
               "master light:")
             A("")
-            A("1. **Staging & linking** — the frames were linked into a Siril "
-              "sequence (`link`). Compressed `.fits.fz` files are read "
+            # The list of steps is conditional (calibration, per-sub
+            # background), so the numbers come from a counter -- hard-coded
+            # ones silently go wrong as soon as a step is added.
+            _step = [0]
+
+            def N() -> str:
+                _step[0] += 1
+                return f"{_step[0]}."
+
+            A(N() + " **Staging & linking** — the frames were linked into a "
+              "Siril sequence (`link`). Compressed `.fits.fz` files are read "
               "directly, and nothing is ever debayered (this is a mono "
               "workflow)."
               + ((f" Blank / black frames were checked for — "
@@ -1191,10 +1944,30 @@ class StackWorker(QThread):
                   if self._blank_skipped else
                   " Blank / black frames were checked for; none were found.")
                  if opts.get("skip_blank", True) else ""))
+            if self._calib_notes:
+                A(N() + " **Calibration** (`calibrate`) — the masters below "
+                  "were applied to the lights, following "
+                  "**Lc = (L − D) / (F − O)**. A master dark already contains "
+                  "the bias, so bias is only subtracted separately when no "
+                  "dark is used.")
+                for filt in sorted(self._calib_notes):
+                    A(f"    - **{filt}:** {self._calib_notes[filt]}")
+                if opts.get("calib_library"):
+                    A("    - Darks / bias were taken from the library "
+                      f"`{opts['calib_library']}`; flats come from the "
+                      "session next to the lights.")
+                if opts.get("cosmetic", True):
+                    A("    - Cosmetic correction (`-cc=dark 3 3`) was "
+                      "requested — it only takes effect for filters that "
+                      "actually got a matching dark.")
+                if opts.get("flats_by_date"):
+                    A("    - Flats were matched **per night** (only flats "
+                      "from the same date folder as the lights were used).")
             if opts.get("bg_extract"):
-                A("2. **Per-sub background** — a gradient was removed from "
-                  "every individual sub before registration (`seqsubsky`).")
-            A(("3." if opts.get("bg_extract") else "2.")
+                A(N() + " **Per-sub background** — a gradient was removed "
+                  "from every individual sub before registration "
+                  "(`seqsubsky`).")
+            A(N()
               + " **Registration** — 2-pass global star alignment "
               "(`register -2pass` → `seqapplyreg`). Siril picks the sharpest "
               "frame as the reference and aligns every other frame to it with "
@@ -1214,17 +1987,37 @@ class StackWorker(QThread):
             if qf:
                 # Say plainly whether they actually fired this run: listing
                 # the settings alone would imply frames were dropped.
-                applied = [f for f, (st, ef) in self._stacked_counts.items()
-                           if ef < st]
+                #
+                # The test is "were arguments emitted for that channel",
+                # i.e. the same source of truth seqapplyreg was given.
+                # Inferring it from a shrunken frame count instead is wrong
+                # in k-sigma mode, where the surviving count cannot be
+                # predicted and therefore always equals the staged one.
+                counts = self._stacked_counts
+                applied = [f for f, (st, _ef) in counts.items()
+                           if self._quality_filter_args(st)]
                 if applied:
                     where = (f"They applied to {', '.join(sorted(applied))} "
                              "(the filters with enough frames).")
-                else:
+                elif not counts:
+                    where = ("No channel was stacked this run, so they did "
+                             "not run either.")
+                elif all(st < FILTER_MIN_FRAMES
+                         for st, _ef in counts.values()):
                     where = (f"They did **not** apply this run — no filter "
                              f"reached {FILTER_MIN_FRAMES} frames, and on "
                              "shorter sets losing a sub costs more "
                              "signal-to-noise than the worst frame costs "
                              "sharpness.")
+                else:
+                    # Enough frames, yet nothing was emitted: the values
+                    # themselves are the reason (100% keeps everything, and
+                    # a setting that would leave fewer than
+                    # MIN_STACK_FRAMES frames is refused).
+                    where = ("They did **not** apply this run — at the "
+                             "values above they would either keep every "
+                             f"frame or leave fewer than {MIN_STACK_FRAMES} "
+                             "frames to integrate.")
                 A("    - **Frame quality filters configured:** "
                   + ", ".join(qf) + f".  {where}")
             if opts.get("crop_edges", True):
@@ -1237,10 +2030,8 @@ class StackWorker(QThread):
             drz = opts.get("drizzle", 1)
             drz_txt = (f" Drizzle **{drz}×** upscaling was applied."
                        if drz and drz > 1 else "")
-            A(("4." if opts.get("bg_extract") else "3.")
-              + f" {frm}{drz_txt}")
-            A(("5." if opts.get("bg_extract") else "4.")
-              + " **Integration** (`stack`):")
+            A(N() + f" {frm}{drz_txt}")
+            A(N() + " **Integration** (`stack`):")
             A("    - **Rejection** is chosen automatically from each filter's "
               "frame count (see the table above) — percentile clipping for "
               "few frames, Winsorized sigma for more, linear-fit for large "
@@ -1254,7 +2045,7 @@ class StackWorker(QThread):
               + (", output-normalized." if opts.get("output_norm", True)
                  else "."))
             if opts.get("bg_master", True):
-                A(("6." if opts.get("bg_extract") else "5.")
+                A(N()
                   + " **Background extraction** (`subsky`, degree 1) — the sky "
                   "gradient was removed from each finished master while still "
                   "linear (gradients differ per filter, so this works better "
@@ -1340,9 +2131,34 @@ class StackWorker(QThread):
         # 5 · Good to know ---------------------------------------------------
         A("## 5 · Good to know")
         A("")
-        A("- **No calibration frames** (darks / flats / bias) were used. "
-          "Without flats you may see some vignetting and dust shadows — "
-          "apply calibration beforehand for the cleanest result.")
+        if reused:
+            # Nothing was stacked this run, so nothing was calibrated either
+            # -- but the reused masters may well be calibrated.  Saying "no
+            # calibration was used" here would be plain wrong.
+            A("- The masters were **reused**, so no calibration ran this "
+              "time. Whether they are calibrated is recorded in the report "
+              "of the run that produced them.")
+        elif not self._calib_notes:
+            A("- **No calibration frames** (darks / flats / bias) were used. "
+              "Without flats you may see some vignetting and dust shadows — "
+              "shoot flats for each filter and re-run for the cleanest "
+              "result.")
+        else:
+            # Filters that were reused weren't calibrated this run either,
+            # so they can't be judged here -- only the freshly stacked ones.
+            skip = set(partial_reuse or ())
+            missing = [f for f in sorted(self._groups)
+                       if f not in skip
+                       and "flat=" not in self._calib_notes.get(f, "")]
+            if missing:
+                one = len(missing) == 1
+                A(f"- **No flat was applied to {', '.join(missing)}** — "
+                  + ("that channel" if one else "those channels")
+                  + " may still show vignetting and dust shadows. Flats are "
+                  "filter-specific, so each filter needs its own set.")
+            A("- The calibration masters that were used are kept in "
+              f"`{CALIB_DIRNAME}/` — delete that folder to force a rebuild on "
+              "the next run.")
         A("- Keep the **linear masters** in `masters/`; you can redo the "
           "processing from any step without re-stacking.")
         if errors:
@@ -1364,24 +2180,44 @@ class StackWorker(QThread):
             "your colour image"
         lum = (f"masters/{os.path.basename(self._separate_lum)}"
                if self._separate_lum else None)
+        # What the finish step REALLY did.  Telling the user "the colour is
+        # already calibrated" when auto-finish was off, or when PCC could not
+        # reach a catalog, would make them skip a step they still need.
+        steps = self._finish_steps
+        pcc_done = any(s.startswith("Photometric Colour Calibration")
+                       for s in steps)
+        bg_done = any(s.startswith("Extracted the background gradient")
+                      for s in steps)
+        nb_done = bool(composite and palette in ("SHO", "HOO")
+                       and self._opts.get("nb_normalize", True))
         S: list[str] = []
         A = S.append
 
         A(f"# 🎨 Final Processing — {target} ({palette})")
         A("")
-        A("Everything the script produced is **linear** and colour-calibrated. "
-          "The steps below are the *creative*, non-linear part — they're yours "
-          "to taste. Do them in **Siril** (or PixInsight / Photoshop / "
+        if not composite:
+            A("**No colour image was produced this run** — what you have is "
+              "one linear master per filter in `masters/`. Combine them "
+              "yourself (Siril: *Image Processing → RGB composition*), or "
+              "re-run with **Compose colour image** enabled. The steps below "
+              "assume a combined image and apply from that point on.")
+            A("")
+        A("Everything the script produced is **linear**"
+          + (" and colour-calibrated." if pcc_done else
+             ", and the colour is **not** calibrated yet (see step 2).")
+          + " The steps below are the *creative*, non-linear part — they're "
+          "yours to taste. Do them in **Siril** (or PixInsight / Photoshop / "
           "Affinity Photo).")
         A("")
         A("> 💡 **Work on a copy**, and keep the linear masters in `masters/` "
           "so you can always redo from any step.")
         A("")
         A("> 📖 New to this? The three stages are always: **(1) flatten the "
-          "background → (2) calibrate colour (already done for you) → "
-          "(3) stretch**, and only *then* the artistic touches. Stretching "
-          "before calibrating ruins the colour, which is why the script "
-          "hands the image over still linear.")
+          "background → (2) calibrate colour"
+          + (" (already done for you)" if pcc_done else " (still to do)")
+          + " → (3) stretch**, and only *then* the artistic touches. "
+          "Stretching before calibrating ruins the colour, which is why the "
+          "script hands the image over still linear.")
         A("")
         A("---")
         A("")
@@ -1389,17 +2225,29 @@ class StackWorker(QThread):
         if palette in ("LRGB", "RGB", "HaRGB"):
             A(f"## Part A — Colour (open `{comp}`)")
             A("")
-            A("1. **Background check.** If a gradient still shows, run "
-              "*Image Processing → Background Extraction* (degree 1, "
-              "**Subtract**). A flat background is essential before stretching.")
-            if palette == "HaRGB":
+            A("1. **Background check.** "
+              + ("A gradient was already removed; if one still shows, run "
+                 if bg_done else
+                 "No background extraction was run on the colour image, so "
+                 "do it now: ")
+              + "*Image Processing → Background Extraction* (degree 1, "
+              "**Subtract**). A flat background is essential before "
+              "stretching.")
+            if pcc_done:
+                A("2. **White balance.** The colour is already "
+                  "**PCC-calibrated** — leave the white balance as it is.")
+            elif palette == "HaRGB":
                 A("2. **White balance.** PCC was **not** applied (the Red "
                   "channel carries Ha, so star photometry is invalid). Set the "
                   "balance by hand: *Image Processing → Color Calibration*, "
                   "pick a neutral background reference.")
             else:
-                A("2. **White balance.** The colour is already "
-                  "**PCC-calibrated** — leave the white balance as it is.")
+                A("2. **White balance — still to do.** Photometric Colour "
+                  "Calibration did **not** run (auto-finish was off, or no "
+                  "photometry catalog was reachable). Plate-solve the image "
+                  "and run *Image Processing → Photometric Color "
+                  "Calibration*, or balance it by hand against a neutral "
+                  "background.")
             A("3. **Stretch.** Use *Histogram Transformation* or *GHS "
               "(Generalised Hyperbolic Stretch)*. Aim for a **neutral grey "
               "background** around 0.10–0.15 and don't clip the bright stars. "
@@ -1448,11 +2296,20 @@ class StackWorker(QThread):
         # Narrowband SHO / HOO
         A(f"## Narrowband (open `{comp}`)")
         A("")
-        A("1. **Starting point.** The channels were already normalized to Ha, "
-          "so the image is balanced — not the pure-green you'd get from a raw "
-          "SHO combine.")
-        A("2. **Background check** *(optional)* — *Image Processing → "
-          "Background Extraction* (degree 1) if a gradient remains.")
+        if nb_done:
+            A("1. **Starting point.** The channels were already normalized to "
+              "Ha, so the image is balanced — not the pure-green you'd get "
+              "from a raw SHO combine.")
+        else:
+            A("1. **Starting point.** The channels were **not** normalized to "
+              "a common reference, so expect one channel — usually the strong "
+              "Ha — to dominate and push the image green. Fix that first with "
+              "per-channel *Curves*, or re-run with **Normalize narrowband "
+              "channels** enabled.")
+        A("2. **Background check**"
+          + (" *(optional)*" if bg_done else "")
+          + " — *Image Processing → Background Extraction* (degree 1) if a "
+          "gradient remains.")
         A("3. **Stretch.** *Histogram* or *GHS*. Keep the background neutral "
           "and dark.")
         A("4. **Colour balance** to the look you want (the classic Hubble "
@@ -1534,6 +2391,12 @@ class StackWorker(QThread):
                         f"Partial reuse: keeping {len(skip)} existing master(s) "
                         f"({', '.join(sorted(skip))}); stacking the rest.",
                         LogColor.GREEN)
+                # Calibration masters are built once for the whole run, not
+                # per filter -- darks and bias are shared across channels.
+                if self._opts.get("calibrate", True) and self._calib:
+                    self.progress.emit(4, "Building calibration masters...")
+                    self._emit("Building calibration masters…", LogColor.GREEN)
+                    self._build_calib_masters()
                 results, errors, last_result = self._stack_all_filters(
                     reuse={f: reusable_full[f] for f in skip})
 
@@ -1571,7 +2434,11 @@ class StackWorker(QThread):
             # Optional: combine the aligned masters into a colour composite.
             composite = None
             composite_load = None
-            if want_compose and len(final_paths) >= 3:
+            # Two masters are enough: HOO feeds the same OIII master into
+            # both Green and Blue.  Demanding three filters here would
+            # refuse the most common narrowband pair outright -- _compose
+            # validates the actual channel mapping and says what is missing.
+            if want_compose and len(final_paths) >= 2:
                 self.progress.emit(90, "Composing colour image...")
                 composite = self._compose(final_paths)
                 composite_load = composite
@@ -1581,8 +2448,8 @@ class StackWorker(QThread):
                     composite_load = self._finish_composite(composite)
             elif want_compose:
                 self._emit(
-                    "Colour composition skipped: need at least 3 filters "
-                    "(R, G, B).", LogColor.SALMON)
+                    "Colour composition skipped: a colour image needs at "
+                    "least two filters (three for R/G/B).", LogColor.SALMON)
 
             # Load the colour composite if we made one, else the last master.
             last = composite_load or (list(final_paths.values())[-1]
@@ -1829,6 +2696,38 @@ class StackWorker(QThread):
             self._emit(f"  Colour composition failed: {exc}", LogColor.RED)
             return None
 
+    def _collect_rejmaps(self, process_dir: str, out_name: str) -> None:
+        """Copy any rejection maps out of _work/ into the qa/ folder.
+
+        ``stack -rejmap`` writes its map(s) beside the stack output, i.e.
+        deep inside _work/ where nobody looks -- and "Delete _work/ when
+        finished" would remove them.  The exact file names differ between
+        Siril versions (low/high maps), so match on the output name plus
+        "rejmap" rather than guessing a fixed suffix.
+        """
+        try:
+            names = [f for f in os.listdir(process_dir)
+                     if "rejmap" in f.lower() and f.startswith(out_name)]
+        except OSError as exc:
+            _log_swallowed(exc)
+            return
+        if not names:
+            self._emit("  Rejection map requested but none was written.",
+                       LogColor.SALMON)
+            return
+        qa_dir = os.path.join(self._out_dir, QA_DIRNAME)
+        os.makedirs(qa_dir, exist_ok=True)
+        for name in names:
+            dst = os.path.join(qa_dir, name)
+            try:
+                if os.path.exists(dst):
+                    os.remove(dst)
+                shutil.copy2(os.path.join(process_dir, name), dst)
+            except OSError as exc:
+                _log_swallowed(exc)
+        self._emit(f"  Rejection map(s) -> {QA_DIRNAME}/"
+                   f"{', '.join(sorted(names))}", LogColor.GREEN)
+
     def _bg_extract_master(self, path: str) -> None:
         """Background-extract a single linear per-filter master, in place."""
         ext = self._ext
@@ -2072,11 +2971,11 @@ class StackWorker(QThread):
         try:
             self._cmd("load", f'"{path}"')
             self._cmd("platesolve")
-            base = path
-            for e in (".fits.fz", ".fit.fz", ".fits", ".fit", ".fts"):
-                if base.lower().endswith(e):
-                    base = base[:-len(e)]
-                    break
+            # Siril appends its own extension, so strip the existing one --
+            # via _fits_ext, which knows the compound forms (.fits.fz ...)
+            # and cannot fall out of step with FITS_EXTS.
+            ext = _fits_ext(path)
+            base = path[:-len(ext)] if ext else path
             self._cmd("save", f'"{base}"')
             self._emit(
                 f"  Plate-solved {os.path.basename(path)}", LogColor.GREEN)
@@ -2227,6 +3126,9 @@ class ImageMonoTrainWindow(QMainWindow):
         self._busy = False
         # Distinct OBJECT names found by the last analysis (>1 = warn).
         self._multi_target: list = []
+        # Calibration library folder (darks / bias) and the last scan result.
+        self._library = ""
+        self._calib: dict = {}
 
         self.init_ui()
         self._load_settings()
@@ -2269,6 +3171,7 @@ class ImageMonoTrainWindow(QMainWindow):
 
         self._build_source_group(layout)
         self._build_filters_group(layout)
+        self._build_calibration_group(layout)
         self._build_options_group(layout)
         self._build_compose_group(layout)
         self._build_output_group(layout)
@@ -2352,6 +3255,136 @@ class ImageMonoTrainWindow(QMainWindow):
 
         parent_layout.addWidget(group)
 
+    def _build_calibration_group(self, parent_layout: QVBoxLayout) -> None:
+        group = QGroupBox("Calibration")
+        layout = QVBoxLayout(group)
+
+        self.chk_calibrate = QCheckBox("Apply calibration when frames exist")
+        self.chk_calibrate.setChecked(True)
+        self.chk_calibrate.setToolTip(
+            "Calibrate the lights before stacking:  Lc = (L − D) / (F − O).\n"
+            "Everything is optional and additive — whatever is found is used, "
+            "the rest is skipped.  Harmless when nothing is there.")
+        _nofocus(self.chk_calibrate)
+        self.chk_calibrate.toggled.connect(self._on_calibrate_toggled)
+        layout.addWidget(self.chk_calibrate)
+
+        lrow = QHBoxLayout()
+        self.btn_library = QPushButton("\U0001F4C1  Library…")
+        _nofocus(self.btn_library)
+        self.btn_library.setToolTip(
+            "Folder holding your reusable DARK and BIAS frames — either raw "
+            "frames (the script stacks them) or ready-made masters.\n"
+            "Flats are NOT taken from here: they belong to the session and "
+            "are found next to your lights.")
+        self.btn_library.clicked.connect(self._pick_library)
+        lrow.addWidget(self.btn_library)
+        self.btn_library_clear = QPushButton("✕")
+        self.btn_library_clear.setFixedWidth(30)
+        self.btn_library_clear.setToolTip("Forget the library folder.")
+        _nofocus(self.btn_library_clear)
+        self.btn_library_clear.clicked.connect(self._clear_library)
+        lrow.addWidget(self.btn_library_clear)
+        layout.addLayout(lrow)
+
+        self.lbl_library = QLabel("No library folder set.")
+        self.lbl_library.setWordWrap(True)
+        self.lbl_library.setStyleSheet("color:#888888;font-size:9pt;")
+        layout.addWidget(self.lbl_library)
+
+        self.lbl_calib_found = QLabel("Analyze a folder to see what is found.")
+        self.lbl_calib_found.setWordWrap(True)
+        self.lbl_calib_found.setStyleSheet("color:#88aaff;font-size:9pt;")
+        layout.addWidget(self.lbl_calib_found)
+
+        self.chk_cosmetic = QCheckBox("Cosmetic correction (hot pixels)")
+        self.chk_cosmetic.setChecked(True)
+        self.chk_cosmetic.setToolTip(
+            "Adds -cc=dark 3 3, which finds hot/cold pixels from the master "
+            "dark's statistics and repairs them.\n"
+            "Needs a matching dark — without one this has no effect.")
+        _nofocus(self.chk_cosmetic)
+        layout.addWidget(self.chk_cosmetic)
+
+        self.chk_flats_by_date = QCheckBox("Match flats to the same night")
+        self.chk_flats_by_date.setChecked(False)
+        self.chk_flats_by_date.setToolTip(
+            "OFF: all flats of a filter are pooled into one master — correct "
+            "for a permanently mounted rig, and less noisy.\n"
+            "ON: only flats from the same date folder as the lights are used "
+            "— pick this if the optical train was changed between nights.")
+        _nofocus(self.chk_flats_by_date)
+        layout.addWidget(self.chk_flats_by_date)
+
+        parent_layout.addWidget(group)
+
+    def _on_filter_mode_changed(self, mode: str) -> None:
+        """Make the quality-filter spin boxes mean what the mode says.
+
+        '% best' takes 1..100 (share of frames kept), 'k-sigma' takes a
+        sigma multiple where anything past ~5 already rejects nothing.  A
+        value left over from the other mode is replaced by that mode's
+        sensible default rather than silently reinterpreted.
+        """
+        k_sigma = mode == "k-sigma"
+        hi, default = (10, 3) if k_sigma else (100, 90)
+        changed = False
+        for spin in getattr(self, "_filter_spins", ()):
+            old = spin.value()
+            spin.setRange(1, hi)
+            if old > hi:
+                spin.setValue(default)
+                changed = True
+            spin.setSuffix(" σ" if k_sigma else " %")
+        # This also runs once during construction, before the Log tab
+        # exists -- and there is nothing to report at that point anyway.
+        if changed and hasattr(self, "log_text"):
+            self._log(
+                f"Filter mode is now '{mode}' — the values were reset to "
+                f"{default}{'σ' if k_sigma else '%'}; they were percentages."
+                if k_sigma else
+                f"Filter mode is now '{mode}' — the values were reset to "
+                f"{default}%; they were sigma multiples.", LogColor.BLUE)
+
+    def _on_calibrate_toggled(self, on: bool) -> None:
+        for w in (self.btn_library, self.btn_library_clear,
+                  self.chk_cosmetic, self.chk_flats_by_date):
+            w.setEnabled(on)
+        # The summary line states what will be applied, so it has to follow
+        # the switch -- otherwise it keeps advertising masters that the run
+        # will now ignore (or claims calibration is off after it was
+        # switched back on).
+        if self._groups:
+            self._show_calib_summary()
+
+    def _set_library(self, path: str) -> None:
+        self._library = path or ""
+        self.lbl_library.setText(self._library or "No library folder set.")
+
+    def _clear_library(self) -> None:
+        """Forget the library AND drop what was found in it.
+
+        Without the re-scan the darks and bias from the old library stay in
+        `self._calib` and would still be applied -- while the panel says
+        "No library folder set."
+        """
+        if not self._library:
+            return
+        self._set_library("")
+        self._log("Calibration library cleared.", LogColor.BLUE)
+        if self._root:
+            self._on_analyze()
+
+    def _pick_library(self) -> None:
+        start = self._library or self._root or os.path.expanduser("~")
+        path = QFileDialog.getExistingDirectory(
+            self, "Select the calibration library folder", start)
+        if path:
+            self._set_library(path)
+            self._log(f"Calibration library: {path}", LogColor.BLUE)
+            if self._root:
+                self._on_analyze()      # re-scan so the library is included
+
     def _build_options_group(self, parent_layout: QVBoxLayout) -> None:
         group = QGroupBox("Stacking Options")
         layout = QVBoxLayout(group)
@@ -2430,6 +3463,13 @@ class ImageMonoTrainWindow(QMainWindow):
         _nofocus(self.cmb_filter_mode)
         row_mode.addWidget(self.cmb_filter_mode, 1)
         layout.addLayout(row_mode)
+        # The spin boxes below carry a different quantity per mode -- a
+        # percentage (1..100) or a sigma multiple (1..10).  Without the
+        # range following the mode, "90" silently becomes "reject beyond
+        # 90 sigma", i.e. no filtering at all, while the UI looks armed.
+        self._filter_spins: list = []
+        self.cmb_filter_mode.currentTextChanged.connect(
+            self._on_filter_mode_changed)
 
         common_tip = (f"\n\nApplied only to filters with at least "
                       f"{FILTER_MIN_FRAMES} frames — on shorter runs losing "
@@ -2453,6 +3493,7 @@ class ImageMonoTrainWindow(QMainWindow):
             row.addWidget(chk, 1)
             row.addWidget(spin)
             layout.addLayout(row)
+            self._filter_spins.append(spin)
             return chk, spin
 
         self.chk_f_wfwhm, self.spin_keep = _filter_row(
@@ -2471,6 +3512,10 @@ class ImageMonoTrainWindow(QMainWindow):
             "Background level",
             "Drop frames with a bright background — moonlight, twilight or "
             "passing headlights.", 90)
+        # The handler only fires on a CHANGE, so the unit suffix has to be
+        # applied once here -- otherwise the boxes show bare numbers until
+        # the mode is toggled for the first time.
+        self._on_filter_mode_changed(self.cmb_filter_mode.currentText())
 
         self.chk_output_norm = QCheckBox("Output normalization")
         self.chk_output_norm.setChecked(True)
@@ -2482,8 +3527,11 @@ class ImageMonoTrainWindow(QMainWindow):
         self.chk_rejmap = QCheckBox("Save rejection map (QA)")
         self.chk_rejmap.setChecked(False)
         self.chk_rejmap.setToolTip(
-            "Also write a map showing which pixels were rejected — handy "
-            "for checking that rejection behaved.")
+            "Also write a map showing which pixels the integration rejected "
+            "— handy for checking that rejection behaved (satellite trails "
+            "should show up, the target should not).\n"
+            f"The maps are collected into the {QA_DIRNAME}/ folder next to "
+            "the masters.")
         _nofocus(self.chk_rejmap)
         layout.addWidget(self.chk_rejmap)
 
@@ -2718,8 +3766,11 @@ class ImageMonoTrainWindow(QMainWindow):
     def _all_setting_widgets(self) -> dict:
         """Every persisted option widget, keyed by its settings name.
 
-        Used by the .json preset export/import so a saved preset covers the
-        whole configuration, not just the handful a built-in profile sets.
+        Used by the .json preset export/import so a saved preset covers every
+        option, not just the handful a built-in profile sets.  Paths are
+        deliberately absent: the calibration library lives on one machine,
+        and baking it into a shared preset would point someone else's run at
+        a folder that does not exist.
         """
         w = {
             "filter_mode": self.cmb_filter_mode,
@@ -2727,6 +3778,9 @@ class ImageMonoTrainWindow(QMainWindow):
             "f_round_val": self.spin_f_round,
             "f_stars_val": self.spin_f_stars,
             "f_bkg_val": self.spin_f_bkg,
+            "calibrate": self.chk_calibrate,
+            "cosmetic": self.chk_cosmetic,
+            "flats_by_date": self.chk_flats_by_date,
             "crop_edges": self.chk_crop_edges,
             "output_norm": self.chk_output_norm,
             "rejmap": self.chk_rejmap,
@@ -2798,7 +3852,12 @@ class ImageMonoTrainWindow(QMainWindow):
         applied, unknown = 0, 0
         self._applying_preset = True          # don't trip "Custom" per widget
         try:
-            for key, value in settings.items():
+            # The filter mode sets the spin boxes' range, so it has to be
+            # applied before their values -- JSON key order is whatever the
+            # file happens to carry.
+            ordered = sorted(settings.items(),
+                             key=lambda kv: kv[0] != "filter_mode")
+            for key, value in ordered:
                 w = widgets.get(key)
                 if w is None:
                     unknown += 1
@@ -2818,8 +3877,12 @@ class ImageMonoTrainWindow(QMainWindow):
                     applied += 1
                 except (TypeError, ValueError):
                     unknown += 1
+            # Every dependent enable-state has to follow the loaded values,
+            # or a preset that switches calibration off leaves its sub-options
+            # clickable and the panel lying about what will run.
             self._on_compose_toggled(self.chk_compose.isChecked())
             self._on_palette_changed()
+            self._on_calibrate_toggled(self.chk_calibrate.isChecked())
             self.chk_disto.setEnabled(self.chk_platesolve_reg.isChecked())
         finally:
             self._applying_preset = False
@@ -3025,9 +4088,11 @@ class ImageMonoTrainWindow(QMainWindow):
         self.chk_skip_blank.setChecked(st.value("skip_blank", True, type=bool))
         self.chk_rejection.setChecked(st.value("rejection", True, type=bool))
         self.chk_weighting.setChecked(st.value("weighting", True, type=bool))
-        self.spin_keep.setValue(int(st.value("f_wfwhm_val", 90)))
+        # Mode BEFORE the values: it decides the spin boxes' range, and a
+        # percentage restored into a k-sigma range would be clamped to 10.
         self.cmb_filter_mode.setCurrentText(
             str(st.value("filter_mode", "% best")))
+        self.spin_keep.setValue(int(st.value("f_wfwhm_val", 90)))
         self.chk_f_wfwhm.setChecked(st.value("f_wfwhm_on", False, type=bool))
         self.chk_f_round.setChecked(st.value("f_round_on", False, type=bool))
         self.spin_f_round.setValue(int(st.value("f_round_val", 90)))
@@ -3049,6 +4114,12 @@ class ImageMonoTrainWindow(QMainWindow):
             st.value("align_filters", True, type=bool))
         self.chk_platesolve_master.setChecked(
             st.value("platesolve_master", False, type=bool))
+        self.chk_calibrate.setChecked(st.value("calibrate", True, type=bool))
+        self.chk_cosmetic.setChecked(st.value("cosmetic", True, type=bool))
+        self.chk_flats_by_date.setChecked(
+            st.value("flats_by_date", False, type=bool))
+        self._set_library(str(st.value("calib_library", "")))
+        self._on_calibrate_toggled(self.chk_calibrate.isChecked())
         self.chk_reuse.setChecked(st.value("reuse_masters", False, type=bool))
         self.chk_load_result.setChecked(st.value("load_result", True, type=bool))
         self.chk_clear_log.setChecked(st.value("clear_log", True, type=bool))
@@ -3096,6 +4167,10 @@ class ImageMonoTrainWindow(QMainWindow):
         st.setValue("copy", self.chk_copy.isChecked())
         st.setValue("align_filters", self.chk_align_filters.isChecked())
         st.setValue("platesolve_master", self.chk_platesolve_master.isChecked())
+        st.setValue("calibrate", self.chk_calibrate.isChecked())
+        st.setValue("cosmetic", self.chk_cosmetic.isChecked())
+        st.setValue("flats_by_date", self.chk_flats_by_date.isChecked())
+        st.setValue("calib_library", self._library)
         st.setValue("reuse_masters", self.chk_reuse.isChecked())
         st.setValue("load_result", self.chk_load_result.isChecked())
         st.setValue("clear_log", self.chk_clear_log.isChecked())
@@ -3273,24 +4348,75 @@ class ImageMonoTrainWindow(QMainWindow):
         if not self._root:
             return
         self._maybe_clear_log()
+        # Drop everything the previous scan produced.  If this analysis fails
+        # (_on_analyze_done never runs), leftovers would otherwise describe
+        # the old folder -- stale calibration masters and a stale
+        # multiple-target warning.
         self._groups = {}
+        self._calib = {}
+        self._multi_target = []
         self.tbl_filters.setRowCount(0)
         self._set_left_enabled(False)
         self.lbl_header.setText(f"Analyzing: {self._root}")
         self._set_status("Scanning for light frames…")
         self._log(f"Analyzing folder: {self._root}", LogColor.BLUE)
 
-        self._analyze_worker = AnalyzeWorker(self._root)
+        # The library is scanned regardless of the "Apply calibration" switch:
+        # that switch decides whether the masters are USED, and tying
+        # discovery to it means toggling it after an analysis leaves _calib
+        # silently incomplete.  Reading a few extra headers is cheap.
+        self._analyze_worker = AnalyzeWorker(self._root, self._library)
         self._analyze_worker.progress.connect(self._on_progress)
         self._analyze_worker.finished.connect(self._on_analyze_done)
         self._analyze_worker.failed.connect(self._on_worker_failed)
         self._analyze_worker.start()
+
+    def _show_calib_summary(self, unsupported: int = 0) -> None:
+        """Report what calibration material the scan turned up."""
+        if unsupported:
+            self._log(
+                f"{unsupported} XISF file(s) found and skipped — that format "
+                "is not supported (its headers cannot be read).",
+                LogColor.SALMON)
+        if not self.chk_calibrate.isChecked():
+            self.lbl_calib_found.setText("Calibration is switched off.")
+            return
+        c = self._calib or {}
+        bits = []
+        for kind, label in ((KIND_FLAT, "flats"),
+                            (KIND_DARKFLAT, "dark-flats"),
+                            (KIND_DARK, "darks"), (KIND_BIAS, "bias")):
+            groups = c.get(kind) or {}
+            if not groups:
+                continue
+            frames = sum(len(g["files"]) for g in groups.values())
+            unit = "filter" if kind in (KIND_FLAT, KIND_DARKFLAT) else "set"
+            plural = "" if len(groups) == 1 else "s"
+            bits.append(f"{label}: {len(groups)} {unit}{plural} "
+                        f"({frames} frames)")
+        if bits:
+            self.lbl_calib_found.setText(" · ".join(bits))
+            self._log("Calibration found — " + " · ".join(bits),
+                      LogColor.GREEN)
+        else:
+            hint = ("" if self._library
+                    else "  Set a Library folder for darks / bias.")
+            self.lbl_calib_found.setText(
+                "No calibration frames found." + hint)
 
     def _on_analyze_done(self, payload: dict) -> None:
         self._groups = payload["groups"]
         self._target = payload["target"]
         total = payload["total"]
         objects = payload.get("objects", [])
+        self._calib = payload.get("calib", {}) or {}
+        self._show_calib_summary(payload.get("unsupported", 0))
+        if payload.get("stray_lights"):
+            self._log(
+                f"{payload['stray_lights']} light frame(s) in the library / "
+                "neighbouring calibration folders were ignored — only "
+                "calibration frames are taken from outside the target "
+                "folder.", LogColor.SALMON)
 
         self._set_left_enabled(True)
 
@@ -3298,16 +4424,18 @@ class ImageMonoTrainWindow(QMainWindow):
         self._populate_compose_combos()
 
         # Frames from two different objects must never be pooled into one
-        # stack -- that silently produces garbage.  Warn loudly.
-        self._multi_target = objects if len(objects) > 1 else []
+        # stack -- that silently produces garbage.  Warn loudly.  Compared
+        # normalised, so "M 101" and "M101" don't raise a false alarm.
+        distinct = {_object_key(o) for o in objects if _object_key(o)}
+        self._multi_target = objects if len(distinct) > 1 else []
         if self._multi_target:
             names = ", ".join(objects)
             self._log(
-                f"WARNING: {len(objects)} different targets found ({names}). "
+                f"WARNING: {len(distinct)} different targets found ({names}). "
                 "Their frames would be stacked together!", LogColor.RED)
             QMessageBox.warning(
                 self, "More than one target in this folder",
-                f"The selected folder contains frames of {len(objects)} "
+                f"The selected folder contains frames of {len(distinct)} "
                 f"different objects:\n\n{names}\n\n"
                 "Stacking them together would combine different parts of "
                 "the sky into one image.\n\n"
@@ -3354,8 +4482,13 @@ class ImageMonoTrainWindow(QMainWindow):
             for f in filters)
         self.info_text.setHtml(
             f"<h2 style='color:#88aaff;'>{self._target}</h2>"
-            f"<p>Scanned <b>{total}</b> FITS file(s) under:<br>"
-            f"<span style='color:#888;'>{self._root}</span></p>"
+            f"<p>Scanned <b>{payload.get('in_target', total)}</b> "
+            "FITS file(s) under:<br>"
+            f"<span style='color:#888;'>{self._root}</span>"
+            + (f"<br>plus <b>{payload['outside']}</b> calibration file(s) "
+               "from the library / neighbouring folders."
+               if payload.get("outside") else "")
+            + "</p>"
             f"<p><b>{len(filters)}</b> optical filter(s) with light frames — "
             f"<b>{total_txt}</b> total integration:</p>"
             f"<table cellspacing='0'>{rows}</table>"
@@ -3391,6 +4524,10 @@ class ImageMonoTrainWindow(QMainWindow):
             palette = _detect_palette(sorted(self._groups.keys()))
 
         return {
+            "calibrate": self.chk_calibrate.isChecked(),
+            "cosmetic": self.chk_cosmetic.isChecked(),
+            "flats_by_date": self.chk_flats_by_date.isChecked(),
+            "calib_library": self._library,
             "skip_blank": self.chk_skip_blank.isChecked(),
             "rejection": self.chk_rejection.isChecked(),
             "weighting": self.chk_weighting.isChecked(),
@@ -3473,7 +4610,7 @@ class ImageMonoTrainWindow(QMainWindow):
 
         self._stack_worker = StackWorker(
             self.siril, self._groups, self._target, out_dir,
-            self._ext, self._current_opts())
+            self._ext, self._current_opts(), self._calib)
         self._stack_worker.progress.connect(self._on_progress)
         # Text-only slot: the worker already logged to the Siril console on
         # its own thread, so the main thread must not touch sirilpy here.
@@ -3728,9 +4865,10 @@ class ImageMonoTrainWindow(QMainWindow):
             "<p>But the script does not depend on the folder names: the "
             "<b>FILTER</b>, <b>IMAGETYP</b> and <b>OBJECT</b> FITS keywords "
             "are the source of truth, with folder names used only as a "
-            "fallback.  Frames whose type is dark / flat / bias are "
-            "ignored.  The same filter spread across several nights is "
-            "pooled into a single stack.</p>"
+            "fallback.  Frames whose type is dark / flat / dark-flat / bias "
+            "are collected separately and used for <b>calibration</b> (see "
+            "the <i>Calibration</i> tab).  The same filter spread across "
+            "several nights is pooled into a single stack.</p>"
             "<p><b>Pick the folder of ONE target.</b>  If the folder holds "
             "frames of several objects (e.g. you picked the date or LIGHT "
             "folder), their frames would end up in the same stack — so the "
@@ -3754,6 +4892,10 @@ class ImageMonoTrainWindow(QMainWindow):
             "<tr><td><b>link / convert</b></td>"
             "<td>FITS frames are linked into a Siril sequence; non-FITS "
             "raws are converted.  Never debayered.</td></tr>"
+            "<tr><td><b>calibrate</b> <i>(optional)</i></td>"
+            "<td>Subtracts the master dark and divides by the master flat "
+            "(plus cosmetic correction).  Runs only for the masters that "
+            "were actually found — see the <i>Calibration</i> tab.</td></tr>"
             "<tr><td><b>seqsubsky</b> <i>(optional)</i></td>"
             "<td>Background / gradient extraction on every sub before "
             "registration.  Off by default.</td></tr>"
@@ -3810,8 +4952,11 @@ class ImageMonoTrainWindow(QMainWindow):
             "errors / wind), <b>Star count</b> (clouds, haze) or "
             "<b>Background level</b> (moonlight, twilight).  "
             "<b>Mode</b> decides how the numbers are read: "
-            "<i>% best</i> keeps that share of the best frames, "
-            "<i>k-sigma</i> rejects beyond k standard deviations.  "
+            "<i>% best</i> keeps that share of the best frames (1–100), "
+            "<i>k-sigma</i> rejects beyond k standard deviations (1–10).  "
+            "Switching the mode re-ranges the boxes, and a value left over "
+            "from the other meaning is reset — 90 as a sigma multiple would "
+            "reject nothing at all.  "
             f"Applied only from <b>{FILTER_MIN_FRAMES} frames</b> per "
             "filter: every dropped sub costs signal-to-noise (noise scales "
             "with 1/√n), and on a short run that loss outweighs what "
@@ -3933,6 +5078,103 @@ class ImageMonoTrainWindow(QMainWindow):
             "still saved.</p>")
         tabs.addTab(tab2, "The Pipeline")
 
+        tab_cal = QTextEdit()
+        tab_cal.setReadOnly(True)
+        tab_cal.setHtml(
+            "<h2 style='color:#88aaff;'>Calibration — Darks, Flats, Bias</h2>"
+            "<p>Calibration removes what the <i>camera and optics</i> add to "
+            "every frame, before any stacking happens.  Siril computes</p>"
+            "<p style='font-family:monospace;color:#aaddaa;"
+            "text-align:center;'>"
+            "Lc = (L − D) / (F − O)</p>"
+            "<p>L = light, D = master dark, F = master flat, O = master "
+            "offset (bias).  Everything is <b>optional and additive</b>: the "
+            "script uses whatever it finds and silently skips the rest — with "
+            "no calibration frames at all it behaves exactly as before.</p>"
+            "<hr>"
+            "<h3 style='color:#88aaff;'>Which frame belongs where</h3>"
+            "<table cellpadding='6' style='width:100%'>"
+            "<tr><td style='width:110px'><b>FLAT</b></td>"
+            "<td><b>Session</b>, one set <i>per filter</i>.  Depends on "
+            "focus, rotation, dust and spacing, so it is only valid until "
+            "the next teardown.  Found next to your lights.</td></tr>"
+            "<tr><td><b>DARK-FLAT</b></td>"
+            "<td><b>Session</b> (library as fallback).  Same exposure and "
+            "gain as the flats; used to offset-correct them.</td></tr>"
+            "<tr><td><b>DARK</b></td>"
+            "<td><b>Library</b>.  Must match exposure, gain, binning and "
+            "temperature — with a cooled camera on a fixed setpoint it stays "
+            "valid for months.</td></tr>"
+            "<tr><td><b>BIAS</b></td>"
+            "<td><b>Library</b>.  Depends only on gain and binning; "
+            "essentially permanent.</td></tr>"
+            "</table>"
+            "<p>The <b>Library…</b> button points at the folder holding your "
+            "reusable darks and bias.  It may contain <i>raw frames</i> (they "
+            "get stacked into masters) or <i>ready-made masters</i> — a group "
+            "of exactly one file is adopted as a master as-is.  Flats are "
+            "never taken from the library; they are session data.</p>"
+            "<hr>"
+            "<h3 style='color:#88aaff;'>How frames are matched</h3>"
+            "<p>Matching runs on <b>FITS headers</b>, not on file names, so "
+            "any naming scheme works.  A master is only used when exposure, "
+            "gain, binning and image dimensions match exactly and the "
+            f"temperature is within <b>±{CALIB_TEMP_TOLERANCE_C:g} °C</b>.  A "
+            "non-matching dark is reported in the log and skipped rather than "
+            "applied — a 60&nbsp;s dark on 300&nbsp;s lights would do real "
+            "damage.  Values missing from a header never block a match.</p>"
+            "<h3 style='color:#88aaff;'>Two rules worth knowing</h3>"
+            "<ul>"
+            "<li><b>Bias is never applied together with a dark.</b>  A master "
+            "dark already contains the offset; subtracting bias as well would "
+            "remove it twice.  <tt>-bias=</tt> is only added when no dark is "
+            "used.</li>"
+            "<li><b>Flats are offset-corrected before stacking.</b>  Real "
+            "bias / dark-flat first; if none exists, Siril's synthetic offset "
+            "<tt>=64*$OFFSET</tt>; and if that is refused too, the flats are "
+            "stacked raw.  Calibration never aborts a run.</li>"
+            "</ul>"
+            "<h3 style='color:#88aaff;'>Options</h3>"
+            "<ul>"
+            "<li><b>Apply calibration when frames exist</b> — master switch.  "
+            "Harmless to leave on when there is nothing to apply.</li>"
+            "<li><b>Cosmetic correction (hot pixels)</b> — adds "
+            "<tt>-cc=dark 3 3</tt>, which locates hot and cold pixels from "
+            "the master dark's own statistics.  Needs a matching dark; "
+            "without one it has no effect.</li>"
+            "<li><b>Match flats to the same night</b> — <i>off</i> pools all "
+            "flats of a filter into one, less noisy master (right for a "
+            "permanently mounted rig); <i>on</i> uses only the flats from the "
+            "same date folder as the lights (right if the optical train was "
+            "changed between nights).</li>"
+            "</ul>"
+            "<h3 style='color:#88aaff;'>Masters and reuse</h3>"
+            f"<p>Every master built is written to <b>output/{CALIB_DIRNAME}/"
+            "</b> with a descriptive name such as "
+            "<span style='font-family:monospace;color:#aaddaa;'>"
+            "M101_RED_-10C_3s_G100_flat</span>, and reused on the next run.  "
+            "Delete that folder to force a rebuild.  The report "
+            "(<tt>output.md</tt>) always lists which master went into which "
+            "filter.</p>"
+            "<h3 style='color:#88aaff;'>How many to shoot</h3>"
+            "<table cellpadding='6' style='width:100%'>"
+            "<tr><td style='width:110px'><b>Bias</b></td>"
+            "<td>50–100, shortest exposure, cap on, per gain.  Once.</td></tr>"
+            "<tr><td><b>Darks</b></td>"
+            "<td>25–30 per exposure × gain × setpoint.  Refresh every few "
+            "months.</td></tr>"
+            "<tr><td><b>Flats</b></td>"
+            "<td>20–40 <i>per filter</i>, after each session and before "
+            "teardown, ~50% histogram.</td></tr>"
+            "<tr><td><b>Dark-flats</b></td>"
+            "<td>20–30, same exposure and gain as the flats, cap on.</td></tr>"
+            "</table>"
+            "<p style='color:#888;'>On a modern low-dark-current sensor "
+            "(e.g. IMX533, no amp glow) flats give by far the biggest "
+            "improvement; darks mainly earn their keep through the cosmetic "
+            "correction.</p>")
+        tabs.addTab(tab_cal, "Calibration")
+
         tab_ref = QTextEdit()
         tab_ref.setReadOnly(True)
         tab_ref.setHtml(
@@ -4046,6 +5288,8 @@ class ImageMonoTrainWindow(QMainWindow):
             "│   └─ TARGET_FILTER_fullframe.fit  full, uncropped stack\n"
             "├─ output.md             exactly what the script did\n"
             "├─ todo.md               step-by-step final processing\n"
+            "├─ calib/                master dark / flat / bias (reused)\n"
+            "├─ qa/                   rejection maps (if enabled)\n"
             "└─ _work/                intermediates — safe to delete\n"
             "    ├─ sequences/  per-filter Siril sequences\n"
             "    ├─ align/      cross-filter alignment\n"
@@ -4065,6 +5309,9 @@ class ImageMonoTrainWindow(QMainWindow):
             "these) and "
             "<span style='font-family:monospace;color:#aaddaa;'>"
             "TARGET_FILTER_fullframe.fit</span> (the full, uncropped stack).</li>"
+            "<li><b>calib/</b> keeps the calibration masters that were built "
+            "(dark, flat per filter, bias).  They are reused by later runs — "
+            "delete the folder to rebuild them.</li>"
             "<li>Everything else lives under <b>_work/</b> — you can delete "
             "that whole folder any time without losing a result.</li>"
             "</ul>"
@@ -4073,10 +5320,10 @@ class ImageMonoTrainWindow(QMainWindow):
             "<ul>"
             "<li>A filter needs at least <b>2</b> light frames to register "
             "and stack; single-frame filters are skipped.</li>"
-            "<li>This release stacks <b>lights only</b> (no dark / flat / "
-            "bias calibration).  Without flats, expect some vignetting and "
-            "dust shadows — apply calibration beforehand, or keep "
-            "master-calibrated lights in the folder, for the best result.</li>"
+            "<li><b>Flats matter most.</b>  Without them expect vignetting "
+            "and dust shadows, and PCC will keep complaining about a "
+            "gradient.  Shoot 20–40 per filter after each session and drop "
+            "them next to your lights — see the <b>Calibration</b> tab.</li>"
             "<li>The colour composite is produced for you (see the "
             "<b>Palettes</b> tab).  The remaining <b>stretch</b> and, for "
             "LRGB, the final <b>luminance combine</b> are yours — they are "
