@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.3.0
+Script Version: 1.4.0
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,9 +73,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.3.0
+# Script Version: 1.4.0
 # Siril Version: 1.4.0
-# Python Module Version: 1.3.0
+# Python Module Version: 1.4.0
 # Script Category: preprocessing
 # Script Description: Point it at a N.I.N.A. target folder; it discovers the
 #   light frames per optical filter, calibrates them with whatever darks,
@@ -87,6 +87,129 @@ SPDX-License-Identifier: GPL-3.0-or-later
 # Script Author: Sven Ramuschkat
 
 CHANGELOG:
+1.4.0 - Per-palette stacking, and a report that matches the run
+      - "Finish: calibrated composite saved" was printed unconditionally,
+        two log entries after "colour calibration skipped for HaRGB
+        (Ha-boosted Red)".  The same claim went into the report as "Saved
+        the calibrated, still-LINEAR composite".  Both now key on the
+        success line, so a skipped or failed calibration reads as
+        "composite (uncalibrated)"
+      - Switching "Normalize narrowband channels" off while narrowband
+        SPCC is on is the recommended pairing, and `todo.md` was calling
+        it a defect: "the channels were **not** normalized ... re-run with
+        Normalize narrowband channels enabled" -- which would undo the
+        calibration the reader had just been advised to get.  That branch
+        now only fires when no narrowband SPCC ran.  Measured on two
+        M 16 runs differing only in that option: R/G sigma 2.64 with it
+        off against 2.73 with it on, and the fitted slope 1.209 against
+        1.251 (closer to 1 = less correction needed).  Real, but far
+        smaller than the alignment effect
+      - The "try another palette in seconds" tip contradicted the line
+        directly above it, which had just explained that the skipped
+        filters were never stacked and that another palette therefore
+        needs a full re-run.  It is now suppressed in exactly that case.
+        The narrowband version also offered to "try HOO" at the end of a
+        HOO run; it names the other narrowband palette instead
+      - A run that produces no composite no longer reads as if it had.
+        The report opened with "The script stacked each filter, aligned the
+        channels, and combined them into a colour image" three sections
+        above "No colour composite was produced this run", and section 4
+        called that absent image "this image".  In `todo.md` the
+        narrowband step told the reader to re-run with "Normalize
+        narrowband channels" enabled -- an option that was already on and
+        had nothing to do with it: normalization is part of the
+        composition, and there was none
+      - The stale-master warning no longer claims the leftovers share one
+        grid.  After four palette-only runs, `masters/` held HA, LUMINOS
+        and OIII from three different runs on three different canvases,
+        and the warning said "that run's grid" as if there were one
+      - Section 4 names the calibration that actually ran instead of
+        always saying "PCC", which contradicted the "Colour calibration:
+        SPCC" line three paragraphs above it
+      - "Quick linear LRGB" is now carried into both documents, not just
+        the log.  The report said "luminance baked in linearly" and then
+        "Colour calibration: SPCC" with nothing connecting them, and
+        todo.md claimed the script "keeps L separate automatically" --
+        the exact opposite of what the option had just done -- and told
+        the reader to leave the white balance alone.  Measured on two
+        M 16 runs over the same R/G/B masters, differing only in that
+        option: SPCC dropped 531 of 2597 stars as "pixel out of range"
+        with L baked in, against 68 of 2603 without.  1057 stars carried
+        the solution instead of 1484, and both fits came out worse
+        (R/G sigma 1.33 against 1.15, B/G 0.35 against 0.32)
+      - The stale-master warning is emitted after the LAST row of the
+        folder table, not after the `output.md` row.  A blockquote between
+        two rows ends a Markdown table, so `todo.md` and `qa/` were
+        rendered as loose text below it
+      - The skipped-filter messages agree in number.  A HaRGB run leaves
+        out exactly one channel and reported "OIII are not read by this
+        palette"; the log line, the report bullet, the stale-master
+        warning and both todo tips hard-coded the plural
+      - The two documents no longer describe work the palette skipped.
+        `output.md` said "For **every filter**, the raw lights were turned
+        into one master light" two lines above the note listing the four
+        filters it had not touched, claimed "all masters were pooled" for
+        an alignment over two of six, and credited plate-solving to every
+        master.  Its file table promised that `masters/*.fit` share one
+        grid while the folder still held four channels from an earlier
+        alignment on a different one -- now flagged, with the reason and
+        the way out.  `todo.md` told the reader to trust an SPCC baseline
+        that `output.md` flags as self-defeating, and offered a palette
+        swap "in seconds" from masters that were never built
+      - Full master reuse is refused when the aligned masters are not all
+        the same size.  `-framing=min` crops to the intersection of
+        whatever was in the alignment sequence, so a run that aligns a
+        subset (see the option below) leaves the other channels on the
+        previous grid; reusing the mix would hand `rgbcomp` channels of
+        different dimensions.  Partial reuse is unaffected -- the
+        fullframe masters it keeps predate alignment
+      - The run no longer opens with "Stacking N filter(s)" and then skips
+        four of them one line later.  It reports what was discovered, and
+        the worker -- the only part that knows -- reports what is stacked
+      - New option "Stack only the filters this palette uses" (off by
+        default).  An LRGB night processed as HOO stacked four masters the
+        composite never opened.  Besides the time, it cost quality: the
+        cross-filter alignment hands every master to Siril's two-pass
+        registration, which picks the reference itself -- `setref` cannot
+        override it, its help says -2pass exists to "find a good reference
+        image" -- and a star-rich broadband master wins.  The narrowband
+        channels then match a frame whose stars they do not share: on one
+        M 16 run OIII aligned on 12 star pairs and Ha on 22, against
+        188-476 for the broadband masters.  The set is derived from the
+        channel mapping rather than the palette name, so it cannot
+        disagree with what `_compose` reads; skipping is refused when the
+        palette has an unfillable channel anyway, and when no composite is
+        being made at all -- greying the box out with the rest of the
+        compose group is cosmetic, a saved preset can still arrive with
+        both set, and without a composite nothing reads a palette
+      - `register -2pass` and `seqapplyreg` no longer share one `try`.
+        They fail for unrelated reasons and only the first one is about
+        two-pass support: a frame the cloud-sync folder had not finished
+        materialising was reported as "2-pass registration unavailable"
+        although registration had just succeeded on all six frames, and
+        the retry then used a command that silently drops framing,
+        drizzle and every quality filter -- `register` alone accepts
+        neither -framing= nor any -filter-*.  Each failure now gets its
+        own message and its own fallback, what could not be honoured is
+        recorded per channel, and the report says which master was not
+        built the way the options describe
+      - SPCC sends the mono sensor in narrowband mode too.  Siril's help
+        says -narrowband makes it ignore "the previous filter arguments"
+        -- filters only -- and its usage grammar keeps -monosensor= in a
+        separate group, because the sensor's quantum efficiency at 656 and
+        501 nm is an independent factor.  Leaving it out never failed; it
+        silently used whatever sensor Siril's own dialog last held, which
+        on a fresh install is an OSC one.  The filter names are now
+        omitted there on purpose, and the log says so, because Siril
+        echoes its stored names on every run and they look like ours
+      - "Normalize narrowband channels" and SPCC's narrowband mode are
+        flagged when both are on.  They balance the same thing by opposite
+        means: linear_match flattens the Ha / OIII flux ratio on purpose,
+        and that ratio is precisely what SPCC measures against catalogue
+        spectra.  Observed on one HOO run: R/G fit sigma 5.8, against 1.4
+        for a broadband composite of the same night.  Log, report, tooltip
+        and help now say which one to switch off
+
 1.3.0 - Colour calibration, rejection and background modelling
       - SPCC (Spectrophotometric Colour Calibration) replaces PCC as the
         preferred method: it accounts for the sensor's and filters'
@@ -146,6 +269,17 @@ CHANGELOG:
         saturate and drop out of the fit (measured on one dataset:
         1107 -> 1531 stars excluded, 69 -> 522 of them saturated, R/G fit
         sigma 0.61 -> 0.77)
+      - The palette warning is logged after the filter list it refers to,
+        and no longer carries Markdown emphasis: the Log tab renders plain
+        text, so "**LRGB**" showed up with its asterisks
+      - A palette the discovered filters cannot fill is caught when it is
+        CHOSEN, not after a full run: picking SHO without an SII filter
+        used to stack, align and plate-solve everything and only then say
+        "no aligned master mapped to the RED channel" -- baffling wording
+        when a RED filter plainly exists, because SHO wants SII there.
+        The message now names what the palette expects and which palette
+        would work, and a run that was asked for a colour image and did
+        not produce one no longer reports "All done ... 0 failed"
       - The SPCC database location is asked for via sirilpy
         (get_siril_userdatadir) instead of only guessing per-platform
         paths, which would miss a Flatpak / Snap / Store build entirely.
@@ -379,7 +513,7 @@ from PyQt6.QtGui import QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -842,6 +976,26 @@ def _signature_matches(master: dict, target: dict) -> bool:
     return True
 
 
+def _mixed_grids(paths: dict) -> dict:
+    """``{filter: (w, h)}`` when the aligned masters disagree on size.
+
+    Empty when they all match, or when no size could be read -- an
+    unreadable header is not evidence of a mismatch, and refusing reuse
+    over one would be worse than the mismatch it is guarding against.
+    """
+    dims: dict = {}
+    for filt, path in paths.items():
+        header = _read_header(path)
+        if header is None:
+            continue
+        try:
+            dims[filt] = (int(header.get("NAXIS1", 0)),
+                          int(header.get("NAXIS2", 0)))
+        except (ValueError, TypeError):
+            continue
+    return dims if len(set(dims.values())) > 1 else {}
+
+
 def _inspect(path: str) -> dict:
     """Read a FITS header ONCE and return everything discovery needs.
 
@@ -1238,6 +1392,13 @@ class StackWorker(QThread):
         # count in _stacked_counts is no longer the one the decision was
         # made on, and re-deriving from it flips the answer.
         self._qf_decision: dict = {}
+        # Filters left unstacked because the palette does not read them.
+        self._skipped_by_palette: list = []
+        # filter -> registration options that could not be honoured.
+        # Empty is the normal case; a non-empty entry means the master
+        # differs from what the options say, and the report must not
+        # describe it as if they had run.
+        self._reg_degraded: dict = {}
         # Set when drizzle ran on a set too small to fill its finer grid.
         self._drizzle_warned = False
         # Siril's data directory, asked for once (None = not asked yet).
@@ -1396,7 +1557,7 @@ class StackWorker(QThread):
             _log_swallowed(exc)
             return 0
 
-    def _register(self, seq: str) -> str:
+    def _register(self, seq: str, filt: str) -> str:
         """Register the sequence; return the resulting sequence name."""
         drizzle = self._opts.get("drizzle", 1)
         # -framing=min keeps only the area covered by ALL sub-frames, so the
@@ -1460,16 +1621,73 @@ class StackWorker(QThread):
                     f"  Plate-solve registration failed ({exc}); "
                     "falling back to star alignment.", LogColor.SALMON)
 
-        # Star-based two-pass registration.
+        # Star-based two-pass registration.  The two commands get their own
+        # scopes because they fail for unrelated reasons, and only one of
+        # those reasons has anything to do with two-pass support.  Sharing
+        # one `try` diagnosed a frame that the cloud-sync folder had not
+        # finished materialising as "2-pass registration unavailable" --
+        # registration had in fact just succeeded on all six frames -- and
+        # then retried with a command that quietly drops framing, drizzle
+        # and every quality filter.
         try:
             self._cmd("register", seq, "-2pass")
-            self._cmd(*apply_args)
         except (CommandError, DataError, SirilError) as exc:
             self._emit(
                 f"  2-pass registration unavailable ({exc}); "
                 "using single-pass global registration.", LogColor.SALMON)
-            self._cmd("register", seq)
+            self._single_pass(seq, filt, drizzle)
+            return f"r_{seq}"
+        try:
+            self._cmd(*apply_args)
+        except (CommandError, DataError, SirilError) as exc:
+            # Registration succeeded, so this is not about two-pass.  Retry
+            # without the optional extras -- an older Siril may not know
+            # -framing= or a -filter- flag -- and only then give up.
+            self._emit(
+                f"  Applying the registration failed ({exc}); retrying "
+                "without framing and quality filters.", LogColor.SALMON)
+            extras = [a for a in apply_args[2:] if not a.startswith("-scale=")
+                      and a not in ("-drizzle", "-pixfrac=1.0",
+                                    "-kernel=square")]
+            self._cmd(*[a for a in apply_args if a not in extras])
+            self._note_reg_degraded(filt, extras)
         return f"r_{seq}"
+
+    def _single_pass(self, seq: str, filt: str, drizzle: int) -> None:
+        """Register and export in one step, when two-pass is unavailable.
+
+        `register` carries -scale= and -drizzle but knows neither -framing=
+        nor any -filter-* option, so this path cannot honour the crop or the
+        quality filters however they are set.  It says so and records it,
+        because a report that still claimed them would describe a master
+        that was never built that way.
+        """
+        args = ["register", seq]
+        if drizzle and drizzle > 1:
+            args += [f"-scale={drizzle}", "-drizzle",
+                     "-pixfrac=1.0", "-kernel=square"]
+        self._cmd(*args)
+        self._note_reg_degraded(
+            filt, ["-framing=", "quality filters"],
+            "single-pass `register` supports neither")
+
+    def _note_reg_degraded(self, filt: str, dropped: list,
+                           why: str = "this Siril rejected") -> None:
+        """Record registration options that did not actually run.
+
+        The quality-filter decision is rewritten to "did not fire" so the
+        report cannot go on naming filters that never reached Siril.
+        """
+        if not dropped:
+            return
+        names = [d for d in dropped if not d.startswith("-scale=")]
+        self._reg_degraded[filt] = names
+        if any("filter" in d for d in names):
+            n, _fired = self._qf_decision.get(filt,
+                                              (self._current_n_frames, True))
+            self._qf_decision[filt] = (n, False)
+        self._emit(f"  {filt}: {why} {', '.join(names)} — the master was "
+                   "built without them.", LogColor.SALMON)
 
     def _effective_frame_count(self, n_frames: int) -> int:
         """Frames expected to survive the quality filters.
@@ -1841,6 +2059,80 @@ class StackWorker(QThread):
             self._calib_notes[filt] = ", ".join(used)
         return args
 
+    def _unused_by_palette(self, filters: list) -> set:
+        """Filters to leave unstacked, when the user asked for that.
+
+        Off by default, because a master that was never built cannot be
+        reused for a different palette later.  Skipping is also refused
+        whenever the palette has a channel it cannot fill: the composite
+        stops there in any case, and the filters that would be left out
+        are the only thing that lets the night be salvaged with a
+        different palette.  That check doubles as the guarantee that at
+        least two masters survive, which the cross-filter alignment needs
+        -- one filter can fill at most two of R/G/B (OIII under HOO), so a
+        palette with all three channels filled always names two or more.
+
+        The side effect is the point as much as the time saved.  Siril's
+        two-pass registration picks the alignment reference itself, from
+        whatever is in the sequence -- `setref` cannot override it, its own
+        help says -2pass "adds a preliminary pass ... to find a good
+        reference image".  With every filter in that pool a broadband
+        master usually wins, and the narrowband channels then have to match
+        a spectrally unrelated frame: on one M 16 run OIII matched on 12
+        star pairs and Ha on 22, against 188-476 for the broadband masters.
+        Leaving the unused filters out puts only the composite's own
+        channels in the pool, so the reference is one of them.
+        """
+        if not self._opts.get("palette_only", False):
+            return set()
+        if not self._opts.get("compose", False):
+            # Greying the box out when composition is off is cosmetic; a
+            # saved preset can still arrive with both set.  Without a
+            # composite there is no palette reading anything, so skipping
+            # would drop masters on behalf of a picture that is never made.
+            self._emit(
+                "  Stacking every filter: 'Stack only the filters this "
+                "palette uses' needs a colour composite to have a palette "
+                "to go by, and that is switched off.", LogColor.SALMON)
+            return set()
+        wanted = _palette_filters(self._opts, filters)
+        if not wanted:
+            self._emit(
+                "  Stacking every filter: the channel mapping does not name "
+                "any of the discovered filters, so there is nothing reliable "
+                "to skip.", LogColor.SALMON)
+            return set()
+        skip = {f for f in filters if f not in wanted}
+        if not skip:
+            return set()
+        # Refuse when the palette cannot be completed anyway.  Skipping
+        # would then trade six usable masters for two and no picture --
+        # the composite is going to stop at the empty channel either way,
+        # and the filters left out are the only thing that would let the
+        # user salvage the night with another palette.
+        palette = self._opts.get("compose_palette", "RGB")
+        if palette == "Auto":
+            palette = _detect_palette(filters)
+        empty = _unfillable_channels(sorted(wanted), palette)
+        if empty:
+            self._emit(
+                f"  Stacking every filter: {palette} cannot fill "
+                f"{', '.join(empty)} from the filters found, so the "
+                "composite will stop there anyway — the other masters are "
+                "worth more than the time saved.", LogColor.SALMON)
+            return set()
+        self._skipped_by_palette = sorted(skip)
+        self._emit(
+            f"Stacking {len(wanted)} of {len(filters)} filters: "
+            f"{', '.join(sorted(wanted))}.  "
+            f"{', '.join(sorted(skip))} "
+            + _plural(skip, "is not read", "are not read")
+            + " by this palette, and leaving "
+            + _plural(skip, "it", "them")
+            + " out also keeps the alignment reference among the channels "
+            "that end up in the picture.", LogColor.BLUE)
+        return skip
+
     def _stack_all_filters(self, reuse: dict | None = None
                            ) -> tuple[dict, dict, str | None]:
         """Stack every discovered filter into a per-filter master.
@@ -1855,6 +2147,9 @@ class StackWorker(QThread):
         errors: dict[str, str] = {}
         last_result = None
         filters = list(self._groups.keys())
+        skip = self._unused_by_palette(filters)
+        if skip:
+            filters = [f for f in filters if f not in skip]
         n_f = len(filters)
 
         for fi, filt in enumerate(filters):
@@ -1939,7 +2234,7 @@ class StackWorker(QThread):
                 self._qf_decision[filt] = (
                     n_linked, bool(self._quality_filter_args(n_linked)))
                 self._emit("  Registering frames...", LogColor.BLUE)
-                seq = self._register(seq)
+                seq = self._register(seq, filt)
 
                 # Registration itself can drop frames -- a sub with no
                 # detectable stars (clouds, a passing veil) simply fails to
@@ -2060,10 +2355,14 @@ class StackWorker(QThread):
             A(f"- **Preset:** {opts['preset']}")
         A("")
         A("This folder was produced automatically from your N.I.N.A. light "
-          "frames. The script stacked each filter, aligned the channels, and "
-          "combined them into a colour image. **Every image here is still "
-          "_linear_** (not stretched) — the final, creative processing is up "
-          "to you and is described in **[`todo.md`](todo.md)**.")
+          "frames. The script stacked each filter"
+          + (", aligned the channels, and combined them into a colour image."
+             if comp_name else
+             " and aligned the channels; **no colour image was produced** "
+             "this run \u2014 see 3.3 for why.")
+          + " **Every image here is still _linear_** (not stretched) — the "
+          "final, creative processing is up to you and is described in "
+          "**[`todo.md`](todo.md)**.")
         A("")
         A("---")
         A("")
@@ -2078,6 +2377,15 @@ class StackWorker(QThread):
               "calibrated. **Start here.** |")
         A("| `masters/…_<FILTER>.fit` | Per-channel master, **aligned** to a "
           "common grid — use these to combine channels. |")
+        # Only the channels THIS run aligned share a grid.  Aligned masters
+        # of skipped filters are still on disk from an earlier run, and
+        # -framing=min gave that run a different canvas -- so the folder
+        # now holds two grids that must not be combined.
+        stale = sorted(
+            f for f in self._skipped_by_palette
+            if os.path.exists(os.path.join(
+                self._out_dir, MASTERS_DIRNAME,
+                f"{_safe(self._target)}_{self._tok(f)}{self._ext}")))
         A("| `masters/…_<FILTER>_fullframe.fit` | The same channel at "
           "**full, uncropped** size. |")
         A("| `_work/` | All intermediate files. **Safe to delete** any "
@@ -2090,6 +2398,23 @@ class StackWorker(QThread):
         if opts.get("rejmap"):
             A(f"| `{QA_DIRNAME}/` | Rejection maps — which pixels the "
               "integration threw away. |")
+        # After the LAST row: a blockquote between two rows ends the table
+        # and orphans everything below it.
+        if stale:
+            A("")
+            A("> ⚠️ `masters/` also holds aligned "
+              + ", ".join(stale)
+              + _plural(stale, " from an **earlier run**.  That one "
+                               "carries the grid of the run that wrote it",
+                        " from **earlier runs**.  Each carries the grid of "
+                        "the run that wrote it")
+              + ", which need not be this one\u2019s or each "
+              "other\u2019s — `-framing=min` crops to the intersection of "
+              "whatever was aligned together, and every run aligns the set "
+              "its palette asked for.  Combining them with the channels "
+              "above would mismatch.  Re-run with *Stack only the filters "
+              "this palette uses* switched **off** to put every channel back "
+              "on one grid.")
         A("")
         A("---")
         A("")
@@ -2125,6 +2450,11 @@ class StackWorker(QThread):
                 total_exp += exp
                 A(f"| {filt} | {n} | _reused_ | {_format_duration(exp)} "
                   "| _(earlier run)_ |")
+                continue
+            if filt in self._skipped_by_palette:
+                A(f"| {filt} | {n} | _not stacked_ | — | _the "
+                  f"{opts.get('compose_palette', 'RGB')} palette does not "
+                  "read this filter_ |")
                 continue
             if filt not in produced:
                 # A Siril message may contain a pipe, which would tear the
@@ -2168,8 +2498,10 @@ class StackWorker(QThread):
             A(f"| {filt} | {n} | {used} | {_format_duration(exp_used)} "
               f"| {rej_label} |")
         A("")
-        A(f"**Total:** {total} light frame(s) found across "
-          f"{len(self._groups)} filter(s) — "
+        A(f"**Total:** {total} light "
+          + _plural(range(total), "frame", "frames") + " found across "
+          + f"{len(self._groups)} "
+          + _plural(self._groups, "filter", "filters") + " — "
           f"**{_format_duration(total_exp)}** integrated"
           + (" (reused masters counted with the frames they were built from)."
              if reused_set else "."))
@@ -2179,7 +2511,10 @@ class StackWorker(QThread):
               "frames were dropped, **registration could not align a sub** "
               "(too few detectable stars — clouds or haze), or the quality "
               "filters removed frames.  The rejection algorithm was chosen "
-              "for that smaller number.")
+              "for that smaller number."
+              + ("  Rows reading *not stacked* were skipped on purpose — "
+                 "see the note under 3.1." if self._skipped_by_palette
+                 else ""))
         if any_estimated:
             A("")
             A("> Counts marked **≈** are what the quality filters are "
@@ -2223,8 +2558,10 @@ class StackWorker(QThread):
         if not reused:
             A("### 3.1 · Building each channel master")
             A("")
-            A("For **every filter**, the raw lights were turned into one "
-              "master light:")
+            A(("For **every filter**, " if not self._skipped_by_palette
+               else f"For the {len(produced)} filters that were stacked "
+                    f"({', '.join(sorted(produced))}), ")
+              + "the raw lights were turned into one master light:")
             A("")
             # The list of steps is conditional (calibration, per-sub
             # background), so the numbers come from a counter -- hard-coded
@@ -2235,6 +2572,21 @@ class StackWorker(QThread):
                 _step[0] += 1
                 return f"{_step[0]}."
 
+            if self._skipped_by_palette:
+                A(N() + " **Filter selection** — *Stack only the filters "
+                  "this palette uses* was on, so "
+                  + ", ".join(self._skipped_by_palette)
+                  + _plural(self._skipped_by_palette,
+                            " was", " were")
+                  + " left unstacked.  Besides the time saved, this "
+                  "keeps the cross-filter alignment reference among the "
+                  "channels that end up in the picture: Siril's two-pass "
+                  "registration picks that reference itself, from whatever "
+                  "masters are in the sequence, and a broadband one "
+                  "normally wins — which leaves the narrowband channels "
+                  "matching a spectrally unrelated frame.  Re-run with the "
+                  "box off to build the missing masters for another "
+                  "palette.")
             A(N() + " **Staging & linking** — the frames were linked into a "
               "Siril sequence (`link`). Compressed `.fits.fz` files are read "
               "directly, and nothing is ever debayered (this is a mono "
@@ -2334,6 +2686,16 @@ class StackWorker(QThread):
             drz_txt = (f" Drizzle **{drz}×** upscaling was applied."
                        if drz and drz > 1 else "")
             A(N() + f" {frm}{drz_txt}")
+            if self._reg_degraded:
+                # Naming the channels matters: the others really were built
+                # with the framing and filters described above, and lumping
+                # them together would understate those.
+                for f in sorted(self._reg_degraded):
+                    A(f"    - \u26a0\ufe0f **{f}** was registered without "
+                      + ", ".join(self._reg_degraded[f])
+                      + ".  Siril refused the full argument set for this "
+                      "channel and it fell back to a smaller one, so the "
+                      "line above does not describe this master.")
             if self._drizzle_warned:
                 A(f"    - ⚠️ Drizzle ran on fewer than {DRIZZLE_MIN_FRAMES} "
                   "frames. It spreads each sub's flux over a finer grid, so "
@@ -2385,10 +2747,13 @@ class StackWorker(QThread):
             if did_align:
                 A("### 3.2 · Aligning the channels to each other")
                 A("")
+                n_al = len(final_paths)
                 A("Each filter is stacked against its *own* reference, so the "
                   "masters can sit on slightly different pixel grids — the "
-                  "colour channels wouldn't line up. To fix that, all masters "
-                  "were pooled and re-registered onto **one common grid** "
+                  "colour channels wouldn't line up. To fix that, "
+                  + (f"the {n_al} stacked masters were"
+                     if self._skipped_by_palette else "all masters were")
+                  + " pooled and re-registered onto **one common grid** "
                   "(`seqapplyreg -framing=min`), producing **pixel-identical** "
                   "channels:")
                 A("")
@@ -2396,8 +2761,12 @@ class StackWorker(QThread):
                   "image).")
                 A("")
         if opts.get("platesolve_master"):
-            A("The per-filter masters were also **plate-solved** (a WCS / sky "
-              "coordinate solution was written into each).")
+            A(("The per-filter masters were also"
+               if not self._skipped_by_palette else
+               f"The {len(final_paths)} masters this run produced were "
+               "also")
+              + " **plate-solved** (a WCS / sky coordinate solution was "
+              "written into each).")
             A("")
 
         if composite:
@@ -2415,6 +2784,14 @@ class StackWorker(QThread):
                 A("- **Normalized** the channels to the Ha reference "
                   "(`linear_match`) first, so the strong Ha doesn't dominate "
                   "and turn the result green.")
+                if any(s.startswith("Colour calibration: SPCC")
+                       for s in self._finish_steps):
+                    A("    - ⚠️ SPCC also calibrated this image. The two "
+                      "overlap: normalisation flattens the line ratio on "
+                      "purpose, and SPCC's narrowband mode calibrates that "
+                      "very ratio against catalogue spectra. Switch "
+                      "**Normalize narrowband channels** off to let SPCC "
+                      "work on the physical ratio.")
             if palette == "HaRGB":
                 A(f"- **Blended Ha into Red** at "
                   f"{int(opts.get('ha_strength', 50))}% (a PixelMath screen "
@@ -2423,6 +2800,18 @@ class StackWorker(QThread):
             A("- **Combined** the channels with `rgbcomp`"
               + (" (luminance baked in linearly — the *quick* mode)." if baked
                  else "."))
+            if baked and any(s.startswith("Colour calibration: SPCC")
+                             or s.startswith("Colour calibration: PCC")
+                             for s in self._finish_steps):
+                # Same shape as the narrowband note above: an option that
+                # works against the calibration that follows it.
+                A("    - ⚠️ The colour was calibrated **after** that.  "
+                  "Baking L in linearly lifts the star cores over the top "
+                  "of the range, and photometry can only use stars it can "
+                  "still measure — Siril reports the count it dropped as "
+                  "*pixel out of range*.  Untick **Quick linear LRGB** to "
+                  "calibrate the RGB alone and combine L after stretching "
+                  "(`todo.md` walks through it).")
             if self._separate_lum:
                 A(f"- The **luminance** master "
                   f"(`masters/{os.path.basename(self._separate_lum)}`) was "
@@ -2447,12 +2836,20 @@ class StackWorker(QThread):
         # 4 · Linear note ----------------------------------------------------
         A("---")
         A("")
-        A("## 4 · Important — this image is still _linear_")
+        A("## 4 · Important — "
+          + ("this image is" if comp_name else "these masters are")
+          + " still _linear_")
         A("")
+        which = ("SPCC" if any(s.startswith("Colour calibration: SPCC")
+                               for s in self._finish_steps) else "PCC")
         A("A linear image looks almost black: the faint galaxy / nebula "
-          "signal sits just above the background. Colour calibration (PCC) "
-          "**must** run on linear data, which is why the script stops here. "
-          "The next step — **stretching** — is creative and best done by eye.")
+          "signal sits just above the background. Colour calibration "
+          f"({which}) **must** run on linear data, which is why "
+          + ("the script stops here" if comp_name else
+             "the masters are handed over untouched \u2014 combine them "
+             "first, then calibrate, and only then stretch")
+          + ". The next step — **stretching** — is creative and best done "
+          "by eye.")
         A("")
         A("👉 Open **[`todo.md`](todo.md)** for a step-by-step guide.")
         A("")
@@ -2520,6 +2917,12 @@ class StackWorker(QThread):
                       for s in steps)
         nb_done = bool(composite and palette in ("SHO", "HOO")
                        and self._opts.get("nb_normalize", True))
+        # Narrowband SPCC ran instead of the normalization -- the intended
+        # pairing, and the reason the advice below must not be "switch
+        # normalization back on".
+        nb_spcc = bool(composite and palette in ("SHO", "HOO")
+                       and any(s.startswith("Colour calibration: SPCC")
+                               and "narrowband" in s for s in steps))
         S: list[str] = []
         A = S.append
 
@@ -2563,7 +2966,15 @@ class StackWorker(QThread):
               + "*Image Processing → Background Extraction* (degree 1, "
               "**Subtract**). A flat background is essential before "
               "stretching.")
-            if pcc_done:
+            if pcc_done and palette == "LRGB" and self._opts.get(
+                    "quick_lrgb"):
+                A("2. **White balance.** The colour was "
+                  "**photometrically calibrated**, but *Quick linear LRGB* "
+                  "had already baked the luminance in, so the brightest "
+                  "stars were clipped and could not be measured.  Treat the "
+                  "balance as good-but-approximate, and re-run with that "
+                  "option off if the colour looks off.")
+            elif pcc_done:
                 A("2. **White balance.** The colour is already "
                   "**photometrically calibrated** — leave the white balance "
                   "as it is.")
@@ -2618,10 +3029,26 @@ class StackWorker(QThread):
             A("---")
             A("")
             A("### Tips")
-            A("- To reuse an existing luminance next time, keep the palette on "
-              "**LRGB** — the script keeps L separate automatically.")
-            A("- Re-run with **Reuse existing masters** ticked to try another "
-              "palette in seconds (no re-stacking).")
+            if self._separate_lum:
+                A("- To reuse an existing luminance next time, keep the "
+                  "palette on **LRGB** — the script keeps L separate "
+                  "automatically.")
+            elif palette == "LRGB" and self._opts.get("quick_lrgb"):
+                A("- L was **baked into** this composite, not kept separate: "
+                  "that is what *Quick linear LRGB* does.  Untick it to get "
+                  "a calibrated RGB plus a separate luminance, which is the "
+                  "order Siril recommends.")
+            if self._skipped_by_palette:
+                A("- The "
+                  + _plural(self._skipped_by_palette, "filter", "filters")
+                  + " this palette skipped "
+                  + _plural(self._skipped_by_palette, "was", "were")
+                  + " never stacked, so another palette needs a full re-run "
+                  "— untick *Stack only the filters this palette uses* "
+                  "first.")
+            if not self._skipped_by_palette:
+                A("- Re-run with **Reuse existing masters** ticked to try "
+                  "another palette in seconds (no re-stacking).")
             return "\n".join(S) + "\n"
 
         # Narrowband SHO / HOO
@@ -2631,6 +3058,27 @@ class StackWorker(QThread):
             A("1. **Starting point.** The channels were already normalized to "
               "Ha, so the image is balanced — not the pure-green you'd get "
               "from a raw SHO combine.")
+        elif not composite:
+            # Telling the reader to switch on an option that may already be
+            # on would send them looking in the wrong place: nothing was
+            # normalized because nothing was composed.
+            A("1. **Starting point.** No composite was made, so no "
+              "normalization ran either — it is part of the composition "
+              "step. When you combine the channels yourself, match them "
+              "first (Siril: `linear_match` against the Ha master), or "
+              "the strong Ha will dominate and push the image green.")
+        elif nb_spcc:
+            # Normalization off AND narrowband SPCC on is the recommended
+            # pairing, not a gap: SPCC measures the physical line ratio and
+            # corrects it: normalizing first would have flattened the very
+            # quantity it reads.  Telling the reader to switch the option
+            # back on would undo the calibration they just got.
+            A("1. **Starting point.** The channels were deliberately **not** "
+              "normalized: SPCC's narrowband mode measured the real Ha / "
+              "OIII line ratio against catalogue spectra and corrected it "
+              "from there. That is the physically grounded starting point — "
+              "leave *Normalize narrowband channels* off while SPCC is "
+              "doing the calibration.")
         else:
             A("1. **Starting point.** The channels were **not** normalized to "
               "a common reference, so expect one channel — usually the strong "
@@ -2644,8 +3092,14 @@ class StackWorker(QThread):
         if pcc_done:
             A("   - The channels were additionally **colour-calibrated with "
               "SPCC in narrowband mode**, using each line's wavelength — so "
-              "the starting balance is physical, not just normalized. Trust "
-              "it as your baseline before you start pushing the palette.")
+              "the starting balance is physical, not just normalized."
+              + (" Trust it as your baseline before you start pushing the "
+                 "palette." if not nb_done else
+                 "  ⚠️ But the channels were **also** normalized to Ha "
+                 "first, which flattens the very line ratio SPCC then "
+                 "measured — so treat this baseline as approximate, and see "
+                 "the note in `output.md` for which of the two to switch "
+                 "off."))
         A("3. **Stretch.** *Histogram* or *GHS*. Keep the background neutral "
           "and dark.")
         A("4. **Colour balance** to the look you want (the classic Hubble "
@@ -2665,8 +3119,18 @@ class StackWorker(QThread):
         A("### Tips")
         A("- A separate broadband **RGB run** gives you natural star colours "
           "to blend over the narrowband nebula.")
-        A("- Re-run with **Reuse existing masters** ticked to try HOO (or "
-          "LRGB) on the same data in seconds.")
+        if self._skipped_by_palette:
+            A("- The "
+              + _plural(self._skipped_by_palette, "filter", "filters")
+              + " this palette skipped "
+              + _plural(self._skipped_by_palette, "was", "were")
+              + " never stacked, so another palette needs a full re-run — "
+              "untick *Stack only the filters this palette uses* first.")
+        if not self._skipped_by_palette:
+            # Naming the palette that was just built would be circular.
+            other = "SHO" if palette == "HOO" else "HOO"
+            A(f"- Re-run with **Reuse existing masters** ticked to try "
+              f"{other} (or LRGB) on the same data in seconds.")
         return "\n".join(S) + "\n"
 
     # -- main -------------------------------------------------------------
@@ -2700,9 +3164,25 @@ class StackWorker(QThread):
                 for filt in filters}
             missing_aligned = [f for f, p in aligned_paths.items()
                                if not os.path.exists(p)]
+            mixed = ({} if missing_aligned or not want_reuse
+                     else _mixed_grids(aligned_paths))
             reusable_full = {f: p for f, p in full_paths.items()
                              if os.path.exists(p)}
-            reuse_ok = bool(want_reuse and filters and not missing_aligned)
+            reuse_ok = bool(want_reuse and filters
+                            and not missing_aligned and not mixed)
+            if mixed:
+                # Aligned masters only overlay if they came out of the SAME
+                # alignment run: -framing=min crops to the intersection of
+                # whatever was in the sequence, so a later run over a subset
+                # (see "Stack only the filters this palette uses") leaves the
+                # others on the previous grid.  Reusing the mix would hand
+                # rgbcomp channels of different sizes.
+                shown = ", ".join(
+                    f"{f} {w}\u00d7{h}" for f, (w, h) in sorted(mixed.items()))
+                self._emit(
+                    "Full reuse not possible — the aligned masters are not "
+                    f"on one grid ({shown}). They come from different "
+                    "alignment runs; re-aligning them now.", LogColor.SALMON)
             partial_reuse: list = []
 
             if reuse_ok:
@@ -2841,6 +3321,7 @@ class StackWorker(QThread):
             self.finished.emit(
                 {"results": final_paths, "errors": errors,
                  "aligned": did_align, "aborted": self._aborted,
+                 "compose_wanted": bool(self._opts.get("compose", False)),
                  "composite": composite,
                  "finished": bool(composite and self._opts.get("finish", True)),
                  "preview": (composite_load
@@ -2916,11 +3397,24 @@ class StackWorker(QThread):
 
         for role, fname in (("red", m_red), ("green", m_green),
                             ("blue", m_blue)):
-            if not fname or fname not in paths:
-                self._emit(
-                    f"  Colour composition skipped: no aligned master mapped "
-                    f"to the {role.upper()} channel.", LogColor.SALMON)
-                return None
+            if fname and fname in paths:
+                continue
+            wants = _PALETTE_SOURCE.get(palette, {}).get(role, "a filter")
+            if fname:
+                why = (f"'{fname}' is mapped to it, but no aligned master "
+                       "of that name was produced")
+            else:
+                why = f"{palette} takes it from {wants}, and none is mapped"
+            better = _detect_palette(sorted(paths))
+            # Plain text: the Log tab escapes what it is given, so Markdown
+            # emphasis would show up as literal asterisks.
+            hint = ("" if better == palette else
+                    f"  With the filters you have, {better} would work; "
+                    "or map the channel by hand in the dropdowns.")
+            self._emit(
+                f"  Colour composition skipped: the {role.upper()} channel "
+                f"has no master — {why}.{hint}", LogColor.SALMON)
+            return None
 
         # LRGB best practice (Siril docs): compose R,G,B ONLY, colour-calibrate
         # that linear RGB, and combine luminance AFTER stretching -- baking L
@@ -3107,9 +3601,27 @@ class StackWorker(QThread):
         one command line, and Siril re-splits it shell-style; with the
         quotes around the value only, the split happens at the space inside
         it and the run dies on `Invalid argument IMX411/455/461/533/571"`.
+
+        The sensor is sent in every mode, narrowband included -- see the
+        comment below for why leaving it out is the same class of silent
+        error as naming the OSC entry.
         """
         args: list = []
+        sensor = (self._opts.get("spcc_sensor") or "").strip()
+        if sensor:
+            self._check_spcc_name(sensor, "mono_sensors", "sensor")
+            args.append(f'"-monosensor={sensor}"')
         if palette in ("SHO", "HOO"):
+            # The sensor belongs here too.  Siril's own help says
+            # -narrowband makes it ignore "the previous FILTER arguments"
+            # -- filters only; its usage grammar keeps -monosensor= in a
+            # separate optional group.  That is physics, not a quirk: the
+            # narrowband arguments describe the filter passbands, while the
+            # sensor's quantum efficiency at 656/501 nm is an independent
+            # factor in the same product.  Omitting it does not fail, it
+            # silently falls back to whatever sits in Siril's saved SPCC
+            # preferences -- an OSC sensor, on a fresh install.
+            #
             # Wavelengths are physics, not preference.  Bandwidth depends on
             # the user's filter set, so that one is configurable.
             bw = float(self._opts.get("nb_bandwidth", 7))
@@ -3118,12 +3630,29 @@ class StackWorker(QThread):
             args += ["-narrowband",
                      f"-rwl={r:g}", f"-gwl={g:g}", f"-bwl={b:g}",
                      f"-rbw={bw:g}", f"-gbw={bw:g}", f"-bbw={bw:g}"]
+            if not sensor:
+                self._emit(
+                    "  SPCC: no sensor name given, so Siril will use "
+                    "whichever sensor its own SPCC dialog last had -- "
+                    "possibly an OSC one, which is the wrong spectral "
+                    "model for a filter wheel. Narrowband mode does not "
+                    "replace the sensor, only the filters.",
+                    LogColor.SALMON)
+            elif any((self._opts.get(k) or "").strip() for k in
+                     ("spcc_rfilter", "spcc_gfilter", "spcc_bfilter")):
+                # Siril prints its stored filter names on every SPCC run,
+                # narrowband or not.  Seeing "Antlia R, Antlia G, Antlia B"
+                # under a narrowband command looks like the filters were
+                # sent and ignores the wavelengths; say which one wins.
+                self._emit(
+                    "  SPCC: the filter names are not used here -- "
+                    "narrowband mode replaces them with the wavelengths "
+                    "and bandwidths above. Siril still echoes the stored "
+                    "names in its own log; the wavelengths are what it "
+                    "calibrates with.", LogColor.BLUE)
             return args
-        sensor = (self._opts.get("spcc_sensor") or "").strip()
         if not sensor:
             return args
-        self._check_spcc_name(sensor, "mono_sensors", "sensor")
-        args.append(f'"-monosensor={sensor}"')
         filters = [(self._opts.get(k) or "").strip()
                    for k in ("spcc_rfilter", "spcc_gfilter", "spcc_bfilter")]
         for flag, val in zip(("-rfilter", "-gfilter", "-bfilter"), filters):
@@ -3225,6 +3754,23 @@ class StackWorker(QThread):
                 LogColor.SALMON)
 
         narrowband = palette in ("SHO", "HOO")
+        if (narrowband and self._opts.get("use_spcc", True)
+                and self._opts.get("nb_normalize", True)):
+            # These two balance the same thing by opposite means.
+            # linear_match forces the channels onto a common histogram,
+            # i.e. it deliberately removes the Ha/OIII flux ratio -- which
+            # is the very quantity SPCC's narrowband mode then measures
+            # against catalogue spectra to calibrate.  Observed on one
+            # HOO run: the R/G fit came out with sigma 5.8, against 1.4 for
+            # a broadband composite of the same night.
+            self._emit(
+                "  Note: 'Normalize narrowband channels' already forced the "
+                "channels onto a common level, so SPCC is now measuring a "
+                "ratio that was flattened on purpose. Turning that option "
+                "off leaves the physical line ratio intact for SPCC to "
+                "calibrate; keep it on only when you are not calibrating.",
+                LogColor.SALMON)
+
         attempts: list = []
         if self._opts.get("use_spcc", True):
             detailed = self._spcc_args(palette)
@@ -3408,14 +3954,23 @@ class StackWorker(QThread):
         except (CommandError, DataError, SirilError) as exc:
             _log_swallowed(exc)
 
-        # Save the calibrated LINEAR composite over the original.
+        # Save the LINEAR composite over the original.  "Calibrated" is
+        # only true when a calibration actually ran: HaRGB skips it on
+        # purpose (Ha in the Red channel invalidates star photometry), and
+        # claiming it here contradicted the line two entries above.
+        calibrated = any(s.startswith("Colour calibration: ")
+                         for s in self._finish_steps)
         try:
             self._cmd("save", f'"{base}"')
             self._finish_steps.append(
-                "Saved the calibrated, still-LINEAR composite.")
+                "Saved the " + ("calibrated, " if calibrated else "")
+                + "still-LINEAR composite.")
             self._emit(
-                f"  Finish: calibrated composite saved "
-                f"({os.path.basename(base)}{ext}).", LogColor.GREEN)
+                "  Finish: "
+                + ("calibrated composite" if calibrated
+                   else "composite (uncalibrated)")
+                + f" saved ({os.path.basename(base)}{ext}).",
+                LogColor.GREEN)
         except (CommandError, DataError, SirilError) as exc:
             self._emit(f"  Finish: save failed ({exc}).", LogColor.RED)
 
@@ -3740,11 +4295,77 @@ def _detect_palette(filters: list[str]) -> str:
     return "RGB"
 
 
+# What each palette feeds into a colour channel, in words.  Used to explain
+# a channel that cannot be filled: "no master for RED" is baffling when a
+# RED filter plainly exists and the palette is SHO, which wants SII there.
+_PALETTE_SOURCE = {
+    "LRGB": {"red": "a Red filter", "green": "a Green filter",
+             "blue": "a Blue filter"},
+    "RGB": {"red": "a Red filter", "green": "a Green filter",
+            "blue": "a Blue filter"},
+    "HaRGB": {"red": "a Red filter", "green": "a Green filter",
+              "blue": "a Blue filter"},
+    "SHO": {"red": "an SII filter", "green": "an Ha filter",
+            "blue": "an OIII filter"},
+    "HOO": {"red": "an Ha filter", "green": "an OIII filter",
+            "blue": "an OIII filter"},
+}
+
+
+def _unfillable_channels(filters: list, palette: str) -> list:
+    """Colour channels this palette cannot fill from these filters.
+
+    Answers the question before a run rather than after it: the filter
+    list is known as soon as the folder is analysed, so choosing SHO
+    without an SII filter can be reported immediately instead of after
+    stacking, aligning and plate-solving everything.
+    """
+    m = _auto_channel_map(list(filters), palette)
+    return [r for r in ("red", "green", "blue") if not m.get(r)]
+
+
 def _first_with_role(filters: list[str], role: str) -> str:
     for f in filters:
         if _filter_role(f) == role:
             return f
     return ""
+
+
+def _plural(items, one: str, many: str) -> str:
+    """Pick a wording for a list of one versus several.
+
+    The skipped-filter set is usually several but is routinely one, and a
+    hard-coded plural reads as a bug in text the user is meant to trust:
+    "OIII are not read by this palette".
+    """
+    return one if len(items) == 1 else many
+
+
+def _palette_filters(opts: dict, filters: list) -> set:
+    """Filters whose masters this palette's composite will actually read.
+
+    Deliberately derived from the channel mapping rather than from the
+    palette name: the dropdowns are what `_compose` reads, so anything
+    else could disagree with them.  Luminance counts only for LRGB /
+    HaRGB, matching `_compose` -- a stale L still showing in the combo
+    under HOO is ignored there and must be ignored here too.  HaRGB finds
+    its Ha master by role instead of through a dropdown, so that one is
+    added back explicitly.
+
+    Returns an empty set when the mapping names nothing usable; callers
+    treat that as "cannot tell" and stack everything.
+    """
+    palette = opts.get("compose_palette", "RGB")
+    if palette == "Auto":
+        palette = _detect_palette(filters)
+    keys = ["map_red", "map_green", "map_blue"]
+    if palette in ("LRGB", "HaRGB"):
+        keys.append("map_lum")
+    used = {(opts.get(k) or "").strip() for k in keys}
+    if palette == "HaRGB":
+        used.add(_first_with_role(filters, "ha") or "")
+    used.discard("")
+    return {f for f in filters if f in used}
 
 
 def _auto_channel_map(filters: list[str], palette: str) -> dict:
@@ -4371,6 +4992,25 @@ class ImageMonoTrainWindow(QMainWindow):
         prow.addStretch()
         layout.addLayout(prow)
 
+        self.chk_palette_only = QCheckBox(
+            "Stack only the filters this palette uses")
+        self.chk_palette_only.setToolTip(
+            "Skips the filters the composite never reads.  On an LRGB + "
+            "Ha/OIII night set to HOO that is four of six channels, so the "
+            "run takes about half as long.\n\n"
+            "It also improves the colour image: Siril picks the "
+            "cross-filter alignment reference itself from whatever masters "
+            "are present, and a broadband one usually wins.  The narrowband "
+            "channels then have to match a spectrally unrelated frame — "
+            "measured on one M 16 run: OIII aligned on 12 star pairs and Ha "
+            "on 22, against 188–476 for the broadband masters.  Leaving the "
+            "unused filters out keeps the reference among the channels that "
+            "end up in the picture.\n\n"
+            "Off by default: a master that was never built cannot be reused "
+            "when you switch palette later.")
+        _nofocus(self.chk_palette_only)
+        layout.addWidget(self.chk_palette_only)
+
         # Ha blend strength (HaRGB only): how strongly Ha is mixed into Red.
         self.row_ha = QHBoxLayout()
         self.lbl_ha = QLabel("Ha → Red:")
@@ -4408,8 +5048,15 @@ class ImageMonoTrainWindow(QMainWindow):
         self.chk_nb_norm.setChecked(True)
         self.chk_nb_norm.setToolTip(
             "Before combining SHO/HOO, linear-match the channels to the Ha "
-            "reference (Siril's recommendation) so no single channel — "
-            "usually the strong Ha — dominates and turns the result green.")
+            "reference so no single channel — usually the strong Ha — "
+            "dominates and turns the result green.\n"
+            "Turn this OFF when SPCC is doing the colour calibration: this "
+            "flattens the Ha/OIII ratio on purpose, and that ratio is "
+            "exactly what SPCC's narrowband mode measures against "
+            "catalogue spectra. Doing both makes SPCC calibrate a "
+            "difference that was already removed.\n"
+            "Keep it ON when you are NOT calibrating (SPCC off, or no "
+            "Gaia spectrophotometry catalog available).")
         _nofocus(self.chk_nb_norm)
         layout.addWidget(self.chk_nb_norm)
 
@@ -4602,6 +5249,7 @@ class ImageMonoTrainWindow(QMainWindow):
             "cosmetic": self.chk_cosmetic,
             "flats_by_date": self.chk_flats_by_date,
             "crop_edges": self.chk_crop_edges,
+            "palette_only": self.chk_palette_only,
             "output_norm": self.chk_output_norm,
             "rejmap": self.chk_rejmap,
             "bg_extract": self.chk_bg_extract,
@@ -4765,7 +5413,8 @@ class ImageMonoTrainWindow(QMainWindow):
             self._applying_preset = False
 
     def _on_compose_toggled(self, on: bool) -> None:
-        for w in (self.cmb_palette, self.cmb_map_lum, self.cmb_map_red,
+        for w in (self.cmb_palette, self.chk_palette_only,
+                  self.cmb_map_lum, self.cmb_map_red,
                   self.cmb_map_green, self.cmb_map_blue, self.chk_nb_norm,
                   self.chk_quick_lrgb, self.chk_finish):
             w.setEnabled(on)
@@ -4810,6 +5459,19 @@ class ImageMonoTrainWindow(QMainWindow):
             val = mapping.get(role, "")
             idx = cmb.findText(val) if val else 0
             cmb.setCurrentIndex(idx if idx >= 0 else 0)
+        # Say it NOW, not after a full stack: the filter list is already
+        # known, so a palette that cannot be filled is knowable here.
+        missing = [r for r in ("red", "green", "blue") if not mapping.get(r)]
+        if missing and self.chk_compose.isChecked():
+            wants = ", ".join(
+                f"{r.upper()} ← {_PALETTE_SOURCE.get(palette, {}).get(r, '?')}"
+                for r in missing)
+            better = _detect_palette(filters)
+            self._log(
+                f"{palette} cannot be built from these filters — {wants}. "
+                + (f"Choose {better}, " if better != palette else "")
+                + "map the channel by hand, or the run will stack the "
+                "masters and then skip the colour image.", LogColor.SALMON)
 
     def _build_output_group(self, parent_layout: QVBoxLayout) -> None:
         group = QGroupBox("Output")
@@ -4996,6 +5658,8 @@ class ImageMonoTrainWindow(QMainWindow):
         self.chk_output_norm.setChecked(st.value("output_norm", True, type=bool))
         self.chk_rejmap.setChecked(st.value("rejmap", False, type=bool))
         self.chk_crop_edges.setChecked(st.value("crop_edges", True, type=bool))
+        self.chk_palette_only.setChecked(
+            st.value("palette_only", False, type=bool))
         self.chk_bg_master.setChecked(st.value("bg_master", True, type=bool))
         self.chk_bg_extract.setChecked(st.value("bg_extract", False, type=bool))
         self.chk_platesolve_reg.setChecked(
@@ -5061,6 +5725,7 @@ class ImageMonoTrainWindow(QMainWindow):
         st.setValue("output_norm", self.chk_output_norm.isChecked())
         st.setValue("rejmap", self.chk_rejmap.isChecked())
         st.setValue("crop_edges", self.chk_crop_edges.isChecked())
+        st.setValue("palette_only", self.chk_palette_only.isChecked())
         st.setValue("bg_master", self.chk_bg_master.isChecked())
         st.setValue("bg_extract", self.chk_bg_extract.isChecked())
         st.setValue("platesolve_reg", self.chk_platesolve_reg.isChecked())
@@ -5321,7 +5986,6 @@ class ImageMonoTrainWindow(QMainWindow):
         self._set_left_enabled(True)
 
         self.lbl_target.setText(f"Target: {self._target}")
-        self._populate_compose_combos()
 
         # Frames from two different objects must never be pooled into one
         # stack -- that silently produces garbage.  Warn loudly.  Compared
@@ -5407,6 +6071,9 @@ class ImageMonoTrainWindow(QMainWindow):
             self._log(f"  {filt}: {len(g['files'])} lights "
                       f"({_format_duration(g.get('exp_total', 0.0))})",
                       LogColor.BLUE)
+        # Last, so that a "this palette cannot be built from these filters"
+        # warning appears BELOW the list of filters it is talking about.
+        self._populate_compose_combos()
 
     # ------------------------------------------------------------------
     # STACKING
@@ -5454,6 +6121,7 @@ class ImageMonoTrainWindow(QMainWindow):
             "output_norm": self.chk_output_norm.isChecked(),
             "rejmap": self.chk_rejmap.isChecked(),
             "crop_edges": self.chk_crop_edges.isChecked(),
+            "palette_only": self.chk_palette_only.isChecked(),
             "bg_master": self.chk_bg_master.isChecked(),
             "bg_extract": self.chk_bg_extract.isChecked(),
             "platesolve_reg": self.chk_platesolve_reg.isChecked(),
@@ -5514,8 +6182,10 @@ class ImageMonoTrainWindow(QMainWindow):
         self._maybe_clear_log()
         self._set_left_enabled(False)
         self.tabs.setCurrentWidget(self.log_text)
-        self._log(f"Stacking {len(self._groups)} filter(s) into {out_dir}",
-                  LogColor.GREEN)
+        # Says "discovered", not "stacking": the palette may leave some
+        # of them out, and the worker is the one that knows which.
+        self._log(f"Starting run — {len(self._groups)} filter(s) discovered, "
+                  f"output to {out_dir}", LogColor.GREEN)
 
         self._stack_worker = StackWorker(
             self.siril, self._groups, self._target, out_dir,
@@ -5537,13 +6207,16 @@ class ImageMonoTrainWindow(QMainWindow):
         preview = payload.get("preview")
         separate_lum = payload.get("separate_lum")
         aborted = payload.get("aborted", False)
+        compose_wanted = payload.get("compose_wanted", False)
         self._set_left_enabled(True)
         self.progress.setValue(100)
 
         n_ok = len(results)
         n_err = len(errors)
         self.lbl_header.setText(
-            ("Stopped: " if aborted else "Done: ")
+            ("Stopped: " if aborted
+             else "Masters only: " if compose_wanted and not composite
+             else "Done: ")
             + f"{n_ok} master(s) written"
             + (", cross-filter aligned" if aligned else "")
             + (", colour composite" if composite else "")
@@ -5606,6 +6279,14 @@ class ImageMonoTrainWindow(QMainWindow):
                 f"Stopped by request: {n_ok} master(s) were finished and "
                 "kept. Re-run with 'Reuse existing masters' to stack the "
                 "rest and compose.", LogColor.SALMON)
+        elif compose_wanted and not composite:
+            # The colour image was the point of the run; "0 failed" would
+            # read as success when the requested result is missing.
+            self._log(
+                f"Finished with {n_ok} master(s), but NO colour image — see "
+                "the reason above. The masters are usable; fix the palette "
+                "or the channel mapping and re-run with 'Reuse existing "
+                "masters' to compose in seconds.", LogColor.SALMON)
         else:
             self._log(f"All done: {n_ok} master(s) written, {n_err} failed."
                       + (f" Composite: {os.path.basename(composite)}"
@@ -5828,7 +6509,21 @@ class ImageMonoTrainWindow(QMainWindow):
             "<tr><td><b>register −2pass</b></td>"
             "<td>Two-pass star registration picks the best reference and "
             "aligns all frames (or plate-solve registration if enabled; it "
-            "falls back to star alignment automatically).</td></tr>"
+            "falls back to star alignment automatically).<br>"
+            "Note that <b>-2pass chooses that reference itself</b>, from "
+            "whatever is in the sequence — that is the whole point of the "
+            "preliminary pass, and <tt>setref</tt> cannot override it.  It "
+            "is why <i>Stack only the filters this palette uses</i> improves "
+            "the colour image and not just the runtime (see "
+            "<i>Palettes</i>).<br>"
+            "If this step fails, the run falls back to single-pass "
+            "registration — which knows neither <tt>-framing=</tt> nor any "
+            "<tt>-filter-</tt> option, so the crop and the quality filters "
+            "cannot be honoured there.  What was given up is recorded per "
+            "channel and named in the report, never silently dropped.  A "
+            "failure of <tt>seqapplyreg</tt> is handled separately, because "
+            "by then registration has already succeeded and it says nothing "
+            "about two-pass support.</td></tr>"
             "<tr><td><b>seqapplyreg</b></td>"
             "<td>Applies the registration.  <i>min</i> framing (default) "
             "crops the ragged stacking edges; <i>max</i> keeps the full "
@@ -6002,6 +6697,32 @@ class ImageMonoTrainWindow(QMainWindow):
             "is written to the output folder and loaded in Siril.  Needs at "
             "least R, G and B mapped.</p>"
             "<hr>"
+            "<h3 style='color:#88aaff;'>Stack only the filters this "
+            "palette uses</h3>"
+            "<p>An LRGB night that you process as HOO stacks four masters "
+            "the composite never opens.  With this box ticked they are "
+            "skipped, which roughly halves the run \u2014 and, less "
+            "obviously, improves the picture.</p>"
+            "<p>The cross-filter alignment puts every master into one "
+            "sequence and lets Siril\u2019s two-pass registration choose "
+            "the reference; <span style='font-family:monospace;"
+            "color:#aaddaa;'>setref</span> cannot override that, because "
+            "<b>-2pass</b> exists precisely to \u201cfind a good reference "
+            "image\u201d of its own.  A star-rich broadband master normally "
+            "wins, and the narrowband channels then have to match a frame "
+            "whose stars they largely do not share.  Measured on one "
+            "M\u00a016 run: OIII matched on <b>12</b> star pairs and Ha on "
+            "<b>22</b>, "
+            "against <b>188\u2013476</b> for the broadband masters.  A fit "
+            "resting on twelve points carries its scale term poorly, which "
+            "is what puts colour fringes in the corners.</p>"
+            "<p>Leaving the unused filters out puts only the composite\u2019s "
+            "own channels in that pool, so the reference is one of them.  "
+            "The box is <b>off</b> by default: a master that was never built "
+            "cannot be reused when you switch palette later, and the run "
+            "refuses to skip anything that would leave fewer than two "
+            "channels.</p>"
+            "<hr>"
             "<h3 style='color:#88aaff;'>Narrowband (SHO / HOO) order</h3>"
             "<p>Following Siril's guidance for narrowband, the channels are "
             "<b>normalized before combining</b> — each is linear-matched to "
@@ -6010,7 +6731,18 @@ class ImageMonoTrainWindow(QMainWindow):
             "combined <b>linearly</b>; you stretch and fine-tune colour "
             "afterwards.  Normalized copies (<span style='font-family:"
             "monospace;color:#aaddaa;'>*_nbnorm</span>) are written under "
-            "<tt>_work/helpers/</tt> so the masters stay untouched.  PCC is "
+            "<tt>_work/helpers/</tt> so the masters stay untouched.</p>"
+            "<p style='color:#ffb0a0;'><b>Do not combine it with SPCC.</b>  "
+            "Normalisation flattens the Ha / OIII flux ratio on purpose — "
+            "and that ratio is precisely what SPCC's narrowband mode "
+            "measures against catalogue spectra in order to calibrate it.  "
+            "Running both makes SPCC correct a difference that was already "
+            "removed; on one HOO run the R/G fit came out at sigma 5.8, "
+            "against 1.4 for a broadband composite of the same night.  "
+            "Switch <b>Normalize narrowband channels</b> off when SPCC is "
+            "calibrating, and on when it is not.  The script says so in the "
+            "Log and in the report when it sees both.</p>"
+            "<p>PCC is "
             "skipped "
             "(mapped emission lines aren't photometric).  Turn normalization "
             "off with <i>Normalize narrowband channels</i> if you prefer to "
@@ -6064,6 +6796,16 @@ class ImageMonoTrainWindow(QMainWindow):
             "photometry is meaningless there, so PCC is never attempted for "
             "these palettes; without SPCC they stay uncalibrated, as "
             "before.</p>"
+            "<p>The <b>sensor name is sent in narrowband mode too</b>.  "
+            "Siril\u2019s own help says <tt>-narrowband</tt> makes it ignore "
+            "\u201cthe previous <i>filter</i> arguments\u201d — filters "
+            "only.  "
+            "That is physics, not a quirk: the wavelengths describe the "
+            "filter passbands, while the sensor\u2019s quantum efficiency at "
+            "656 and 501 nm is an independent factor in the same product.  "
+            "The filter <i>names</i> are deliberately left out there, and "
+            "the log says so, because Siril echoes its stored names on every "
+            "run and they look as if they had been used.</p>"
             "<p>The chain degrades one step at a time and never aborts the "
             "finish:</p>"
             "<ol>"
@@ -6333,7 +7075,9 @@ class ImageMonoTrainWindow(QMainWindow):
             "common aliases).  Override the palette and any channel with the "
             "dropdowns.  For several looks from one dataset, run again with a "
             "different palette and tick <b>Reuse existing masters</b> — it "
-            "skips stacking + alignment and re-composes in seconds.</p>")
+            "skips stacking + alignment and re-composes in seconds, as long "
+            "as every channel it needs was stacked and the aligned masters "
+            "still share one grid (see <i>Output &amp; Tips</i>).</p>")
         tabs.addTab(tab_ref, "Palettes")
 
         tab3 = QTextEdit()
@@ -6395,7 +7139,17 @@ class ImageMonoTrainWindow(QMainWindow):
             "for the composition (seconds).  If only some masters exist "
             "(e.g. a new filter was added), the script reuses what it can "
             "and stacks just the missing filters — and always logs what it "
-            "skipped and why.</li>"
+            "skipped and why.<br>Two things stop full reuse, both on "
+            "purpose.  A master that was never built cannot be reused, so a "
+            "run made with <b>Stack only the filters this palette uses</b> "
+            "has to be repeated in full for a palette that needs the "
+            "others.  And the aligned masters must all be the same size: "
+            "<tt>-framing=min</tt> crops to the intersection of whatever was "
+            "aligned together, so a run over a subset leaves the remaining "
+            "channels on the previous grid.  Mixing those would hand "
+            "<tt>rgbcomp</tt> channels of different dimensions, so the "
+            "script re-aligns instead and names the leftovers in the "
+            "report.</li>"
             "<li>Re-running is safe: existing outputs are overwritten.  Turn "
             "reuse OFF after changing stacking options or adding frames.</li>"
             "<li><b>Stopping really stops.</b>  Closing the window mid-run "

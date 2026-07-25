@@ -1,0 +1,629 @@
+# Svenesis ImageMono Train — Benutzeranleitung
+
+**Version 1.4.0** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+
+> *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
+
+---
+
+## Inhaltsverzeichnis
+
+1. [Was ist ImageMono Train?](#1-was-ist-imagemono-train)
+2. [Hintergrundwissen für Einsteiger](#2-hintergrundwissen-für-einsteiger)
+3. [Voraussetzungen & Installation](#3-voraussetzungen--installation)
+4. [Daten vorbereiten](#4-daten-vorbereiten)
+5. [Erste Schritte — der erste Lauf](#5-erste-schritte--der-erste-lauf)
+6. [Die Benutzeroberfläche](#6-die-benutzeroberfläche)
+7. [Kalibrierung](#7-kalibrierung)
+8. [Stacking-Optionen](#8-stacking-optionen)
+9. [Paletten & Kanalzuordnung](#9-paletten--kanalzuordnung)
+10. [Farbkalibrierung](#10-farbkalibrierung)
+11. [Ausgabedateien](#11-ausgabedateien)
+12. [Master wiederverwenden](#12-master-wiederverwenden)
+13. [Empfohlene Arbeitsabläufe](#13-empfohlene-arbeitsabläufe)
+14. [Fehlerbehebung](#14-fehlerbehebung)
+15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
+16. [Häufige Fragen](#16-häufige-fragen)
+17. [Neu in 1.4.0](#17-neu-in-140)
+
+---
+
+## 1. Was ist ImageMono Train?
+
+**Svenesis ImageMono Train** nimmt eine Nacht (oder mehrere Nächte) monochromer Subs durch ein Filterrad und erzeugt daraus:
+
+- ein **lineares Master pro Filter**, kalibriert und gestackt,
+- alle Master **auf einem gemeinsamen Pixelraster ausgerichtet**, sodass die Kanäle exakt übereinanderliegen,
+- ein **Farbkomposit** in der Palette deiner Wahl, hintergrundbereinigt und farbkalibriert,
+- einen **Verarbeitungsbericht** (`output.md`), der beschreibt, was tatsächlich passiert ist, und
+- eine **Nachbearbeitungsanleitung** (`todo.md`) für die verbleibenden kreativen Schritte.
+
+Du tippst keinen einzigen Siril-Befehl. Du wählst einen Ordner und drückst einen Knopf.
+
+Das Skript ist gezielt für eine **Monochrom-Kamera hinter einem Filterrad** gebaut. Frames werden nie debayert, und jede Entscheidung — welcher Rejection-Algorithmus, welche Gewichtung, welche Farbkalibrierung — fällt pro Filter, denn ein 30-Minuten-Ha-Kanal und ein 3-Minuten-Blau-Kanal sind nicht dasselbe Problem.
+
+### Was es *nicht* tut
+
+Es hört beim **linearen** Bild auf. Strecken, Sternreduktion, Sättigung und die finale Luminanz-Kombination sind gestalterische Entscheidungen, und `todo.md` führt dich mit konkreten Siril-Menüpfaden hindurch. Diese Grenze ist Absicht: Farbkalibrierung muss auf linearen Daten laufen, also übergibt das Skript genau dort, wo der Geschmack anfängt.
+
+---
+
+## 2. Hintergrundwissen für Einsteiger
+
+### Warum Mono + Filterrad anders ist
+
+Eine One-Shot-Color-Kamera (OSC) hat eine Bayer-Matrix fest auf dem Sensor: jedes Pixel ist dauerhaft rot, grün oder blau. Ein **Monochrom**-Sensor hat keine — jedes Pixel sammelt alles Licht, das es bekommt. Die Farbe kommt vom **Filterrad** davor: du nimmst einen Satz Frames durch Rot auf, dann durch Grün, dann durch Blau (oder Luminanz), und kombinierst sie hinterher.
+
+Die Vorteile sind real — keine Interpolation, volle Auflösung pro Kanal, und die Freiheit, dreimal so lange auf den schwachen Kanal zu halten. Der Preis: du hast jetzt drei bis sechs getrennte Datensätze, die einzeln gestackt und dann **pixelgenau** zur Deckung gebracht werden müssen. Genau daran scheitern die meisten manuellen Arbeitsabläufe, und genau das automatisiert dieses Skript am sorgfältigsten.
+
+### Breitband vs. Schmalband
+
+| Typ | Filter | Was durchkommt | Typischer Einsatz |
+|---|---|---|---|
+| **Breitband** | L, R, G, B | Breite Ausschnitte des sichtbaren Spektrums | Galaxien, Sternhaufen, natürliche Farbe |
+| **Schmalband** | Ha, OIII, SII | Wenige Nanometer um eine Emissionslinie | Nebel, lichtverschmutzter Himmel, Mondnächte |
+
+Schmalband-Frames sind deutlich dunkler und enthalten weit weniger Sterne, weil ein 4,5-nm-Filter fast alles Kontinuumslicht blockiert. Diese eine Tatsache treibt mehrere Entscheidungen dieses Skripts — welche Frames sich registrieren lassen, welche Gewichtung passt, und welche Farbkalibrierung überhaupt sinnvoll ist.
+
+### Kalibrierungsframes
+
+Siril berechnet jedes kalibrierte Light so:
+
+```
+Lc = (L − D) / (F − O)
+```
+
+- **L** — dein Light-Frame
+- **D** — Master-Dark: das Eigensignal des Sensors (thermisches Rauschen, Hotpixel) bei gleicher Belichtung, Gain und Temperatur
+- **F** — Master-Flat: was deine Optik mit einem gleichmäßig ausgeleuchteten Feld macht (Vignettierung, Staubschatten)
+- **O** — Offset/Bias: der elektronische Sockel, den die Kamera jedem Auslesevorgang hinzufügt
+
+**Flats sind am wichtigsten.** Ohne sie überleben Vignettierung und Staubschatten bis ins Endbild — und, für dieses Skript besonders relevant, sie hinterlassen einen Helligkeitsgradienten, der die photometrische Farbkalibrierung messbar ungenauer macht. Wenn du nur eine Sorte Kalibrierungsframes aufnimmst, nimm Flats auf.
+
+Beachte: Das Master-Dark enthält den Bias bereits. Beides abzuziehen würde ihn doppelt entfernen, deshalb wendet das Skript Bias auf die Lights **nur dann** an, wenn kein Dark verwendet wird.
+
+### Linear vs. gestreckt
+
+Direkt aus der Kamera und aus dem Stacker ist ein Astrofoto **linear**: die Pixelwerte sind proportional zum gesammelten Licht. Es sieht fast schwarz aus, weil das interessante Signal knapp über dem Hintergrund liegt.
+
+**Strecken** komprimiert diesen riesigen Dynamikumfang auf etwas, das ein Bildschirm zeigen kann. Für Messzwecke ist es zugleich unumkehrbar — nach dem Strecken verhalten sich Sternhelligkeiten nicht mehr linear zum echten Fluss, und die photometrische Farbkalibrierung wird ungültig. Deshalb ist jedes Bild, das dieses Skript schreibt, linear, und deshalb passiert die Kalibrierung, bevor du ein Histogramm anfasst.
+
+---
+
+## 3. Voraussetzungen & Installation
+
+### Anforderungen
+
+- **Siril 1.4** oder neuer, mit Python-Skript-Unterstützung
+- **sirilpy** (liegt Siril bei)
+- **PyQt6, astropy, numpy** — werden beim ersten Start automatisch über `s.ensure_installed` installiert
+- Für die Farbkalibrierung: eine Internetverbindung **oder** ein lokaler Gaia-Katalog. Ohne beides entsteht das Komposit trotzdem, nur eben unkalibriert.
+
+### Installation
+
+1. `Svenesis-ImageMono-Train.py` in deinen Siril-Skriptordner kopieren.
+2. In Siril: **Skripte → Skripte aktualisieren** (oder Siril neu starten).
+3. Über **Bildverarbeitung → Skripte → Svenesis ImageMono Train** starten. Es muss kein Bild geladen sein.
+
+### Hinweis zu Cloud-Ordnern
+
+Sirils `link`-Befehl legt **symbolische Links** auf deine Frames an. Cloud-Clients (Dropbox, OneDrive, iCloud Drive, Google Drive) schreiben synchronisierte Symlinks aktiv um — ein verlinkter Frame kann dadurch zwischen zwei Siril-Befehlen verschwinden, mitten im Lauf, ohne Warnung des Cloud-Clients.
+
+Halte den Arbeitsbaum auf einer **lokalen Platte**. Wenn deine Rohdaten in der Cloud liegen, kopiere den Zielordner vorher lokal, oder nimm den Ordner `output/_work/` von der Synchronisation aus.
+
+---
+
+## 4. Daten vorbereiten
+
+### Was das Skript liest
+
+Maßgeblich ist der **FITS-Header**, nicht der Ordnername:
+
+| Schlüsselwort | Wofür |
+|---|---|
+| `FILTER` | Gruppierung der Frames zu Kanälen |
+| `IMAGETYP` | Unterscheidung Lights / Darks / Flats / Dark-Flats / Bias |
+| `OBJECT` | Erkennen, dass versehentlich ein Ordner mit mehreren Zielen gewählt wurde |
+| `EXPTIME`, `GAIN`, `CCD-TEMP`, `XBINNING`, `NAXIS1/2` | Zuordnung der Kalibrierungsmaster zu den Lights |
+
+Das N.I.N.A.-Ordnerschema `DATE\IMAGETYPE\TARGETNAME\FILTER\…` dient nur als **Rückfallebene**, wenn ein Schlüsselwort fehlt. Praktisch heißt das: das Skript kommt mit fast jedem Ordnerlayout zurecht — auch mit der klassischen N.I.N.A.-Anordnung, bei der `FLAT/` *neben* dem Zielordner liegt statt darin.
+
+### Unterstützte Formate
+
+- `.fit`, `.fits`, `.fts` — und ihre Rice-komprimierten `.fz`-Varianten, direkt lesbar
+- **XISF wird nicht unterstützt.** Solche Dateien werden gezählt und gemeldet, nie stillschweigend übergangen: astropy kann XISF-Header nicht lesen, damit fehlten Belichtung, Gain und Temperatur, und die Kalibrierungszuordnung könnte gar nicht funktionieren.
+
+### Mehrere Nächte
+
+Derselbe Filter über mehrere Nächte verteilt wird automatisch **zu einem Stack zusammengefasst**. Zeige einfach auf einen Ordner, der alle enthält.
+
+### Empfohlenes Ordnerlayout
+
+```
+M16/
+├─ LIGHT/2026-07-25/{LUMINOS,RED,GREEN,BLUE,HA,OIII}/…
+├─ LIGHT/2026-08-14/{…}/…          ← zweite Nacht, gleiches Ziel
+└─ FLAT/2026-07-25/{…}/…           ← Session-Flats, pro Filter
+```
+
+Darks und Bias gehören in einen separaten **Library**-Ordner (siehe §7), weil sie monatelang wiederverwendbar sind.
+
+---
+
+## 5. Erste Schritte — der erste Lauf
+
+1. **Skript starten.** Es muss kein Bild geladen sein.
+2. **Select Target Folder…** — den Wurzelordner **eines** Ziels wählen.
+3. Optional einen **Library…**-Ordner mit deinen wiederverwendbaren Darks und Bias setzen. Er wird zwischen Läufen gemerkt.
+4. **Analyze Folder** drücken. Der Overview-Tab listet nun jeden Filter mit Frameanzahl, Gesamtbelichtung, Belichtungszeit, Gain und Sensortemperatur — dazu die gefundenen Kalibrierungsframes.
+5. **Palette** prüfen. *Auto* schlägt eine aus den gefundenen Filtern vor, und immer nur eine, deren drei Kanäle sich tatsächlich füllen lassen.
+6. Unter **Auto-finish** die **SPCC**-Felder prüfen. Sie sind für ein bestimmtes Rig vorbelegt — trage deinen eigenen Sensor- und Filternamen ein (siehe §10).
+7. **Stack All Filters** drücken und den **Log**-Tab beobachten.
+8. Am Ende öffnet sich `output/`, das Farbbild ist in Siril geladen. Lies **`todo.md`** für den Rest.
+
+Eine Nacht mit sechs Filtern und vierzig Frames dauert auf einem aktuellen Laptop rund 20 Sekunden.
+
+---
+
+## 6. Die Benutzeroberfläche
+
+Das Fenster hat ein **linkes Panel** für Eingaben und Optionen und ein **rechtes Panel** mit zwei Tabs.
+
+### Rechtes Panel
+
+| Tab | Inhalt |
+|---|---|
+| **Overview** | Was die Analyse gefunden hat: Filter, Frameanzahlen, Belichtungszeiten, Kalibrierungsframes, Warnungen |
+| **Log** | Alles, was der Lauf tut, in der Reihenfolge — inklusive der exakten Siril-Befehle |
+
+Im Log erklärt das Skript seine Entscheidungen. Wenn es etwas überspringt, auf eine Rückfallebene ausweicht oder eine Konfiguration bemerkt, die gegen sich selbst arbeitet, steht es dort — und wiederholt im Bericht.
+
+### Linkes Panel, von oben nach unten
+
+1. **Zielordner** — *Select Target Folder…* und *Analyze Folder*
+2. **Kalibrierung** — Library-Pfad und die Kalibrierungsschalter (§7)
+3. **Stacking** — Rejection, Gewichtung, Qualitätsfilter, Beschnitt, Hintergrund (§8)
+4. **Farbe** — Palette, Kanalzuordnung, Komposition und Auto-finish (§9, §10)
+5. **Aktionen** — Ausrichtung, Plate-Solving, Wiederverwendung, Aufräumen und **Stack All Filters**
+
+### Vorlagen (Presets)
+
+Drei Vorlagen setzen den gesamten Optionsblock auf einmal:
+
+| Vorlage | Zweck |
+|---|---|
+| **Quick look** | „Sehen die Daten gut aus?" — keine QA-Extras, keine Farbkalibrierung, alle Frames behalten, gestreckte Vorschau |
+| **Balanced** | Der sinnvolle Standard für eine normale Nacht: Blank-Erkennung, Gewichtung, Hintergrundextraktion pro Kanal, volles Auto-finish |
+| **Final** | Alles an: Qualitätsfilter (gewichtete FWHM + Rundheit), Rejection-Maps, plate-solvte Master |
+
+Eigene vollständige Konfigurationen lassen sich außerdem als `.json` speichern und laden.
+
+---
+
+## 7. Kalibrierung
+
+Alles hier ist **optional und additiv**. Das Skript nutzt, was es findet, und überspringt den Rest; ganz ohne Kalibrierungsframes verhält es sich exakt wie vor der Kalibrierungs-Unterstützung.
+
+### Woher die Frames kommen
+
+- **Flats** werden neben deinen Lights erwartet, pro Filter, pro Session. Beide Layouts funktionieren: im Zielordner oder daneben in einem Geschwister-Verzeichnis `FLAT/`.
+- **Darks und Bias** kommen aus dem **Library**-Ordner — einmal gesetzt und monatelang genutzt. Er darf Rohframes enthalten (die werden zu Mastern gestackt) oder fertige Master; eine Gruppe mit genau einer Datei wird als fertiger Master übernommen.
+
+Nur Kalibrierung wird von außerhalb des Zielordners geholt. Ein *Light*-Frame, das in der Library oder einem Nachbarordner liegt, wird gezählt und gemeldet, aber nie in dein Ziel gestackt.
+
+### Wie Master zugeordnet werden
+
+Die Zuordnung läuft über **FITS-Header, nicht über Dateinamen**:
+
+| Eigenschaft | Toleranz |
+|---|---|
+| Belichtungszeit | exakt |
+| Gain | exakt |
+| Binning | exakt |
+| Bildmaße | exakt |
+| Sensortemperatur | ±2 °C |
+
+Ein Dark, das nicht passt, wird **gemeldet und übersprungen**, nicht angewendet. Ein 60-s-Dark auf 300-s-Lights würde echten Schaden anrichten, und es stillschweigend zu verwenden wäre schlimmer, als gar keines zu nehmen.
+
+**Darks werden zusätzlich nach Temperatur gruppiert**, damit ein −10-°C- und ein −20-°C-Satz niemals zu einem Master gemittelt werden, das für keines von beiden stimmt. Bias wird nicht so aufgeteilt — er ist temperaturunabhängig.
+
+### Die Optionen
+
+| Option | Wirkung |
+|---|---|
+| **Apply calibration when frames exist** | Hauptschalter. Aus = rohe Lights stacken, wie früher. |
+| **Cosmetic correction (hot pixels)** | `-cc=dark` — entfernt Hot- und Coldpixel anhand der Statistik des Darks. Setzt ein Dark voraus. |
+| **Match flats to the same night** | Nutzt nur Flats aus dem Datumsordner der Lights. Einschalten, wenn zwischen den Sessions umgebaut wurde; auslassen, um Flats für ein rauschärmeres Master zu poolen. |
+
+### Die Offset-Kette der Flats
+
+Flats müssen ihren eigenen Offset loswerden, bevor sie irgendetwas normieren können. Das Skript weicht in drei Stufen aus und bricht nie ab:
+
+1. ein echtes **Dark-Flat** oder **Bias**-Master, wenn eines passt,
+2. Sirils **synthetischer Bias** `=64*$OFFSET`,
+3. gar keine Offset-Korrektur — das Flat wird direkt gestackt.
+
+Master werden in `calib/` unter lesbaren, aus dem Header abgeleiteten Namen wie `M101_RED_-10C_3s_G100_flat` zwischengespeichert und von späteren Läufen wiederverwendet.
+
+---
+
+## 8. Stacking-Optionen
+
+### Rejection — pro Filter, aus der Frameanzahl gewählt
+
+Ausreißer-Rejection entfernt Satelliten, kosmische Strahlung und Flugzeuge. Welcher Algorithmus funktioniert, hängt vollständig davon ab, wie viele Frames zur Verfügung stehen — deshalb wählt das Skript pro Kanal:
+
+| Frames | Algorithmus | Warum |
+|---|---|---|
+| ≤ 4 | **Percentile Clipping** 0.2 / 0.1 | Sigma-Verfahren brauchen eine Population; bei drei Frames sagt eine Standardabweichung nichts |
+| 5 – 20 | **Winsorized Sigma** 3 / 3 | Robust, das Arbeitspferd für eine normale Nacht |
+| 21 – 49 | **Linear Fit** 3 / 3 | Verkraftet einen Gradienten, der sich über den Stack ändert |
+| ≥ 50 | **GESDT** 0.3 / 0.05 | Siril dokumentiert es als besser als Linear Fit bei großen Stacks |
+
+Die beiden GESDT-Zahlen sind **keine** Sigmas — es sind der maximal verworfene Anteil und ein Signifikanzniveau. Ein Siril-Build, das den Parameter nicht kennt, fällt auf Linear Fit zurück, und der Bericht nennt den Algorithmus, der *wirklich* gelaufen ist — eine Rückfallebene kann sich also nicht hinter der bevorzugten verstecken.
+
+Die Stufe wird für die Frames gewählt, die **tatsächlich integriert** werden, nicht für die gefundenen. Ein Sub ohne genügend erkennbare Sterne lässt sich nicht registrieren und wird von Siril ausgeschlossen; das Skript zählt, was Siril wirklich exportiert hat. In einer realen Nacht gingen 3 von 6 OIII-Frames durch Wolken verloren — die verbliebenen 3 bekamen Percentile Clipping, während die naive Zählung Winsorized Sigma auf drei Frames angewendet und damit gar nichts verworfen hätte.
+
+### Frame-Gewichtung
+
+| Methode | Am besten für |
+|---|---|
+| **Weighted FWHM** (Standard) | Breitband — Schärfe skaliert mit der Sternzahl |
+| **Noise** | **Schmalband** — ein sternarmes Feld würde sonst für den Filter bestraft, nicht für den Frame |
+| **Number of stars** | Nächte mit stark schwankender Transparenz |
+
+### Qualitätsfilter
+
+Vier Filter — **Weighted FWHM**, **Roundness**, **Star count**, **Background level** — in zwei Modi:
+
+- **% best** (1–100): den entsprechenden Anteil der besten Frames behalten. `90` verwirft das schlechteste Zehntel.
+- **k-sigma** (1–10): Frames verwerfen, die weiter als *k* Standardabweichungen vom Mittel entfernt sind.
+
+Die Wertefelder folgen dem Modus, damit ein Prozentwert nie stillschweigend als Sigma-Vielfaches umgedeutet wird.
+
+Sie greifen zum **Registrierungszeitpunkt**, damit verworfene Frames gar nicht erst neu projiziert werden — und erst ab **20 Frames** pro Filter. Darunter kostet der Verlust eines Subs mehr Signal-Rausch-Abstand, als der schlechteste Frame an Schärfe kostet. Das Log warnt, wenn die Filter mehr als 15 % eines Satzes verwerfen, samt daraus folgendem Rauschanstieg.
+
+### Beschnitt, Hintergrund und der Rest
+
+| Option | Hinweise |
+|---|---|
+| **Crop stacking edges (min framing)** | Behält nur die Fläche, die jeder Sub abdeckt. Dithering kostet einen schmalen Streifen (realer Lauf: 3008 px → 2991 px). Das ist eine Rahmenwahl innerhalb von `seqapplyreg`, kein nachträglicher Beschnitt. |
+| **Background extraction per channel** | Entfernt den Himmelsgradienten aus jedem fertigen Master, solange es linear ist. Gradienten unterscheiden sich je Filter, deshalb wirkt das pro Kanal besser als einmal auf dem Farbbild. Optional mit **RBF**-Modell, das einem Gradienten folgt, der über das Feld die Richtung wechselt — ein Polynom vom Grad 1 kann ihn nur in eine Richtung kippen. |
+| **Background extraction per sub-frame** | Langsamer; der Sub-Durchgang bleibt polynomiell, gemäß Sirils Empfehlung. |
+| **Skip blank / black frames** | Verwirft komplett schwarze, flache oder defekte Frames, bevor sie die Registrierung sprengen. |
+| **Save rejection map (QA)** | Schreibt pro Kanal nach `qa/`, was verworfen wurde. |
+| **Drizzle** | Braucht **geditherte** Subs, und genügend davon. Unter etwa 40 Frames warnen Log und Bericht, dass es eher Rauschen als Auflösung hinzufügt. |
+| **Register via plate solving** | Optional mit Distortion-Master; fällt automatisch auf Sternausrichtung zurück. |
+
+### Wenn die Registrierung nicht alles kann
+
+`register -2pass` und `seqapplyreg` scheitern aus unabhängigen Gründen, deshalb werden sie getrennt behandelt — nur das erste sagt überhaupt etwas über Two-Pass-Unterstützung aus.
+
+Scheitert die Two-Pass-Registrierung, weicht der Lauf auf einfaches `register` aus, das weder `-framing=` noch irgendeine `-filter-`-Option kennt. Beschnitt und Qualitätsfilter können auf diesem Kanal also nicht eingehalten werden. Was aufgegeben wurde, wird **pro Kanal festgehalten und im Bericht benannt**, nie stillschweigend fallengelassen.
+
+---
+
+## 9. Paletten & Kanalzuordnung
+
+### Die Paletten
+
+| Palette | Zuordnung | Hinweise |
+|---|---|---|
+| **LRGB** | R=Rot, G=Grün, B=Blau, L=Luminanz | L wird standardmäßig *nach* dem Strecken kombiniert (siehe §10) |
+| **RGB** | R=Rot, G=Grün, B=Blau | Ohne Luminanz |
+| **SHO** | R=SII, G=Ha, B=OIII | Die Hubble-Palette |
+| **HOO** | R=Ha, G=OIII, B=OIII | Zwei Filter genügen — OIII speist Grün und Blau |
+| **HaRGB** | R=Rot + Ha-Beimischung, G=Grün, B=Blau | Einstellbare **Ha → Rot**-Stärke; Farbkalibrierung entfällt (siehe §10) |
+
+**Auto** schlägt eine Palette aus den gefundenen Filtern vor, und immer nur eine, deren drei Kanäle sich tatsächlich füllen lassen. Breitband gewinnt, wenn es vollständig ist, weil es natürliche Farbe liefert — für den gemappten Look manuell auf SHO / HOO / HaRGB wechseln. Jeder Kanal lässt sich über die Dropdowns überschreiben.
+
+Wählst du eine Palette, die deine Filter nicht füllen können — SHO ohne SII-Filter ist der klassische Fall —, sagt das Skript das **bei der Auswahl**, nicht erst nach einem vollen Lauf. Es weigert sich in dieser Lage außerdem, Filter zu überspringen, damit du am Ende trotzdem verwertbare Master hast.
+
+### Kanalübergreifende Ausrichtung
+
+Jeder Filter wird gegen seinen *eigenen* Referenzframe gestackt, die Master können also auf leicht verschiedenen Pixelrastern liegen. Zur Korrektur werden alle Master in eine kleine Sequenz gelegt, neu registriert und mit `-framing=min` neu projiziert — das Ergebnis sind Kanäle, die **pixelidentisch** groß sind und exakt übereinanderliegen.
+
+### Stack only the filters this palette uses
+
+**Standardmäßig aus.** Eingeschaltet werden Filter, die das Komposit nie liest, vollständig übersprungen.
+
+Bei einer LRGB-Nacht, die als HOO verarbeitet wird, sind das vier von sechs Kanälen — der Lauf dauert also etwa halb so lange. Der größere Effekt betrifft aber das Bild selbst, und es lohnt sich zu verstehen, warum.
+
+Sirils Two-Pass-Registrierung **wählt die Ausrichtungsreferenz selbst**, aus dem, was in der Sequenz liegt. Genau dafür existiert der Vorlauf, und `setref` kann ihn nicht überstimmen. Ein sternreiches Breitband-Master gewinnt in der Regel — und dann müssen die Schmalband-Kanäle sich an einem Frame ausrichten, dessen Sterne sie kaum teilen.
+
+Gemessen an einer M-16-Nacht, gleiche Frames, gleiche Einstellungen:
+
+| | Alle sechs Master im Pool | Nur Ha + OIII |
+|---|---:|---:|
+| Ausrichtungsreferenz | Luminanz | Ha |
+| Gematchte Sternpaare für OIII | **12** | **1165** |
+| SPCC R/G-Fit-Sigma | **5.76** | **2.73** |
+
+Eine auf zwölf Punkten gefittete Transformation trägt ihren Maßstabsterm schlecht — und das erzeugt die Farbsäume in den Ecken.
+
+Zwei Situationen bringen das Skript dazu, nichts zu überspringen (und zu sagen warum):
+
+- die Palette hat ohnehin einen Kanal, den sie nicht füllen kann — das Komposit bricht dort so oder so ab, und die anderen Master sind mehr wert als die gesparte Zeit;
+- es wird gar kein Komposit gebaut — ohne eines liest nichts eine Palette.
+
+Der Kompromiss: **ein nie gebautes Master lässt sich später nicht wiederverwenden.** Wenn du mehrere Paletten aus einer Nacht probieren willst, lass die Option beim ersten Lauf aus.
+
+---
+
+## 10. Farbkalibrierung
+
+### SPCC statt PCC
+
+**Spectrophotometric Colour Calibration** berücksichtigt die Empfindlichkeitskurven deines Sensors und deiner Filter. Sirils eigene Dokumentation nennt sie die genauere Methode und PCC überholt — und für ein Mono-Rig hinter einem Filterrad ist dieser Unterschied bedeutsam, weil einfaches PCC generisches Breitband-R/G/B unterstellt.
+
+An echten Daten zeigt sich das im Fit selbst: die Steigung Katalog gegen Bild ging von ~3,0 unter OSC-Annahmen auf ~0,95, sobald Mono-Sensor und Filter beschrieben waren.
+
+### Die Namen richtig treffen
+
+Ein Sensor- oder Filtername, den Siril nicht kennt, ist für Siril **kein Fehler** — es setzt still etwas anderes ein. Die klassische Falle:
+
+> `IMX533` existiert **nur** in den OSC-Tabellen. Trägst du das ein, wird dein Filterrad-Rig stillschweigend als One-Shot-Color-Kamera kalibriert. Der Mono-Eintrag für denselben Chip heißt **`Sony IMX411/455/461/533/571`**.
+
+Das Skript liest die SPCC-Datenbank, die Siril selbst verwendet (nur lesend, über sirilpy lokalisiert), und meldet einen Namen, der fehlt, mehrdeutig ist oder nur teilweise passt — bevor der Lauf so weit kommt. Eine Datenbank, die es nicht findet, bedeutet *nicht prüfbar*, nie *ungültig*.
+
+Die gültigen Namen kannst du dir auch in Sirils Befehlszeile ausgeben lassen:
+
+```
+spcc_list monosensor
+spcc_list redfilter
+```
+
+Die Felder sind **für das Rig des Autors vorbelegt** — Player One Ares-M Pro (IMX533 mono) mit Antlia LRGB V-Pro und 4,5-nm-Edge-SHO-Filtern. Überschreibe sie für deine Ausrüstung; sie werden gemerkt. Bleiben sie leer, greift die Konfiguration aus Sirils eigenem SPCC-Dialog.
+
+### Schmalband wird auch kalibriert
+
+Bei SHO oder HOO läuft SPCC im **Narrowband-Modus**: jeder gemappte Kanal wird über seine Emissionslinie beschrieben — Ha 656,3, OIII 500,7, SII 671,6 nm — plus der von dir gesetzten Bandbreite (Nachkommastellen wie 4,5 nm werden unterstützt). Gewöhnliche Sternphotometrie ist für gemappte Emissionslinien bedeutungslos, deshalb wird PCC für diese Paletten nie versucht.
+
+Zwei Details, die man kennen sollte:
+
+- **Der Sensorname geht mit.** Sirils Hilfe sagt, `-narrowband` lasse es „die vorangehenden *Filter*-Argumente" ignorieren — nur die Filter. Das ist Physik, keine Marotte: die Wellenlängen beschreiben die Filterdurchlässe, während die Quanteneffizienz des Sensors bei 656 und 501 nm ein davon unabhängiger Faktor im selben Produkt ist.
+- **Die Filternamen bleiben dort bewusst weg**, und das Log sagt es — denn Siril echot seine gespeicherten Namen bei jedem Lauf, und sie sehen aus, als wären sie verwendet worden.
+
+### Normalisierung und SPCC arbeiten gegeneinander
+
+**Normalize narrowband channels** gleicht die SHO/HOO-Kanäle per Linear Match an die Ha-Referenz an, damit ein Hubble-Palettenstack nicht grün wird. Das ist nützlich — aber nicht, während SPCC kalibriert.
+
+`linear_match` plättet das Ha/OIII-Flussverhältnis *absichtlich*, und genau dieses Verhältnis misst SPCCs Narrowband-Modus gegen Katalogspektren. Beides gleichzeitig heißt: die Kalibrierung liest eine Größe, die zuvor bewusst gelöscht wurde.
+
+Gemessen an zwei Läufen derselben Daten, die sich nur in dieser Option unterscheiden:
+
+| | Normalisierung an | Normalisierung aus |
+|---|---:|---:|
+| R/G-Fit-Sigma | 2,730 | **2,641** |
+| Steigung des Fits | 1,251 | **1,209** (näher an 1 = weniger Korrektur nötig) |
+
+Der Effekt ist real, aber moderat — deutlich kleiner als der Ausrichtungseffekt weiter oben. **Empfehlung:** Normalisierung *aus*, wenn SPCC kalibriert, und *an*, wenn nicht. Log, Bericht und `todo.md` nennen jeweils, was für deinen Lauf gilt.
+
+### Die Rückfallkette
+
+Die Farbkalibrierung weicht Stufe für Stufe aus und bricht das Auto-finish nie ab:
+
+1. **SPCC** mit deinen Sensor-/Filternamen (bzw. den Narrowband-Wellenlängen)
+2. **SPCC** blank — mit dem, was in Sirils Voreinstellungen steht
+3. **PCC** (NOMAD-Katalog) — nur Breitband-Paletten
+4. **PCC** gegen einen lokalen Gaia-Katalog — funktioniert offline
+5. aufgeben, und das im Bericht und in `todo.md` klar sagen
+
+### HaRGB ist bewusst ausgenommen
+
+Sein Rot-Kanal trägt beigemischtes Ha, wodurch die Sternphotometrie ungültig wird. Das Skript überspringt die Farbkalibrierung dort, sagt es, und das gespeicherte Komposit wird als **unkalibriert** bezeichnet — gleiche es von Hand ab.
+
+### Quick linear LRGB
+
+Standardmäßig bleibt die **Luminanz getrennt**: das RGB wird für sich kalibriert, und L wird *nach* dem Strecken kombiniert. Das ist Sirils empfohlene Reihenfolge.
+
+**Quick linear LRGB** backt L stattdessen schon bei der Komposition ein. Das ist schneller und manchmal bequem, hebt aber das obere Ende an — mehr Sterne sättigen und fallen aus dem photometrischen Fit. Gemessen an zwei Läufen über dieselben R/G/B-Master:
+
+| | L getrennt | L eingebacken |
+|---|---:|---:|
+| Als *pixel out of range* verworfene Sterne | 68 von 2603 | **531 von 2597** |
+| Sterne in der Lösung | 1484 | 1057 |
+| R/G-Fit-Sigma | 1,148 | 1,334 |
+
+Wenn du sie nutzt, vermerken Bericht und `todo.md`, dass der resultierende Weißabgleich brauchbar, aber nur näherungsweise ist.
+
+---
+
+## 11. Ausgabedateien
+
+```
+output/
+├─ TARGET_RGB.fit        das fertige Farbbild (linear, kalibriert)
+├─ TARGET_RGB_preview.fit gestreckte Vorschau, falls aktiviert
+├─ masters/
+│   ├─ TARGET_FILTER.fit            ausgerichtet — diese zum Kombinieren nutzen
+│   └─ TARGET_FILTER_fullframe.fit  voller, unbeschnittener Stack
+├─ output.md             was das Skript getan hat, Schritt für Schritt
+├─ todo.md               Anleitung für die finale Bearbeitung
+├─ calib/                Master-Dark / -Flat / -Bias — beim nächsten Lauf wiederverwendet
+├─ qa/                   Rejection-Maps (falls aktiviert)
+└─ _work/                Zwischendateien — jederzeit löschbar
+```
+
+**`masters/` enthält zwei Fassungen pro Kanal.** Die `_fullframe`-Datei ist der Stack in seiner eigenen Geometrie; die schlichte wurde auf das gemeinsame Raster neu projiziert und ist die, die man zum Kanalkombinieren nimmt.
+
+### Die beiden Dokumente
+
+**`output.md`** ist ein vollständiger Verarbeitungsbericht: gefundene Filter, Frames *gefunden vs. tatsächlich gestackt*, Belichtungszeit, der pro Kanal verwendete Rejection-Algorithmus, welches Kalibrierungsmaster in welchen Filter ging, jede wirksam gewordene Option und die tatsächlich gelaufenen Auto-finish-Schritte.
+
+**`todo.md`** ist eine palettenspezifische Anleitung für den kreativen Teil — Strecken, Farbabgleich und bei LRGB die abschließende Luminanz-Kombination, mit konkreten Siril-Menüpfaden.
+
+### Beide Dokumente beschreiben, was tatsächlich passiert ist
+
+Das ist das Leitprinzip hinter der Berichterstattung, und es ist erwähnenswert, denn ein Bericht, der den *Normalfall* beschreibt, ist schlechter als kein Bericht:
+
+- Ein Filter, der übersprungen wurde, der fehlgeschlagen ist oder den ein Abbruch nie erreicht hat, wird als solcher gezeigt, statt eine Frameanzahl zu bekommen. Ein Filter, den die Palette nicht liest, steht als *not stacked* mit genau diesem Grund da — nicht als „der Lauf wurde gestoppt".
+- Vorhergesagte Anzahlen sind als Schätzung (`≈`) oder Obergrenze (`≤`, k-Sigma) markiert, nie als gemessen ausgegeben.
+- Der genannte Rejection-Algorithmus ist der, der wirklich lief.
+- „Haben die Qualitätsfilter gegriffen?" wird daraus beantwortet, was der Registrierung tatsächlich übergeben wurde — nicht nachträglich aus einer Frameanzahl abgeleitet, die die Registrierung verändert haben kann.
+- Eine astrometrische Lösung, die das Komposit von plate-solvten Mastern *geerbt* hat, wird von einer eigens berechneten unterschieden.
+- Ein Komposit, das nie entstanden ist, wird nicht beschrieben, als gäbe es eines.
+- Das gespeicherte Komposit heißt nur dann *kalibriert*, wenn wirklich kalibriert wurde.
+- Es wird nie zu einer Option geraten, die nicht die Ursache war, und kein Tipp gegeben, den der Lauf unmöglich gemacht hat.
+
+---
+
+## 12. Master wiederverwenden
+
+**Reuse existing masters** erlaubt es, eine andere Palette ohne erneutes Stacken zu probieren:
+
+- **Volle Wiederverwendung** — alle ausgerichteten Master existieren: Stacking *und* Ausrichtung entfallen, du zahlst nur die Komposition (Sekunden).
+- **Teilweise Wiederverwendung** — einige Master existieren: das Skript behält diese und stackt nur die fehlenden Filter.
+
+Was übersprungen wird und warum, steht immer im Log.
+
+### Zwei Dinge verhindern die volle Wiederverwendung — beide mit Absicht
+
+1. **Ein nie gebautes Master lässt sich nicht wiederverwenden.** Ein Lauf mit *Stack only the filters this palette uses* muss für eine Palette, die die anderen braucht, vollständig wiederholt werden.
+2. **Die ausgerichteten Master müssen alle dieselbe Größe haben.** `-framing=min` schneidet auf die Schnittmenge dessen zu, was zusammen ausgerichtet wurde — ein Lauf über eine Teilmenge lässt die übrigen Kanäle also auf dem vorherigen Raster zurück. Sie zu mischen würde `rgbcomp` Kanäle unterschiedlicher Maße übergeben, deshalb richtet das Skript stattdessen neu aus und benennt die Überbleibsel im Bericht.
+
+Schalte die Wiederverwendung **aus**, nachdem du Stacking-Optionen geändert oder Frames hinzugefügt hast. Ansonsten ist ein erneuter Lauf gefahrlos: vorhandene Ausgaben werden überschrieben.
+
+---
+
+## 13. Empfohlene Arbeitsabläufe
+
+### Eine normale LRGB-Nacht
+
+1. Vorlage **Balanced**, Palette **Auto** (sie wird LRGB wählen).
+2. *Stack only the filters this palette uses* **aus** lassen, falls du später eine andere Palette möchtest.
+3. *Quick linear LRGB* **aus** lassen — SPCC soll das RGB allein kalibrieren.
+4. Laufen lassen. Dann `todo.md` folgen: RGB strecken, Luminanz getrennt strecken, zuletzt kombinieren.
+
+### Eine Schmalband-Nacht, bestmögliche Farbe
+
+1. Palette **HOO** oder **SHO**.
+2. **Stack only the filters this palette uses** *an* — hier zahlt es sich am meisten aus.
+3. **Normalize narrowband channels** *aus* — SPCC soll das echte Linienverhältnis messen.
+4. Filter-**Bandbreite** setzen (z. B. 4,5 nm) und den Sensornamen prüfen.
+5. Laufen lassen, dann `todo.md` folgen.
+
+### Mehrere Looks aus einer Nacht
+
+1. Erster Lauf: alles an, *Stack only the filters this palette uses* **aus**, damit alle Master gebaut und gemeinsam ausgerichtet werden.
+2. Folgeläufe: Palette wechseln, **Reuse existing masters** anhaken, in Sekunden neu komponieren.
+
+### Nur mal in die Daten schauen
+
+Vorlage **Quick look** mit *save stretched preview*. Keine Farbkalibrierung, keine QA-Artefakte — in wenigen Sekunden ein Blick auf die Nacht.
+
+---
+
+## 14. Fehlerbehebung
+
+### „Colour composition skipped: the RED channel has no master"
+
+Die Palette will einen Filter, den du nicht hast — SHO nimmt Rot aus einem **SII**-Filter, und keiner ist zugeordnet. Die Meldung nennt, was die Palette erwartet und welche Palette mit deinen Filtern funktionieren würde. Entweder die Palette wechseln oder den Kanal in den Dropdowns von Hand zuordnen.
+
+Die Master sind da und brauchbar; der Lauf meldet *„Finished with N master(s), but NO colour image"* statt Erfolg zu behaupten.
+
+### Die Farbe wirkt falsch, und SPCC meldet „imprecise solution"
+
+Zwei übliche Ursachen, nach Wirkung sortiert:
+
+1. **Keine Flats.** Vignettierung hinterlässt einen Helligkeitsgradienten über dem Feld, und Siril wird weiter *„consider correcting the image gradient first"* melden. Das ist die wirksamste Stellschraube, und keine Skripteinstellung ersetzt sie.
+2. **Ein falscher Sensorname.** Siehe §10 — im Log nach einem Namen suchen, der nicht zu Sirils Mono-Tabellen passte.
+
+### Ein Kanal hat die meisten Frames verloren
+
+```
+Registration dropped 3 of 6 frame(s) — 3 will be integrated.
+Only 3 frame(s) left for OIII: too few for outlier rejection to mean much.
+```
+
+Frames ohne genügend erkennbare Sterne — Wolken, Dunst, ein durchziehender Schleier — lassen sich nicht ausrichten, und Siril schließt sie aus. Das sind Daten, kein Fehler. Behandle den Kanal als vorläufig und nimm mehr davon auf.
+
+### „FITS error: failed to find or open the following file"
+
+Fast immer ein **Cloud-synchronisierter Arbeitsordner**. Sirils `link` legt Symlinks an, und Dropbox & Co. schreiben sie mitten im Lauf um. Verschiebe den Arbeitsbaum auf eine lokale Platte oder nimm `output/_work/` von der Synchronisation aus. Siehe §3.
+
+### „2-pass registration unavailable"
+
+Erscheint das *zusammen mit* einem Datei-nicht-gefunden-Fehler, ist es das Cloud-Problem von oben, keine Frage der Siril-Version. Die beiden Fehlerarten werden genau deshalb getrennt gemeldet, damit man sie auseinanderhalten kann.
+
+### Nach dem Bearbeiten des Skripts hat sich nichts geändert
+
+Siril hält das geladene Skript im Speicher. Schließe das Skriptfenster und starte es neu aus dem Skripte-Menü.
+
+### Im masters-Ordner haben die Dateien unterschiedliche Größen
+
+Du hast mit *Stack only the filters this palette uses* gearbeitet, es wurden also nur einige Kanäle neu ausgerichtet. Der Bericht benennt die Überbleibsel. Ein Lauf mit ausgeschalteter Option bringt alle Kanäle zurück auf ein Raster.
+
+---
+
+## 15. Tipps & Empfehlungen
+
+- **Nimm Flats auf.** Pro Filter, pro Session, bevor du das Rig abbaust. Nichts anderes auf dieser Liste kommt in der Wirkung nahe heran.
+- **Baue einmal eine Dark- und Bias-Library.** Auf festen Sollwert gekühlt bleiben Darks monatelang gültig. Library-Ordner setzen und vergessen.
+- **Gib Schmalband mehr Zeit, als du denkst.** Ein 4,5-nm-Filter ist dunkel. Sechs Subs reichen, um etwas zu sehen; für sinnvolle Rejection reichen sie nicht.
+- **Rausch-Gewichtung für Schmalband**, gewichtete FWHM für Breitband.
+- **Nicht vor der Kalibrierung strecken.** Das Skript übergibt aus gutem Grund linear.
+- **Lies das Log, wenn dich etwas überrascht.** Jede Rückfallebene, jeder übersprungene Schritt und jede sich selbst widersprechende Kombination wird dort in einem Satz erklärt.
+- **Behalte `masters/`.** Von dort aus lässt sich der gesamte Farbprozess ohne erneutes Stacken wiederholen — das macht Paletten-Experimente billig.
+- **Benenne deine Ziele über die Nächte hinweg einheitlich** (`M16`, nicht einmal `M 16` und in der nächsten Session `Adlernebel`) — das Skript vergleicht Namen normalisiert, aber Einheitlichkeit hält die Ordner sauber.
+
+---
+
+## 16. Häufige Fragen
+
+**Funktioniert es mit einer Farbkamera (OSC)?**
+Nein, und das bewusst. Frames werden nie debayert. Dies ist ein Mono-Filterrad-Arbeitsablauf.
+
+**Brauche ich Kalibrierungsframes?**
+Nein. Alles ist optional und additiv: ganz ohne stackt das Skript rohe Lights genau so, wie es das vor der Kalibrierungs-Unterstützung getan hat. Flats bringen die größte Verbesserung.
+
+**Kann ich mehrere Nächte kombinieren?**
+Ja — leg sie unter einen Zielordner. Derselbe Filter aus verschiedenen Nächten wird automatisch zu einem Stack zusammengefasst.
+
+**Warum ist mein Bild fast schwarz?**
+Es ist linear, und das ist richtig so. Öffne `todo.md` und folge den Streckschritten, oder aktiviere *save stretched preview* für einen schnellen Blick.
+
+**Warum hat HaRGB keine Farbkalibrierung?**
+Sein Rot-Kanal trägt beigemischtes Ha, die Sternphotometrie beschreibt ihn also nicht mehr. Jede photometrische Kalibrierung würde das Falsche messen. Gleiche ihn von Hand ab.
+
+**Was passiert, wenn ich das Fenster mitten im Lauf schließe?**
+Es fragt zuerst nach, beendet dann den aktuellen Filter und hört dort auf. Ausrichtung, Plate-Solving, das Farbbild und das Aufräumen von `_work/` entfallen — ein Komposit aus der Hälfte der Kanäle ist nicht das Bild, das du wolltest. Die fertigen Master bleiben erhalten, und Log, Bericht und Dialog sagen *gestoppt*, nicht *fertig*. Mit **Reuse existing masters** machst du weiter.
+
+**Kann ich es ohne Internetverbindung nutzen?**
+Ja. Installiere einen lokalen Gaia-Katalog in Siril, dann erreicht ihn die Kalibrierungskette. Ohne beides entsteht das Komposit trotzdem — nur unkalibriert, und der Bericht sagt das.
+
+**Verändert es meine Rohframes?**
+Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
+
+---
+
+## 17. Neu in 1.4.0
+
+- **Stack only the filters this palette uses** (standardmäßig aus) — halbiert einen typischen Lauf und hält vor allem die kanalübergreifende Ausrichtungsreferenz unter den Kanälen, die im Bild landen. Die Messwerte stehen in §9.
+- **Der SPCC-Sensor geht auch im Narrowband-Modus mit.** `-narrowband` lässt Siril nur die *Filter*-Argumente ignorieren; ihn wegzulassen scheiterte nie, es nahm still, was der SPCC-Dialog zuletzt enthielt.
+- **Schmalband-Normalisierung und SPCC** werden markiert, wenn beide aktiv sind — und die empfohlene Kombination wird als solche erkannt, statt als Mangel gemeldet zu werden.
+- **Registrierungsfehler werden diagnostiziert, nicht geraten.** `register -2pass` und `seqapplyreg` werden getrennt behandelt, und Optionen, die die Rückfallebene nicht einhalten konnte, werden pro Kanal festgehalten.
+- **Die volle Master-Wiederverwendung wird verweigert, wenn die ausgerichteten Master nicht alle dieselbe Größe haben** — was nach einem Palette-only-Lauf vorkommt.
+- **Eine lange Reihe von Berichtskorrekturen** — ein Lauf ohne Komposit liest sich nicht mehr, als hätte er eines, eine übersprungene Kalibrierung heißt nicht mehr *kalibriert*, und es wird nie zu einer Option geraten, die nicht die Ursache war.
+
+---
+
+## Credits
+
+**Entwickelt von** Sven Ramuschkat
+**Website:** [www.svenesis.org](https://www.svenesis.org)
+**GitHub:** [github.com/sramuschkat/Siril-Scripts](https://github.com/sramuschkat/Siril-Scripts)
+**Lizenz:** GPL-3.0-or-later
+
+Teil der **Svenesis Siril Scripts**-Sammlung, zu der außerdem gehören:
+- Svenesis Gradient Analyzer
+- Svenesis Blink Comparator
+- Svenesis Annotate Image
+- Svenesis Image Advisor
+- Svenesis Multiple Histogram Viewer
+- Svenesis Satellite Trail Cleaner
+- Svenesis Script Security Scanner
+
+---
+
+*Wenn dir dieses Werkzeug nützt, unterstütze die Entwicklung gern über [Buy me a Coffee](https://buymeacoffee.com/svenesis).*
