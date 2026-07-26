@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.4.0** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.5.0** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.4.0](#17-neu-in-140)
+17. [Neu in 1.5.0](#17-neu-in-150)
 
 ---
 
@@ -109,6 +109,12 @@ Direkt aus der Kamera und aus dem Stacker ist ein Astrofoto **linear**: die Pixe
 
 Sirils `link`-Befehl legt **symbolische Links** auf deine Frames an. Cloud-Clients (Dropbox, OneDrive, iCloud Drive, Google Drive) schreiben synchronisierte Symlinks aktiv um — ein verlinkter Frame kann dadurch zwischen zwei Siril-Befehlen verschwinden, mitten im Lauf, ohne Warnung des Cloud-Clients.
 
+**Wenn das Log meldet, dass Funktionen zurückgefallen sind.** Ein Teil dessen, was dieses Skript tut, braucht Aufrufe, die erst neuere Versionen von Sirils Python-Modul (`sirilpy`) mitbringen: gemessene Frame-Zahlen, das Komposit im Speicher, das Lesen von Sirils eigenem Log. Jeder davon ist abgesichert, ein fehlender Aufruf kostet also nichts — der Lauf nimmt den einfacheren Weg. Was er bisher kostete, war eine *Erklärung*, denn der Rückfall war stumm und dauerhaft.
+
+Das Skript startet jetzt nicht mehr unterhalb von **sirilpy 1.0.0** (das mit Siril 1.4 ausgeliefert wird), und oberhalb dieser Schwelle prüft es jeden optionalen Aufruf einzeln — indem es fragt, ob es ihn gibt, nicht indem es Versionsnummern vergleicht. Was fehlt, wird einmal beim Start und noch einmal in `output.md` benannt, samt seiner Folge. Ein Siril-Update stellt sie wieder her.
+
+**Plattenplatz während eines Laufs.** Jeder Schritt — Kalibrieren, Hintergrund, Registrieren — schreibt eine vollständige Kopie jedes Frames. Mit gesetztem **Delete _work/ when finished** wird jede Generation freigegeben, sobald die nächste fertig ist; der Spitzenbedarf bleibt damit bei etwa zwei statt vier Generationen — rund 3,6 GB pro Generation bei hundert 3008×3008-Subs in 32 bit. Ohne den Haken bleibt jede Zwischenstufe liegen, und genau das will man, wenn etwas untersucht werden muss. (Die Idee stammt aus **Storage Friendly Stacking** von Quark-Coder, das den Ordner überwacht; ein fester Schritt nach jedem Kommando leistet dasselbe ohne Dateiwächter.)
+
 Halte den Arbeitsbaum auf einer **lokalen Platte**. Wenn deine Rohdaten in der Cloud liegen, kopiere den Zielordner vorher lokal, oder nimm den Ordner `output/_work/` von der Synchronisation aus.
 
 ---
@@ -124,7 +130,9 @@ Maßgeblich ist der **FITS-Header**, nicht der Ordnername:
 | `FILTER` | Gruppierung der Frames zu Kanälen |
 | `IMAGETYP` | Unterscheidung Lights / Darks / Flats / Dark-Flats / Bias |
 | `OBJECT` | Erkennen, dass versehentlich ein Ordner mit mehreren Zielen gewählt wurde |
-| `EXPTIME`, `GAIN`, `CCD-TEMP`, `XBINNING`, `NAXIS1/2` | Zuordnung der Kalibrierungsmaster zu den Lights |
+| `INSTRUME`, `EXPTIME`, `GAIN`, `CCD-TEMP`, `XBINNING`, `NAXIS1/2` | Zuordnung der Kalibrierungsmaster zu den Lights |
+
+Manche Aufnahmesoftware schreibt **gar kein `IMAGETYP`**. Ein solcher Frame wird dann über seinen *Inhalt* gelesen: kein Filter, kein Objekt und die Montierung auf RA = DEC = 0 geparkt heißt geschlossener Verschluss → **Dark**; ein Filter *und* ein Objekt heißt, es wurde auf etwas gezielt → **Light**. Flat und Bias werden bewusst nie geraten — nichts in einem gewöhnlichen Header trennt sie zuverlässig, und ein Fehlgriff dort würde die Kalibrierung verderben statt sie nur zu überspringen.
 
 Das N.I.N.A.-Ordnerschema `DATE\IMAGETYPE\TARGETNAME\FILTER\…` dient nur als **Rückfallebene**, wenn ein Schlüsselwort fehlt. Praktisch heißt das: das Skript kommt mit fast jedem Ordnerlayout zurecht — auch mit der klassischen N.I.N.A.-Anordnung, bei der `FLAT/` *neben* dem Zielordner liegt statt darin.
 
@@ -209,6 +217,8 @@ Alles hier ist **optional und additiv**. Das Skript nutzt, was es findet, und ü
 - **Flats** werden neben deinen Lights erwartet, pro Filter, pro Session. Beide Layouts funktionieren: im Zielordner oder daneben in einem Geschwister-Verzeichnis `FLAT/`.
 - **Darks und Bias** kommen aus dem **Library**-Ordner — einmal gesetzt und monatelang genutzt. Er darf Rohframes enthalten (die werden zu Mastern gestackt) oder fertige Master; eine Gruppe mit genau einer Datei wird als fertiger Master übernommen.
 
+Eine Library soll wachsen, deshalb werden **nur die Darks gestackt, die dieser Lauf auch verwenden kann** — beurteilt nach derselben Regel, die später eines auswählt. Fünf Belichtungszeiten bei drei Setpoints sind fünfzehn Master; vierzehn davon zu bauen, um eines zu öffnen, kostet Minuten und liest hunderte Frames für nichts.
+
 Nur Kalibrierung wird von außerhalb des Zielordners geholt. Ein *Light*-Frame, das in der Library oder einem Nachbarordner liegt, wird gezählt und gemeldet, aber nie in dein Ziel gestackt.
 
 ### Wie Master zugeordnet werden
@@ -217,13 +227,28 @@ Die Zuordnung läuft über **FITS-Header, nicht über Dateinamen**:
 
 | Eigenschaft | Toleranz |
 |---|---|
-| Belichtungszeit | exakt |
+| Kamera (`INSTRUME`) | exakt, sofern beide Header sie nennen |
+| Belichtungszeit | innerhalb 5 % — das nächstgelegene gewinnt |
 | Gain | exakt |
 | Binning | exakt |
 | Bildmaße | exakt |
 | Sensortemperatur | ±2 °C |
 
-Ein Dark, das nicht passt, wird **gemeldet und übersprungen**, nicht angewendet. Ein 60-s-Dark auf 300-s-Lights würde echten Schaden anrichten, und es stillschweigend zu verwenden wäre schlimmer, als gar keines zu nehmen.
+Die **Kamera** gehört zum Schlüssel, weil Bildgröße und Binning nur ein Indiz sind: zwei Bodies mit demselben Sensorformat würden sich sonst gegenseitig kalibrieren. Ein fehlender Header-Wert blockiert eine Zuordnung nie — außer der Belichtungszeit: ein unlesbares `EXPTIME` liest sich als 0 s, und 0 gegen 120 ist genau die Fehlpaarung, die nicht durchrutschen darf.
+
+**Die Belichtungszeit ist eine Toleranz, keine Identität.** Das thermische Signal skaliert mit der Belichtung, ein 290-s-Dark entfernt also nahezu das, was ein 300-s-Dark entfernen würde — es abzulehnen ließe die Lights unkalibriert, und das ist das schlechtere Ergebnis. Das nächstgelegene Dark innerhalb des Bandes wird verwendet und **im Log benannt**, mit der Bestätigung, dass alles andere übereinstimmt. Darüber hinaus läuft der Lauf ohne Dark weiter und sagt das auch: ein 60-s-Dark auf 300-s-Lights liegt 80 % daneben und wird nie angewendet.
+
+**Ein Filter mit gemischten Belichtungszeiten wird in Teilen kalibriert.** Ein Dark entfernt nur das thermische Signal, das während *seiner eigenen* Belichtung entstanden ist — ein einzelnes Dark auf 120-s- und 300-s-Subs ist also für keine der beiden richtig. Jede Belichtungszeit wird separat bereitgestellt, mit ihrem eigenen Dark kalibriert, und die kalibrierten Teile werden vor der Registrierung wieder zusammengeführt (`merge`) — der Kanal endet damit weiterhin als **ein** Master, und genau das braucht das Farbkomposit. Nur das Dark hängt von der Belichtungszeit ab; ohne Darks im Lauf gibt es nichts aufzuteilen und der gewöhnliche Einzeldurchlauf greift. Der Report nennt jeden Kanal, bei dem das passiert ist.
+
+**Über Nächte gepoolte Flats werden gegeneinander geprüft.** Kein Header sagt, ob der optische Aufbau zwischen zwei Sessions verändert wurde — die Division des einen Flats durch das andere sagt es: ein passendes Paar ergibt ein gleichförmiges Bild, ein unpassendes zeigt die Vignettierung oder den Staub, der sich verschoben hat. Jeder Frame wird zuerst durch seinen eigenen Median geteilt, ein helleres Panel oder eine abklingende Dämmerung zählt also nicht als Abweichung; übrig bleibt die Form.
+
+| Streuung des Verhältnisses | Bedeutung |
+|---|---|
+| unter 0,15 % | die Nächte passen zusammen — Poolen ist richtig |
+| 0,15 % – 0,30 % | brauchbar, wird im Report vermerkt |
+| über 0,30 % | am Aufbau wurde vermutlich etwas verändert; der Report nennt die Nächte und verweist auf *Match flats to the same night* |
+
+Die Prüfung schweigt, wenn diese Option schon an ist, wenn es nur eine Nacht gibt oder wenn die Frames nicht lesbar sind. Verfahren und Schwellen stammen aus dem **Flat On Flat Analyzer** von Carlo Mollicone im offiziellen Siril-Skript-Repository.
 
 **Darks werden zusätzlich nach Temperatur gruppiert**, damit ein −10-°C- und ein −20-°C-Satz niemals zu einem Master gemittelt werden, das für keines von beiden stimmt. Bias wird nicht so aufgeteilt — er ist temperaturunabhängig.
 
@@ -237,11 +262,12 @@ Ein Dark, das nicht passt, wird **gemeldet und übersprungen**, nicht angewendet
 
 ### Die Offset-Kette der Flats
 
-Flats müssen ihren eigenen Offset loswerden, bevor sie irgendetwas normieren können. Das Skript weicht in drei Stufen aus und bricht nie ab:
+Flats müssen ihren eigenen Offset loswerden, bevor sie irgendetwas normieren können. Das Skript weicht in vier Stufen aus und bricht nie ab:
 
 1. ein echtes **Dark-Flat** oder **Bias**-Master, wenn eines passt,
-2. Sirils **synthetischer Bias** `=64*$OFFSET`,
-3. gar keine Offset-Korrektur — das Flat wird direkt gestackt.
+2. ein gewöhnliches **DARK mit der Belichtungszeit der Flats** (innerhalb 20 %) — ein Dark mit der Flat-Belichtung *ist* ein Dark-Flat, ganz gleich, was `IMAGETYP` behauptet, und Flat-Belichtungen sind kurz genug, dass der Unterschied vernachlässigbar bleibt,
+3. Sirils **synthetischer Bias** `=64*$OFFSET`,
+4. gar keine Offset-Korrektur — das Flat wird direkt gestackt.
 
 Master werden in `calib/` unter lesbaren, aus dem Header abgeleiteten Namen wie `M101_RED_-10C_3s_G100_flat` zwischengespeichert und von späteren Läufen wiederverwendet.
 
@@ -256,13 +282,31 @@ Ausreißer-Rejection entfernt Satelliten, kosmische Strahlung und Flugzeuge. Wel
 | Frames | Algorithmus | Warum |
 |---|---|---|
 | ≤ 4 | **Percentile Clipping** 0.2 / 0.1 | Sigma-Verfahren brauchen eine Population; bei drei Frames sagt eine Standardabweichung nichts |
-| 5 – 20 | **Winsorized Sigma** 3 / 3 | Robust, das Arbeitspferd für eine normale Nacht |
-| 21 – 49 | **Linear Fit** 3 / 3 | Verkraftet einen Gradienten, der sich über den Stack ändert |
-| ≥ 50 | **GESDT** 0.3 / 0.05 | Siril dokumentiert es als besser als Linear Fit bei großen Stacks |
+| 5 – 10 | **Sigma Clipping** 3 / 3 | Das Einfachste, das greift, sobald es mehr als eine Handvoll sind |
+| 11 – 30 | **Winsorized Sigma** 3 / 3 | Robust, das Arbeitspferd für eine normale Nacht |
+| 31 – 300 | **GESDT** 0.3 / 0.05 | Generalized Extreme Studentized Deviate Test |
+| > 300 | **Linear Fit** 5 / 4 | Modelliert einen Trend *über* den Stack — dafür muss er lang sein |
+
+Diese Bandgrenzen stammen von **Cyril Richard**, aus [AMSP](https://gitlab.com/free-astro/siril-scripts/-/blob/main/preprocessing/AMSP.py) im offiziellen Siril-Skript-Repository. Er hat Siril geschrieben und diese Algorithmen implementiert, seine Schwellen wiegen also schwerer als unsere eigene Herleitung.
 
 Die beiden GESDT-Zahlen sind **keine** Sigmas — es sind der maximal verworfene Anteil und ein Signifikanzniveau. Ein Siril-Build, das den Parameter nicht kennt, fällt auf Linear Fit zurück, und der Bericht nennt den Algorithmus, der *wirklich* gelaufen ist — eine Rückfallebene kann sich also nicht hinter der bevorzugten verstecken.
 
-Die Stufe wird für die Frames gewählt, die **tatsächlich integriert** werden, nicht für die gefundenen. Ein Sub ohne genügend erkennbare Sterne lässt sich nicht registrieren und wird von Siril ausgeschlossen; das Skript zählt, was Siril wirklich exportiert hat. In einer realen Nacht gingen 3 von 6 OIII-Frames durch Wolken verloren — die verbliebenen 3 bekamen Percentile Clipping, während die naive Zählung Winsorized Sigma auf drei Frames angewendet und damit gar nichts verworfen hätte.
+Die Stufe wird für die Frames gewählt, die **tatsächlich integriert** werden, nicht für die gefundenen. Ein Sub ohne genügend erkennbare Sterne lässt sich nicht registrieren und wird von Siril ausgeschlossen; das Skript zählt, was Siril wirklich exportiert hat. In einer realen Nacht gingen 3 von 6 OIII-Frames durch Wolken verloren — die verbliebenen 3 bekamen Percentile Clipping, während die naive Zählung Sigma Clipping auf drei Frames angewendet und damit gar nichts verworfen hätte.
+
+**Die Zahl ist gemessen, nicht geschätzt.** Nach der Registrierung fragt das Skript Siril nach der erzeugten Sequenz — `get_seq()` liefert zurück, welche Frames noch enthalten sind, und für jeden davon FWHM, Rundheit und Sternzahl, wie Siril sie gemessen hat. Diese Werte stehen im Report als Messungen, in einer eigenen Tabelle.
+
+Das reicht über den Report hinaus: die Qualitätsfilter laufen zum *Registrierungs*zeitpunkt, die exportierte Anzahl hat sie also bereits berücksichtigt. Ihren Anteil ein zweites Mal abzuziehen — wie es das Skript bisher tat, sowohl für den Report als auch für die Rejection-Stufe — wählte den Algorithmus für eine kleinere Population als die tatsächlich integrierte. Ein Kanal mit 34 exportierten Frames wurde als 30 behandelt, und das ist eine andere Stufe. Eine Schätzung springt jetzt nur noch ein, wenn die Sequenz gar nicht lesbar ist, und der Report kennzeichnet sie mit `≈`.
+
+Was Siril zurückgibt, landet zusätzlich als eigene Tabelle in `output.md`:
+
+| Filter | Integriert | Mediane FWHM | Rundheit | Sterne |
+|---|---:|---:|---:|---:|
+| HA | 29 von 31 | 3,14 px | 0,88 | 412 |
+| OIII | 12 von 12 | 3,90 px | — | — |
+
+Die Rundheit ist 1,00 bei perfekt runden Sternen; deutlich darunter heißt Trailing. Die Sternzahl ist Sirils eigene Detektion auf der Referenzebene — ein Kanal weit unter den anderen bedeutet meist einfach, dass der Filter weniger Licht durchlässt, nicht dass etwas schiefging. Ein Wert, den Siril **nicht** aufgezeichnet hat, erscheint als `—`, nie als `0,00`: eine Null dort läse sich als katastrophales Trailing oder als leeres Feld, während die Wahrheit schlicht „nicht gemessen" ist.
+
+Das Verfahren stammt aus **RegistrationInspector** von Cecile Melis und dem **Sequence Statistics Analyzer** von Carlo Mollicone.
 
 ### Frame-Gewichtung
 
@@ -405,6 +449,71 @@ Zwei weitere Besonderheiten:
 - **Für HaRGB entfällt die Farbkalibrierung.** Mit Ha im Rot-Kanal beschreibt die Sternphotometrie diesen Kanal nicht mehr, jede photometrische Kalibrierung würde also das Falsche messen. Das gespeicherte Komposit wird als *unkalibriert* gekennzeichnet — gleiche es von Hand ab.
 - **Die Luminanz bleibt trotzdem getrennt**, genau wie bei LRGB, und wird nach dem Strecken kombiniert.
 
+**Wie viel Ha tatsächlich hineingeht.** Die Beimischung lautet `1-(1-R)·(1-k·Ha)` — ein Screen-Blend, und auf *gestreckten* Daten ist das etwas spürbar anderes als eine Addition. Auf **linearen** Daten nicht. Bei typischen linearen Helligkeiten (0,001–0,01) stimmen beide auf besser als 0,1 % überein:
+
+| R | Ha | Screen-Blend | R + k·Ha |
+|---|---|---|---|
+| 0,002 | 0,003 | 0,003497 | 0,003500 |
+| 0,02 | 0,03 | 0,034700 | 0,035000 |
+| 0,4 | 0,6 | 0,580000 | 0,700000 |
+
+Der Regler addiert also einen Anteil Ha zu Rot, mehr passiert dort nicht. Die Screen-Form hat trotzdem ihren Zweck — sie kann 1,0 nie überschreiten, ein heller Sternkern lässt sich damit nicht ins Clipping schieben — aber die Lichterkompression, die ein Screen-Blend *nach* dem Strecken bringt, findet hier schlicht nicht statt. Wer die will, wiederholt die Beimischung nach dem Strecken.
+
+---
+
+### Die übrigen Schmalband-Zuordnungen
+
+SHO und HOO kennt jeder. Der Rest ist dieselbe Idee mit den Linien an anderen Plätzen — durchweg **reine Zuordnungen**, bei denen ein Kanal kopiert und nicht berechnet wird:
+
+| Palette | Rot | Grün | Blau |
+|---|---|---|---|
+| SHO | SII | Ha | OIII |
+| HOO | Ha | OIII | OIII |
+| HSO | Ha | SII | OIII |
+| HOS | Ha | OIII | SII |
+| OSS | OIII | SII | SII |
+| OHH | OIII | Ha | Ha |
+| OSH | OIII | SII | Ha |
+| OHS | OIII | Ha | SII |
+| HSS | Ha | SII | SII |
+
+Jede bekommt dieselbe Behandlung wie SHO: Schmalband-Normalisierung, wenn eingeschaltet, und SPCC im Narrowband-Modus mit den Wellenlängen der Linien, die *diese* Palette in den jeweiligen Kanal gelegt hat — dieselbe Tabelle steuert beides, eine Palette kann also nicht mit falschen Wellenlängen bei SPCC ankommen.
+
+Der Satz über SHO/HOO hinaus stammt aus **Cyril Richards PalettePicker** im offiziellen Siril-Skript-Repository (dort übernommen aus der Seti Astro Suite Pro).
+
+---
+
+### Realistic1 / Realistic2 — gewichtete Mischungen
+
+Diese *mischen* die Linien, statt sie zuzuordnen:
+
+| Palette | Rot | Grün | Blau |
+|---|---|---|---|
+| Realistic1 | 50 % Ha + 50 % SII | 30 % Ha + 70 % OIII | 90 % OIII + 10 % Ha |
+| Realistic2 | 70 % Ha + 30 % SII | 30 % SII + 70 % OIII | 100 % OIII |
+
+Gemischt wird mit Sirils `pm`, und die **Farbkalibrierung entfällt**: ein Kanal aus 70 % Ha und 30 % SII hat kein einzelnes Durchlassband, das SPCC modellieren könnte — derselbe Grund, aus dem HaRGB ausgeschlossen ist.
+
+---
+
+### Warum die Palettenliste hier endet
+
+Jede Palette oben ist entweder eine Zuordnung oder eine gewichtete Summe. Das ist kein Zufall, sondern das, was eine **lineare** Pipeline ehrlich anbieten kann:
+
+- **Zuordnungen** verschieben ganze Kanäle. Linear oder gestreckt — das Ergebnis ist dasselbe.
+- **Gewichtete Summen** sind Linearkombinationen, vertauschen also ebenfalls mit dem Stretch.
+- **Dynamische Paletten** — Foraxx und Verwandte — mischen mit einem Faktor wie `t^(1-t)`, wobei `t = Ha·OIII`. Auf gestreckten Daten läuft `t` über [0,1] und der Faktor leistet etwas. Auf linearen Daten liegt `t` bei etwa 1e-6, `t^(1-t)` fällt gegen null, und die Palette degeneriert zu „alles OIII". Sie fehlen hier **bewusst**.
+
+Cyril Richards PalettePicker zieht dieselbe Grenze von der anderen Seite: er hat die Fähigkeit, *lineare* Bilder zusammenzusetzen, bewusst aufgegeben, weil das einen automatischen Stretch erzwungen hätte. Dieses Skript behält die lineare Stufe — dort gehört die Farbkalibrierung hin — und überlässt die dynamischen Paletten dem Werkzeug, das für die gestreckte Stufe gebaut ist.
+
+---
+
+### Synthetische Luminanz
+
+Eine Schmalbandnacht hat keinen Luminanzfilter, und das Detail verteilt sich auf zwei oder drei Kanäle. **Build a synthetic luminance master** mittelt die Emissionslinien-Master zu `masters/TARGET_SynthL.fit`, das ihr gemeinsames Signal-Rausch-Verhältnis trägt.
+
+Es wird bewusst **nicht** ins Farbbild kombiniert. Eine Luminanz-Kombination auf linearen Daten hebt das helle Ende vor der Farbkalibrierung an — derselbe Fehler, den *Quick linear LRGB* macht, an echten Daten gemessen mit 531 geclippten Sternen gegen 68. `todo.md` nimmt die Datei als Teil B auf und kombiniert sie nach dem Strecken, wo sie hingehört.
+
 ---
 
 ### Auto
@@ -426,6 +535,14 @@ Wählst du eine Palette, die deine Filter nicht füllen können, sagt das Skript
 ### Kanalübergreifende Ausrichtung
 
 Jeder Filter wird gegen seinen *eigenen* Referenzframe gestackt, die Master können also auf leicht verschiedenen Pixelrastern liegen. Zur Korrektur werden alle Master in eine kleine Sequenz gelegt, neu registriert und mit `-framing=min` neu projiziert — das Ergebnis sind Kanäle, die **pixelidentisch** groß sind und exakt übereinanderliegen.
+
+### Wie das Komposit zusammengesetzt wird
+
+Die drei Kanäle werden aus Siril zurückgelesen, im Speicher gestapelt und als ein RGB-Bild übergeben (`new` + Pixeldaten), dann gespeichert. Sirils `rgbcomp` bleibt als Rückfallebene und ist weiterhin der einzige Weg für die `-lum=`-Kombination von *Quick linear LRGB* — das ist Sirils eigene Luminanzübertragung und keine Kanalkopie.
+
+Der Grund ist prosaisch: `rgbcomp` behandelt gequotete Pfade nicht so wie `cd` / `load` / `save`, ein Leerzeichen im Ordnernamen zerlegte also den Dateinamen. Die Komposition hat das bisher umgangen, indem sie in den Master-Ordner wechselte und nackte Basisnamen übergab. Das Zurücklesen über Siril klärt nebenbei die Orientierungsfrage konstruktiv — welche Zeilenreihenfolge Siril herausgibt, bekommt es auch zurück, niemand muss `ROWORDER` interpretieren.
+
+Der Report nennt, welcher der beiden Wege tatsächlich gelaufen ist.
 
 ### Stack only the filters this palette uses
 
@@ -541,7 +658,8 @@ output/
 ├─ TARGET_RGB_preview.fit gestreckte Vorschau, falls aktiviert
 ├─ masters/
 │   ├─ TARGET_FILTER.fit            ausgerichtet — diese zum Kombinieren nutzen
-│   └─ TARGET_FILTER_fullframe.fit  voller, unbeschnittener Stack
+│   └─ TARGET_FILTER_29x300s_G100_-10C_fullframe.fit
+│                                   voller, unbeschnittener Stack
 ├─ output.md             was das Skript getan hat, Schritt für Schritt
 ├─ todo.md               Anleitung für die finale Bearbeitung
 ├─ calib/                Master-Dark / -Flat / -Bias — beim nächsten Lauf wiederverwendet
@@ -550,6 +668,8 @@ output/
 ```
 
 **`masters/` enthält zwei Fassungen pro Kanal.** Die `_fullframe`-Datei ist der Stack in seiner eigenen Geometrie; die schlichte wurde auf das gemeinsame Raster neu projiziert und ist die, die man zum Kanalkombinieren nimmt.
+
+Der Name der Vollformat-Datei trägt das Rezept: **integrierte Frames × Belichtung, Gain, Sensortemperatur** — `M16_HA_29x300s_G100_-10C_fullframe.fit`. Die Frame-Zahl ist die, die die Registrierung überlebt hat, nicht die eingestellte — der Name kann also nie mehr versprechen, als in der Datei steckt. Ein Kanal mit gemischten Belichtungen bekommt schlicht `40subs` statt eines `NxT`, das für keine der beiden Hälften stimmen würde. Der ausgerichtete Master behält den kurzen Namen `TARGET_FILTER.fit`, weil `rgbcomp` und *Reuse existing masters* genau danach suchen.
 
 ### Die beiden Dokumente
 
@@ -669,6 +789,7 @@ Du hast mit *Stack only the filters this palette uses* gearbeitet, es wurden als
 - **Nicht vor der Kalibrierung strecken.** Das Skript übergibt aus gutem Grund linear.
 - **Lies das Log, wenn dich etwas überrascht.** Jede Rückfallebene, jeder übersprungene Schritt und jede sich selbst widersprechende Kombination wird dort in einem Satz erklärt.
 - **Behalte `masters/`.** Von dort aus lässt sich der gesamte Farbprozess ohne erneutes Stacken wiederholen — das macht Paletten-Experimente billig.
+- **Magentafarbene Sterne sind bei Drei-Linien-Paletten normal.** Sterne sind Kontinuumsquellen: sie landen im Rot- und im Blaukanal, aber nicht in dem, der Ha trägt — SHO und Verwandte färben sie deshalb lila. Das übliche Gegenmittel läuft *nach* dem Strecken: `invert` → `rmgreen` (SCNR) → `invert`. Das Skript macht das nicht für dich, weil das Invertieren linearer Daten nicht dasselbe bedeutet wie das Invertieren gestreckter Daten; `todo.md` erinnert an der richtigen Stelle daran.
 - **Benenne deine Ziele über die Nächte hinweg einheitlich** (`M16`, nicht einmal `M 16` und in der nächsten Session `Adlernebel`) — das Skript vergleicht Namen normalisiert, aber Einheitlichkeit hält die Ordner sauber.
 
 ---
@@ -701,7 +822,23 @@ Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.4.0
+## 17. Neu in 1.5.0
+
+- **Elf Paletten mehr** — die Schmalband-Zuordnungen HSO, HOS, OSS, OHH, OSH, OHS und HSS sowie die gewichteten Mischungen Realistic1 und Realistic2. Eine Tabelle steuert Zuordnung, Dropdown, Kanalmeldungen, SPCC-Wellenlängen und dieses Handbuch — auseinanderlaufen können sie damit nicht. Siehe §9.
+- **Die dynamischen Paletten fehlen bewusst**, und §9 sagt warum: ihr Blendfaktor `t^(1-t)` fällt auf linearen Daten in sich zusammen. Dieselbe Rechnung steht jetzt für den Ha→Rot-Regler, der bei linearen Helligkeiten einen Anteil Ha addiert und sonst nichts.
+- **Das Komposit wird im Speicher zusammengesetzt**, `rgbcomp` ist Rückfallebene — damit entfällt die Umgehung für seinen Umgang mit Leerzeichen in Pfaden. Für die Luminanzübertragung von *Quick linear LRGB* bleibt es der einzige Weg. Der Report nennt den tatsächlich gelaufenen.
+- **Optionale synthetische Luminanz** für Schmalbandnächte: die Emissionslinien-Master gemittelt zu `masters/TARGET_SynthL.fit`, bewusst nicht ins Farbbild kombiniert.
+- **Ein Filter mit gemischten Belichtungszeiten wird in Teilen kalibriert** — jede Belichtung mit ihrem eigenen Dark, vor der Registrierung wieder zusammengeführt. Ein Dark entfernt nur das thermische Signal seiner eigenen Belichtungszeit.
+- **Der Name des Vollformat-Masters trägt das Rezept**: `M16_HA_29x300s_G100_-10C_fullframe.fit`, mit der Frame-Zahl, die die Registrierung überlebt hat.
+- **Die Ausrichtungsqualität wird berichtet.** Wie viele Sternpaare jeder Kanal getroffen hat, wird aus Sirils Log gelesen; ein Kanal weit unter seinen Geschwistern wird benannt.
+- **Kalibrierungsmaster werden nach Bedarf gebaut**, die Kamera gehört zum Zuordnungsschlüssel, ein Dark innerhalb von 5 % der Belichtungszeit wird verwendet und benannt, und ein gewöhnliches DARK mit der Flat-Belichtung wird als deren Offset akzeptiert.
+- **Die integrierte Frame-Zahl wird gemessen**, zurückgelesen aus Sirils eigenen Registrierungsdaten — was nebenbei aufdeckte, dass die Qualitätsfilter doppelt abgezogen wurden. Der Report bekommt eine gemessene Tabelle mit FWHM, Rundheit und Sternzahl.
+- **Zwischendateien werden generationsweise freigegeben**, der Spitzenbedarf bleibt bei etwa zwei statt vier Generationen.
+- **Über Nächte gepoolte Flats werden vor dem Kombinieren gegeneinander geprüft.**
+- **Eine sirilpy-Untergrenze und ein Fähigkeitsbericht.** Das Skript startet nicht mehr unterhalb von sirilpy 1.0.0 (was Siril 1.4 mitliefert) und sagt das in einem Satz; oberhalb benennt es jeden optionalen Aufruf, den dieses Modul nicht hat — beim Start und in `output.md` — samt seiner Folge.
+- **Die SPCC-Namensfelder vervollständigen beim Tippen**, aus Sirils eigener Datenbank.
+
+## Was in 1.4.0 neu war
 
 - **Stack only the filters this palette uses** (standardmäßig aus) — halbiert einen typischen Lauf und hält vor allem die kanalübergreifende Ausrichtungsreferenz unter den Kanälen, die im Bild landen. Die Messwerte stehen in §9.
 - **Der SPCC-Sensor geht auch im Narrowband-Modus mit.** `-narrowband` lässt Siril nur die *Filter*-Argumente ignorieren; ihn wegzulassen scheiterte nie, es nahm still, was der SPCC-Dialog zuletzt enthielt.

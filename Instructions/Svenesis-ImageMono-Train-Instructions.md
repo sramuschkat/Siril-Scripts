@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.4.0** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.5.0** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.4.0](#17-whats-new-in-140)
+17. [What's New in 1.5.0](#17-whats-new-in-150)
 
 ---
 
@@ -109,6 +109,12 @@ Straight out of the camera and the stacker, an astrophoto is **linear**: pixel v
 
 Siril's `link` command creates **symbolic links** to your frames. Cloud clients (Dropbox, OneDrive, iCloud Drive, Google Drive) actively rewrite symlinks they sync, which can make a linked frame vanish between two Siril commands — mid-run, with no warning from the cloud client.
 
+**If the Log says features fell back.** Part of what this script does needs calls that only newer versions of Siril's Python module (`sirilpy`) provide: measured frame counts, composing the colour image in memory, reading Siril's own log. Every one of them is wrapped, so a missing call costs nothing — the run takes a simpler route. What it used to cost was an *explanation*, because the fallback was silent and permanent.
+
+The script now refuses to start below **sirilpy 1.0.0** (which ships with Siril 1.4), and above that floor it checks each optional call individually — by asking whether the call exists, not by comparing version numbers. Anything missing is named once at startup and again in `output.md`, together with what it changes. Updating Siril restores them.
+
+**Disk while a run is going.** Each step — calibrate, background, register — writes a full copy of every frame. With **Delete _work/ when finished** ticked, each generation is freed as soon as the next one is complete, so the peak stays at about two generations instead of four: roughly 3.6 GB per generation for a hundred 3008×3008 32-bit subs. Untick it and every intermediate is kept, which is what you want when something needs inspecting. (The idea comes from **Storage Friendly Stacking** by Quark-Coder, which watches the folder; a deterministic step after each command does the same job without a file watcher.)
+
 Keep the working tree on a **local disk**. If your raw data lives in the cloud, either copy the target folder locally before processing, or exclude the `output/_work/` folder from syncing.
 
 ---
@@ -124,7 +130,9 @@ The **FITS header is the source of truth**, not the folder name:
 | `FILTER` | Grouping frames into channels |
 | `IMAGETYP` | Telling lights from darks / flats / dark-flats / bias |
 | `OBJECT` | Detecting that you accidentally picked a folder with several targets |
-| `EXPTIME`, `GAIN`, `CCD-TEMP`, `XBINNING`, `NAXIS1/2` | Matching calibration masters to lights |
+| `INSTRUME`, `EXPTIME`, `GAIN`, `CCD-TEMP`, `XBINNING`, `NAXIS1/2` | Matching calibration masters to lights |
+
+Some capture software writes **no `IMAGETYP` at all**. Such a frame is then read from its *content*: no filter, no object and the mount parked at RA = DEC = 0 means the shutter was closed → **dark**; a filter *and* an object means it was pointed at something → **light**. Flat and bias are deliberately never guessed — nothing in an ordinary header separates them reliably, and a wrong guess there would corrupt the calibration instead of merely skipping it.
 
 The N.I.N.A. folder schema `DATE\IMAGETYPE\TARGETNAME\FILTER\…` is used only as a **fallback** when a keyword is missing. In practice this means the script works with almost any folder layout — including the classic N.I.N.A. arrangement where `FLAT/` sits *beside* the target folder rather than inside it.
 
@@ -209,6 +217,8 @@ Everything here is **optional and additive**. The script uses whatever it finds 
 - **Flats** are expected next to your lights, per filter, per session. Both layouts work: inside the target folder, or beside it in a sibling `FLAT/` directory.
 - **Darks and bias** come from the **Library** folder — a place you set once and reuse for months. It may hold raw frames (which get stacked into masters) or ready-made masters; a group of exactly one file is adopted as-is.
 
+A library is meant to grow, so **only the darks this run can actually use are stacked** — judged by the same rule that will later pick one. Five exposures at three setpoints are fifteen masters; building fourteen of them to open one would cost minutes and read hundreds of frames for nothing.
+
 Only calibration is taken from outside the target folder. A *light* frame sitting in the library or a neighbouring folder is counted and reported, never stacked into your target.
 
 ### How masters are matched
@@ -217,13 +227,28 @@ Matching runs on **FITS headers, not filenames**:
 
 | Property | Tolerance |
 |---|---|
-| Exposure time | exact |
+| Camera (`INSTRUME`) | exact, where both headers name it |
+| Exposure time | within 5 % — nearest wins |
 | Gain | exact |
 | Binning | exact |
 | Image dimensions | exact |
 | Sensor temperature | ±2 °C |
 
-A dark that does not match is **reported and skipped**, not applied. A 60-second dark on 300-second lights would do real damage, and silently using it would be worse than using none.
+The **camera** is part of the key because image size and binning are only a proxy: two bodies sharing a sensor format would otherwise calibrate each other. A value missing from a header never blocks a match — except the exposure, where an unreadable `EXPTIME` reads as 0 s, and 0 against 120 is exactly the mismatch that must not slip through.
+
+**Exposure is a tolerance, not an identity.** The thermal signal scales with exposure, so a 290-second dark removes very nearly what a 300-second one would, while refusing it would leave the lights uncalibrated — the worse outcome. The nearest dark inside the band is used and **named in the log**, with everything else confirmed to agree. Beyond it the run continues without a dark and says so: a 60-second dark on 300-second lights is 80 % off and is never applied.
+
+**A filter that mixes exposures is calibrated in parts.** A dark only removes the thermal signal that grew during *its own* exposure, so a single dark applied to 120-second and 300-second subs is right for neither. Each exposure is staged separately, calibrated with its own dark, and the calibrated parts are merged again (`merge`) before registration — so the channel still ends as **one** master, which is what the colour composite needs. Only the dark depends on exposure; with no darks in the run there is nothing to split for and the ordinary single pass runs. The report names every channel this happened to.
+
+**Flats pooled across nights are checked against each other.** Nothing in the headers says whether the optical train moved between two sessions — but dividing one night's flat by another's does: a matching pair gives a uniform image, a mismatched one shows the vignetting or dust that shifted. Each frame is normalised by its own median first, so a brighter panel or a fading twilight sky is not counted as disagreement; what remains is the shape.
+
+| Spread of the ratio | Reading |
+|---|---|
+| under 0.15 % | the nights agree — pooling is right |
+| 0.15 % – 0.30 % | usable, noted in the report |
+| above 0.30 % | the train was probably touched; the report names the nights and points at *Match flats to the same night* |
+
+The check is silent when that option is already on, when there is only one night, or when the frames cannot be read. Method and thresholds come from the **Flat On Flat Analyzer** by Carlo Mollicone in the official Siril script repository.
 
 **Darks are also grouped by temperature**, so a −10 °C and a −20 °C set can never be averaged into a single master that is correct for neither. Bias is not split that way — it is temperature-independent.
 
@@ -237,11 +262,12 @@ A dark that does not match is **reported and skipped**, not applied. A 60-second
 
 ### The flat offset chain
 
-Flats need their own offset removed before they can normalise anything. The script degrades in three steps and never aborts:
+Flats need their own offset removed before they can normalise anything. The script degrades in four steps and never aborts:
 
 1. a real **dark-flat** or **bias** master, if one matches,
-2. Siril's **synthetic bias** `=64*$OFFSET`,
-3. no offset correction at all — the flat is stacked directly.
+2. a plain **DARK shot at the flats' exposure** (within 20 %) — a dark at the flat exposure *is* a dark-flat, whatever `IMAGETYP` calls it, and flat exposures are short enough for the difference to stay negligible,
+3. Siril's **synthetic bias** `=64*$OFFSET`,
+4. no offset correction at all — the flat is stacked directly.
 
 Masters are cached in `calib/` under readable, header-derived names such as `M101_RED_-10C_3s_G100_flat` and reused by later runs.
 
@@ -256,13 +282,31 @@ Outlier rejection removes satellites, cosmic rays and aircraft. Which algorithm 
 | Frames | Algorithm | Why |
 |---|---|---|
 | ≤ 4 | **Percentile clipping** 0.2 / 0.1 | Sigma methods need a population; with three frames a standard deviation means nothing |
-| 5 – 20 | **Winsorized sigma** 3 / 3 | Robust, the workhorse for a normal night |
-| 21 – 49 | **Linear fit** 3 / 3 | Handles a gradient that changes across the stack |
-| ≥ 50 | **GESDT** 0.3 / 0.05 | Siril documents it as outperforming linear fit on large stacks |
+| 5 – 10 | **Sigma clipping** 3 / 3 | The cheapest thing that works once there are more than a handful |
+| 11 – 30 | **Winsorized sigma** 3 / 3 | Robust, the workhorse for a normal night |
+| 31 – 300 | **GESDT** 0.3 / 0.05 | Generalized Extreme Studentized Deviate Test |
+| > 300 | **Linear fit** 5 / 4 | Models a trend *across* the stack, so it needs a long one to define |
+
+These band edges are **Cyril Richard's**, taken from [AMSP](https://gitlab.com/free-astro/siril-scripts/-/blob/main/preprocessing/AMSP.py) in the official Siril script repository. He wrote Siril and implemented these algorithms, so his thresholds carry more weight than our own reasoning did.
 
 GESDT's two numbers are **not** sigmas — they are the maximum rejected fraction and a significance level. A Siril build that does not know the token falls back to linear fit, and the report names the algorithm that *really* ran, so a fallback cannot hide behind the preferred one.
 
-The tier is chosen for the frames that are **actually integrated**, not the ones that were found. A sub without enough detectable stars cannot be registered, and Siril excludes it; the script counts what Siril really exported. On one real night, 3 of 6 OIII frames were lost to cloud — the surviving 3 got percentile clipping, where the naive count would have applied Winsorized sigma to three frames and rejected nothing at all.
+The tier is chosen for the frames that are **actually integrated**, not the ones that were found. A sub without enough detectable stars cannot be registered, and Siril excludes it; the script counts what Siril really exported. On one real night, 3 of 6 OIII frames were lost to cloud — the surviving 3 got percentile clipping, where the naive count would have applied sigma clipping to three frames and rejected nothing at all.
+
+**The count is measured, not estimated.** After registration the script asks Siril for the sequence it produced — `get_seq()` hands back which frames are still included and, for each of them, the FWHM, roundness and star count Siril measured. Those numbers stand in the report as measurements, in their own table.
+
+This matters beyond the report: the quality filters run at *registration* time, so the exported count already has them applied. Subtracting their share a second time — as the script used to, for both the report and the rejection band — chose the algorithm for a smaller population than the one being integrated. A channel of 34 exported frames was treated as 30, which is a different band. An estimate now stands in only when the sequence cannot be read at all, and the report marks it with `≈`.
+
+What Siril hands back also goes into `output.md` as a table of its own:
+
+| Filter | Integrated | Median FWHM | Roundness | Stars |
+|---|---:|---:|---:|---:|
+| HA | 29 of 31 | 3.14 px | 0.88 | 412 |
+| OIII | 12 of 12 | 3.90 px | — | — |
+
+Roundness is 1.00 for perfectly round stars; well below that means trailing. The star count is Siril's own detection on the reference layer — a channel far below the others usually means the filter simply passes less light, not that anything went wrong. A value Siril did **not** record shows as `—`, never as `0.00`: a zero there would read as catastrophic trailing or an empty field, when the truth is that the measurement is absent.
+
+The technique comes from **RegistrationInspector** by Cecile Melis and the **Sequence Statistics Analyzer** by Carlo Mollicone.
 
 ### Frame weighting
 
@@ -405,6 +449,71 @@ Two further specifics:
 - **Colour calibration is skipped for HaRGB.** With Ha blended into Red, star photometry no longer describes that channel, so any photometric calibration would be measuring the wrong thing. The saved composite is labelled *uncalibrated* — balance it by hand.
 - **The luminance is still kept separate**, exactly as in LRGB, and combined after stretching.
 
+**How much Ha actually goes in.** The blend is `1-(1-R)·(1-k·Ha)` — a screen blend, and on *stretched* data that is a meaningfully different thing from adding. On **linear** data it is not. At typical linear brightness (0,001–0,01) the two agree to better than 0,1 %:
+
+| R | Ha | screen blend | R + k·Ha |
+|---|---|---|---|
+| 0,002 | 0,003 | 0,003497 | 0,003500 |
+| 0,02 | 0,03 | 0,034700 | 0,035000 |
+| 0,4 | 0,6 | 0,580000 | 0,700000 |
+
+So the slider adds a fraction of Ha to Red, and nothing more subtle than that. The screen form still earns its place — it can never exceed 1,0, so a bright star core cannot be pushed into clipping — but the highlight compression a screen blend gives *after* a stretch is simply not happening here. Redo the blend post-stretch if you want that behaviour.
+
+---
+
+### The other narrowband assignments
+
+SHO and HOO are the two everyone knows. The rest are the same idea with the lines in other places — all of them **pure assignments**, where a channel is copied rather than computed:
+
+| Palette | Red | Green | Blue |
+|---|---|---|---|
+| SHO | SII | Ha | OIII |
+| HOO | Ha | OIII | OIII |
+| HSO | Ha | SII | OIII |
+| HOS | Ha | OIII | SII |
+| OSS | OIII | SII | SII |
+| OHH | OIII | Ha | Ha |
+| OSH | OIII | SII | Ha |
+| OHS | OIII | Ha | SII |
+| HSS | Ha | SII | SII |
+
+Each gets the same treatment as SHO: narrowband normalisation if enabled, and SPCC in narrowband mode with the wavelengths of the lines *this* palette put in each channel — the same table drives both, so a palette cannot be added with the wrong wavelengths sent to SPCC.
+
+The set beyond SHO/HOO comes from **Cyril Richard's PalettePicker** in the official Siril script repository (adapted there from Seti Astro Suite Pro).
+
+---
+
+### Realistic1 / Realistic2 — weighted mixes
+
+These *mix* the lines instead of assigning them:
+
+| Palette | Red | Green | Blue |
+|---|---|---|---|
+| Realistic1 | 50 % Ha + 50 % SII | 30 % Ha + 70 % OIII | 90 % OIII + 10 % Ha |
+| Realistic2 | 70 % Ha + 30 % SII | 30 % SII + 70 % OIII | 100 % OIII |
+
+The mixing runs through Siril's `pm`, and **colour calibration is skipped**: a channel that is 70 % Ha and 30 % SII has no single passband for SPCC to model — the same reason HaRGB is excluded.
+
+---
+
+### Why the palette list stops here
+
+Every palette above is either an assignment or a weighted sum. That is not a coincidence, it is what a **linear** pipeline can honestly offer:
+
+- **Assignments** move whole channels around. Linear or stretched, the result is identical.
+- **Weighted sums** are linear combinations, so they too commute with the stretch.
+- **Dynamic palettes** — Foraxx and its relatives — blend with a factor like `t^(1-t)` where `t = Ha·OIII`. On stretched data `t` spans [0,1] and the factor does real work. On linear data `t` is around 1e-6, `t^(1-t)` collapses towards zero, and the palette degenerates into "all OIII". They are **deliberately absent**.
+
+Cyril Richard's PalettePicker states the same boundary from the other side: it dropped the ability to assemble *linear* images, because doing so would have forced an automatic stretch on the user. This script keeps the linear stage — which is where colour calibration belongs — and leaves the dynamic palettes to the tool built for the stretched stage.
+
+---
+
+### Synthetic luminance
+
+A narrowband night has no Luminance filter, and the detail sits spread across two or three channels. **Build a synthetic luminance master** averages the emission-line masters into `masters/TARGET_SynthL.fit`, which carries their combined signal-to-noise.
+
+It is deliberately **not** combined into the colour image. A luminance combine on linear data lifts the bright end before colour calibration — the same mistake *Quick linear LRGB* makes, measured on real data at 531 clipped stars against 68. `todo.md` picks the file up as Part B and combines it after the stretch, where it belongs.
+
 ---
 
 ### Auto
@@ -426,6 +535,14 @@ If you pick a palette the filters cannot fill, the script says so **when you cho
 ### Cross-filter alignment
 
 Each filter is stacked against its *own* reference frame, so the masters can sit on slightly different pixel grids. To fix that, all masters are pooled into one small sequence, re-registered, and re-projected with `-framing=min`, producing channels that are **pixel-identical** in size and overlay exactly.
+
+### How the composite is assembled
+
+The three channels are read back out of Siril, stacked in memory and handed over as one RGB image (`new` + pixel data), then saved. Siril's `rgbcomp` remains as the fallback and is still the only route for the *Quick linear LRGB* `-lum=` combine, which is Siril's own luminance transfer rather than a channel copy.
+
+The reason for the change is prosaic: `rgbcomp` does not honour quoted paths the way `cd` / `load` / `save` do, so a folder name containing a space split the filename. Composition used to work around that by changing into the masters folder and passing bare basenames. Reading the planes back through Siril also settles the orientation question by construction — whatever row order Siril hands out is the row order it gets back, so nothing has to interpret `ROWORDER`.
+
+The report names which of the two routes actually ran.
 
 ### Stack only the filters this palette uses
 
@@ -541,7 +658,8 @@ output/
 ├─ TARGET_RGB_preview.fit stretched preview, if enabled
 ├─ masters/
 │   ├─ TARGET_FILTER.fit            aligned — use these to combine channels
-│   └─ TARGET_FILTER_fullframe.fit  full, uncropped stack
+│   └─ TARGET_FILTER_29x300s_G100_-10C_fullframe.fit
+│                                   full, uncropped stack
 ├─ output.md             what the script did, step by step
 ├─ todo.md               step-by-step final-processing guide
 ├─ calib/                master dark / flat / bias — reused next run
@@ -550,6 +668,8 @@ output/
 ```
 
 **`masters/` holds two versions per channel.** The `_fullframe` file is the stack in its own geometry; the plain one has been re-projected onto the common grid and is the one to use for channel combination.
+
+The full-frame name carries the recipe: **frames integrated × exposure, gain, sensor temperature** — `M16_HA_29x300s_G100_-10C_fullframe.fit`. The frame count is the one that survived registration, not the number staged, so the name can never promise more than the file holds. A channel that mixed exposures gets a plain `40subs` instead of an `NxT` that would be true for neither half. The aligned master keeps the short `TARGET_FILTER.fit` name because it is what `rgbcomp` and *Reuse existing masters* look for.
 
 ### The two documents
 
@@ -669,6 +789,7 @@ You ran with *Stack only the filters this palette uses* on, so only some channel
 - **Do not stretch before calibrating.** The script hands over linear for a reason.
 - **Read the Log when something surprises you.** Every fallback, every skipped step and every self-defeating combination is explained there in one sentence.
 - **Keep `masters/`.** You can redo the whole colour process from those files without re-stacking, and they are what makes palette experiments cheap.
+- **Magenta stars in a three-line palette are expected.** Stars are continuum sources: they land in the Red and Blue channels but not in the one carrying Ha, so SHO and its relatives turn them purple. The usual remedy runs *after* stretching — `invert` → `rmgreen` (SCNR) → `invert`. The script does not do it for you, because inverting linear data does not mean what inverting stretched data means; `todo.md` reminds you where it belongs.
 - **Name your targets consistently** across nights (`M16`, not `M 16` in one session and `Eagle Nebula` in the next) — the script compares names normalised, but consistency keeps the folders tidy.
 
 ---
@@ -701,7 +822,23 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.4.0
+## 17. What's New in 1.5.0
+
+- **Eleven more palettes** — the narrowband assignments HSO, HOS, OSS, OHH, OSH, OHS and HSS, plus the weighted mixes Realistic1 and Realistic2. One table drives the mapping, the dropdown, the channel messages, the SPCC wavelengths and this manual, so none of them can drift apart. See §9.
+- **The dynamic palettes are deliberately absent**, and §9 says why: their `t^(1-t)` blend factor collapses on linear data. The same arithmetic is now stated for the Ha→Red slider, which at linear levels adds a fraction of Ha and nothing more.
+- **The composite is assembled in memory** and `rgbcomp` became the fallback — which removes the workaround for its handling of paths containing spaces. It remains the only route for the *Quick linear LRGB* luminance transfer. The report names the route that ran.
+- **Optional synthetic luminance** for narrowband nights: the emission-line masters averaged into `masters/TARGET_SynthL.fit`, deliberately not combined into the colour image.
+- **A filter that mixes exposures is calibrated in parts** — each exposure with its own dark, merged again before registration. A dark only removes the thermal signal that grew during its own exposure.
+- **The full-frame master's name carries the recipe**: `M16_HA_29x300s_G100_-10C_fullframe.fit`, with the frame count that survived registration.
+- **Alignment quality is reported.** The number of star pairs each channel matched on is read from Siril's log, and a channel far below its siblings is named.
+- **Calibration masters are built on demand**, the camera is part of the matching key, a dark within 5 % of the exposure is used and named, and a plain DARK at the flats' exposure is accepted as their offset.
+- **The integrated frame count is measured**, read back from Siril's own registration data — which also uncovered the quality filters being subtracted twice. The report gains a measured FWHM / roundness / star-count table.
+- **Intermediates are freed one generation at a time**, holding peak disk usage at about two generations instead of four.
+- **Flats pooled across nights are checked against each other** before they are combined.
+- **A sirilpy floor and a capability report.** The script refuses to start below sirilpy 1.0.0 (what Siril 1.4 ships) with one clear sentence, and above that floor it names any optional call this module lacks — at startup and in `output.md` — together with what it changes.
+- **The SPCC name fields complete as you type**, from Siril's own database.
+
+## What was new in 1.4.0
 
 - **Stack only the filters this palette uses** (off by default) — halves a typical run and, more importantly, keeps the cross-filter alignment reference among the channels that end up in the picture. See §9 for the measurements.
 - **The SPCC sensor is sent in narrowband mode too.** `-narrowband` makes Siril ignore the *filter* arguments only; leaving the sensor out never failed, it silently used whatever the SPCC dialog last held.

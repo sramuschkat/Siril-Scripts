@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.4.0
+Script Version: 1.5.0
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,9 +73,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.4.0
+# Script Version: 1.5.0
 # Siril Version: 1.4.0
-# Python Module Version: 1.4.0
+# Python Module Version: 1.0.0
 # Script Category: preprocessing
 # Script Description: Point it at a N.I.N.A. target folder; it discovers the
 #   light frames per optical filter, calibrates them with whatever darks,
@@ -85,8 +85,340 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   with background extraction and photometric colour calibration.  Writes a
 #   Markdown processing report and a post-processing guide alongside.
 # Script Author: Sven Ramuschkat
+#
+# Acknowledgements:
+#   The stacking-rejection thresholds in _rejection_args() are taken from
+#   AMSP (Automatic Multi-Session Processing) by Cyril Richard, the
+#   author of Siril, GPL-3.0-or-later:
+# https://gitlab.com/free-astro/siril-scripts/-/blob/main/preprocessing/AMSP.py
+#   Reading AMSP alongside this script also contributed the noon-to-noon
+#   observing-night key, the per-group disk cleanup, the INSTRUME check,
+#   the wider set of CCD-temperature keywords, the closest-exposure dark
+#   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.5.0 - Composition beyond SHO/HOO, and calibration that follows the exposure
+      - Audit fixes found by RUNNING the pure helpers on hostile input
+        rather than reading them.  _format_duration guarded ValueError and
+        TypeError but not OverflowError, which is what int(round(inf))
+        raises -- a corrupt EXPTIME reaching the report would have killed
+        the whole document, not just that row.  Every non-finite input now
+        gives an em-dash.  And _exp_tag promised a "Siril-safe" token
+        while formatting with "g", which switches to exponent notation
+        outside 1e-5..1e6: 1e+09 carries a plus that no dot-replacing
+        removes.  Real exposures never reach that, but a token generator
+        that is safe only for plausible input is not safe.  It writes the
+        digits out and falls back to "0s" on anything unusable
+      - Audit fixes on the measured statistics.  A registration value
+        Siril did not record (roundness, star count) was printed as 0.00
+        / 0 -- which reads as catastrophic trailing or an empty field,
+        when the truth is "not recorded".  Log and report now leave the
+        value out (em-dash in the table).  And in the flat consistency
+        check, an UNDATED flat could become the reference: "?" sorts
+        after every digit, so the plain sort crowned it "most recent
+        night" and the warning would have named "?" as a night.  Dated
+        nights rule; an undated set only ever compares
+      - Audit fix: the file contradicted itself about old sirilpy.  The
+        exception imports fell back to LOCALLY DEFINED stand-ins "for
+        older sirilpy" -- and a locally defined CommandError is never what
+        sirilpy raises, so all 28 `except CommandError, DataError,
+        SirilError` handlers would have missed and a Siril error would
+        have escaped as an unhandled exception, killing the run with a
+        traceback instead of falling back.  Twelve lines further down, the
+        new floor refuses to start below 1.0.0, where those exceptions
+        certainly exist.  The stand-ins are gone and the imports are
+        plain.  The floor itself now asks for check_module_version with
+        getattr: a module too old to have the checker is also too old for
+        the floor, and asking rather than calling keeps the answer a
+        sentence instead of a traceback
+      - A version floor and a capability report.  Every script in the
+        official repository declares a minimum sirilpy -- AutoBGE 0.7.41,
+        GraXpert-AI 0.8.6, RegistrationInspector 1.0.16, whose API this
+        script now uses -- and this one declared none.  It refuses to
+        start below 1.0.0 (what Siril 1.4 ships) with one sentence instead
+        of an AttributeError from inside a worker thread.  Above that
+        floor, five features need calls that older modules lack: measured
+        frame counts, composing in memory, the composite's WCS, reading
+        Siril's log, and finding its data directory.  All five are wrapped
+        already -- which was the problem, because the fallback was silent
+        and permanent.  They are now probed with hasattr (a capability, so
+        no version table has to be kept true), named once at startup, and
+        repeated in output.md with what each one changes.  The header
+        metadata also claimed "Python Module Version: 1.4.0", which is
+        Siril's version; there is no such sirilpy
+      - Audit fixes on the three additions above.  `_seq_quality` trusted
+        whatever sequence `load_seq` left current: if the load quietly
+        failed, `get_seq()` answered about an EARLIER one and its frame
+        count would have chosen the rejection band.  The count is now
+        cross-checked against the files on disk and a mismatch is "wrong
+        sequence, cannot tell"; both `<seq>` and `<seq>_` are tried,
+        because Siril writes the trailing underscore and scripts in the
+        wild load it both ways.  `_drop_generation` required a digit after
+        the underscore, so it deleted a sequence's frames and left
+        `<seq>_.seq` -- Siril's own sequence file -- behind.  And the
+        comment on _stacked_counts still described the old pairing after
+        its first element became the staged count
+      - The integrated frame count is MEASURED, not estimated.  Siril's
+        own registration data is read back through get_seq(): which frames
+        are still included, and their median FWHM, roundness and star
+        count, all of which now stand in the report as measurements.  This
+        also uncovered a real defect: the quality filters run at
+        seqapplyreg, so the count of exported frames already reflects them
+        -- and _effective_frame_count subtracted their share a SECOND
+        time, once for the report and once for the rejection tier.  A
+        channel of 34 exported frames was integrated as 30, which is a
+        different rejection band.  The estimate remains for the one case
+        it was written for: when the count cannot be read at all.  (From
+        RegistrationInspector by Cecile Melis and the Sequence Statistics
+        Analyzer by Carlo Mollicone.)
+      - Intermediates are freed one generation at a time.  The chain
+        lights -> pp_ -> bkg_ -> r_ writes a full copy of every frame at
+        each step, and keeping all of them until the master was written
+        made peak disk usage their SUM: about 3.6 GB per generation for a
+        hundred 3008x3008 subs.  Each predecessor is now deleted as soon
+        as its successor is complete, which holds the peak at roughly two.
+        Gated on the same option as _work/ itself, and the freed size is
+        measured with lstat, so the staged symlinks are not reported as
+        gigabytes that were never there.  (From Storage Friendly Stacking
+        by Quark-Coder, whose file watcher this replaces with a
+        deterministic step.)
+      - Flats pooled across nights are checked against each other first.
+        Dividing one night's flat by another's gives a uniform image when
+        the optical train did not move and shows the vignetting or dust
+        that did -- so each frame is normalised by its own median (a
+        brighter panel is not a disagreement) and the spread of the ratio
+        is measured.  Under 0.15% the nights agree, up to 0.3% is usable,
+        beyond that the report names the nights and points at "Match flats
+        to the same night".  Silent when that option is already on, when
+        there is only one night, or when nothing could be read.  (Method
+        and thresholds from the Flat On Flat Analyzer by Carlo Mollicone.)
+      - Audit fixes on the new palettes, all one root cause -- the channel
+        dropdowns can only show ONE source per channel, and a weighted
+        palette reads two.  Narrowband normalisation covered the three
+        mapped masters, so the line that had no dropdown went into the mix
+        unnormalised, at its raw level.  `_unfillable_channels` judged a
+        channel by the dominant source alone, so Realistic1 without an SII
+        filter looked perfectly fillable and the run refused at the very
+        end -- the exact failure HaRGB had in 1.4.0.  And
+        `_palette_filters` left the same master out, so "stack only the
+        filters this palette uses" would have skipped a channel the
+        composite then asked for.  All three now go through
+        `_palette_roles`, which reads the weights
+      - Audit fix: `synth_lum` sat in the preset widget map, where every
+        key is one of the three presets' seventeen.  Ticking it flipped
+        the preset combo to "Custom" although no preset value had changed.
+        Moved to the settings map, next to palette and quick_lrgb
+      - Audit fix: the comment above the compose chain claimed every step
+        used quoted absolute paths.  `_norm` still loads by basename,
+        because `linear_match` resolves its argument against the working
+        directory; the comment now says which is which
+      - Eleven more palettes: the narrowband ASSIGNMENTS HSO, HOS, OSS,
+        OHH, OSH, OHS and HSS, plus the weighted mixes Realistic1 and
+        Realistic2.  One table now drives the mapping, the dropdown, the
+        "which filter does this channel want" message, the SPCC
+        wavelengths and the manuals -- a palette cannot exist in one and
+        be missing from another, nor reach SPCC with the wrong lines.  The
+        weighted ones are mixed with `pm` and, like HaRGB, skip colour
+        calibration: a channel that is 70% Ha and 30% SII has no single
+        passband to model.  (From Cyril Richard's PalettePicker, adapted
+        there from Seti Astro Suite Pro.)
+      - The dynamic palettes (Foraxx and relatives) are deliberately NOT
+        included.  Their blend factor is t**(1-t) with t = Ha*OIII; on
+        linear data t is around 1e-6 and the expression collapses.  The
+        same arithmetic applies to our own Ha->Red blend, which is now
+        documented honestly: at linear levels 1-(1-R)*(1-k*Ha) and
+        R + k*Ha agree to better than 0.1%, so the slider adds a fraction
+        of Ha and the screen form only guarantees it cannot clip
+      - The composite is assembled in memory (`new` + set_image_pixeldata)
+        and rgbcomp became the fallback -- and stays the only route for
+        the -lum= combine, which is Siril's luminance transfer rather than
+        a channel copy.  rgbcomp does not honour quoted paths, which is
+        why composition used to cd into the masters folder and pass bare
+        basenames; that workaround is gone, and so is the pm staging for
+        HaRGB.  The planes are READ back through get_image_pixeldata and
+        written unchanged, so row order is a round trip rather than an
+        interpretation of ROWORDER.  `new` rather than a loaded mono
+        template: Siril stays in single-layer display state after loading
+        mono, and the pushed result then renders monochrome (PalettePicker
+        documents this).  The report names which route ran
+      - Optional synthetic luminance for narrowband: the emission-line
+        masters averaged into masters/TARGET_SynthL.fit.  It is NOT
+        combined into the colour image -- doing that on linear data lifts
+        the bright end before colour calibration, the same mistake Quick
+        linear LRGB makes -- and todo.md picks it up as Part B, after the
+        stretch.  Magenta stars in a three-line palette get a todo.md
+        entry with the invert/rmgreen/invert remedy for the same reason:
+        inverting linear data is not inverting stretched data
+      - Audit fixes: the colour composite is no longer built from masters
+        that are not on one pixel grid.  `_compose` states that its inputs
+        are identical in size, which -framing=min guarantees -- but only
+        when alignment ran; after a failed alignment the caller handed it
+        the unaligned masters anyway, and rgbcomp would either refuse them
+        or combine channels that do not overlay.  The sizes are now
+        compared first (only in that case, so a normal run reads no extra
+        headers) and composition is skipped with the reason
+      - Audit fixes: the HaRGB blend stages its two inputs under
+        PixelMath-safe names.  The expression 1-(1-$R$)*(1-k*$Ha$) refers
+        to images BY FILE NAME, and the full-frame master's new name
+        carries the sensor temperature -- "-10C" would put a hyphen inside
+        a subtraction.  The same was already true for a target called
+        NGC-7000.  Both inputs are copied to pm_R / pm_Ha in the helper
+        folder and the expression is evaluated there
+      - Audit fix: a filter whose every exposure went uncalibrated no
+        longer records a calibration note.  The per-exposure path wrote one
+        unconditionally, so the report would have printed a "Calibration"
+        step listing parts that read "uncalibrated"
+      - A filter that mixes exposures is now calibrated in parts.  A dark
+        removes the thermal signal that grew during ITS exposure, so one
+        dark on 120s and 300s subs is right for neither -- the script used
+        to pick a dark from one representative frame and merely warn.  Each
+        exposure is now staged and calibrated separately and the calibrated
+        parts are merged (`merge`) before registration, so the channel
+        still ends as ONE master.  Only the dark depends on exposure, so
+        nothing is split when the run has no darks; and a merge that fails
+        falls back to the old single pass, out loud.  (Third reading of
+        AMSP, which groups by (object, filter, exposure) throughout.)
+      - The full-frame master's name carries the recipe:
+        M16_HA_29x300s_G100_-10C_fullframe.  The frame count is the one
+        that survived registration, not the number staged, and a channel of
+        mixed exposures gets "40subs" rather than an NxT that would be true
+        for neither half.  Reuse matches the stable <TARGET>_<FILTER>_
+        prefix instead of a fixed filename -- otherwise reusing a master
+        would require stacking exactly the same frames again -- and the
+        bare name written by earlier versions still counts
+      - After alignment, each registered master is asked for its own FILTER
+        keyword before its name is written on it.  The index map that
+        connects Siril's frame numbers to filters is careful, but a channel
+        saved under the wrong name is the one error here that nothing
+        downstream can catch; a mismatch now drops the channel instead.  An
+        unreadable keyword proves nothing and is let through
+      - Help and both manuals catch up with the calibration this version
+        actually performs: the camera is part of the match key, the dark
+        exposure is a 5% band with the nearest one named in the log (not
+        an exact-or-skip rule), a plain DARK can stand in as a dark-flat,
+        only the darks a run can use are stacked, a missing IMAGETYP is
+        read from the frame's content, and the SPCC names fall back to
+        `spcc_list` and now auto-complete in the fields.  Each of those
+        was implemented without the documentation following it.  The
+        rejection bands now LINK Cyril Richard's AMSP rather than only
+        naming it -- and the help tabs became QTextBrowsers to make that
+        work: a QTextEdit draws <a href> as blue text and does nothing on
+        click, so every link in the help was dead
+      - Audit fixes: re-tiering the rejection bands left four documents
+        describing the old ones.  README and both manuals still listed
+        "5-20 Winsorized, 21-49 linear fit, GESDT from 50", and all three
+        said a 6-frame channel would have used Winsorized sigma when it
+        now uses plain sigma.  A comment above the constants still put the
+        GESDT crossover at "more than 50 images", directly above the
+        comment that sets it to 31.  And the example in
+        _effective_frame_count (21 frames -> 18) no longer crossed a band
+        edge at all, since both are Winsorized now -- it is 33 -> 29,
+        which crosses GESDT to Winsorized.  A test now checks the bands in
+        the code against every document that names them
+      - Audit fixes: the calibration signature now includes the camera.
+        Comparing INSTRUME while grouping without it was inconsistent --
+        two bodies of the same model share every other property, so their
+        frames landed in one group, were averaged into one master, and the
+        instrument test then judged a group that was already mixed.
+        INSTRUMENTS_WITHOUT_IMAGETYP was dead: the content inference runs
+        as a last resort for every file rather than being gated on a
+        device list, which is the more general behaviour and does not need
+        the list.  And _dark_as_darkflat binds its best-candidate variable
+        up front instead of relying on the guard alone
+      - Calibration masters are built on demand.  Every dark signature
+        found used to be stacked and every flat set with it, however
+        little the run could use: a library holding five exposures at
+        three setpoints is fifteen dark masters built to use one, and a
+        flat set for a filter with no lights this run produced a master
+        nothing opens.  The demand is judged with the SAME rule that
+        later picks a master, loose exposure tolerance included, so a
+        signature cannot be skipped here and wanted there -- and when
+        there is nothing to judge by, everything is built, because too
+        much is a cost while too little is a defect.  (Second reading of
+        AMSP, whose _get_active_requirements does the same.)
+      - A plain DARK at the flats' exposure is accepted as their offset
+        when no dark-flat or bias exists.  A dark-flat IS a dark taken at
+        the flat exposure, and plenty of capture software writes it as
+        IMAGETYP=DARK; refusing it over a label left the flats on a
+        synthetic offset with a measured one sitting right there.  20%
+        tolerance rather than the 5% used for lights: flat exposures are
+        short, so the same share is a far smaller absolute difference, and
+        so is the dark signal being corrected.  Nothing happens when the
+        flats have mixed exposures -- there is no single right answer then
+      - Seven things adopted from AMSP (Automatic Multi-Session
+        Processing) by **Cyril Richard**, the author of Siril, after
+        reading it side by side with this one.  With thanks -- see the
+        acknowledgement in the header for the link:
+          * The observing night is computed from DATE-OBS, noon to noon,
+            instead of read off a folder name.  A session running past
+            midnight is now ONE night, so "Match flats to the same night"
+            stops pairing half a session's lights with the wrong flats --
+            a problem this script previously answered by asking the user
+            to change their N.I.N.A. folder pattern
+          * Each filter's working tree is deleted once its master is
+            written, so peak disk is one channel rather than the sum of
+            all of them (six 3000x3000 32-bit channels is over a
+            gigabyte nothing reads again).  Bounded by "Delete _work/
+            when finished": keeping means keeping
+          * A dark whose exposure is not identical is no longer refused
+            outright.  After the exact match fails, the closest one
+            within 5% is used and said so; the thermal signal scales with
+            exposure, so 290s on 300s lights removes most of what 300s
+            would, while 60s does not.  Everything else -- camera, gain,
+            binning, size, temperature -- must still agree exactly
+          * INSTRUME now blocks a master from a different camera.  Image
+            size and binning were only a proxy: two cameras sharing a
+            sensor format would have calibrated each other
+          * CCDTEMP, TEMPERAT and CAMTCCD are read as well.  Missing a
+            spelling meant the temperature silently counted as unknown,
+            and a dark from another setpoint slipped through
+          * IMAGETYP can be inferred from the header content when the
+            keyword is absent (some capture software omits it): no
+            FILTER, no OBJECT and RA=DEC=0 is a dark, a FILTER and an
+            OBJECT is a light.  Flat and bias are never guessed -- a
+            wrong guess there corrupts the calibration instead of
+            skipping it
+          * The rejection band edges are his, and differ from ours in
+            three of five: plain sigma for 5-10, GESDT from 31 rather
+            than 50, and linear fit moved from the middle of the range to
+            the top (>300, at 5/4), where a long stack gives its trend
+            model enough data.  He implemented these algorithms in Siril,
+            so the thresholds are credited to him in the code, the help
+            and the report
+      - Audit fixes: the relative alignment warning compared against the
+        upper-middle value, which is not the median for an even number of
+        channels -- the report and this file both called it the median,
+        so it is one now.  Its blind spot is documented too: comparing
+        against the median assumes most channels aligned well, which is
+        the second reason the absolute floor exists.  A _plural() call
+        had the same word in both branches, implying a distinction
+        English does not make.  The star-pair table cannot print the
+        reference channel twice.  CALIB_TOKENS was dead: the
+        sibling-folder search became header-based and nothing ever read it
+      - The report says how many star pairs each channel was aligned on,
+        and flags the ones fitted on too few.  Siril logs that count and
+        the script used to throw it away, so the number that best predicts
+        colour fringing at the edges could only be found by reading
+        Siril's own log: on one M 16 run OIII matched on 12 pairs against
+        a Luminance reference and produced an SPCC R/G sigma of 5.76,
+        while the same data aligned among its own kind matched on 1165
+        and came out at 2.73.  Read back through get_siril_log() over the
+        alignment step only.  Two rules flag a channel -- an absolute
+        floor of 30 pairs (a judgement about what a similarity fit needs,
+        not a measurement) and a quarter of the run's median, which
+        catches a channel that had the stars available and still did not
+        match them.  Diagnostic only: nothing about the image changes,
+        and an unrecognised log format prints nothing at all
+      - The SPCC name fields complete as you type, from Siril's own
+        lists.  The names come from the JSON tables, which cost nothing
+        to read and stay out of the log; `spcc_list` is asked only when
+        those cannot be found -- it is Siril's own answer, and therefore
+        always right, but it prints the whole list.  Read back via
+        get_siril_log(), whose existence had been wrongly ruled out
+        earlier.  The fields stay free text: clearing them still means
+        "use Siril's own SPCC configuration", and an editable combo box
+        would have lost a hand-typed name on the next preset load, since
+        that loader drops combo values it cannot find in the list
 1.4.0 - Per-palette stacking, and a report that matches the run
       - The Help dialog links the full manual (EN / DE) on GitHub.  The
         tabs are a quick reference and stay that way; the link sits in a
@@ -491,24 +823,36 @@ import traceback
 import datetime
 
 import sirilpy as s
+
+# Siril 1.4 ships sirilpy 1.0.x, and everything this script needs to run
+# at all is in 1.0.0.  Checked before anything else -- before the imports
+# below, which the floor is what guarantees -- so a too-old module gives
+# one clear sentence instead of an ImportError or an AttributeError from
+# deep inside a worker thread.  Features that need MORE than the floor are
+# listed in OPTIONAL_API and reported individually; see
+# `_missing_capabilities`.
+SIRILPY_MIN_VERSION = "1.0.0"
+
+_version_ok = getattr(s, "check_module_version", None)
+if _version_ok is None or not _version_ok(f">={SIRILPY_MIN_VERSION}"):
+    # A module without check_module_version() is far older than the floor,
+    # so the answer is the same either way -- and asking for the function
+    # rather than calling it keeps the answer a sentence instead of a
+    # traceback.
+    print(f"Svenesis ImageMono Train needs sirilpy "
+          f"{SIRILPY_MIN_VERSION} or newer (Siril 1.4). "
+          "Update Siril, or its Python module from the Scripts menu.")
+    sys.exit(1)
+
+# Guaranteed by the floor above.  These used to fall back to locally
+# defined stand-ins for "older sirilpy" -- which was worse than no
+# handling at all: a locally defined CommandError is never what sirilpy
+# raises, so every `except CommandError` in this file would have missed,
+# and a Siril error would have escaped as an unhandled exception.
 from sirilpy import LogColor, NoImageError
-
-try:
-    from sirilpy.exceptions import (
-        SirilError, SirilConnectionError, CommandError, DataError,
-    )
-except ImportError:                       # older sirilpy
-    class SirilError(Exception):
-        pass
-
-    class SirilConnectionError(Exception):
-        pass
-
-    class CommandError(Exception):
-        pass
-
-    class DataError(Exception):
-        pass
+from sirilpy.exceptions import (
+    SirilError, SirilConnectionError, CommandError, DataError,
+)
 
 s.ensure_installed("PyQt6", "astropy", "numpy")
 
@@ -520,9 +864,10 @@ from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QMessageBox, QGroupBox,
     QCheckBox, QComboBox, QSpinBox, QDoubleSpinBox, QSizePolicy,
     QDialog,
-    QLineEdit, QTextEdit, QTabWidget, QScrollArea, QProgressBar,
+    QLineEdit, QTextEdit, QTextBrowser, QTabWidget, QScrollArea,
+    QProgressBar,
     QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
-    QAbstractItemView,
+    QAbstractItemView, QCompleter,
 )
 from PyQt6.QtCore import Qt, QSettings, QUrl, pyqtSignal, QThread
 from PyQt6.QtGui import QDesktopServices
@@ -531,7 +876,7 @@ from PyQt6.QtGui import QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -544,7 +889,8 @@ STACKS_DIRNAME = "output"
 #   <STACKS_DIRNAME>/
 #     TARGET_<palette>.fit        the finished colour image(s), at the top
 #     masters/                    per-channel masters (TARGET_FILTER.fit =
-#                                 aligned; *_fullframe.fit = uncropped)
+#                                 aligned; *_fullframe.fit = uncropped,
+#                                 named <N>x<EXP>_G<gain>_<temp>C)
 #     _work/                      all intermediates -- safe to delete
 #       sequences/<filter>/       Siril sequences per filter
 #       align/                    cross-filter alignment work
@@ -572,8 +918,6 @@ UNSUPPORTED_EXTS = (".xisf",)
 LIGHT_TOKENS = ("light",)
 
 # Frame types we must never treat as lights, even if a FILTER is present.
-CALIB_TOKENS = ("dark", "flat", "bias", "offset")
-
 # Frame kinds the calibration pipeline knows.  Order matters in _inspect:
 # "dark flat" / "flatdark" must be tested before plain "dark" and "flat".
 KIND_LIGHT = "light"
@@ -585,6 +929,16 @@ KIND_BIAS = "bias"
 # How closely a library master must match the frames it calibrates.
 # Exposure and gain must be exact; the cooled setpoint is allowed to drift a
 # little, because CCD-TEMP is a measurement and wobbles by tenths of a degree.
+# How far a dark's exposure may be from the lights' before it stops
+# helping.  A fraction, not seconds: the thermal signal scales with
+# exposure, so 5% of 300s is a different thing than 5% of 30s.
+DARK_EXPOSURE_TOLERANCE = 0.05
+
+# Wider for the flats' offset: a flat exposure is short, so the same share
+# is a much smaller absolute difference -- and so is the dark signal it
+# corrects.
+DARKFLAT_EXPOSURE_TOLERANCE = 0.20
+
 CALIB_TEMP_TOLERANCE_C = 2.0
 
 # Placeholder for frames without a FILTER keyword (e.g. an OSC-style
@@ -607,10 +961,13 @@ FILTER_MIN_FRAMES = 20
 # Warn when the quality filters throw away more than this share of a set.
 FILTER_WARN_FRACTION = 0.15
 
-# From this many frames the Generalized Extreme Studentized Deviate Test
-# outperforms linear-fit clipping (Siril's documentation puts the crossover
-# at "more than 50 images").
-GESDT_MIN_FRAMES = 50
+# Rejection band edges, taken from AMSP by Cyril Richard (the author of
+# Siril) -- see the acknowledgement in the header.  They carry more weight
+# than our own reasoning because the same person implemented these
+# algorithms in Siril.
+SIGMA_MAX_FRAMES = 10
+GESDT_MIN_FRAMES = 31
+LINEAR_MIN_FRAMES = 300
 
 # Drizzle redistributes each sub's flux onto a finer grid, so it needs many
 # dithered frames to fill that grid evenly.  Below this count the coverage
@@ -633,6 +990,11 @@ _DOCS_BASE = ("https://github.com/sramuschkat/Siril-Scripts/blob/main/"
               "Instructions/Svenesis-ImageMono-Train-Instructions")
 DOCS_URL_EN = f"{_DOCS_BASE}.md"
 DOCS_URL_DE = f"{_DOCS_BASE}_de.md"
+
+# The source of the rejection bands -- see the acknowledgement in the
+# header.  Named here so the help can link it rather than describe it.
+AMSP_URL = ("https://gitlab.com/free-astro/siril-scripts/-/blob/main"
+            "/preprocessing/AMSP.py")
 
 DEFAULT_SPCC_SENSOR = "Sony IMX411/455/461/533/571"
 DEFAULT_SPCC_RFILTER = "Antlia R"
@@ -922,6 +1284,222 @@ def _classify_path(parts: list) -> str | None:
 _DATE_SEGMENT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 
 
+def _infer_kind_from_content(header) -> str:
+    """Guess light vs dark from the header when IMAGETYP is missing.
+
+    Some capture software never writes IMAGETYP.  Falling back to folder
+    names only helps inside a N.I.N.A.-shaped tree; this works anywhere,
+    from signals that are unambiguous:
+
+      * no FILTER, no OBJECT and the telescope parked at RA=DEC=0 -- the
+        shutter was closed, so it is a dark;
+      * a FILTER *and* an OBJECT -- it was pointed at something, so it is
+        a light.
+
+    Bias and flat are deliberately NOT guessed: nothing in an ordinary
+    header separates them reliably, and a wrong guess there corrupts the
+    calibration instead of merely skipping it.  Returns "" for "no idea".
+    """
+    flt = _clean_token(header.get("FILTER"))
+    obj = _clean_token(header.get("OBJECT"))
+    try:
+        ra = abs(float(header.get("RA", 0) or 0))
+        dec = abs(float(header.get("DEC", 0) or 0))
+    except (ValueError, TypeError):
+        ra = dec = 0.0
+    if not flt and not obj and ra < 1e-6 and dec < 1e-6:
+        return KIND_DARK
+    if flt and obj:
+        return KIND_LIGHT
+    return ""
+
+
+def _header_string(path: str) -> str:
+    """A FITS header as text, for `set_image_metadata_from_header_string`.
+
+    Carries the source metadata -- WCS above all -- onto an image built in
+    memory, which starts with none.  Returns "" when the file cannot be
+    read: a composite without a WCS can still be plate-solved, so this is
+    never worth failing over.
+    """
+    try:
+        with fits.open(path, memmap=True, ignore_missing_simple=True) as hdul:
+            for hdu in hdul:
+                if getattr(hdu, "data", None) is not None:
+                    return hdu.header.tostring(sep="\n")
+    except Exception as exc:
+        _log_swallowed(exc)
+    return ""
+
+
+def _fits_filter(path: str) -> str:
+    """The FILTER keyword of a FITS file, or "" when it cannot be read.
+
+    Used to confirm that a registered frame really is the channel the
+    caller believes it is.  "" means "could not tell", never "wrong": a
+    master whose header lost the keyword must not be thrown away over it.
+    """
+    try:
+        with fits.open(path, memmap=True, ignore_missing_simple=True) as hdul:
+            for hdu in hdul:
+                token = _clean_token((hdu.header or {}).get("FILTER"))
+                if token:
+                    return token
+    except Exception as exc:
+        _log_swallowed(exc)
+    return ""
+
+
+# How far two flats of the same filter may disagree before pooling them
+# stops being right.  From the Flat On Flat Analyzer by Carlo Mollicone in
+# the official Siril script repository: it divides one flat by another --
+# a perfect pair gives a uniform image -- and reads the spread of the
+# result.  Below 0.15% the pair is excellent, up to 0.3% still usable,
+# beyond that something in the optical train moved.
+FLAT_MATCH_GOOD = 0.0015
+FLAT_MATCH_LIMIT = 0.0030
+
+
+def _flat_disagreement(a: str, b: str) -> float | None:
+    """Spread of the ratio between two flats, or None if unreadable.
+
+    Each frame is divided by its own median first, so a difference in
+    illumination level -- twilight fading, a panel at another brightness
+    -- does not count as disagreement.  What is left is the SHAPE:
+    vignetting, dust, spacing.  The standard deviation of that ratio is
+    the number the reference tool judges.
+
+    Only a strided sample is read (every 4th pixel in each axis, a
+    sixteenth of the frame).  Dust shadows and vignetting are large,
+    smooth structures; they do not hide between pixels, and a flat is
+    read here purely to be compared, never to be applied.
+    """
+    try:
+        with fits.open(a, memmap=True, ignore_missing_simple=True) as ha, \
+                fits.open(b, memmap=True, ignore_missing_simple=True) as hb:
+            da = next((h.data for h in ha if getattr(h, "data", None)
+                       is not None), None)
+            db = next((h.data for h in hb if getattr(h, "data", None)
+                       is not None), None)
+            if da is None or db is None or da.shape != db.shape:
+                return None
+            sa = np.asarray(da[..., ::4, ::4], dtype=np.float64)
+            sb = np.asarray(db[..., ::4, ::4], dtype=np.float64)
+    except Exception as exc:
+        _log_swallowed(exc)
+        return None
+    ma, mb = float(np.median(sa)), float(np.median(sb))
+    if ma <= 0 or mb <= 0:
+        return None
+    ratio = (sa / ma) / np.where(sb / mb <= 0, np.nan, sb / mb)
+    with np.errstate(invalid="ignore"):
+        spread = float(np.nanstd(ratio))
+    return spread if np.isfinite(spread) else None
+
+
+# Everything the script uses BEYOND the floor, and what happens without
+# it.  A missing call is caught by the try/except around every one of
+# these -- which is exactly the problem: the feature would fall back
+# silently, for the whole life of the installation, and nobody would know
+# why the report keeps saying "estimated".  Naming them once at startup
+# turns that into an answerable question.
+OPTIONAL_API = (
+    ("Measured frame counts and registration statistics",
+     ("get_seq",),
+     "the frame count is estimated from the files instead, and the "
+     "report marks it"),
+    ("Colour composition in memory",
+     ("get_image_pixeldata", "set_image_pixeldata", "image_lock",
+      "is_image_loaded"),
+     "rgbcomp composes instead, which cannot take a path containing a "
+     "space"),
+    ("Metadata (WCS) on the composite",
+     ("set_image_metadata_from_header_string",),
+     "the composite is written without the source WCS; plate-solving "
+     "still works"),
+    ("Reading Siril's log",
+     ("get_siril_log",),
+     "alignment star-pair counts are not reported, and SPCC names are "
+     "checked against the local database only"),
+    ("Finding Siril's data directory",
+     ("get_siril_userdatadir",),
+     "the SPCC database is looked for in the usual places instead"),
+)
+
+
+def _missing_capabilities(siril) -> list:
+    """``[(feature, missing calls, consequence)]`` for this sirilpy.
+
+    Asked with `hasattr`, not by version number: what matters is whether
+    the call exists, and a version table would be one more thing to keep
+    true.
+    """
+    out = []
+    for feature, calls, consequence in OPTIONAL_API:
+        absent = [c for c in calls if not hasattr(siril, c)]
+        if absent:
+            out.append((feature, absent, consequence))
+    return out
+
+
+def _median(values: list) -> float:
+    """True median, including the average of the middle two on even counts.
+
+    Written out rather than imported: `statistics.median` would do, but
+    this file already keeps its numeric helpers together and the even
+    case is exactly the one that gets hand-rolled wrongly.
+    """
+    ordered = sorted(values)
+    n = len(ordered)
+    if not n:
+        return 0.0
+    mid = n // 2
+    return (ordered[mid] if n % 2
+            else (ordered[mid - 1] + ordered[mid]) / 2.0)
+
+
+def _exp_tag(exp: float) -> str:
+    """A Siril-safe sequence-name token for an exposure, e.g. 1.5 -> "1p5s".
+
+    Sequence names end up in filenames and in Siril command lines, where a
+    dot would start what looks like an extension.  The digits are written
+    out rather than formatted with "g": at 1e6 and above (and below 1e-5)
+    "g" switches to exponent notation, and "1e+09" carries a plus that no
+    amount of dot-replacing removes.  Real exposures never reach that, but
+    a token generator that is safe only for plausible input is not safe.
+    """
+    try:
+        value = float(exp)
+    except (ValueError, TypeError):
+        return "0s"
+    if not math.isfinite(value):
+        return "0s"
+    text = f"{value:.6f}".rstrip("0").rstrip(".") or "0"
+    return text.replace(".", "p").replace("-", "m") + "s"
+
+
+def _night_key(date_obs: str) -> str:
+    """The observing night a frame belongs to, as ``YYYY-MM-DD``.
+
+    Subtracting twelve hours puts the whole dark period under one date:
+    a session from 21:00 to 03:00 is one night, not two.  That is the
+    problem a folder-per-calendar-date layout cannot express, and it is
+    why the flats of a session can otherwise end up paired with only half
+    of its lights.
+
+    Returns "" when DATE-OBS is missing or unparseable, so callers can
+    fall back to the path.
+    """
+    txt = (date_obs or "").strip().replace("Z", "")
+    if not txt:
+        return ""
+    try:
+        return (datetime.datetime.fromisoformat(txt)
+                - datetime.timedelta(hours=12)).strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        return ""
+
+
 def _path_date(path: str) -> str:
     """The session date encoded in the path, or "" if there is none.
 
@@ -949,13 +1527,19 @@ def _calib_signature(info: dict, with_temp: bool = False) -> tuple:
     The temperature is rounded to a whole degree.  Cooled setpoints are
     integers and CCD-TEMP wobbles by tenths, so a session lands in one
     bucket; two genuinely different setpoints land in two.
+
+    The camera is part of the key.  Without it, two bodies of the same
+    model -- same size, same gain, same binning -- share a group and get
+    averaged into one master, and the INSTRUME test in
+    `_signature_matches` then checks a group that is already mixed.
     """
     temp = info.get("temp_v")
     return (round(float(info.get("exp_s") or 0.0), 3),
             info.get("gain_v"),
             info.get("binning", 1),
             info.get("dims"),
-            (round(float(temp)) if with_temp and temp is not None else None))
+            (round(float(temp)) if with_temp and temp is not None else None),
+            info.get("instrument") or None)
 
 
 def _sig_sort_key(sig) -> tuple:
@@ -973,14 +1557,20 @@ def _sig_sort_key(sig) -> tuple:
 def _signature_matches(master: dict, target: dict) -> bool:
     """True if `master` may calibrate frames described by `target`.
 
-    Exposure, gain, binning and image size must agree exactly; the cooled
-    setpoint may drift a little because CCD-TEMP is a measurement.  A missing
+    The camera must be the same one where both headers name it: image size
+    and binning are only a proxy, and two cameras sharing a sensor format
+    would otherwise calibrate each other.  Exposure, gain, binning and
+    image size must agree exactly; the cooled setpoint may drift a little
+    because CCD-TEMP is a measurement.  A missing
     gain, temperature or size is treated as "unknown, don't block" -- refusing
     a usable master because a keyword is absent would be worse than using it.
     Exposure is the exception: `_inspect` reports an unreadable EXPTIME as
     0.0, and 0 s vs 120 s is exactly the mismatch that must not slip through,
     so an unknown exposure blocks the match.
     """
+    mi, ti = master.get("instrument"), target.get("instrument")
+    if mi and ti and mi != ti:
+        return False        # a dark from a different camera, never
     if master.get("dims") and target.get("dims") \
             and master["dims"] != target["dims"]:
         return False
@@ -1069,8 +1659,12 @@ def _inspect(path: str) -> dict:
 
     # IMAGETYP is authoritative; the N.I.N.A. folder names are the fallback
     # for files that carry no type keyword.
+    # IMAGETYP first, then the folder layout, then the content itself.
+    # Content last on purpose: it is the only one that can be wrong about a
+    # frame whose keyword and folder both said something sensible.
     out["kind"] = (_classify_kind(_clean_token(header.get("IMAGETYP")))
-                   or _classify_path(parts))
+                   or _classify_path(parts)
+                   or _infer_kind_from_content(header))
     out["is_light"] = out["kind"] == KIND_LIGHT
 
     filt = _clean_token(header.get("FILTER"))
@@ -1096,7 +1690,11 @@ def _inspect(path: str) -> dict:
             out["gain"] = f"G{out['gain_v']}"
         except (ValueError, TypeError):
             pass
-    for key in ("CCD-TEMP", "CCD_TEMP", "SET-TEMP"):
+    # Six spellings in the wild.  AMSP, Siril's own multi-session script,
+    # reads all of these; missing one means the temperature silently counts
+    # as "unknown" and a dark from another setpoint slips through.
+    for key in ("CCD-TEMP", "CCD_TEMP", "CCDTEMP", "TEMPERAT",
+                "CAMTCCD", "SET-TEMP"):
         if key in header:
             try:
                 out["temp_v"] = float(header[key])
@@ -1104,6 +1702,15 @@ def _inspect(path: str) -> dict:
             except (ValueError, TypeError):
                 pass
             break
+    # The camera, so a dark from a DIFFERENT one cannot be matched to these
+    # lights.  Image size and binning are only a proxy: two cameras sharing
+    # a sensor format pass that test and would calibrate each other.
+    out["instrument"] = _clean_token(header.get("INSTRUME"))
+    # The observing night, computed from when the frame was taken rather
+    # than from a folder name.  Noon-to-noon, so a session that runs past
+    # midnight stays ONE night -- the folder-per-date layout splits it in
+    # two and pairs half the lights with the wrong flats.
+    out["night"] = _night_key(str(header.get("DATE-OBS", "")))
     return out
 
 
@@ -1113,10 +1720,13 @@ def _is_blank_frame(path: str) -> bool:
     Cloud outages, a closed flap, a failed download or a dropped exposure
     leave frames that are all-zero or perfectly flat.  They poison
     registration ("no stars found") and drag the stack down, so they are
-    skipped.  Only every 8th pixel in each axis is examined (1/64 of the
-    data) -- enough to tell "black" from "sky", and fast on a cloud-synced
-    folder.  On any doubt the frame is KEPT (returns False): dropping a good
-    frame is worse than keeping a marginal one.
+    skipped.  Only a sample is examined -- eight rows spread evenly down
+    the frame where astropy offers `.section` (which decompresses just
+    those tiles of a Rice-compressed sub), otherwise every 8th pixel in
+    each axis.  Either way it is a fraction of a percent of the data:
+    enough to tell "black" from "sky", and fast on a cloud-synced folder.
+    On any doubt the frame is KEPT (returns False): dropping a good frame
+    is worse than keeping a marginal one.
     """
     try:
         with fits.open(path, memmap=True) as hdul:
@@ -1177,11 +1787,21 @@ def _sample_pixels(hdu):
 
 
 def _format_duration(seconds: float) -> str:
-    """Human-friendly integration time: 4560 -> '1h 16m'."""
+    """Human-friendly integration time: 4560 -> '1h 16m'.
+
+    Every unusable input becomes an em-dash rather than an exception.
+    Infinity needs saying separately: `int(round(inf))` raises
+    OverflowError, which is neither ValueError nor TypeError, and a
+    corrupt EXPTIME reaching the report would have taken the whole
+    document down with it.
+    """
     try:
-        secs = int(round(float(seconds)))
+        value = float(seconds)
     except (ValueError, TypeError):
         return "—"
+    if not math.isfinite(value):
+        return "—"
+    secs = int(round(value))
     if secs <= 0:
         return "—"
     h, rem = divmod(secs, 3600)
@@ -1311,7 +1931,8 @@ class AnalyzeWorker(QThread):
                                info, with_temp=(kind == KIND_DARK)))
                     grp = calib[kind].setdefault(
                         key, {"files": [], "info": info,
-                              "date": _path_date(path)})
+                              "date": info.get("night")
+                              or _path_date(path)})
                     grp["files"].append(path)
                     continue
 
@@ -1333,13 +1954,18 @@ class AnalyzeWorker(QThread):
                 g = groups.setdefault(
                     info["filter"],
                     {"files": [], "sample": {}, "exp_total": 0.0,
-                     "info": info, "dates": set(), "exps": set()})
+                     "info": info, "dates": set(), "exps": set(),
+                     "by_exp": {}})
                 g["files"].append(path)
                 g["exp_total"] = g.get("exp_total", 0.0) + info["exp_s"]
                 g["dates"].add(_path_date(path))
-                # Dark matching uses ONE representative frame per filter, so
-                # a filter holding two different exposures has to be flagged.
-                g["exps"].add(round(float(info["exp_s"]), 3))
+                exp_key = round(float(info["exp_s"]), 3)
+                g["exps"].add(exp_key)
+                # Keep the frames of each exposure together.  A dark is only
+                # valid for the exposure it was shot at, so a filter that
+                # mixes exposures has to be calibrated in parts -- see
+                # `_exposure_split`.
+                g["by_exp"].setdefault(exp_key, []).append(path)
                 if not g["sample"]:
                     g["sample"] = {"exp": info["exp"], "gain": info["gain"],
                                    "temp": info["temp"]}
@@ -1394,6 +2020,18 @@ class StackWorker(QThread):
         self._masters: dict = {}
         # filter -> human-readable list of the masters applied to it.
         self._calib_notes: dict = {}
+        # {filter: (spread, other_night, reference_night)} for flats that
+        # disagree across nights -- the report has to name them.
+        self._flat_warn: dict = {}
+        # Written by _synthetic_luminance; the report and todo.md name it.
+        self._synth_lum: str = ""
+        # How the composite was actually assembled -- in memory or through
+        # rgbcomp.  The report states the route that ran, not the usual one.
+        self._compose_how: str = ""
+        # Filters whose frames were calibrated per exposure and merged
+        # again -- recorded so the report can say so, since nothing in the
+        # finished master reveals it.
+        self._split_filters: set = set()
         # Set by _compose when L is kept separate (correct LRGB path).
         self._separate_lum = None
         # Human-readable record of what the finish step actually did, for the
@@ -1407,7 +2045,16 @@ class StackWorker(QThread):
         # What each filter really contributed: {filter: (staged, effective)}.
         # The report must quote these, not the discovered counts -- blank
         # frames and the quality filters both shrink the set on the way in.
+        # filter -> (frames staged, frames actually integrated).  The
+        # second is measured from the registered sequence wherever that
+        # can be read; see _measured for which of the two it was.
         self._stacked_counts: dict = {}
+        # Was the integrated count MEASURED (from the registered sequence)
+        # or estimated?  The report must not present one as the other.
+        self._measured: dict = {}
+        # Per-channel registration statistics, when Siril would hand them
+        # over: median FWHM / roundness / star count.
+        self._reg_stats: dict = {}
         # The rejection algorithm that really ran, per filter.  Recomputing
         # it in the report would hide a fallback (see _stack).
         self._rej_labels: dict = {}
@@ -1417,6 +2064,11 @@ class StackWorker(QThread):
         # count in _stacked_counts is no longer the one the decision was
         # made on, and re-deriving from it flips the answer.
         self._qf_decision: dict = {}
+        # filter -> star pairs its cross-filter alignment was fitted on,
+        # and which filter Siril chose as the reference.  Empty when the
+        # log could not be read or its format was not recognised.
+        self._align_pairs: dict = {}
+        self._align_ref = None
         # Filters left unstacked because the palette does not read them.
         self._skipped_by_palette: list = []
         # filter -> registration options that could not be honoured.
@@ -1564,6 +2216,86 @@ class StackWorker(QThread):
                     continue
             args.append(f"{flag}={value}{suffix}")
         return args
+
+    def _seq_quality(self, process_dir: str, seq: str, filt: str,
+                     expect: int = 0) -> dict | None:
+        """Ask Siril for the registration data of a finished sequence.
+
+        `get_seq()` hands back what Siril itself recorded per frame:
+        which frames are still included, and for each of them the FWHM,
+        the roundness and the number of stars it detected.  That turns
+        three numbers this script used to ESTIMATE into measurements --
+        the frame count above all, which decides the rejection algorithm
+        and is quoted in the report.
+
+        The sequence has to be loaded for the API to answer, so this runs
+        `load_seq` first.  Siril writes the sequence file with a trailing
+        underscore, and different scripts in the wild load it both ways,
+        so both are tried before giving up.
+
+        `expect` is the frame count taken from the files on disk.  If a
+        load quietly leaves an EARLIER sequence current, `get_seq()`
+        answers about that one instead -- and its count would then drive
+        the rejection band.  A mismatch is therefore treated as "wrong
+        sequence, cannot tell", not as data.
+
+        Returns None on any failure -- an unreadable sequence is "cannot
+        tell", never "nothing there", and the file count remains as the
+        fallback it always was.
+        """
+        data = None
+        for name in (seq, f"{seq}_"):
+            try:
+                self._cmd("load_seq", f'"{name}"')
+                data = self.siril.get_seq()
+            except Exception as exc:
+                _log_swallowed(exc)
+                continue
+            if data is not None:
+                break
+        if data is None or not getattr(data, "imgparam", None):
+            return None
+        if expect and getattr(data, "number", 0) != expect:
+            self._emit(
+                f"  Registration data skipped: Siril reports "
+                f"{getattr(data, 'number', 0)} frame(s) where the folder "
+                f"holds {expect} — that is not this sequence.",
+                LogColor.SALMON)
+            return None
+        try:
+            included = [i for i, p in enumerate(data.imgparam)
+                        if getattr(p, "incl", True)]
+            out = {"included": len(included), "total": data.number}
+            regs = getattr(data, "regparam", None) or []
+            layer = next((r for r in regs
+                          if r and any(x is not None for x in r)), None)
+            if layer:
+                for key, attr in (("fwhm", "fwhm"),
+                                  ("roundness", "roundness"),
+                                  ("stars", "number_of_stars")):
+                    vals = [float(getattr(layer[i], attr))
+                            for i in included
+                            if i < len(layer) and layer[i] is not None
+                            and getattr(layer[i], attr, None)]
+                    if vals:
+                        out[key] = _median(vals)
+        except (AttributeError, TypeError, ValueError, IndexError) as exc:
+            _log_swallowed(exc)
+            return None
+        if out.get("fwhm"):
+            self._reg_stats[filt] = out
+            # A value Siril did not record is "unknown", and printing it
+            # as 0.00 would read as catastrophic trailing / zero stars.
+            parts = [f"median FWHM {out['fwhm']:.2f} px"]
+            if out.get("roundness") is not None:
+                parts.append(f"roundness {out['roundness']:.2f}")
+            if out.get("stars") is not None:
+                parts.append(f"{int(out['stars'])} stars")
+            self._emit(
+                f"  Registration data: {out['included']} of {out['total']} "
+                f"frame(s) included, " + ", ".join(parts) + ".",
+                LogColor.BLUE)
+        return out
 
     def _count_seq_frames(self, process_dir: str, seq: str) -> int:
         """How many frames a Siril sequence really holds on disk.
@@ -1718,9 +2450,9 @@ class StackWorker(QThread):
         """Frames expected to survive the quality filters.
 
         The rejection algorithm must be picked for the population that is
-        actually integrated: filtering 21 frames down to the best 90% leaves
-        18, which wants Winsorized sigma, not the linear fit that 21 frames
-        would suggest.
+        actually integrated: filtering 33 frames down to the best 90% leaves
+        29, which wants Winsorized sigma, not the GESDT that 33 frames would
+        suggest.
 
         Derived from the arguments _quality_filter_args() really emits, so a
         filter that was dropped there (too few frames left, 100%, k-sigma)
@@ -1747,11 +2479,12 @@ class StackWorker(QThread):
 
     def _stack(self, seq: str, out_name: str, n_frames: int,
                filt: str = "") -> None:
-        # Choose rejection for the number of frames that will really be
-        # integrated, not the number that was staged.
-        n_eff = self._effective_frame_count(n_frames)
+        """Integrate `seq`.  `n_frames` is the count that will REALLY be
+        integrated -- measured from the registered sequence where that is
+        possible, estimated only when it is not.  Applying the quality
+        filters' share here as well would count them twice."""
         rej_tokens, rej_label = _rejection_args(
-            n_eff, self._opts.get("rejection", True))
+            n_frames, self._opts.get("rejection", True))
 
         def _tail() -> list:
             """Everything after the rejection tokens (identical on retry)."""
@@ -1760,7 +2493,7 @@ class StackWorker(QThread):
                 args += ["-output_norm"]
             # Frame weighting lifts the better subs -- only meaningful once
             # there are a few frames left to weight.
-            if self._opts.get("weighting", True) and n_eff >= 3:
+            if self._opts.get("weighting", True) and n_frames >= 3:
                 args += [f"-weight={_weight_token(self._opts)}"]
             # Frame quality filtering already happened at registration time
             # (see _quality_filter_args), so the sequence handed to stack
@@ -1777,9 +2510,9 @@ class StackWorker(QThread):
             return args + ["-32b", f"-out={out_name}"]
 
         args = ["stack", seq] + rej_tokens + _tail()
-        n_txt = (f"n={n_frames}" if n_eff == n_frames
-                 else f"n≈{n_eff} of {n_frames} after filtering")
-        self._emit(f"  Rejection: {rej_label} ({n_txt})", LogColor.BLUE)
+        self._emit(f"  Rejection: {rej_label} (n={n_frames}"
+                   + (", measured" if self._measured.get(filt) else "")
+                   + ")", LogColor.BLUE)
         self._emit("  " + " ".join(args), LogColor.BLUE)
         try:
             self._cmd(*args)
@@ -1980,11 +2713,22 @@ class StackWorker(QThread):
         # flat exposure's dark signal.)
         flat_offset = self._masters.get(KIND_DARKFLAT) or \
             self._masters.get(KIND_BIAS) or ""
+        if not flat_offset:
+            flat_offset = self._dark_as_darkflat(c) or ""
 
         # 2) One master flat per filter.  Optionally restricted to the nights
         #    the lights of that filter were actually taken.
         by_date = self._opts.get("flats_by_date", False)
         for filt, grp in (c.get(KIND_FLAT) or {}).items():
+            if filt not in self._groups:
+                # A flat set for a filter this run has no lights for.
+                # Stacking it costs the same as a useful one and produces
+                # a master nothing will open.
+                self._emit(
+                    f"  flat {filt}: no lights use this filter — not "
+                    "stacked.", LogColor.BLUE)
+                continue
+            self._check_flat_consistency(filt, grp["files"])
             use = dict(grp)
             # The restriction must reach the master's NAME as well: without
             # it a per-night master and a pooled one share a filename, and
@@ -2019,7 +2763,10 @@ class StackWorker(QThread):
         #    the same filename would share a cache entry, so the collision is
         #    broken deterministically (sorted order) instead of silently.
         claimed: dict = {}
+        wanted = self._darks_in_demand(c.get(KIND_DARK) or {})
         for sig in sorted((c.get(KIND_DARK) or {}), key=_sig_sort_key):
+            if sig not in wanted:
+                continue
             grp = c[KIND_DARK][sig]
             name = self._master_name(KIND_DARK, grp["info"])
             n = claimed.get(name, 0) + 1
@@ -2033,8 +2780,209 @@ class StackWorker(QThread):
             if m:
                 self._masters[KIND_DARK][sig] = (m, grp["info"])
 
-    def _calibrate_args(self, filt: str, light_info: dict) -> list:
-        """Build the `calibrate` arguments for one filter, or [] for none."""
+    def _closest_dark(self, light_info: dict, filt: str):
+        """The nearest usable dark when none matches exactly.
+
+        Refusing every dark whose exposure is not identical leaves the
+        lights uncalibrated, which is worse than a small mismatch: the
+        thermal signal scales with exposure, so a 290 s dark on 300 s
+        lights removes most of what a 300 s one would.  A 60 s dark on
+        300 s lights does not -- which is why the tolerance is a FRACTION
+        of the target rather than a fixed number of seconds.
+
+        Everything except exposure still has to agree: camera, gain,
+        binning, size, temperature.  This loosens only the one dimension
+        that degrades gracefully, and always says so, because a silently
+        substituted dark is exactly what this script exists to surface.
+        """
+        want = light_info.get("exp_s")
+        if not want:
+            return None
+        best = best_delta = best_exp = None
+        for _sig, (path, info) in (self._masters.get(KIND_DARK) or {}).items():
+            have = info.get("exp_s")
+            if not have:
+                continue
+            probe = dict(info, exp_s=want)     # judge everything BUT exposure
+            if not _signature_matches(probe, light_info):
+                continue
+            delta = abs(float(have) - float(want))
+            if best_delta is None or delta < best_delta:
+                best, best_delta, best_exp = path, delta, float(have)
+        if best is None:
+            return None
+        share = best_delta / float(want)
+        if share > DARK_EXPOSURE_TOLERANCE:
+            self._emit(
+                f"  {filt}: the closest dark is {best_exp:g}s against "
+                f"{float(want):g}s lights ({share * 100:.0f}% off) — too far "
+                "to help, continuing without one.", LogColor.SALMON)
+            return None
+        self._emit(
+            f"  {filt}: no dark matches {float(want):g}s exactly; using the "
+            f"closest at {best_exp:g}s ({share * 100:.0f}% off).  Everything "
+            "else — camera, gain, binning, size, temperature — does match.",
+            LogColor.SALMON)
+        return best
+
+    def _check_flat_consistency(self, filt: str, files: list) -> None:
+        """Warn when the flats of one filter come from different optics.
+
+        Pooling flats across nights is right for a rig that never moves
+        and wrong the moment the train is touched -- and nothing in the
+        headers says which happened.  Dividing one night's flat by
+        another's does say it: a matching pair gives a uniform result, a
+        mismatched one shows the vignetting or dust that moved.
+
+        One frame per night is enough; the point is the shape of the
+        illumination, which every frame of a set shares.  Silent when
+        there is only one night, when the frames cannot be read, or when
+        the option to keep nights apart is already on.
+        """
+        if self._opts.get("flats_by_date", False):
+            return                      # the user already keeps them apart
+        by_night: dict = {}
+        for path in files:
+            by_night.setdefault(_path_date(path) or "?", path)
+        if len(by_night) < 2:
+            return
+        # "?" (undated) sorts AFTER every digit, so a plain sort would
+        # make an undated flat the ruler -- and the message would name
+        # "?" as a night.  Dated nights rule; "?" only ever compares.
+        dated = sorted(n for n in by_night if n != "?")
+        if not dated:
+            return                      # nothing to anchor a comparison on
+        ruler = dated[-1]               # the most recent dated night
+        nights = [n for n in sorted(by_night) if n != ruler] + [ruler]
+        base = by_night[ruler]
+        worst = worst_night = None
+        for night in nights[:-1]:
+            spread = _flat_disagreement(base, by_night[night])
+            if spread is None:
+                continue
+            if worst is None or spread > worst:
+                worst, worst_night = spread, night
+        if worst is None:
+            return
+        if worst <= FLAT_MATCH_GOOD:
+            self._emit(
+                f"  flat {filt}: {len(nights)} nights agree to "
+                f"{worst * 100:.2f}% — pooling them is right.",
+                LogColor.BLUE)
+            return
+        level = "usable" if worst <= FLAT_MATCH_LIMIT else "a real mismatch"
+        self._flat_warn[filt] = (worst, worst_night, nights[-1])
+        self._emit(
+            f"  flat {filt}: the set from {worst_night} differs from "
+            f"{nights[-1]} by {worst * 100:.2f}% — {level}. "
+            + ("Above " if worst > FLAT_MATCH_LIMIT else "Under ")
+            + f"{FLAT_MATCH_LIMIT * 100:.1f}% usually means the optical "
+            "train was touched between the nights, and one pooled master "
+            "then corrects neither. Switch on 'Match flats to the same "
+            "night' to keep them apart.",
+            LogColor.SALMON if worst > FLAT_MATCH_LIMIT else LogColor.BLUE)
+
+    def _dark_as_darkflat(self, c: dict):
+        """A plain DARK at the flats' exposure, used as their offset.
+
+        A dark-flat is just a dark taken with the flat's exposure, and
+        plenty of capture software writes it as IMAGETYP=DARK -- the
+        keyword says nothing about the intent.  Refusing it because of a
+        label leaves the flats on a synthetic offset when a measured one
+        is sitting right there.
+
+        The tolerance is wider than for lights (20% against 5%): flat
+        exposures are short, so the absolute difference stays small, and
+        the dark signal being corrected is correspondingly tiny.  Nothing
+        happens unless flats exist and no real dark-flat or bias was
+        found.
+        """
+        flats = c.get(KIND_FLAT) or {}
+        darks = c.get(KIND_DARK) or {}
+        if not flats or not darks:
+            return None
+        exps = {float((g.get("info") or {}).get("exp_s") or 0)
+                for g in flats.values()}
+        exps.discard(0.0)
+        if len(exps) != 1:
+            return None     # flats of mixed exposure: no single right answer
+        want = exps.pop()
+        best = best_delta = best_grp = None
+        for sig, grp in darks.items():
+            have = (grp.get("info") or {}).get("exp_s")
+            if not have:
+                continue
+            delta = abs(float(have) - want)
+            if delta / want > DARKFLAT_EXPOSURE_TOLERANCE:
+                continue
+            if best_delta is None or delta < best_delta:
+                best, best_delta, best_grp = sig, delta, grp
+        if best is None:
+            return None
+        got = float(best_grp["info"]["exp_s"])
+        self._emit(
+            f"  No dark-flat or bias found; using a {got:g}s dark set as "
+            f"the flats' offset (they were shot at {want:g}s).  "
+            "A dark at the flat exposure IS a dark-flat, whatever the "
+            "IMAGETYP keyword calls it.", LogColor.BLUE)
+        return self._stack_calib_group(
+            KIND_DARKFLAT, best_grp,
+            self._master_name(KIND_DARKFLAT, best_grp["info"]))
+
+    def _darks_in_demand(self, groups: dict) -> set:
+        """Dark signatures some part of this run can actually use.
+
+        A library is meant to grow: darks for five exposures at three
+        setpoints are fifteen signatures, and stacking all of them to use
+        one costs minutes and reads hundreds of frames for masters nothing
+        opens.  Only the ones a filter's lights could match are built --
+        judged with the SAME rule that will later pick one, so a signature
+        cannot be skipped here and then wanted there.
+
+        The exposure test is deliberately the loose one: `_closest_dark`
+        may reach for a neighbouring exposure, so a signature within that
+        tolerance has to exist as a master by then.
+
+        Returns every signature when nothing can be judged (no lights
+        analysed yet), because building too much is a cost and building
+        too little is a defect.
+        """
+        infos = [g.get("info") or {} for g in self._groups.values()]
+        infos = [i for i in infos if i]
+        if not infos:
+            return set(groups)
+        wanted = set()
+        for sig, grp in groups.items():
+            di = grp.get("info") or {}
+            for li in infos:
+                probe = dict(di, exp_s=li.get("exp_s"))
+                if not _signature_matches(probe, li):
+                    continue        # camera / gain / size / temp rule it out
+                want, have = li.get("exp_s"), di.get("exp_s")
+                if not want or not have:
+                    wanted.add(sig)
+                    break
+                share = abs(float(have) - float(want)) / float(want)
+                if share <= DARK_EXPOSURE_TOLERANCE:
+                    wanted.add(sig)
+                    break
+        skipped = len(groups) - len(wanted)
+        if skipped:
+            self._emit(
+                f"  {skipped} dark set(s) do not match any filter's lights "
+                "(exposure, gain, temperature, camera or size) — not "
+                "stacked.", LogColor.BLUE)
+        return wanted
+
+    def _calibrate_args(self, filt: str, light_info: dict,
+                        warn_mixed: bool = True) -> list:
+        """Build the `calibrate` arguments for one filter, or [] for none.
+
+        ``warn_mixed`` is False when the caller has already split the
+        filter by exposure (`_exposure_split`): the warning about a dark
+        that fits only some of the frames would then be describing a
+        problem that was just solved.
+        """
         if not self._opts.get("calibrate", True) or not self._masters:
             return []
         args: list = []
@@ -2045,6 +2993,8 @@ class StackWorker(QThread):
             if _signature_matches(info, light_info):
                 dark = path
                 break
+        if dark is None:
+            dark = self._closest_dark(light_info, filt)
         if dark:
             args.append(f"-dark={dark}")
             used.append(f"dark={os.path.basename(dark)}")
@@ -2052,7 +3002,7 @@ class StackWorker(QThread):
             # filter mixes exposures, the dark is right for only some of
             # them -- say so rather than let it pass unnoticed.
             exps = (self._groups.get(filt) or {}).get("exps") or []
-            if len(exps) > 1:
+            if warn_mixed and len(exps) > 1:
                 self._emit(
                     f"  {filt}: frames use {len(exps)} different exposures "
                     f"({', '.join(f'{e:g}s' for e in exps)}); the dark "
@@ -2083,6 +3033,87 @@ class StackWorker(QThread):
         if used:
             self._calib_notes[filt] = ", ".join(used)
         return args
+
+    def _find_fullframe(self, mdir: str, filt: str):
+        """An existing full-frame master for this filter, or None.
+
+        The name carries the recipe (frames, exposure, gain, temperature),
+        so it changes whenever the run does -- matching it exactly would
+        make reuse depend on stacking the very same frames again.  The
+        stable part is the ``<TARGET>_<FILTER>_`` prefix; the trailing
+        underscore is what keeps ``R`` from matching ``RED``.  Among
+        several the newest wins, and the bare
+        ``<TARGET>_<FILTER>_fullframe`` written by earlier versions still
+        matches the same rule.
+        """
+        pre = f"{_safe(self._target)}_{self._tok(filt)}_"
+        tail = f"_fullframe{self._ext}"
+        try:
+            hits = [os.path.join(mdir, f) for f in os.listdir(mdir)
+                    if f.startswith(pre) and f.lower().endswith(tail.lower())]
+        except OSError as exc:
+            _log_swallowed(exc)
+            return None
+        if not hits:
+            return None
+        return max(hits, key=lambda f: os.path.getmtime(f))
+
+    def _master_stem(self, filt: str, n_stack: int) -> str:
+        """``<TARGET>_<FILTER>_<recipe>_fullframe`` -- e.g.
+        ``M16_HA_29x300s_G100_-10C_fullframe``.
+
+        What a stack is worth depends on how it was made, and a bare
+        ``M16_HA_fullframe`` hides every bit of that.  The frame count is
+        the one that was actually integrated (after registration dropped
+        what it could not align), so the name cannot promise more than the
+        file contains.  A filter that mixes exposures gets a plain count
+        instead of ``NxT``: no single exposure would be true for it.
+
+        Missing header values are left out rather than guessed, so the
+        name is always shorter than it is wrong.
+        """
+        grp = self._groups.get(filt) or {}
+        info = grp.get("info") or {}
+        exps = grp.get("exps") or []
+        parts = [f"{_safe(self._target)}_{self._tok(filt)}"]
+        if len(exps) == 1 and exps[0]:
+            parts.append(f"{n_stack}x{float(exps[0]):g}s")
+        else:
+            parts.append(f"{n_stack}subs")
+        gain = info.get("gain_v")
+        if gain is not None:
+            parts.append(f"G{float(gain):g}")
+        temp = info.get("temp_v")
+        if temp is not None:
+            parts.append(f"{float(temp):.0f}C")
+        parts.append("fullframe")
+        return "_".join(parts)
+
+    def _exposure_split(self, filt: str) -> list:
+        """``[(tag, exposure, files)]`` when a filter needs calibrating in
+        parts, or ``[]`` when one pass over all its frames is right.
+
+        A master dark is only valid for the exposure it was shot at: the
+        thermal signal it removes grew for exactly that long.  A filter
+        holding 120 s and 300 s subs therefore cannot be calibrated in one
+        pass -- whichever dark is chosen is wrong for the other half.  The
+        frames are split by exposure, each part gets its own dark, and the
+        calibrated parts are merged again before registration, so the
+        channel still ends as ONE master (which is what the composite
+        needs).
+
+        Only the DARK depends on exposure.  Flats and bias do not, so with
+        no darks in the run there is nothing to split for and the ordinary
+        single pass is both correct and faster.
+        """
+        if not self._opts.get("calibrate", True):
+            return []
+        if not self._masters.get(KIND_DARK):
+            return []
+        by_exp = (self._groups.get(filt) or {}).get("by_exp") or {}
+        if len(by_exp) < 2:
+            return []
+        return [(_exp_tag(exp), exp, by_exp[exp]) for exp in sorted(by_exp)]
 
     def _unused_by_palette(self, filters: list) -> set:
         """Filters to leave unstacked, when the user asked for that.
@@ -2208,10 +3239,38 @@ class StackWorker(QThread):
             lights_dir = os.path.join(work, "lights")
             if os.path.isdir(work):
                 shutil.rmtree(work, ignore_errors=True)
-            n_linked = self._link_frames(files, lights_dir)
-            self._emit(
-                f"  Staged {n_linked} frame(s) into {lights_dir}",
-                LogColor.BLUE)
+            # A dark is only valid for the exposure it was shot at, so a
+            # filter mixing exposures is staged in parts -- one per
+            # exposure -- and merged again after calibration.
+            splits = self._exposure_split(filt)
+            staged: list = []
+            n_linked = 0
+            blank_mark = self._blank_skipped
+            for tag, exp, sub in splits:
+                d = os.path.join(work, f"lights_{tag}")
+                k = self._link_frames(sub, d)
+                if k:
+                    staged.append((tag, exp, d, k))
+                    n_linked += k
+            if splits and len(staged) < 2:
+                # Only one exposure survived staging (the rest were blank or
+                # unreadable): there is nothing left to split, so take the
+                # ordinary path -- and undo the blank tally, which the
+                # single pass is about to count again.
+                shutil.rmtree(work, ignore_errors=True)
+                self._blank_skipped = blank_mark
+                staged = []
+            if staged:
+                self._emit(
+                    f"  Staged {n_linked} frame(s) in "
+                    f"{len(staged)} exposure group(s): "
+                    + ", ".join(f"{e:g}s x{k}" for _t, e, _d, k in staged),
+                    LogColor.BLUE)
+            else:
+                n_linked = self._link_frames(files, lights_dir)
+                self._emit(
+                    f"  Staged {n_linked} frame(s) into {lights_dir}",
+                    LogColor.BLUE)
             if n_linked < 2:
                 msg = (f"only {n_linked} usable frame(s); need at least 2 "
                        "to register and stack.")
@@ -2224,8 +3283,6 @@ class StackWorker(QThread):
                 # frames from the current directory and writes the "lights"
                 # sequence to ../process (i.e. work/<filter>/process), which
                 # is unique per filter.
-                self._cmd("cd", f'"{lights_dir}"')
-
                 # FITS (incl. Rice-compressed .fits.fz) -> link is instant;
                 # anything else needs convert.  Discovery only ever yields
                 # FITS_EXTS today, so the convert branch is dead in practice
@@ -2233,25 +3290,54 @@ class StackWorker(QThread):
                 # raw format does not silently produce a broken `link`.
                 conv = "link" if _is_fits_like(_fits_ext(files[0])) \
                     else "convert"
-                self._cmd(conv, "lights", "-out=../process")
-                self._cmd("cd", "../process")
 
-                seq = "lights"
-                # Calibration comes first: everything downstream (background,
-                # registration, stacking) should work on corrected pixels.
-                cal_args = self._calibrate_args(
-                    filt, self._groups[filt].get("info") or {})
-                if cal_args:
-                    self._emit("  Calibrating: calibrate lights "
-                               + " ".join(cal_args), LogColor.BLUE)
-                    self._cmd("calibrate", seq, *cal_args)
-                    seq = f"pp_{seq}"
+                seq = None
+                if staged:
+                    try:
+                        seq = self._calibrate_in_parts(filt, staged, conv)
+                    except (CommandError, DataError, SirilError) as exc:
+                        # One pass with a dark that fits some of the frames
+                        # is still better than no master at all -- but it is
+                        # a step down, so it is said out loud.
+                        self._emit(
+                            f"  {filt}: calibrating per exposure failed "
+                            f"({exc}); falling back to one pass over all "
+                            "frames.", LogColor.SALMON)
+                        staged = []
+                        blank_mark = self._blank_skipped
+                        n_linked = self._link_frames(files, lights_dir)
+                        self._blank_skipped = blank_mark
+                if seq is None:
+                    self._cmd("cd", f'"{lights_dir}"')
+                    self._cmd(conv, "lights", "-out=../process")
+                    self._cmd("cd", "../process")
 
+                    seq = "lights"
+                    # Calibration comes first: everything downstream
+                    # (background, registration, stacking) should work on
+                    # corrected pixels.
+                    cal_args = self._calibrate_args(
+                        filt, self._groups[filt].get("info") or {})
+                    if cal_args:
+                        self._emit("  Calibrating: calibrate lights "
+                                   + " ".join(cal_args), LogColor.BLUE)
+                        self._cmd("calibrate", seq, *cal_args)
+                        previous = seq
+                        seq = f"pp_{seq}"
+                        # pp_ frames are complete files; nothing reads the
+                        # staged originals or their sequence again.
+                        self._drop_generation(
+                            os.path.join(work, "process"), previous)
+                        self._drop_staged(lights_dir)
+
+                proc_dir = os.path.join(work, "process")
                 if self._opts.get("bg_extract", False):
                     self._emit("  Extracting background gradient...",
                                LogColor.BLUE)
+                    previous = seq
                     self._cmd("seqsubsky", seq, "1", "-samples=10")
                     seq = f"bkg_{seq}"
+                    self._drop_generation(proc_dir, previous)
 
                 self._current_n_frames = n_linked
                 # Record what seqapplyreg is about to be told, before
@@ -2259,7 +3345,13 @@ class StackWorker(QThread):
                 self._qf_decision[filt] = (
                     n_linked, bool(self._quality_filter_args(n_linked)))
                 self._emit("  Registering frames...", LogColor.BLUE)
+                previous = seq
                 seq = self._register(seq, filt)
+                if seq != previous:
+                    # -2pass writes its data into the SAME sequence, so
+                    # only a renaming step (seqapplyreg) leaves a
+                    # predecessor behind to delete.
+                    self._drop_generation(proc_dir, previous)
 
                 # Registration itself can drop frames -- a sub with no
                 # detectable stars (clouds, a passing veil) simply fails to
@@ -2282,14 +3374,31 @@ class StackWorker(QThread):
                             f"  Only {n_reg} frame(s) left for {filt}: too "
                             "few for outlier rejection to mean much. Treat "
                             "this channel as provisional.", LogColor.SALMON)
+                # `n_reg` counts what seqapplyreg EXPORTED, which is
+                # already after the quality filters -- they run there, not
+                # at stack time.  Passing it through
+                # _effective_frame_count would subtract the same
+                # percentage a second time, choosing the rejection
+                # algorithm for a population smaller than the one being
+                # integrated.  The estimate is for the case where the
+                # count could not be read at all.
                 n_stack = n_reg or n_linked
-                self._stacked_counts[filt] = (
-                    n_stack, self._effective_frame_count(n_stack))
+                effective = n_reg or self._effective_frame_count(n_linked)
+                self._measured[filt] = bool(n_reg)
+                quality = self._seq_quality(
+                    os.path.join(work, "process"), seq, filt, n_reg)
+                if quality and quality.get("included"):
+                    effective = quality["included"]
+                    n_stack = effective
+                    # Siril's own answer is a measurement even when the
+                    # file count was not available to confirm it.
+                    self._measured[filt] = True
+                self._stacked_counts[filt] = (n_linked, effective)
 
                 # Full-frame (uncropped) per-channel master.  Kept in
                 # masters/ as *_fullframe; the aligned/cropped version is
                 # produced later by _align_masters as TARGET_FILTER.fit.
-                out_name = f"{_safe(self._target)}_{self._tok(filt)}_fullframe"
+                out_name = self._master_stem(filt, n_stack)
                 self._emit("  Integrating...", LogColor.BLUE)
                 self._stack(seq, out_name, n_stack, filt)
 
@@ -2329,11 +3438,163 @@ class StackWorker(QThread):
                     self._cmd("close")
                 except (CommandError, DataError, SirilError):
                     pass
+                # ...and give the disk back now that the master is safe in
+                # masters/.  Keeping every filter's registered frames until
+                # the end makes peak usage the SUM of all channels: six
+                # filters of 3000x3000 32-bit subs is over a gigabyte that
+                # nothing reads again.  Only on success -- a failed filter
+                # keeps its intermediates for inspection.
+                if filt in results:
+                    self._release_work(work, filt)
             except (CommandError, DataError, SirilError) as exc:
                 errors[filt] = str(exc)
                 self._emit(f"  {filt} failed: {exc}", LogColor.RED)
 
         return results, errors, last_result
+
+    def _calibrate_in_parts(self, filt: str, staged: list,
+                            conv: str) -> str:
+        """Calibrate each exposure with its own dark, then merge the parts.
+
+        Returns the merged sequence name, with Siril left in the filter's
+        `process` directory -- the same state the single-pass branch
+        leaves behind, so registration and stacking are unchanged.  The
+        channel therefore still becomes ONE master: splitting is a
+        calibration concern, not a stacking one.
+
+        The merged name carries no trailing underscore because Siril
+        appends ``_00001`` itself; a trailing one would give the double
+        underscore that `_count_seq_frames` then fails to match.
+        """
+        base = (self._groups.get(filt) or {}).get("info") or {}
+        # The note is what the report prints under "Calibration".  It stays
+        # empty until something is really applied: a filter whose every
+        # exposure went uncalibrated must not put a calibration step into
+        # a report where none happened.
+        self._calib_notes.pop(filt, None)
+        notes: list = []
+        seqs: list = []
+        applied = 0
+        for tag, exp, d, _k in staged:
+            self._cmd("cd", f'"{d}"')
+            self._cmd(conv, f"lights_{tag}", "-out=../process")
+            self._cmd("cd", "../process")
+            # Everything except the exposure is shared: same filter, same
+            # camera, same night.  Only the dark lookup changes.
+            info = dict(base, exp_s=exp, exp=f"{exp:g}s")
+            args = self._calibrate_args(filt, info, warn_mixed=False)
+            if args:
+                self._emit(f"  {exp:g}s: calibrate lights_{tag} "
+                           + " ".join(args), LogColor.BLUE)
+                self._cmd("calibrate", f"lights_{tag}", *args)
+                seqs.append(f"pp_lights_{tag}")
+                notes.append(f"{exp:g}s: {self._calib_notes.get(filt, '')}")
+                applied += 1
+            else:
+                # No master fits this exposure.  Its frames still belong in
+                # the stack -- uncalibrated, and named as such in the log.
+                self._emit(
+                    f"  {exp:g}s: no calibration master matches this "
+                    "exposure; its frames go in uncalibrated.",
+                    LogColor.SALMON)
+                seqs.append(f"lights_{tag}")
+                notes.append(f"{exp:g}s: uncalibrated")
+        if applied:
+            self._calib_notes[filt] = " | ".join(notes)
+        else:
+            self._calib_notes.pop(filt, None)
+        merged = f"merged_{self._tok(filt)}"
+        self._cmd("merge", *seqs, merged)
+        # The merge copied every frame, so each part is now a duplicate.
+        proc_dir = os.path.dirname(staged[0][2].rstrip(os.sep))
+        proc_dir = os.path.join(proc_dir, "process")
+        for tag, _exp, d, _k in staged:
+            self._drop_generation(proc_dir, f"pp_lights_{tag}")
+            self._drop_generation(proc_dir, f"lights_{tag}")
+            self._drop_staged(d)
+        # Only now, and only if a master was really applied: a merge that
+        # raised sends the caller down the single-pass path, and a split
+        # that calibrated nothing is not a calibration story to tell.
+        if applied:
+            self._split_filters.add(filt)
+        self._emit(
+            f"  Merged {len(seqs)} sequence(s) into {merged} "
+            f"({applied} calibrated).", LogColor.GREEN)
+        return merged
+
+    def _drop_generation(self, process_dir: str, seq: str) -> None:
+        """Delete one sequence's frames now that its successor exists.
+
+        The chain is lights -> pp_ -> bkg_ -> r_, and every step writes a
+        full copy of every frame.  Keeping all of them until the master is
+        written makes peak disk usage the SUM of the generations: a
+        hundred 3008x3008 32-bit subs are about 3.6 GB per generation, so
+        four of them is most of a laptop's free space for one channel.
+
+        Deleting the predecessor the moment its successor is complete
+        keeps the peak at roughly two.  Bounded by the same option that
+        governs `_work/` as a whole -- someone who unticks "Delete _work/
+        when finished" wants those intermediates, and taking them away
+        one step earlier would be taking exactly what they asked to keep.
+
+        Never touches the sequence it is given if that is also the one
+        still needed: callers pass the OLD name, after the new one exists.
+        """
+        if not self._opts.get("cleanup_work", False):
+            return
+        # `_\d*` rather than `_\d+`: Siril's own sequence file is
+        # "<seq>_.seq" -- underscore, no number -- and requiring a digit
+        # left it behind while its frames were deleted.
+        pat = re.compile(re.escape(seq) + r"(_\d*)?\.(fit|fits|fts|seq)$",
+                         re.IGNORECASE)
+        freed = 0
+        try:
+            names = os.listdir(process_dir)
+        except OSError as exc:
+            _log_swallowed(exc)
+            return
+        for name in names:
+            if not (pat.match(name) or name == f"{seq}_conversion.txt"):
+                continue
+            path = os.path.join(process_dir, name)
+            try:
+                # lstat, not getsize: the staged frames are symlinks by
+                # default, and following them would report the originals'
+                # size as space this run had freed.
+                freed += os.lstat(path).st_size
+                os.remove(path)
+            except OSError as exc:
+                _log_swallowed(exc)
+        if freed > 50e6:          # below that it was a set of symlinks
+            self._emit(
+                f"  Freed {freed / 1e9:.2f} GB — {seq} is no longer needed.",
+                LogColor.BLUE)
+
+    def _drop_staged(self, staged_dir: str) -> None:
+        """Delete a staging folder once its calibrated copy exists.
+
+        In copy mode this is a full second copy of the light frames; in
+        the default symlink mode it costs nothing and goes away with the
+        rest of `_work/`.  Same option gate as `_drop_generation`.
+        """
+        if not self._opts.get("cleanup_work", False):
+            return
+        shutil.rmtree(staged_dir, ignore_errors=True)
+
+    def _release_work(self, work: str, filt: str) -> None:
+        """Delete one filter's working tree once its master is written.
+
+        Bounded by the option that governs the whole `_work/` folder: a
+        user who unticks "Delete _work/ when finished" wants the
+        intermediates, and deleting them per filter would take exactly
+        what they asked to keep.
+        """
+        if not self._opts.get("cleanup_work", False):
+            return
+        try:
+            shutil.rmtree(work, ignore_errors=True)
+        except OSError as exc:
+            _log_swallowed(exc)
 
     def _write_stub_report(self) -> None:
         """Write a brief output.md (replaced by the full report when done)."""
@@ -2344,7 +3605,9 @@ class StackWorker(QThread):
             "**Folder layout**\n\n"
             "- `TARGET_<palette>.fit` — the finished colour image (linear)\n"
             "- `masters/` — per-channel masters "
-            "(`*_fullframe` = full field, the others are aligned)\n"
+            "(`*_fullframe` = full field, named after the frames, "
+            "exposure, gain and temperature that made it; the others are "
+            "aligned)\n"
             "- `_work/` — intermediate files, safe to delete\n"
             "- `todo.md` — step-by-step final-processing guide\n")
         self._write_file("output.md", txt)
@@ -2411,8 +3674,10 @@ class StackWorker(QThread):
             if os.path.exists(os.path.join(
                 self._out_dir, MASTERS_DIRNAME,
                 f"{_safe(self._target)}_{self._tok(f)}{self._ext}")))
-        A("| `masters/…_<FILTER>_fullframe.fit` | The same channel at "
-          "**full, uncropped** size. |")
+        A("| `masters/…_<FILTER>_<N>x<EXP>_G<gain>_<temp>C_fullframe.fit` "
+          "| The same channel at **full, uncropped** size.  The name is "
+          "the recipe: frames integrated, exposure, gain, sensor "
+          "temperature. |")
         A("| `_work/` | All intermediate files. **Safe to delete** any "
           "time. |")
         A("| `output.md` | This report — what the script did, step by step. |")
@@ -2502,7 +3767,14 @@ class StackWorker(QThread):
             # Integration time must follow the frames that were really
             # integrated, not the ones that were merely found.
             exp_used = exp * effective / n if n else 0.0
-            if k_sigma and self._quality_filter_args(staged):
+            if self._measured.get(filt):
+                # Counted from the sequence Siril actually exported, so
+                # every filter it applied is already in this number.  No
+                # hedge belongs on a measurement.
+                if effective != n:
+                    any_reduced = True
+                used = f"**{effective}**" if effective != n else str(effective)
+            elif k_sigma and self._quality_filter_args(staged):
                 # k-sigma rejects "everything beyond k standard deviations":
                 # how many frames that is only Siril knows, so the count is
                 # an upper bound, never a measurement.
@@ -2548,6 +3820,46 @@ class StackWorker(QThread):
               "filter, where how many frames fall outside k standard "
               "deviations is not predictable at all — that column is an "
               "upper bound, and so is the integration time beside it.")
+        if self._reg_stats:
+            A("")
+            A("**Registration quality**, read back from the sequences Siril "
+              "registered — measured, not estimated:")
+            A("")
+            A("| Filter | Integrated | Median FWHM | Roundness | Stars |")
+            A("|---|---:|---:|---:|---:|")
+            def _stat(q, key, spec):
+                # "not recorded" must not render as a zero that reads
+                # like a measurement of a disastrous value.
+                v = q.get(key)
+                return format(v, spec) if v is not None else "—"
+
+            for filt in sorted(self._reg_stats):
+                q = self._reg_stats[filt]
+                A(f"| {filt} | {q['included']} of {q['total']} "
+                  f"| {_stat(q, 'fwhm', '.2f')} px | "
+                  f"{_stat(q, 'roundness', '.2f')} | "
+                  f"{_stat(q, 'stars', '.0f')} |")
+            A("")
+            A("> Roundness is 1.00 for perfectly round stars; a value well "
+              "below that means trailing. The star count is Siril's own "
+              "detection on the reference layer — a channel far below the "
+              "others usually means the filter simply passes less light, "
+              "not that anything went wrong.")
+        gaps = opts.get("missing_api") or []
+        if gaps:
+            A("")
+            A("> ℹ️ **Siril's Python module is older than this script "
+              f"expects**, so {len(gaps)} "
+              + _plural(gaps, "feature took", "features took")
+              + " a simpler route. This is not an error and nothing was "
+              "skipped — but it is why some of the numbers above are "
+              "estimates rather than measurements. Updating Siril "
+              "restores "
+              + _plural(gaps, "it", "them") + ":")
+            for feature, calls, consequence in gaps:
+                A(f">   - **{feature}** — needs `"
+                  + "`, `".join(calls)
+                  + f"`; without it, {consequence}.")
         if self._blank_skipped:
             A("")
             A(f"> ⚠️ **{self._blank_skipped} blank/black frame(s)** were "
@@ -2629,6 +3941,31 @@ class StackWorker(QThread):
                   "dark is used.")
                 for filt in sorted(self._calib_notes):
                     A(f"    - **{filt}:** {self._calib_notes[filt]}")
+                if self._split_filters:
+                    which = ", ".join(sorted(self._split_filters))
+                    A(f"    - **{which}** mixed exposures, so "
+                      + ("that channel was" if len(self._split_filters) == 1
+                         else "those channels were")
+                      + " calibrated in parts — each exposure with its own "
+                      "dark — and the calibrated parts merged again before "
+                      "registration (`merge`). A dark only removes the "
+                      "thermal signal that grew during ITS exposure, so one "
+                      "dark for two exposures is right for neither.")
+                for filt, (spread, other, ref) in sorted(
+                        self._flat_warn.items()):
+                    A(f"    - ⚠️ **{filt}: the flats of {other} and {ref} "
+                      f"differ by {spread * 100:.2f}%.** They were pooled "
+                      "into one master anyway, which is right only if the "
+                      "optical train did not move between those nights. "
+                      + ("That is above the "
+                         f"{FLAT_MATCH_LIMIT * 100:.1f}% where a pooled "
+                         "master stops correcting either night properly — "
+                         "re-run with **Match flats to the same night**."
+                         if spread > FLAT_MATCH_LIMIT else
+                         "It is still inside the usable range, so this is "
+                         "a note rather than a problem.")
+                      + " (Measured by dividing one night's flat by the "
+                      "other's — a matching pair gives a uniform result.)")
                 if opts.get("calib_library"):
                     A("    - Darks / bias were taken from the library "
                       f"`{opts['calib_library']}`; flats come from the "
@@ -2671,9 +4008,9 @@ class StackWorker(QThread):
                 # in k-sigma mode, where the surviving count cannot be
                 # predicted and therefore always equals the staged one.
                 # _qf_decision records what registration was actually told,
-                # and the count it was told it for.  _stacked_counts holds
-                # what SURVIVED registration, which is a different number
-                # and would give a different -- wrong -- answer here.
+                # and the count it was told it for.  _stacked_counts pairs
+                # the staged count with what SURVIVED, and the survivor is
+                # a different number that would give a wrong answer here.
                 qfd = self._qf_decision
                 applied = [f for f, (_n, fired) in qfd.items() if fired]
                 if applied:
@@ -2728,13 +4065,18 @@ class StackWorker(QThread):
                   "below that it usually adds noise instead of resolution. "
                   "Compare against an undrizzled run before keeping this.")
             A(N() + " **Integration** (`stack`):")
-            A("    - **Rejection** is chosen automatically from each filter's "
-              "frame count (see the table above) — percentile clipping for "
-              "few frames, Winsorized sigma for more, linear-fit beyond that, "
-              f"and GESDT from {GESDT_MIN_FRAMES} frames, where the test has "
-              "enough data to outperform the rest. Sigma-based methods need "
-              "a population to work, so few-frame channels use gentler "
-              "percentile clipping.")
+            A("    - **Rejection** is chosen automatically from each "
+              "filter's frame count (see the table above) — percentile "
+              f"clipping up to 4, plain sigma to {SIGMA_MAX_FRAMES}, "
+              f"Winsorized to {GESDT_MIN_FRAMES - 1}, **GESDT** to "
+              f"{LINEAR_MIN_FRAMES}, and linear fit beyond that.  Sigma-based "
+              "methods need a population to work, so few-frame channels use "
+              "gentler percentile clipping; linear fit sits at the top "
+              "because it models a trend across the stack and needs a long "
+              "one to define it.  These band edges are Cyril Richard\u2019s, "
+              "taken from **AMSP** in the official Siril script "
+              "repository — he wrote Siril and implemented these "
+              "algorithms.")
             A("    - **Normalization:** additive + scaling — matches the "
               "background level and brightness of every sub before averaging.")
             if opts.get("weighting", True):
@@ -2767,7 +4109,10 @@ class StackWorker(QThread):
                      "first-degree polynomial cannot."
                      if opts.get("bg_rbf") else ""))
             A("")
-            A("→ saved as `masters/<TARGET>_<FILTER>_fullframe.fit`.")
+            A("→ saved as `masters/<TARGET>_<FILTER>_<N>x<EXP>_G<gain>"
+              "_<temp>C_fullframe.fit` — e.g. "
+              "`M16_HA_29x300s_G100_-10C_fullframe.fit`, so the file says "
+              "what went into it without opening it.")
             A("")
             if did_align:
                 A("### 3.2 · Aligning the channels to each other")
@@ -2785,6 +4130,32 @@ class StackWorker(QThread):
                 A("→ `masters/<TARGET>_<FILTER>.fit` (these feed the colour "
                   "image).")
                 A("")
+                if self._align_pairs:
+                    weak = _align_pairs_warn(self._align_pairs)
+                    A("How many stars each channel was matched on — the "
+                      "number the transform was fitted from:")
+                    A("")
+                    A("| Channel | Star pairs | |")
+                    A("| --- | ---: | --- |")
+                    for f in sorted(self._align_pairs):
+                        if f == self._align_ref:
+                            continue      # listed as the reference below
+                        A(f"| {f} | {self._align_pairs[f]} | "
+                          + ("⚠️ |" if f in weak else " |"))
+                    if self._align_ref:
+                        A(f"| {self._align_ref} | — | _reference_ |")
+                    A("")
+                    if weak:
+                        A("> ⚠️ A scale term fitted on that few points is "
+                          "carried badly, and that is what puts colour "
+                          "fringing towards the edges.  Siril's two-pass "
+                          "registration picks the reference itself from "
+                          "whatever is in the sequence, so a narrowband "
+                          "channel having to match a star-rich broadband "
+                          "reference is the usual cause — *Stack only the "
+                          "filters this palette uses* keeps the reference "
+                          "among the channels that end up in the picture.")
+                        A("")
         if opts.get("platesolve_master"):
             A(("The per-filter masters were also"
                if not self._skipped_by_palette else
@@ -2805,7 +4176,7 @@ class StackWorker(QThread):
                     mp.append(f"**{role}** = {v}")
             A("**Channel mapping:** " + " · ".join(mp))
             A("")
-            if palette in ("SHO", "HOO") and opts.get("nb_normalize", True):
+            if _is_nb_palette(palette) and opts.get("nb_normalize", True):
                 A("- **Normalized** the channels to the Ha reference "
                   "(`linear_match`) first, so the strong Ha doesn't dominate "
                   "and turn the result green.")
@@ -2821,10 +4192,25 @@ class StackWorker(QThread):
                 A(f"- **Blended Ha into Red** at "
                   f"{int(opts.get('ha_strength', 50))}% (a PixelMath screen "
                   "blend) for stronger emission-nebula detail.")
+            if palette in _MIX_PALETTES:
+                A("- **Mixed** the channels with `pm`: "
+                  + "; ".join(
+                      f"{ch.upper()} = {_mix_words(mix)}"
+                      for ch, mix in _MIX_PALETTES[palette].items())
+                  + ".  Colour calibration is skipped for a mixed "
+                  "channel — it has no single passband.")
             baked = palette == "LRGB" and opts.get("quick_lrgb")
-            A("- **Combined** the channels with `rgbcomp`"
-              + (" (luminance baked in linearly — the *quick* mode)." if baked
-                 else "."))
+            A("- **Combined** the channels "
+              + ("with `rgbcomp` (luminance baked in linearly — the "
+                 "*quick* mode)." if baked else
+                 f"{self._compose_how or 'with `rgbcomp`'}."))
+            if self._synth_lum:
+                A(f"- **Synthetic luminance** → "
+                  f"`{MASTERS_DIRNAME}/"
+                  f"{os.path.basename(self._synth_lum)}`, the average of "
+                  "the emission-line masters.  It was **not** combined "
+                  "into the colour image: that belongs after the stretch "
+                  "(see `todo.md`).")
             if baked and any(s.startswith("Colour calibration: SPCC")
                              or s.startswith("Colour calibration: PCC")
                              for s in self._finish_steps):
@@ -2930,7 +4316,10 @@ class StackWorker(QThread):
         comp = os.path.basename(composite) if composite else \
             "your colour image"
         lum = (f"masters/{os.path.basename(self._separate_lum)}"
-               if self._separate_lum else None)
+               if self._separate_lum else
+               (f"masters/{os.path.basename(self._synth_lum)}"
+                if self._synth_lum else None))
+        synth = bool(self._synth_lum and not self._separate_lum)
         # What the finish step REALLY did.  Telling the user "the colour is
         # already calibrated" when auto-finish was off, or when PCC could not
         # reach a catalog, would make them skip a step they still need.
@@ -2940,12 +4329,12 @@ class StackWorker(QThread):
         pcc_done = any(s.startswith("Colour calibration: ") for s in steps)
         bg_done = any(s.startswith("Extracted the background gradient")
                       for s in steps)
-        nb_done = bool(composite and palette in ("SHO", "HOO")
+        nb_done = bool(composite and _is_nb_palette(palette)
                        and self._opts.get("nb_normalize", True))
         # Narrowband SPCC ran instead of the normalization -- the intended
         # pairing, and the reason the advice below must not be "switch
         # normalization back on".
-        nb_spcc = bool(composite and palette in ("SHO", "HOO")
+        nb_spcc = bool(composite and palette in _NB_PALETTES
                        and any(s.startswith("Colour calibration: SPCC")
                                and "narrowband" in s for s in steps))
         S: list[str] = []
@@ -3027,6 +4416,14 @@ class StackWorker(QThread):
             if lum:
                 A(f"## Part B — Luminance (open `{lum}`)")
                 A("")
+                if synth:
+                    A("This luminance is **synthetic** — the average of the "
+                      "emission-line masters, so it carries their combined "
+                      "signal-to-noise. It was deliberately not combined "
+                      "into the colour image: doing that on linear data "
+                      "lifts the bright end before colour calibration, "
+                      "which is the same mistake *Quick linear LRGB* makes.")
+                    A("")
                 A("6. **Sharpen while linear** *(optional)* — deconvolution or "
                   "a tool like BlurXTerminator. The luminance carries all the "
                   "fine detail, so this is where sharpening pays off most.")
@@ -3054,6 +4451,14 @@ class StackWorker(QThread):
             A("---")
             A("")
             A("### Tips")
+            if _is_nb_palette(palette) and "sii" in _palette_roles(palette):
+                A("- **Magenta / purple stars** are the classic artefact of "
+                  "a three-line palette: stars are continuum sources, so "
+                  "they land in Red and Blue but not in the Green channel. "
+                  "The usual remedy, *after stretching*: `invert` → "
+                  "`rmgreen` (SCNR) → `invert`. It is not done here because "
+                  "inverting linear data does not mean what it means after "
+                  "a stretch.")
             if self._separate_lum:
                 A("- To reuse an existing luminance next time, keep the "
                   "palette on **LRGB** — the script keeps L separate "
@@ -3182,17 +4587,13 @@ class StackWorker(QThread):
                 filt: os.path.join(
                     mdir, f"{_safe(self._target)}_{self._tok(filt)}{self._ext}")
                 for filt in filters}
-            full_paths = {
-                filt: os.path.join(
-                    mdir,
-                    f"{_safe(self._target)}_{self._tok(filt)}_fullframe{self._ext}")
-                for filt in filters}
+            full_paths = {filt: self._find_fullframe(mdir, filt)
+                          for filt in filters}
             missing_aligned = [f for f, p in aligned_paths.items()
                                if not os.path.exists(p)]
             mixed = ({} if missing_aligned or not want_reuse
                      else _mixed_grids(aligned_paths))
-            reusable_full = {f: p for f, p in full_paths.items()
-                             if os.path.exists(p)}
+            reusable_full = {f: p for f, p in full_paths.items() if p}
             reuse_ok = bool(want_reuse and filters
                             and not missing_aligned and not mixed)
             if mixed:
@@ -3272,6 +4673,24 @@ class StackWorker(QThread):
                         did_align = True
 
             want_compose = self._opts.get("compose", False)
+            if want_compose and not did_align and len(final_paths) >= 2:
+                # _compose states that its inputs are identical in size,
+                # which -framing=min guarantees -- but only if alignment
+                # actually ran.  When it failed, the masters are still on
+                # their own grids and rgbcomp would either refuse them or,
+                # worse, combine channels that do not overlay.
+                off = _mixed_grids(final_paths)
+                if off:
+                    shown = ", ".join(f"{f} {w}\u00d7{h}"
+                                      for f, (w, h) in sorted(off.items()))
+                    self._emit(
+                        "Colour composition skipped: the masters are not on "
+                        f"one pixel grid ({shown}) and alignment did not "
+                        "run. Combining them would misregister the "
+                        "channels. The per-filter masters are complete and "
+                        "can be composed after a successful alignment.",
+                        LogColor.SALMON)
+                    want_compose = False
 
             # Optional: plate-solve the final masters so they carry a WCS.
             if (self._opts.get("platesolve_master", False)
@@ -3406,6 +4825,20 @@ class StackWorker(QThread):
         self._write_file("output.md", "\n".join(L) + "\n")
 
     # -- colour composition ----------------------------------------------
+    def _pm_stage(self, src: str, helpers: str, tag: str) -> str:
+        """Copy a master into the helper folder under a PixelMath-safe name.
+
+        PixelMath refers to an image by its file name, inside an
+        arithmetic expression.  A hyphen in that name -- the sensor
+        temperature in a full-frame master (`-10C`), or a target called
+        NGC-7000 -- would sit in the middle of a subtraction.  Rather than
+        guess how Siril's parser resolves that, the inputs are staged
+        under names made of letters, digits and underscores only.
+        """
+        name = f"pm_{tag}"
+        shutil.copy2(src, os.path.join(helpers, name + self._ext))
+        return name
+
     def _compose(self, paths: dict) -> str | None:
         """Combine the aligned per-filter masters into one colour image.
 
@@ -3457,33 +4890,46 @@ class StackWorker(QThread):
             # L is calibrated/kept on its own for the post-stretch combine.
             self._separate_lum = paths[m_lum]
 
-        # rgbcomp does NOT honour quoted paths the way cd/load/save do, so a
-        # space in the folder (e.g. a Dropbox "Pinwheel Galaxy" dir) splits
-        # the filename.  Work around it: cd into the folder that holds the
-        # masters and pass BARE BASENAMES (underscored, space-free), with a
-        # relative -out.  All mapped masters live in the same directory.
+        # All mapped masters live in one directory; `_rgbcomp` needs it to
+        # build the relative names that command insists on.
         in_dir = os.path.dirname(paths[m_red])
-        # Compose helpers (_nbnorm / _RED_Ha) are written under _work/helpers
-        # so masters/ stays clean.  Referenced relative to the masters dir
-        # (space-free, so rgbcomp/pm are happy).
+        # Compose helpers (_nbnorm / _RED_Ha / _mix) are written under
+        # _work/helpers so masters/ stays clean.
         helpers = os.path.join(self._out_dir, WORK_DIRNAME, "helpers")
         os.makedirs(helpers, exist_ok=True)
-        helpers_rel = os.path.relpath(helpers, in_dir)
         try:
             self._cmd("cd", f'"{in_dir}"')
-            red_basename = os.path.basename(paths[m_red])
-            green_basename = os.path.basename(paths[m_green])
-            blue_basename = os.path.basename(paths[m_blue])
+            # The channel PATHS are absolute from here on, so nothing
+            # downstream depends on the working directory; `_rgbcomp`
+            # makes the relative names it needs where it needs them.
+            # (`_norm` below still reads by basename -- see its docstring.)
+            #
+            # `use_path` is what every later step reads: the aligned
+            # master, or its normalised copy once that has been made.
+            use_path = dict(paths)
+            red_basename = paths[m_red]
+            green_basename = paths[m_green]
+            blue_basename = paths[m_blue]
 
             # Narrowband normalization (Siril's recommendation): before
             # combining SHO/HOO, linear-match each channel to the Ha
             # reference so the strong Ha doesn't dominate and turn the
             # result green.  Matched copies (*_nbnorm) are written so the
             # original aligned masters stay untouched.
-            if (palette in ("SHO", "HOO")
+            # Which masters this palette actually reads.  An assignment
+            # reads the three mapped ones; a weighted mix reads every
+            # filter its weights name, which the dropdowns do NOT cover --
+            # they can only show one source per channel.
+            if palette in _MIX_PALETTES:
+                needed = [f for f in paths
+                          if _filter_role(f) in _palette_roles(palette)]
+            else:
+                needed = [m_red, m_green, m_blue]
+
+            if (_is_nb_palette(palette)
                     and self._opts.get("nb_normalize", True)):
                 ref_filter = next(
-                    (f for f in (m_red, m_green, m_blue)
+                    (f for f in needed
                      if _filter_role(f) == "ha"), m_green)
                 ref_base = os.path.basename(paths[ref_filter])
                 # 32-bit images live in [0,1]; ignore near-saturated stars.
@@ -3491,25 +4937,40 @@ class StackWorker(QThread):
                 norm_cache: dict = {}
 
                 def _norm(fname):
+                    """The channel to use, as an ABSOLUTE path.
+
+                    The RESULT is absolute; the inputs are not.  Both
+                    `load` and `linear_match` take a file name that Siril
+                    resolves against the working directory, which is
+                    `in_dir` here -- the folder holding every master.
+                    Only `save` gets an absolute path, because the
+                    normalised copy belongs in the helper folder.
+                    """
                     if fname == ref_filter:
-                        return os.path.basename(paths[fname])   # reference
+                        return paths[fname]                     # reference
                     if fname in norm_cache:
                         return norm_cache[fname]
                     src = os.path.basename(paths[fname])
                     out = os.path.join(
-                        helpers_rel, os.path.splitext(src)[0] + "_nbnorm")
+                        helpers, os.path.splitext(src)[0] + "_nbnorm")
                     self._cmd("load", src)
                     self._cmd("linear_match", ref_base, low, high)
-                    self._cmd("save", out)
+                    self._cmd("save", f'"{out}"')
                     norm_cache[fname] = out + self._ext
                     return norm_cache[fname]
 
                 self._emit(
                     f"  {out_label}: normalizing channels to {ref_filter} "
                     "(linear_match).", LogColor.BLUE)
-                red_basename = _norm(m_red)
-                green_basename = _norm(m_green)
-                blue_basename = _norm(m_blue)
+                # Every master this palette reads, not just the three the
+                # dropdowns name: a mixed channel pulls in a filter that
+                # has no dropdown, and leaving it unnormalised would put
+                # the raw Ha level back into the mix.
+                for fname in needed:
+                    use_path[fname] = _norm(fname)
+                red_basename = use_path[m_red]
+                green_basename = use_path[m_green]
+                blue_basename = use_path[m_blue]
 
             # HaRGB: screen-blend the Ha master into the Red channel first,
             # then compose as usual.  Ha is located by filter role among the
@@ -3521,18 +4982,20 @@ class StackWorker(QThread):
                 if ha_filter and ha_filter in paths:
                     k = max(0, min(100,
                                    int(self._opts.get("ha_strength", 50)))) / 100.0
-                    r_var = os.path.splitext(
-                        os.path.basename(paths[m_red]))[0]
-                    ha_var = os.path.splitext(
-                        os.path.basename(paths[ha_filter]))[0]
+                    r_var = self._pm_stage(paths[m_red], helpers, "R")
+                    ha_var = self._pm_stage(paths[ha_filter], helpers, "Ha")
                     enhanced = os.path.join(
-                        helpers_rel, f"{_safe(self._target)}_RED_Ha")
+                        helpers, f"{_safe(self._target)}_RED_Ha")
                     expr = f"1-(1-${r_var}$)*(1-{k:g}*${ha_var}$)"
                     self._emit(
                         f"  HaRGB: blending {ha_filter} into Red at "
                         f"{int(k * 100)}% (PixelMath).", LogColor.BLUE)
+                    # PixelMath resolves a variable against the working
+                    # directory, so the staged copies decide the names.
+                    self._cmd("cd", f'"{helpers}"')
                     self._cmd("pm", f'"{expr}"')
                     self._cmd("save", f'"{enhanced}"')
+                    self._cmd("cd", f'"{in_dir}"')
                     red_basename = enhanced + self._ext
                 else:
                     self._emit(
@@ -3540,35 +5003,241 @@ class StackWorker(QThread):
                         LogColor.SALMON)
                     out_label = "RGB"
 
+            if (self._opts.get("synth_lum", False)
+                    and _is_nb_palette(palette)
+                    and not self._separate_lum):
+                self._synthetic_luminance(palette, use_path, helpers)
+
+            chan = {"red": red_basename, "green": green_basename,
+                    "blue": blue_basename}
+            if palette in _MIX_PALETTES:
+                mixed = self._mix_planes(palette, use_path, helpers)
+                if mixed is None:
+                    return None
+                chan = mixed
+
             out_path = os.path.join(
                 self._out_dir, f"{_safe(self._target)}_{_safe(out_label)}")
-            out_rel = os.path.relpath(out_path, in_dir)
-            args = ["rgbcomp"]
-            if use_lum:
-                args.append(f"-lum={os.path.basename(paths[m_lum])}")
-            args += [red_basename, green_basename, blue_basename,
-                     f"-out={out_rel}"]
             self._emit(
                 f"  Composing {out_label}: "
                 + (f"L={m_lum} " if use_lum else "")
-                + f"R={m_red} G={m_green} B={m_blue}"
+                + (_mix_words(_MIX_PALETTES[palette]["red"]) + " -> R, …"
+                   if palette in _MIX_PALETTES
+                   else f"R={m_red} G={m_green} B={m_blue}")
                 + ("  (L kept separate for post-stretch combine)"
                    if self._separate_lum else ""), LogColor.BLUE)
-            self._emit("  " + " ".join(args), LogColor.BLUE)
-            self._cmd(*args)
 
+            result = None
+            if not use_lum:
+                # Assemble in memory.  `rgbcomp` stays as the fallback --
+                # and it is the ONLY way to do the -lum= combine, which is
+                # Siril's own luminance transfer, not a channel copy.
+                result = self._push_composite(chan, out_path)
+            if result is None:
+                result = self._rgbcomp(chan, out_path, in_dir,
+                                       paths[m_lum] if use_lum else "")
+            return result
+        except (CommandError, DataError, SirilError) as exc:
+            self._emit(f"  Colour composition failed: {exc}", LogColor.RED)
+            return None
+
+    def _mix_planes(self, palette: str, paths: dict,
+                    helpers: str) -> dict | None:
+        """Build the R/G/B planes of a weighted palette with PixelMath.
+
+        A weighted sum is the one kind of channel mixing that means the
+        same thing on linear data as on stretched data, which is why these
+        palettes are offered here and the dynamic ones (Foraxx and
+        friends) are not.  The arithmetic is left to Siril rather than
+        done in numpy, so every pixel operation in this script goes
+        through the same engine.
+
+        Returns None -- and says which line is missing -- when the palette
+        needs a filter this run does not have.
+        """
+        out: dict = {}
+        for ch, mix in _MIX_PALETTES[palette].items():
+            terms = []
+            for role, share in mix.items():
+                src = next((f for f in paths if _filter_role(f) == role),
+                           None)
+                if src is None:
+                    self._emit(
+                        f"  {palette} needs {_ROLE_WORDS.get(role, role)} "
+                        f"for the {ch.upper()} channel, and none was "
+                        "produced — composition skipped.", LogColor.SALMON)
+                    return None
+                var = self._pm_stage(paths[src], helpers, f"{ch}_{role}")
+                terms.append(f"{share:g}*${var}$")
+            expr = "+".join(terms)
+            dst = os.path.join(helpers, f"{_safe(self._target)}_{ch}_mix")
+            self._emit(f"  {ch.upper()} = {expr}", LogColor.BLUE)
+            self._cmd("cd", f'"{helpers}"')
+            self._cmd("pm", f'"{expr}"')
+            self._cmd("save", f'"{dst}"')
+            out[ch] = dst + self._ext
+        return out
+
+    def _synthetic_luminance(self, palette: str, paths: dict,
+                             helpers: str) -> None:
+        """Average the emission-line masters into a luminance master.
+
+        A narrowband night has no L filter, and the detail is spread over
+        two or three channels.  Averaging them gives a master with the
+        combined signal-to-noise, which is what a luminance layer is for.
+
+        It is deliberately NOT combined into the colour image here.  A
+        luminance combine done on linear data lifts the bright end before
+        colour calibration -- the same mistake "Quick linear LRGB" makes,
+        measured at 531 clipped stars against 68.  The file is written,
+        named in the report, and todo.md says where it belongs.
+        """
+        srcs: dict = {}
+        for role in sorted(_palette_roles(palette)):
+            filt = next((f for f in paths if _filter_role(f) == role), None)
+            if filt and filt not in srcs:
+                srcs[filt] = paths[filt]
+        if len(srcs) < 2:
+            self._emit(
+                "  Synthetic luminance needs at least two distinct "
+                "channels; skipped.", LogColor.SALMON)
+            return
+        terms = [f"${self._pm_stage(path, helpers, f'L{i}')}$"
+                 for i, path in enumerate(srcs.values())]
+        expr = f"({'+'.join(terms)})/{len(terms)}"
+        out = os.path.join(self._out_dir, MASTERS_DIRNAME,
+                           f"{_safe(self._target)}_SynthL")
+        try:
+            self._cmd("cd", f'"{helpers}"')
+            self._cmd("pm", f'"{expr}"')
+            self._cmd("save", f'"{out}"')
+        except (CommandError, DataError, SirilError) as exc:
+            self._emit(f"  Synthetic luminance failed: {exc}",
+                       LogColor.SALMON)
+            return
+        self._synth_lum = out + self._ext
+        self._emit(
+            f"  Synthetic luminance ({' + '.join(sorted(srcs))}) / "
+            f"{len(terms)} -> {os.path.basename(self._synth_lum)}. It is "
+            "not combined into the colour image: that belongs after the "
+            "stretch (see todo.md).", LogColor.GREEN)
+
+    def _push_composite(self, chan: dict, out_path: str) -> str | None:
+        """Assemble the three channels in memory and hand them to Siril.
+
+        Replaces `rgbcomp`, which cannot be given a path containing a
+        space: its arguments are split on spaces before they reach the
+        parser, which is why composition used to `cd` into the masters
+        folder and pass bare basenames.
+
+        Orientation needs no assumption here.  The planes are READ back
+        through `get_image_pixeldata` and written with
+        `set_image_pixeldata` unchanged, so whatever row order Siril uses
+        internally is the row order it gets back -- a round trip, not a
+        conversion.  Reading the files with astropy instead would mean
+        deciding what ROWORDER means, and getting it wrong flips the
+        image.
+
+        `new` creates the RGB image rather than reusing a loaded mono
+        master as a template: Siril stays in its single-layer display
+        state after loading a mono image, and the pushed result then
+        renders as monochrome (observed in PalettePicker, whose comment
+        documents it).  Returns None on any failure, leaving the caller to
+        fall back to rgbcomp.
+        """
+        try:
+            planes = []
+            for key in ("red", "green", "blue"):
+                self._cmd("load", f'"{chan[key]}"')
+                arr = np.squeeze(np.asarray(
+                    self.siril.get_image_pixeldata(), dtype=np.float32))
+                if arr.ndim != 2:
+                    self._emit(
+                        f"  In-memory composition: the {key} channel is "
+                        f"not a single-layer image ({arr.ndim}D); using "
+                        "rgbcomp instead.", LogColor.SALMON)
+                    return None
+                planes.append(arr)
+            if len({p.shape for p in planes}) != 1:
+                self._emit(
+                    "  In-memory composition: the channels differ in size "
+                    f"({', '.join(str(p.shape) for p in planes)}); using "
+                    "rgbcomp instead.", LogColor.SALMON)
+                return None
+            height, width = planes[0].shape
+            data = np.stack(planes)            # (3, H, W), channels-first
+            header = _header_string(chan["red"])
+            self._cmd("new", str(width), str(height), "3", "RGB")
+            if not self.siril.is_image_loaded():
+                self._emit("  In-memory composition: Siril did not create "
+                           "the RGB image; using rgbcomp instead.",
+                           LogColor.SALMON)
+                return None
+            with self.siril.image_lock():
+                self.siril.set_image_pixeldata(data)
+                if header:
+                    try:
+                        self.siril.set_image_metadata_from_header_string(
+                            header)
+                    except Exception as exc:
+                        # Losing the WCS is a blemish; losing the image
+                        # over it would not be.
+                        _log_swallowed(exc)
+                        self._emit(
+                            "  Composite written without the source "
+                            "metadata (WCS); plate-solving still works.",
+                            LogColor.SALMON)
+            self._cmd("save", f'"{out_path}"')
             result = out_path + self._ext
             if os.path.exists(result):
+                self._compose_how = ("in memory (`new` + pixel data), so "
+                                     "no path had to survive `rgbcomp`'s "
+                                     "argument splitting")
                 self._emit(
                     f"  Colour composite -> {os.path.basename(result)}",
                     LogColor.GREEN)
                 return result
+            return None
+        except (CommandError, DataError, SirilError, NoImageError,
+                AttributeError, ValueError, OSError) as exc:
             self._emit(
-                "  rgbcomp produced no output file.", LogColor.RED)
+                f"  In-memory composition unavailable ({exc}); using "
+                "rgbcomp instead.", LogColor.SALMON)
             return None
+
+    def _rgbcomp(self, chan: dict, out_path: str, in_dir: str,
+                 lum: str) -> str | None:
+        """Compose with Siril's `rgbcomp`, the fallback and the LRGB path.
+
+        rgbcomp does NOT honour quoted paths the way cd / load / save do,
+        so a space in the folder name splits the filename.  The way around
+        it is to `cd` into the folder holding the masters and pass bare,
+        space-free basenames with a relative -out; helper files reached
+        through `..` work the same way.
+        """
+        def rel(path: str) -> str:
+            return os.path.relpath(path, in_dir)
+
+        args = ["rgbcomp"]
+        if lum:
+            args.append(f"-lum={rel(lum)}")
+        args += [rel(chan["red"]), rel(chan["green"]), rel(chan["blue"]),
+                 f"-out={rel(out_path)}"]
+        try:
+            self._cmd("cd", f'"{in_dir}"')
+            self._emit("  " + " ".join(args), LogColor.BLUE)
+            self._cmd(*args)
         except (CommandError, DataError, SirilError) as exc:
-            self._emit(f"  Colour composition failed: {exc}", LogColor.RED)
+            self._emit(f"  rgbcomp failed: {exc}", LogColor.RED)
             return None
+        result = out_path + self._ext
+        if os.path.exists(result):
+            self._compose_how = "with `rgbcomp`"
+            self._emit(f"  Colour composite -> {os.path.basename(result)}",
+                       LogColor.GREEN)
+            return result
+        self._emit("  rgbcomp produced no output file.", LogColor.RED)
+        return None
 
     def _collect_rejmaps(self, process_dir: str, out_name: str) -> None:
         """Copy any rejection maps out of _work/ into the qa/ folder.
@@ -3636,7 +5305,7 @@ class StackWorker(QThread):
         if sensor:
             self._check_spcc_name(sensor, "mono_sensors", "sensor")
             args.append(f'"-monosensor={sensor}"')
-        if palette in ("SHO", "HOO"):
+        if palette in _NB_PALETTES:
             # The sensor belongs here too.  Siril's own help says
             # -narrowband makes it ignore "the previous FILTER arguments"
             # -- filters only; its usage grammar keeps -monosensor= in a
@@ -3650,8 +5319,10 @@ class StackWorker(QThread):
             # Wavelengths are physics, not preference.  Bandwidth depends on
             # the user's filter set, so that one is configurable.
             bw = float(self._opts.get("nb_bandwidth", 7))
-            r, g, b = ((SII_NM, HA_NM, OIII_NM) if palette == "SHO"
-                       else (HA_NM, OIII_NM, OIII_NM))
+            # Which line sits in which colour channel is exactly what
+            # the palette table says -- so a new palette cannot be added
+            # with the wrong wavelengths sent to SPCC.
+            r, g, b = (_LINE_NM[role] for role in _NB_PALETTES[palette])
             args += ["-narrowband",
                      f"-rwl={r:g}", f"-gwl={g:g}", f"-bwl={b:g}",
                      f"-rbw={bw:g}", f"-gbw={bw:g}", f"-bbw={bw:g}"]
@@ -3756,14 +5427,17 @@ class StackWorker(QThread):
         Red channel carries blended Ha, so the star colours are no longer
         physical.
         """
-        if palette == "HaRGB":
+        if palette == "HaRGB" or palette in _MIX_PALETTES:
+            why = ("the Red channel carries blended Ha"
+                   if palette == "HaRGB" else
+                   "each channel is a weighted mixture of two emission "
+                   "lines, which no single passband describes")
             self._finish_steps.append(
-                "Colour calibration skipped (HaRGB: the Red channel carries "
-                "blended Ha, so star photometry is invalid) — balance the "
-                "colour manually.")
+                f"Colour calibration skipped ({palette}: {why}, so star "
+                "photometry is invalid) — balance the colour manually.")
             self._emit(
-                "  Finish: colour calibration skipped for HaRGB (Ha-boosted "
-                "Red); balance the channels manually.", LogColor.BLUE)
+                f"  Finish: colour calibration skipped for {palette} "
+                f"({why}); balance the channels manually.", LogColor.BLUE)
             return
 
         if palette == "LRGB" and self._opts.get("quick_lrgb"):
@@ -3778,7 +5452,7 @@ class StackWorker(QThread):
                 "calibrates the RGB alone and combines L after stretching.",
                 LogColor.SALMON)
 
-        narrowband = palette in ("SHO", "HOO")
+        narrowband = palette in _NB_PALETTES
         if (narrowband and self._opts.get("use_spcc", True)
                 and self._opts.get("nb_normalize", True)):
             # These two balance the same thing by opposite means.
@@ -4016,6 +5690,46 @@ class StackWorker(QThread):
         return load_path
 
     # -- cross-filter alignment ------------------------------------------
+    def _read_align_pairs(self, log_before, index_to_filter: dict) -> None:
+        """Record how many star pairs each channel aligned on.
+
+        Diagnostic only -- it changes nothing about the image.  It makes
+        visible the one number that predicts colour fringing at the edges
+        and that the script used to throw away: the user had to find it in
+        Siril's own log, among several hundred lines.
+        """
+        if log_before is None:
+            return
+        try:
+            after = self.siril.get_siril_log() or ""
+        except Exception as exc:
+            _log_swallowed(exc)
+            return
+        if not after.startswith(log_before):
+            return          # something else logged; the delta is not ours
+        pairs, ref = _parse_align_pairs(after[len(log_before):],
+                                        index_to_filter)
+        if not pairs:
+            return          # format not recognised -- say nothing
+        self._align_pairs, self._align_ref = pairs, ref
+        weak = _align_pairs_warn(pairs)
+        shown = ", ".join(f"{f} {pairs[f]}" for f in sorted(pairs))
+        self._emit(f"  Alignment matched on: {shown} star pair(s)"
+                   + (f"; {ref} was the reference." if ref else "."),
+                   LogColor.BLUE)
+        if weak:
+            self._emit(
+                "  " + ", ".join(sorted(weak))
+                + " aligned on very few stars.  A scale term fitted on "
+                "that many "
+                "points is carried badly, which shows up as colour fringing "
+                "towards the edges.  Siril picks the reference itself from "
+                "whatever is in the sequence, so a narrowband channel "
+                "matching a broadband reference is the usual cause — "
+                "'Stack only the filters this palette uses' keeps the "
+                "reference among the channels that end up in the picture.",
+                LogColor.SALMON)
+
     def _align_masters(self, results: dict) -> dict:
         """Register the per-filter masters onto one shared pixel grid.
 
@@ -4066,6 +5780,15 @@ class StackWorker(QThread):
             self._cmd("cd", f'"{lights}"')
             self._cmd("link", "masters", "-out=../process")
             self._cmd("cd", "../process")
+            # Snapshot the log so the registration output can be read back
+            # afterwards.  get_siril_log() returns the WHOLE log, so only
+            # the delta belongs to this step -- and only if nothing else
+            # wrote in between, which the prefix check below verifies.
+            log_before = None
+            try:
+                log_before = self.siril.get_siril_log() or ""
+            except Exception as exc:
+                _log_swallowed(exc)
             try:
                 self._cmd("register", "masters", "-2pass")
                 # -framing=min (intersection) so every aligned master comes
@@ -4076,12 +5799,27 @@ class StackWorker(QThread):
             except (CommandError, DataError, SirilError):
                 # Fall back to single-pass global registration.
                 self._cmd("register", "masters")
+            self._read_align_pairs(log_before, index_to_filter)
 
             aligned: dict[str, str] = {}
             for idx, filt in index_to_filter.items():
                 src = os.path.join(
                     work, "process", f"r_masters_{idx:05d}{self._ext}")
                 if not os.path.exists(src):
+                    continue
+                # The index map is only as good as Siril's numbering.  The
+                # file's own FILTER keyword is independent of it, so ask
+                # the frame what it is before writing its name on it: a
+                # channel saved under the wrong name is the one error in
+                # this whole pipeline that nothing downstream can catch.
+                # An unreadable keyword proves nothing and is let through.
+                stamped = _fits_filter(src)
+                if stamped and self._tok(stamped) != self._tok(filt):
+                    self._emit(
+                        f"  Alignment: frame {idx} says FILTER={stamped} "
+                        f"but was expected to be {filt} — excluding it "
+                        "rather than saving a mislabelled channel.",
+                        LogColor.RED)
                     continue
                 out = os.path.join(
                     adir, f"{_safe(self._target)}_{self._tok(filt)}{self._ext}")
@@ -4141,32 +5879,147 @@ def _safe(token: str) -> str:
 def _rejection_args(n: int, enabled: bool) -> tuple[list[str], str]:
     """Pick a stacking rejection algorithm suited to the frame count.
 
-    Sigma-based methods (winsorized, linear fit) need enough frames to
-    estimate a reliable per-pixel distribution; with only a handful of
-    subs they reject poorly or over-aggressively.  Siril's guidance --
-    and general practice -- is percentile clipping for small sets,
-    winsorized / linear-fit for medium ones, and GESDT once the stack is
-    large enough for the test to have power.  Returns ``(tokens, label)``.
+    Sigma-based methods need enough frames to estimate a reliable
+    per-pixel distribution; with only a handful of subs they reject poorly
+    or over-aggressively.
+
+    The band edges are Cyril Richard's, taken from AMSP (Automatic
+    Multi-Session Processing) in the official Siril script repository.  He
+    wrote Siril and implemented these algorithms, so his thresholds carry
+    more weight than our own reasoning did: adopting them moved GESDT from
+    50 frames down to 31, and moved linear fit out of the middle of the
+    range to the top, where a long stack gives its trend model enough data
+    to work with.  Returns ``(tokens, label)``.
+
+    Source (GPL-3.0-or-later):
+    gitlab.com/free-astro/siril-scripts/-/blob/main/preprocessing/AMSP.py
     """
     if not enabled:
         return ["rej", "none"], "no rejection"
     if n <= 4:
         # Percentile clipping -- params are fractions, not sigmas.
         return ["rej", "percentile", "0.2", "0.1"], "percentile 0.2/0.1"
-    if n <= 20:
-        return ["rej", "winsorized", "3", "3"], "winsorized 3/3"
+    if n <= SIGMA_MAX_FRAMES:
+        # Plain sigma clipping: cheapest thing that works once there are
+        # more than a handful, before winsorizing earns its cost.
+        return ["rej", "sigma", "3", "3"], "sigma 3/3"
     if n < GESDT_MIN_FRAMES:
-        # Linear fit handles residual gradients between subs well.
-        return ["rej", "linear", "3", "3"], "linear fit 3/3"
-    # Generalized Extreme Studentized Deviate Test.  Siril documents it as
-    # performing excellently past ~50 frames.  Its two parameters are NOT
-    # sigmas: the first caps the fraction of the stack that may be
+        return ["rej", "winsorized", "3", "3"], "winsorized 3/3"
+    if n > LINEAR_MIN_FRAMES:
+        # Linear fit models a trend ACROSS the stack, so it belongs where
+        # the stack is long enough to define one.
+        return ["rej", "linear", "5", "4"], "linear fit 5/4"
+    # Generalized Extreme Studentized Deviate Test.  Its two parameters are
+    # NOT sigmas: the first caps the fraction of the stack that may be
     # rejected, the second is the significance threshold.
     return (["rej", "g", "0.3", "0.05"],
             "GESDT 0.3 max-reject / 0.05 significance")
 
 
 _SPCC_CACHE: dict = {}
+
+
+# Below this, a similarity fit (scale + rotation + shift) rests on so few
+# points that its scale term stops being trustworthy.  A judgement call,
+# not a measurement -- set from what a fit needs, not from a dataset.
+ALIGN_PAIRS_FLOOR = 30
+# ...and a channel far below the rest of the same run is suspect even when
+# it clears the floor: the others prove how many pairs were available.
+ALIGN_PAIRS_FRACTION = 0.25
+
+
+def _parse_align_pairs(delta: str, index_to_filter: dict) -> tuple:
+    """Star-pair counts per channel from Siril's registration output.
+
+    Siril reports, for the cross-filter alignment, which image it chose as
+    the reference and how many star pairs each other image matched against
+    it.  That count is the best early warning for colour fringing at the
+    edges: a scale term fitted on twelve points is carried badly, and on
+    one M 16 run the twelve-pair channel produced an SPCC R/G sigma of
+    5.76 against 2.73 for the same data aligned among its own kind.
+
+    Returns ``(pairs, reference_filter)``.  Anything unparseable yields an
+    empty dict -- the report then says nothing, because a number nobody
+    measured is worse than no number.
+    """
+    pairs, ref, pending = {}, None, None
+    for raw in delta.splitlines():
+        line = re.sub(r"^\d{2}:\d{2}:\d{2}:\s*", "", raw).strip()
+        m = re.match(r"^.*choosing image (\d+) as new reference", line)
+        if m:
+            ref = index_to_filter.get(int(m.group(1)))
+            continue
+        m = re.match(r"^Matching stars in image (\d+):", line)
+        if m:
+            pending = index_to_filter.get(int(m.group(1)))
+            continue
+        m = re.match(r"^Initial pair matches:\s*(\d+)", line)
+        if m and pending:
+            pairs[pending] = int(m.group(1))
+            pending = None
+    return pairs, ref
+
+
+def _align_pairs_warn(pairs: dict) -> set:
+    """Channels whose alignment rests on too few stars.
+
+    Two rules, because either alone misses a real case: an absolute floor
+    (a fit needs points regardless of what the run achieved elsewhere) and
+    a relative one (a channel far below its siblings had the stars
+    available and still did not match them -- the spectral mismatch this
+    is meant to catch).
+
+    The relative rule compares against the median, so it assumes MOST
+    channels aligned well.  When the majority is weak the median is weak
+    too and only the floor fires -- which is the other reason the floor
+    exists.
+    """
+    if not pairs:
+        return set()
+    ordered = sorted(pairs.values())
+    half = len(ordered) // 2
+    mid = (ordered[half] if len(ordered) % 2
+           else (ordered[half - 1] + ordered[half]) / 2)
+    return {f for f, n in pairs.items()
+            if n < ALIGN_PAIRS_FLOOR or n < mid * ALIGN_PAIRS_FRACTION}
+
+
+def _spcc_names_via_command(siril, what: str) -> set:
+    """Ask Siril itself for an SPCC name list, via ``spcc_list``.
+
+    The JSON tables are the primary source -- reading them costs nothing
+    and stays out of the user's log.  This is the fallback for a packaged
+    build (Flatpak / Snap / Store) where the database is somewhere the
+    path guesses cannot reach: `spcc_list` is Siril's own answer and
+    therefore always right, but it PRINTS the whole list, so it is only
+    worth those log lines when the cheap route already failed.
+
+    The output is a header line naming the list followed by one name per
+    line, so the header is dropped and the rest kept.  Read back through
+    get_siril_log(), which returns the entire log -- hence the snapshot
+    and the delta.  Returns an empty set on any failure: "cannot ask" is
+    never "the name is invalid".
+    """
+    try:
+        before = siril.get_siril_log() or ""
+        siril.cmd("spcc_list", what)
+        after = siril.get_siril_log() or ""
+    except Exception as exc:
+        _log_swallowed(exc)
+        return set()
+    if not after.startswith(before):
+        # Something else logged in between; the delta is not trustworthy.
+        return set()
+    names, header_seen = set(), False
+    for raw in after[len(before):].splitlines():
+        line = re.sub(r"^\d{2}:\d{2}:\d{2}:\s*", "", raw).strip()
+        if not line or line.startswith("Running command"):
+            continue
+        if not header_seen:          # "Mono Sensors", "Red Filters", ...
+            header_seen = True
+            continue
+        names.add(line)
+    return names
 
 
 def _spcc_catalog(table: str, hint: str = "") -> set:
@@ -4320,6 +6173,84 @@ def _detect_palette(filters: list[str]) -> str:
     return "RGB"
 
 
+# Narrowband palettes are pure channel ASSIGNMENTS: which emission line
+# feeds Red, Green and Blue.  One table drives the mapping, the dropdown,
+# the "which filter does this channel want" message and the manuals, so a
+# palette cannot exist in one of them and be missing from another.
+#
+# The set beyond SHO / HOO is Cyril Richard's, from PalettePicker in the
+# official Siril script repository (adapted there from Seti Astro Suite
+# Pro).  Assignments carry over to LINEAR data unchanged -- they move
+# pixels between channels without arithmetic.
+_NB_PALETTES = {
+    "SHO": ("sii", "ha", "oiii"),      # Hubble
+    "HOO": ("ha", "oiii", "oiii"),     # bicolour
+    "HSO": ("ha", "sii", "oiii"),
+    "HOS": ("ha", "oiii", "sii"),
+    "OSS": ("oiii", "sii", "sii"),
+    "OHH": ("oiii", "ha", "ha"),
+    "OSH": ("oiii", "sii", "ha"),
+    "OHS": ("oiii", "ha", "sii"),
+    "HSS": ("ha", "sii", "sii"),
+}
+
+# Weighted palettes MIX the lines instead of assigning them.  A weighted
+# sum is linear, so these are the only mixed palettes that mean the same
+# thing before and after a stretch -- see `_compose_planes`.  Foraxx and
+# the other dynamic palettes are deliberately absent: their blend factor
+# is t**(1-t) with t = Ha*OIII, and on linear data t is ~1e-6, which
+# collapses the whole expression to zero.  They belong in a post-stretch
+# tool, and PalettePicker is that tool.
+_MIX_PALETTES = {
+    "Realistic1": {"red": {"ha": 0.5, "sii": 0.5},
+                   "green": {"ha": 0.3, "oiii": 0.7},
+                   "blue": {"oiii": 0.9, "ha": 0.1}},
+    "Realistic2": {"red": {"ha": 0.7, "sii": 0.3},
+                   "green": {"sii": 0.3, "oiii": 0.7},
+                   "blue": {"oiii": 1.0}},
+}
+
+# The emission line each narrowband role stands for, in nanometres.
+_LINE_NM = {"ha": HA_NM, "oiii": OIII_NM, "sii": SII_NM}
+
+# Short forms for the help tables, where "an Ha filter" reads as noise.
+_ROLE_LABEL = {"ha": "Ha", "oiii": "OIII", "sii": "SII", "red": "R",
+               "green": "G", "blue": "B", "lum": "L"}
+
+_ROLE_WORDS = {"ha": "an Ha filter", "oiii": "an OIII filter",
+               "sii": "an SII filter", "red": "a Red filter",
+               "green": "a Green filter", "blue": "a Blue filter",
+               "lum": "a Luminance filter"}
+
+
+def _is_nb_palette(palette: str) -> bool:
+    """True for every palette built from emission lines.
+
+    Both kinds qualify: the assignments and the weighted mixes.  What
+    separates them is only how a channel is filled, and everything that
+    asks this question -- narrowband normalisation, the synthetic
+    luminance, the magenta-star note -- cares about the lines, not about
+    the arithmetic.  SPCC is the exception and tests `_NB_PALETTES`
+    directly: a mixed channel has no single passband to model.
+    """
+    return palette in _NB_PALETTES or palette in _MIX_PALETTES
+
+
+def _palette_roles(palette: str) -> set:
+    """Every emission line a palette reads, mixed channels included."""
+    if palette in _NB_PALETTES:
+        return set(_NB_PALETTES[palette])
+    return {r for chans in _MIX_PALETTES.get(palette, {}).values()
+            for r in chans}
+
+
+def _mix_words(mix: dict) -> str:
+    """"70% of an Ha filter + 30% of an SII filter" -- for the UI."""
+    return " + ".join(
+        f"{share:.0%} of {_ROLE_WORDS.get(role, role)}"
+        for role, share in mix.items())
+
+
 # What each palette feeds into a colour channel, in words.  Used to explain
 # a channel that cannot be filled: "no master for RED" is baffling when a
 # RED filter plainly exists and the palette is SHO, which wants SII there.
@@ -4330,11 +6261,18 @@ _PALETTE_SOURCE = {
             "blue": "a Blue filter"},
     "HaRGB": {"red": "a Red filter", "green": "a Green filter",
               "blue": "a Blue filter"},
-    "SHO": {"red": "an SII filter", "green": "an Ha filter",
-            "blue": "an OIII filter"},
-    "HOO": {"red": "an Ha filter", "green": "an OIII filter",
-            "blue": "an OIII filter"},
 }
+_PALETTE_SOURCE.update({
+    name: dict(zip(("red", "green", "blue"),
+                   (_ROLE_WORDS[r] for r in roles)))
+    for name, roles in _NB_PALETTES.items()})
+_PALETTE_SOURCE.update({
+    name: {ch: _mix_words(mix) for ch, mix in chans.items()}
+    for name, chans in _MIX_PALETTES.items()})
+
+# Every palette the UI offers, in the order it offers them.
+PALETTES = (["Auto", "LRGB", "RGB", "HaRGB"]
+            + list(_NB_PALETTES) + list(_MIX_PALETTES))
 
 
 def _unfillable_channels(filters: list, palette: str) -> list:
@@ -4345,6 +6283,14 @@ def _unfillable_channels(filters: list, palette: str) -> list:
     without an SII filter can be reported immediately instead of after
     stacking, aligning and plate-solving everything.
     """
+    if palette in _MIX_PALETTES:
+        # The dropdown shows one source per channel, so a channel can look
+        # filled while a line it mixes in is missing.  Judging by the
+        # weights instead is what keeps the pre-run answer and the run
+        # itself from disagreeing -- the failure mode HaRGB had.
+        return [ch for ch in ("red", "green", "blue")
+                if any(not _first_with_role(list(filters), role)
+                       for role in _MIX_PALETTES[palette][ch])]
     m = _auto_channel_map(list(filters), palette)
     return [r for r in ("red", "green", "blue") if not m.get(r)]
 
@@ -4389,6 +6335,13 @@ def _palette_filters(opts: dict, filters: list) -> set:
     used = {(opts.get(k) or "").strip() for k in keys}
     if palette == "HaRGB":
         used.add(_first_with_role(filters, "ha") or "")
+    if palette in _MIX_PALETTES:
+        # A mixed channel reads every line its weights name, and the
+        # dropdown can only show one of them.  Leaving the others out
+        # here would let "stack only the filters this palette uses" skip
+        # a master the composite then asks for.
+        for role in _palette_roles(palette):
+            used.add(_first_with_role(filters, role) or "")
     used.discard("")
     return {f for f in filters if f in used}
 
@@ -4406,14 +6359,17 @@ def _auto_channel_map(filters: list[str], palette: str) -> dict:
         m["blue"] = _first_with_role(filters, "blue")
         if palette in ("LRGB", "HaRGB"):
             m["lum"] = _first_with_role(filters, "lum")
-    elif palette == "SHO":               # Hubble: S->R, H->G, O->B
-        m["red"] = _first_with_role(filters, "sii")
-        m["green"] = _first_with_role(filters, "ha")
-        m["blue"] = _first_with_role(filters, "oiii")
-    elif palette == "HOO":               # Ha->R, OIII->G+B
-        m["red"] = _first_with_role(filters, "ha")
-        m["green"] = _first_with_role(filters, "oiii")
-        m["blue"] = _first_with_role(filters, "oiii")
+    elif palette in _NB_PALETTES:
+        for ch, role in zip(("red", "green", "blue"),
+                            _NB_PALETTES[palette]):
+            m[ch] = _first_with_role(filters, role)
+    elif palette in _MIX_PALETTES:
+        # A mixed channel has no single source filter.  The dropdown shows
+        # the dominant one so the UI is not blank, but composition reads
+        # the weights, not the dropdown -- exactly as HaRGB finds its Ha.
+        for ch, mix in _MIX_PALETTES[palette].items():
+            lead = max(mix.items(), key=lambda kv: kv[1])[0]
+            m[ch] = _first_with_role(filters, lead)
     return m
 
 
@@ -4431,6 +6387,10 @@ class ImageMonoTrainWindow(QMainWindow):
     def __init__(self, siril=None):
         super().__init__()
         self.siril = siril or s.SirilInterface()
+        # [(feature, missing calls, consequence)] for optional Siril calls
+        # this module does not have; reported once and carried into the
+        # run so output.md can say why a step took the simpler route.
+        self._missing_api: list = []
         self._settings = QSettings(SETTINGS_ORG, SETTINGS_APP)
         self._root = ""
         self._groups: dict = {}
@@ -5004,8 +6964,7 @@ class ImageMonoTrainWindow(QMainWindow):
         prow = QHBoxLayout()
         prow.addWidget(QLabel("Palette:"))
         self.cmb_palette = QComboBox()
-        self.cmb_palette.addItems(
-            ["Auto", "LRGB", "RGB", "SHO", "HOO", "HaRGB"])
+        self.cmb_palette.addItems(PALETTES)
         self.cmb_palette.setToolTip(
             "Auto picks LRGB / SHO / HOO from the filters found.  SHO = "
             "Hubble (S→R, Ha→G, O→B); HOO = Ha→R, OIII→G+B; "
@@ -5092,6 +7051,19 @@ class ImageMonoTrainWindow(QMainWindow):
             "Gaia spectrophotometry catalog available).")
         _nofocus(self.chk_nb_norm)
         layout.addWidget(self.chk_nb_norm)
+
+        self.chk_synth_lum = QCheckBox("Build a synthetic luminance master")
+        self.chk_synth_lum.setChecked(False)
+        self.chk_synth_lum.setToolTip(
+            "Narrowband only, and only when there is no Luminance filter: "
+            "averages the emission-line masters into "
+            "masters/TARGET_SynthL.fit.\n"
+            "It is NOT combined into the colour image here. A luminance "
+            "combine belongs after the stretch — todo.md walks you "
+            "through it — and doing it linearly is the same mistake as "
+            "'Quick linear LRGB'.")
+        _nofocus(self.chk_synth_lum)
+        layout.addWidget(self.chk_synth_lum)
 
         self.chk_quick_lrgb = QCheckBox("Quick linear LRGB (bake in luminance)")
         self.chk_quick_lrgb.setChecked(False)
@@ -5307,6 +7279,7 @@ class ImageMonoTrainWindow(QMainWindow):
             "clear_log": self.chk_clear_log,
             "palette": self.cmb_palette,
             "quick_lrgb": self.chk_quick_lrgb,
+            "synth_lum": self.chk_synth_lum,
             "ha_strength": self.spin_ha,
             "finish_stretch": self.chk_finish_stretch,
         }
@@ -5647,6 +7620,55 @@ class ImageMonoTrainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # SETTINGS
     # ------------------------------------------------------------------
+    def _attach_spcc_completers(self) -> None:
+        """Offer Siril's own SPCC names while the user types.
+
+        The fields stay free text on purpose -- clearing them means "use
+        Siril's own SPCC configuration", and a name from a Siril version
+        whose database differs from this one must remain typeable.  A
+        completer adds discovery without taking that away, which an
+        editable combo box would not: the preset loader drops a combo
+        value it cannot find in the list, and a hand-entered filter name
+        would vanish on the next load.
+
+        Names come from the JSON tables, which cost nothing to read and
+        stay out of the user's log.  Only when that finds nothing -- a
+        packaged build whose database the path guesses cannot reach -- is
+        `spcc_list` asked, because it prints the whole list into the log.
+        """
+        hint = self._spcc_root()
+        pairs = ((self.edit_spcc_sensor, "mono_sensors", "monosensor"),
+                 (self.edit_spcc_r, "mono_filters", "redfilter"),
+                 (self.edit_spcc_g, "mono_filters", "greenfilter"),
+                 (self.edit_spcc_b, "mono_filters", "bluefilter"))
+        asked = False
+        for widget, table, list_arg in pairs:
+            names = _spcc_catalog(table, hint)
+            if not names and self.siril is not None:
+                names = _spcc_names_via_command(self.siril, list_arg)
+                asked = asked or bool(names)
+            if not names:
+                continue
+            comp = QCompleter(sorted(names), widget)
+            comp.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            comp.setFilterMode(Qt.MatchFlag.MatchContains)
+            comp.setCompletionMode(
+                QCompleter.CompletionMode.UnfilteredPopupCompletion)
+            widget.setCompleter(comp)
+        if asked:
+            self._log(
+                "SPCC name lists read from Siril via spcc_list — the local "
+                "database was not where this script looks.  That is what "
+                "the lines above are.", LogColor.BLUE)
+
+    def _spcc_root(self) -> str:
+        """Siril's own data directory, or "" if it will not say."""
+        try:
+            return str(self.siril.get_siril_userdatadir() or "")
+        except Exception as exc:
+            _log_swallowed(exc)
+            return ""
+
     def _seed_rig_defaults(self) -> None:
         """Write the shipped rig description into the stored settings once.
 
@@ -5673,6 +7695,7 @@ class ImageMonoTrainWindow(QMainWindow):
     def _load_settings(self) -> None:
         st = self._settings
         self._seed_rig_defaults()
+        self._attach_spcc_completers()
         self.chk_skip_blank.setChecked(st.value("skip_blank", True, type=bool))
         self.chk_rejection.setChecked(st.value("rejection", True, type=bool))
         self.chk_weighting.setChecked(st.value("weighting", True, type=bool))
@@ -5735,6 +7758,8 @@ class ImageMonoTrainWindow(QMainWindow):
         self.chk_compose.setChecked(st.value("compose", True, type=bool))
         self.cmb_palette.setCurrentText(str(st.value("palette", "Auto")))
         self.chk_nb_norm.setChecked(st.value("nb_normalize", True, type=bool))
+        self.chk_synth_lum.setChecked(
+            st.value("synth_lum", False, type=bool))
         self.chk_quick_lrgb.setChecked(st.value("quick_lrgb", False, type=bool))
         self.spin_ha.setValue(int(st.value("ha_strength", 50)))
         self._on_palette_changed()
@@ -5793,6 +7818,7 @@ class ImageMonoTrainWindow(QMainWindow):
         st.setValue("compose", self.chk_compose.isChecked())
         st.setValue("palette", self.cmb_palette.currentText())
         st.setValue("nb_normalize", self.chk_nb_norm.isChecked())
+        st.setValue("synth_lum", self.chk_synth_lum.isChecked())
         st.setValue("quick_lrgb", self.chk_quick_lrgb.isChecked())
         st.setValue("ha_strength", int(self.spin_ha.value()))
         st.setValue("finish", self.chk_finish.isChecked())
@@ -6180,11 +8206,15 @@ class ImageMonoTrainWindow(QMainWindow):
             "align_filters": self.chk_align_filters.isChecked(),
             "platesolve_master": self.chk_platesolve_master.isChecked(),
             "preset": self.cmb_preset.currentText(),
+            # Not an option: what this Siril's Python module cannot do, so
+            # the report can name the reason a step took the simpler route.
+            "missing_api": list(self._missing_api),
             "compose": self.chk_compose.isChecked(),
             "compose_palette": palette,
             "reuse_masters": self.chk_reuse.isChecked(),
             "quick_lrgb": self.chk_quick_lrgb.isChecked(),
             "nb_normalize": self.chk_nb_norm.isChecked(),
+            "synth_lum": self.chk_synth_lum.isChecked(),
             "ha_strength": int(self.spin_ha.value()),
             "map_lum": _map(self.cmb_map_lum),
             "map_red": _map(self.cmb_map_red),
@@ -6458,6 +8488,29 @@ class ImageMonoTrainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # HELP DIALOG
     # ------------------------------------------------------------------
+    def report_capabilities(self) -> None:
+        """Say once which optional Siril calls this module does not have.
+
+        Every use of them is wrapped, so a missing one costs nothing at
+        run time -- it just degrades, quietly, forever.  Stating it at
+        startup is the difference between "the report always says
+        estimated" being a mystery and being an answerable question.
+        """
+        missing = _missing_capabilities(self.siril)
+        if not missing:
+            return
+        self._missing_api = missing
+        self._log(
+            "This Siril's Python module is older than this script "
+            f"expects: {len(missing)} "
+            + _plural(missing, "feature falls", "features fall")
+            + " back to a simpler route. Updating Siril restores "
+            + _plural(missing, "it", "them") + ".", LogColor.SALMON)
+        for feature, calls, consequence in missing:
+            names = ", ".join(f"{c}()" for c in calls)
+            self._log(f"  - {feature} — needs {names}; "
+                      f"without it, {consequence}.", LogColor.SALMON)
+
     def _show_help_dialog(self) -> None:
         dlg = QDialog(self)
         dlg.setWindowTitle("Svenesis ImageMono Train — Help")
@@ -6470,8 +8523,8 @@ class ImageMonoTrainWindow(QMainWindow):
 
         tabs = QTabWidget()
 
-        tab1 = QTextEdit()
-        tab1.setReadOnly(True)
+        tab1 = QTextBrowser()
+        tab1.setOpenExternalLinks(True)
         tab1.setHtml(
             "<h2 style='color:#88aaff;'>Getting Started</h2>"
             "<p><b>What does ImageMono Train do?</b></p>"
@@ -6526,6 +8579,14 @@ class ImageMonoTrainWindow(QMainWindow):
             "are collected separately and used for <b>calibration</b> (see "
             "the <i>Calibration</i> tab).  The same filter spread across "
             "several nights is pooled into a single stack.</p>"
+            "<p>Some capture software writes <b>no IMAGETYP at all</b>.  "
+            "Such a frame is then read from its <i>content</i>: no filter, "
+            "no object and the mount parked at RA=DEC=0 means the shutter "
+            "was closed → <b>dark</b>; a filter <i>and</i> an object means "
+            "it was pointed at something → <b>light</b>.  Flat and bias are "
+            "deliberately never guessed: nothing in an ordinary header "
+            "separates them reliably, and a wrong guess there would "
+            "corrupt the calibration instead of merely skipping it.</p>"
             "<p><b>Pick the folder of ONE target.</b>  If the folder holds "
             "frames of several objects (e.g. you picked the date or LIGHT "
             "folder), their frames would end up in the same stack — so the "
@@ -6536,8 +8597,8 @@ class ImageMonoTrainWindow(QMainWindow):
             "as if they were new light frames.</p>")
         tabs.addTab(tab1, "Getting Started")
 
-        tab2 = QTextEdit()
-        tab2.setReadOnly(True)
+        tab2 = QTextBrowser()
+        tab2.setOpenExternalLinks(True)
         tab2.setHtml(
             "<h2 style='color:#88aaff;'>The Pipeline</h2>"
             "<p>Each filter is processed independently, following the "
@@ -6566,6 +8627,12 @@ class ImageMonoTrainWindow(QMainWindow):
             "is why <i>Stack only the filters this palette uses</i> improves "
             "the colour image and not just the runtime (see "
             "<i>Palettes</i>).<br>"
+            "The report names <b>how many star pairs each channel was "
+            "matched on</b>, read back from Siril's own registration "
+            "output, and flags the ones fitted on too few — that count is "
+            "the earliest warning for colour fringing towards the edges.  "
+            "If the format is not recognised, the report stays silent "
+            "rather than guess.<br>"
             "If this step fails, the run falls back to single-pass "
             "registration — which knows neither <tt>-framing=</tt> nor any "
             "<tt>-filter-</tt> option, so the crop and the quality filters "
@@ -6606,17 +8673,46 @@ class ImageMonoTrainWindow(QMainWindow):
             "work well:</p>"
             "<ul>"
             "<li><b>≤ 4 frames</b> → percentile clipping (0.2 / 0.1)</li>"
-            "<li><b>5 – 20 frames</b> → Winsorized sigma (3σ / 3σ)</li>"
-            f"<li><b>21 – {GESDT_MIN_FRAMES - 1} frames</b> → linear-fit "
-            "clipping (3σ / 3σ) — handles gradients between subs well</li>"
-            f"<li><b>≥ {GESDT_MIN_FRAMES} frames</b> → <b>GESDT</b> "
-            "(Generalized Extreme Studentized Deviate Test), which Siril "
-            "documents as excelling on large stacks.  Its two numbers are "
-            "<i>not</i> sigmas: <tt>0.3</tt> caps the fraction of the stack "
-            "that may be rejected, <tt>0.05</tt> is the significance "
-            "threshold.  If your Siril build does not know it, the run "
-            "falls back to linear fit and says so.</li>"
+            f"<li><b>5 – {SIGMA_MAX_FRAMES} frames</b> → sigma clipping "
+            "(3σ / 3σ)</li>"
+            f"<li><b>{SIGMA_MAX_FRAMES + 1} – {GESDT_MIN_FRAMES - 1} "
+            "frames</b> → Winsorized sigma (3σ / 3σ)</li>"
+            f"<li><b>{GESDT_MIN_FRAMES} – {LINEAR_MIN_FRAMES} frames</b> → "
+            "<b>GESDT</b> (Generalized Extreme Studentized Deviate Test).  "
+            "Its two numbers are <i>not</i> sigmas: <tt>0.3</tt> caps the "
+            "fraction of the stack that may be rejected, <tt>0.05</tt> is "
+            "the significance threshold.  If your Siril build does not know "
+            "it, the run falls back to linear fit and says so.</li>"
+            f"<li><b>&gt; {LINEAR_MIN_FRAMES} frames</b> → linear-fit "
+            "clipping (5 / 4).  It models a trend <i>across</i> the stack, "
+            "so it belongs where the stack is long enough to define one — "
+            "not in the middle of the range, where this script used to put "
+            "it.</li>"
             "</ul>"
+            "<p>The measurements go into <tt>output.md</tt> as a table of "
+            "their own — integrated count, median FWHM, roundness, star "
+            "count per channel.  A value Siril did <b>not</b> record shows "
+            "as an em-dash, never as <tt>0.00</tt>: a zero there would "
+            "read as catastrophic trailing, when the truth is that the "
+            "measurement is absent.</p>"
+            "<p>The frame count that picks the band is <b>measured</b>, "
+            "not estimated: after registration the script asks Siril for "
+            "the sequence it produced and reads which frames are still "
+            "included, together with their median FWHM, roundness and star "
+            "count.  Those numbers go into the report as measurements.  "
+            "The quality filters run at registration time, so the exported "
+            "count already reflects them — subtracting their share again "
+            "would pick the band for a smaller population than the one "
+            "being integrated.  Only when the sequence cannot be read at "
+            "all does an estimate stand in, and the report marks it.</p>"
+            "<p>These band edges are <b>Cyril Richard\u2019s</b>, taken "
+            "from <b>AMSP</b> (Automatic Multi-Session Processing) in "
+            "the official Siril script repository — "
+            f"<a style='color:#88aaff;' href='{AMSP_URL}'>"
+            "AMSP.py</a>, GPL-3.0-or-later.  He wrote Siril and "
+            "implemented these algorithms, so his thresholds carry more "
+            "weight than our own reasoning did.  Only the numbers were "
+            "adopted; no code was copied.</p>"
             "<h3 style='color:#88aaff;'>Stacking Options</h3>"
             "<ul>"
             "<li><b>Preset</b> — one-click profiles: <i>Quick look</i> "
@@ -6891,6 +8987,11 @@ class ImageMonoTrainWindow(QMainWindow):
             "reports in the Log when a name does not match, listing "
             "candidates.  Leave the fields blank to use your own Siril SPCC "
             "configuration.</p>"
+            "<p>The <b>sensor and filter fields auto-complete</b> from that "
+            "same list: type <tt>anti</tt> and every Antlia filter Siril "
+            "knows is offered, spelled exactly as Siril spells it.  You can "
+            "still type anything you like — the field is free text, the "
+            "list is only a suggestion.</p>"
             "<p>Three outcomes, all before the run reaches SPCC:</p>"
             "<ul>"
             "<li><b>exact hit</b> — nothing is said, the name goes through "
@@ -6903,9 +9004,14 @@ class ImageMonoTrainWindow(QMainWindow):
             "script never picks one for you: which of several Siril takes "
             "is Siril's decision.</li>"
             "</ul>"
-            "<p style='color:#888;'>The check reads Siril's own SPCC "
-            "database, read-only, at the location sirilpy reports.  If it "
-            "cannot be found the check is simply skipped — a database the "
+            "<p style='color:#888;'>The names come from Siril's own SPCC "
+            "database, read-only, at the location sirilpy reports.  On a "
+            "packaged build (Flatpak / Snap / Store) that database can sit "
+            "where no path guess reaches it; the script then asks Siril "
+            "itself with <tt>spcc_list</tt>, whose answer is by definition "
+            "right.  That route prints the whole list into the Log, which "
+            "is why it is only taken when reading the files failed.  If "
+            "neither works the check is simply skipped — a database the "
             "script cannot see means <i>cannot check</i>, never <i>invalid "
             "name</i>.  The calibration itself never uses this data: the "
             "names go to Siril, which does its own lookup.</p>"
@@ -6931,8 +9037,8 @@ class ImageMonoTrainWindow(QMainWindow):
             "file is left untouched for serious processing.</p>")
         tabs.addTab(tab2, "The Pipeline")
 
-        tab_cal = QTextEdit()
-        tab_cal.setReadOnly(True)
+        tab_cal = QTextBrowser()
+        tab_cal.setOpenExternalLinks(True)
         tab_cal.setHtml(
             "<h2 style='color:#88aaff;'>Calibration — Darks, Flats, Bias</h2>"
             "<p>Calibration removes what the <i>camera and optics</i> add to "
@@ -6967,23 +9073,63 @@ class ImageMonoTrainWindow(QMainWindow):
             "get stacked into masters) or <i>ready-made masters</i> — a group "
             "of exactly one file is adopted as a master as-is.  Flats are "
             "never taken from the library; they are session data.</p>"
+            "<p>A library is meant to grow, so <b>only the darks this run "
+            "can actually use are stacked</b> — judged by the same rule that "
+            "will later pick one.  Five exposures at three setpoints are "
+            "fifteen masters; building fourteen of them to open one would "
+            "cost minutes and read hundreds of frames for nothing.</p>"
             "<hr>"
             "<h3 style='color:#88aaff;'>How frames are matched</h3>"
             "<p>Matching runs on <b>FITS headers</b>, not on file names, so "
-            "any naming scheme works.  A master is only used when exposure, "
-            "gain, binning and image dimensions match exactly and the "
-            f"temperature is within <b>±{CALIB_TEMP_TOLERANCE_C:g} °C</b>.  A "
-            "non-matching dark is reported in the log and skipped rather than "
-            "applied — a 60&nbsp;s dark on 300&nbsp;s lights would do real "
-            "damage.  Values missing from a header never block a match.</p>"
+            "any naming scheme works.  A master is only used when the "
+            "<b>camera</b> (INSTRUME), gain, binning and image dimensions "
+            "match exactly and the temperature is within "
+            f"<b>±{CALIB_TEMP_TOLERANCE_C:g} °C</b>.  Two bodies of the same "
+            "sensor format would otherwise calibrate each other, which size "
+            "alone cannot rule out.  Values missing from a header never "
+            "block a match — except the exposure, where an unreadable "
+            "EXPTIME reads as 0&nbsp;s and 0 against 120 is exactly the "
+            "mismatch that must not slip through.</p>"
+            f"<p><b>Exposure is matched within {DARK_EXPOSURE_TOLERANCE:.0%}"
+            "</b>, not exactly.  The thermal signal scales with exposure, so "
+            "a 290&nbsp;s dark removes very nearly what a 300&nbsp;s one "
+            "would, while refusing it would leave the lights uncalibrated — "
+            "the worse outcome.  The nearest dark inside that band is used "
+            "and <i>named in the Log</i>, with everything else confirmed to "
+            "agree; beyond it the run continues without a dark and says so.  "
+            "A 60&nbsp;s dark on 300&nbsp;s lights is 80% off and is never "
+            "applied.</p>"
             "<h3 style='color:#88aaff;'>Two rules worth knowing</h3>"
             "<ul>"
+            "<li><b>Flats pooled across nights are checked against each "
+            "other.</b>  Dividing one night's flat by another's gives a "
+            "uniform image when the optical train did not move, and shows "
+            "the vignetting or dust that did.  Each frame is normalised by "
+            "its own median first, so a brighter panel is not counted as "
+            f"disagreement.  Under {FLAT_MATCH_GOOD:.2%} the nights agree; "
+            f"up to {FLAT_MATCH_LIMIT:.2%} is still usable; beyond that the "
+            "report names the nights and points at <i>Match flats to the "
+            "same night</i>.  Silent when that option is already on.</li>"
+            "<li><b>A filter that mixes exposures is calibrated in "
+            "parts.</b>  A dark only removes the thermal signal that grew "
+            "during <i>its own</i> exposure, so one dark for 120&nbsp;s and "
+            "300&nbsp;s subs is right for neither.  Each exposure is staged "
+            "and calibrated with its own dark, and the calibrated parts are "
+            "merged again (<tt>merge</tt>) before registration — the channel "
+            "still becomes <b>one</b> master, which is what the composite "
+            "needs.  Only the dark depends on exposure, so with no darks in "
+            "the run nothing is split.</li>"
             "<li><b>Bias is never applied together with a dark.</b>  A master "
             "dark already contains the offset; subtracting bias as well would "
             "remove it twice.  <tt>-bias=</tt> is only added when no dark is "
             "used.</li>"
             "<li><b>Flats are offset-corrected before stacking.</b>  Real "
-            "bias / dark-flat first; if none exists, Siril's synthetic offset "
+            "bias / dark-flat first; failing that a plain <b>DARK shot at "
+            "the flats' exposure</b> — a dark at the flat exposure IS a "
+            "dark-flat, whatever IMAGETYP calls it, and it is accepted "
+            f"within {DARKFLAT_EXPOSURE_TOLERANCE:.0%} because flat "
+            "exposures are short enough for the difference to stay "
+            "negligible; then Siril's synthetic offset "
             "<tt>=64*$OFFSET</tt>; and if that is refused too, the flats are "
             "stacked raw.  Calibration never aborts a run.</li>"
             "</ul>"
@@ -7028,8 +9174,24 @@ class ImageMonoTrainWindow(QMainWindow):
             "correction.</p>")
         tabs.addTab(tab_cal, "Calibration")
 
-        tab_ref = QTextEdit()
-        tab_ref.setReadOnly(True)
+        # Built before setHtml so the document below stays one flat string
+        # of literals -- a table assembled inside the call would be
+        # invisible to anything that reads the help without running it.
+        nb_rows = "".join(
+            f"<tr><td><b>{name}</b></td>"
+            + "".join(f"<td>{_ROLE_LABEL[r]}</td>" for r in roles)
+            + "</tr>" for name, roles in _NB_PALETTES.items())
+        mix_rows = "".join(
+            f"<tr><td style='width:90px'><b>{name}</b></td>"
+            + "".join(
+                "<td>" + " + ".join(
+                    f"{share:.0%}&nbsp;{_ROLE_LABEL[role]}"
+                    for role, share in chans[ch].items()) + "</td>"
+                for ch in ("red", "green", "blue"))
+            + "</tr>" for name, chans in _MIX_PALETTES.items())
+
+        tab_ref = QTextBrowser()
+        tab_ref.setOpenExternalLinks(True)
         tab_ref.setHtml(
             "<h2 style='color:#88aaff;'>Colour Palettes — Reference</h2>"
             "<p>Every palette runs on the <b>co-registered, "
@@ -7144,6 +9306,57 @@ class ImageMonoTrainWindow(QMainWindow):
             "this is a linear starting point — tune the strength, or redo the "
             "blend post-stretch for full control.</p>"
 
+            "<hr><h3 style='color:#88aaff;'>The other narrowband "
+            "assignments</h3>"
+            "<p>SHO and HOO are the two everyone knows; the rest are the "
+            "same idea with the lines in different places.  All of them are "
+            "pure <b>assignments</b> — a channel is copied, not computed — "
+            "so they behave identically before and after a stretch.</p>"
+            "<table cellpadding='5' style='width:100%'>"
+            "<tr><td style='width:90px'><b>Palette</b></td><td><b>Red</b>"
+            "</td><td><b>Green</b></td><td><b>Blue</b></td></tr>"
+            f"{nb_rows}"
+            "</table>"
+            "<p>Each of them gets the same treatment as SHO: narrowband "
+            "normalisation if enabled, and SPCC in narrowband mode with the "
+            "wavelengths of the lines <i>this</i> palette put in each "
+            "channel.</p>"
+
+            "<hr><h3 style='color:#88aaff;'>Realistic1 / Realistic2 &nbsp;"
+            "<span style='color:#888;font-weight:normal'>(weighted "
+            "mixes)</span></h3>"
+            "<p>These <i>mix</i> the lines instead of assigning them:</p>"
+            "<table cellpadding='5' style='width:100%'>"
+            f"{mix_rows}"
+            "</table>"
+            "<p>The mixing is done with <tt>pm</tt>, and colour calibration "
+            "is skipped: a channel that is 70% Ha and 30% SII has no single "
+            "passband for SPCC to model.</p>"
+
+            "<hr><h3 style='color:#88aaff;'>Why the list stops here</h3>"
+            "<p>Everything above is either an assignment or a weighted sum "
+            "— operations that mean the same thing before and after a "
+            "stretch, which is what a linear pipeline can offer.  The "
+            "<b>dynamic</b> palettes (Foraxx and relatives) blend with a "
+            "factor like <tt>t<sup>(1-t)</sup></tt>, <tt>t = Ha·OIII</tt>: "
+            "on linear data <tt>t</tt> is around 1e-6 and the expression "
+            "collapses.  Stretch first and use Siril's own <b>Palette "
+            "Picker</b> for those.</p>"
+            "<p>Same arithmetic, same caveat for <b>Ha → Red</b>: at linear "
+            "levels the screen blend and plain addition agree to better "
+            "than 0.1%.  The slider adds a fraction of Ha to Red; the "
+            "screen form only guarantees it cannot clip.  The manual works "
+            "this through.</p>"
+
+            "<hr><h3 style='color:#88aaff;'>Synthetic luminance</h3>"
+            "<p><b>Build a synthetic luminance master</b> averages the "
+            "emission-line masters into "
+            "<tt>masters/TARGET_SynthL.fit</tt> — the detail of a "
+            "narrowband night sits spread over its channels, and the "
+            "average carries their combined signal-to-noise.  It is "
+            "<b>not</b> combined into the colour image: that belongs after "
+            "the stretch, and <tt>todo.md</tt> picks it up there.</p>"
+
             "<hr><h3 style='color:#88aaff;'>Auto detection</h3>"
             "<p>With palette = <b>Auto</b>: R+G+B present → <b>LRGB</b> "
             "(or RGB without L); otherwise Ha+OIII+SII → <b>SHO</b>, "
@@ -7161,8 +9374,8 @@ class ImageMonoTrainWindow(QMainWindow):
             "still share one grid (see <i>Output &amp; Tips</i>).</p>")
         tabs.addTab(tab_ref, "Palettes")
 
-        tab3 = QTextEdit()
-        tab3.setReadOnly(True)
+        tab3 = QTextBrowser()
+        tab3.setOpenExternalLinks(True)
         tab3.setHtml(
             "<h2 style='color:#88aaff;'>Output &amp; Tips</h2>"
             "<p>Results go into an <b>output</b> folder inside your "
@@ -7171,7 +9384,8 @@ class ImageMonoTrainWindow(QMainWindow):
             "├─ TARGET_RGB.fit        the finished colour image(s)\n"
             "├─ masters/\n"
             "│   ├─ TARGET_FILTER.fit            aligned (use to combine)\n"
-            "│   └─ TARGET_FILTER_fullframe.fit  full, uncropped stack\n"
+            "│   └─ TARGET_FILTER_29x300s_G100_-10C_fullframe.fit\n"
+            "│                                   full, uncropped stack\n"
             "├─ output.md             exactly what the script did\n"
             "├─ todo.md               step-by-step final processing\n"
             "├─ calib/                master dark / flat / bias (reused)\n"
@@ -7194,7 +9408,9 @@ class ImageMonoTrainWindow(QMainWindow):
             "TARGET_FILTER.fit</span> (aligned to a common grid — combine "
             "these) and "
             "<span style='font-family:monospace;color:#aaddaa;'>"
-            "TARGET_FILTER_fullframe.fit</span> (the full, uncropped stack).</li>"
+            "TARGET_FILTER_29x300s_G100_-10C_fullframe.fit</span> — the "
+            "full, uncropped stack, named after what went into it: frames "
+            "integrated, exposure, gain, sensor temperature.</li>"
             "<li><b>calib/</b> keeps the calibration masters that were built "
             "(dark, flat per filter, bias).  They are reused by later runs — "
             "delete the folder to rebuild them.</li>"
@@ -7231,6 +9447,24 @@ class ImageMonoTrainWindow(QMainWindow):
             "<tt>rgbcomp</tt> channels of different dimensions, so the "
             "script re-aligns instead and names the leftovers in the "
             "report.</li>"
+            "<li><b>If the Log says features fell back.</b>  Some of what "
+            "this script does needs calls that only newer versions of "
+            "Siril's Python module have — measured frame counts, "
+            "composing in memory, reading Siril's log.  Every one of them "
+            "is wrapped, so a missing call costs nothing: the run takes a "
+            "simpler route instead.  What it used to cost was an "
+            "explanation, because the fallback was silent.  Missing calls "
+            "are now named once at startup and again in "
+            "<tt>output.md</tt>, with what each one changes.  Updating "
+            "Siril restores them.</li>"
+            "<li><b>Disk while a run is going.</b>  Each step — calibrate, "
+            "background, register — writes a full copy of every frame.  "
+            "With <b>Delete _work/ when finished</b> ticked, each "
+            "generation is freed as soon as the next one is complete, so "
+            "the peak is about two generations instead of four (roughly "
+            "3.6&nbsp;GB per generation for a hundred 3008×3008 subs).  "
+            "Untick it and every intermediate is kept, which is what you "
+            "want when something needs inspecting.</li>"
             "<li>Re-running is safe: existing outputs are overwritten.  Turn "
             "reuse OFF after changing stacking options or adding frames.</li>"
             "<li><b>Stopping really stops.</b>  Closing the window mid-run "
@@ -7301,6 +9535,7 @@ def main() -> int:
             siril.log(f"Svenesis ImageMono Train v{VERSION} loaded.")
         except (SirilError, OSError, RuntimeError):
             pass
+        win.report_capabilities()
         return app.exec()
     except NoImageError:
         QMessageBox.warning(
