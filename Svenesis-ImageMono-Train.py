@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.7.0
+Script Version: 1.7.1
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.7.0
+# Script Version: 1.7.1
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +97,32 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.7.1 - The colour solution's quality is no longer thrown away
+      - Siril prints how well SPCC fitted -- the SIGMA of each ratio, how
+        far the measured star colours scatter around the ones predicted
+        from catalogue spectra -- and the script dropped it.  "Colour
+        calibration done" read the same for a solution worth trusting and
+        one that was noise.  `output.md` now carries the sigmas, the star
+        counts and the applied white-balance factors, and a sigma above
+        SPCC_SIGMA_LIMIT (1.0) is flagged where it happens and again in
+        the report
+      - Siril's own "imprecise solution" warning does NOT separate those
+        cases: on two runs of the same 94 frames it fired on both, while
+        the sigmas differed by a factor of forty (6.16 / 5.39 against
+        0.149 / 0.239).  The sigma separates them
+      - With the caveat the report states itself: two channels on
+        neighbouring wavelengths -- Ha at 656.3 nm and SII at 671.6 nm --
+        give a ratio near 1 for every star, so that fit has almost no
+        lever arm and its sigma is small because the measurement is
+        INSENSITIVE, not because the solution is good.  Sigmas compare
+        runs of one palette, they do not rank palettes
+      - `_parse_spcc_fit` follows `_parse_align_pairs`: read-only, strips
+        Siril's timestamps, and yields {} on anything it does not
+        recognise, because a number nobody measured is worse than none.
+        Tested against both real logs verbatim
+      - The log snapshotting the two readers share became
+        `_log_snapshot()` instead of being inlined twice
+
 1.7.0 - The palette table, checked against its source
       - Five more narrowband assignments: SOH, HHO, OOS, SHH, SOO.  The
         table was read line by line against Franklin Marek's Perfect
@@ -1081,7 +1107,7 @@ from PyQt6.QtGui import QColor, QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.7.0"
+VERSION = "1.7.1"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -1574,6 +1600,14 @@ FLAT_THIN_SET = 10
 # Eight covers every filter wheel worth the name; beyond that the table
 # would push the rest of the panel out of the window.
 FILTER_TABLE_MAX_ROWS = 8
+
+# Above this, the measured star colours no longer follow the ones the
+# catalogue predicts and the white balance is a starting point rather than
+# a measurement.  Read from Siril's own SPCC output; it is a REPORTING
+# threshold, nothing is decided by it.  Observed on this rig: 0.15 for a
+# solid narrowband fit, 6.2 for one whose channels had been flattened by
+# narrowband normalisation first.
+SPCC_SIGMA_LIMIT = 1.0
 
 
 def _flat_disagreement(a: str, b: str) -> float | None:
@@ -2296,6 +2330,10 @@ class StackWorker(QThread):
         # log could not be read or its format was not recognised.
         self._align_pairs: dict = {}
         self._align_ref = None
+        # How well the photometric colour solution fitted, read back from
+        # Siril's own log.  Empty when nothing was calibrated or the
+        # output could not be parsed -- the report then stays silent.
+        self._spcc_fit: dict = {}
         # Filters left unstacked because the palette does not read them.
         self._skipped_by_palette: list = []
         # filter -> registration options that could not be honoured.
@@ -4688,6 +4726,43 @@ class StackWorker(QThread):
                 for i, step in enumerate(self._finish_steps, 1):
                     A(f"{i}. {step}")
                 A("")
+            if self._spcc_fit:
+                fit = self._spcc_fit
+                sig = fit.get("sigma") or {}
+                worst = max(sig.values(), default=0.0)
+                A("**How well the colour solution fitted.** Siril compares "
+                  "each star's measured colour with the one predicted from "
+                  "its catalogue spectrum; **sigma** is how far the two "
+                  "disagree. The white balance was applied either way — "
+                  "this says how much it is worth.")
+                A("")
+                A("| Quantity | Value | |")
+                A("| --- | ---: | --- |")
+                for ratio in sorted(sig):
+                    A(f"| σ of the {ratio} fit | {sig[ratio]:.3f} | "
+                      + ("⚠️ |" if sig[ratio] > SPCC_SIGMA_LIMIT else " |"))
+                if fit.get("stars"):
+                    A(f"| Stars in the solution | {fit['stars']} | |")
+                if fit.get("excluded"):
+                    A(f"| Stars excluded | {fit['excluded']} | |")
+                for i in sorted(fit.get("k") or {}):
+                    A(f"| White balance K{i} | {fit['k'][i]:.3f} | |")
+                A("")
+                if worst > SPCC_SIGMA_LIMIT:
+                    A(f"> ⚠️ **A sigma of {worst:.2f} means the measured "
+                      "star colours barely follow the catalogue.** Treat "
+                      "the white balance as a starting point, not a "
+                      "measurement. On narrowband the usual cause is "
+                      "*Normalize narrowband channels*, which flattens the "
+                      "very line ratio SPCC then tries to calibrate; a "
+                      "channel aligned on few star pairs does it too.")
+                    A("")
+                A("> Compare sigmas only between runs whose channels carry "
+                  "the same lines. Two channels on neighbouring "
+                  "wavelengths give a ratio near 1 for every star, so its "
+                  "sigma is small because the measurement is insensitive, "
+                  "not because the solution is good.")
+                A("")
             A(f"→ saved **linear** as `{comp_name}`.")
             A("")
         else:
@@ -5950,6 +6025,7 @@ class StackWorker(QThread):
             # and filters it ENDED UP using, so having ours next to it is
             # what turns "SPCC ran" into "SPCC ran with what I asked for".
             self._emit("  " + " ".join(cmd), LogColor.BLUE)
+            before = self._log_snapshot()
             try:
                 self._cmd(*cmd)
             except (CommandError, DataError, SirilError) as exc:
@@ -5960,6 +6036,7 @@ class StackWorker(QThread):
             self._finish_steps.append(f"Colour calibration: {label}.")
             self._emit(f"  Finish: colour calibration done — {label}.",
                        LogColor.GREEN)
+            self._read_spcc_fit(before, label)
             return
 
         if not attempts:
@@ -6142,6 +6219,57 @@ class StackWorker(QThread):
         return load_path
 
     # -- cross-filter alignment ------------------------------------------
+    def _log_snapshot(self):
+        """Siril's whole log right now, or None if it cannot be read.
+
+        `get_siril_log()` returns everything, so a step's own output is
+        the DELTA against a snapshot taken just before it.  Optional API:
+        an older sirilpy simply yields None and the readers stay quiet.
+        """
+        try:
+            return self.siril.get_siril_log() or ""
+        except Exception as exc:                     # noqa: BLE001
+            _log_swallowed(exc)
+            return None
+
+    def _read_spcc_fit(self, log_before, label: str) -> None:
+        """Record how well the colour solution fitted, and say it out loud.
+
+        Siril prints the fit and the script used to drop it: the report
+        said "colour calibration done" whether the measured star colours
+        followed the catalogue closely or scattered wildly around it.
+        Both look identical from outside, and Siril's own "imprecise
+        solution" warning does not separate them either -- it fired on
+        two runs of this data whose sigmas differed by a factor of 40.
+
+        Diagnostic only; nothing downstream reads it.
+        """
+        if log_before is None:
+            return
+        after = self._log_snapshot()
+        if after is None or not after.startswith(log_before):
+            return          # something else logged; the delta is not ours
+        fit = _parse_spcc_fit(after[len(log_before):])
+        if not fit:
+            return          # format not recognised -- say nothing
+        fit["method"] = label
+        self._spcc_fit = fit
+        sig = fit.get("sigma") or {}
+        bits = [f"σ({k}) {v:.3f}" for k, v in sorted(sig.items())]
+        if fit.get("stars"):
+            bits.append(f"{fit['stars']} stars")
+        self._emit("  Colour fit: " + " · ".join(bits), LogColor.BLUE)
+        # A sigma of a few tenths is a solution worth trusting; single
+        # digits mean the measured colours barely follow the catalogue.
+        worst = max(sig.values(), default=0.0)
+        if worst > SPCC_SIGMA_LIMIT:
+            self._emit(
+                f"  The colour solution is weak: the worst ratio scatters "
+                f"by {worst:.2f} around the catalogue prediction (good is "
+                f"well under {SPCC_SIGMA_LIMIT:g}). The white balance was "
+                "still applied — treat it as a starting point, not a "
+                "measurement.", LogColor.SALMON)
+
     def _read_align_pairs(self, log_before, index_to_filter: dict) -> None:
         """Record how many star pairs each channel aligned on.
 
@@ -6236,11 +6364,7 @@ class StackWorker(QThread):
             # afterwards.  get_siril_log() returns the WHOLE log, so only
             # the delta belongs to this step -- and only if nothing else
             # wrote in between, which the prefix check below verifies.
-            log_before = None
-            try:
-                log_before = self.siril.get_siril_log() or ""
-            except Exception as exc:
-                _log_swallowed(exc)
+            log_before = self._log_snapshot()
             try:
                 self._cmd("register", "masters", "-2pass")
                 # -framing=min (intersection) so every aligned master comes
@@ -6378,6 +6502,56 @@ ALIGN_PAIRS_FLOOR = 30
 # ...and a channel far below the rest of the same run is suspect even when
 # it clears the floor: the others prove how many pairs were available.
 ALIGN_PAIRS_FRACTION = 0.25
+
+
+def _parse_spcc_fit(delta: str) -> dict:
+    """How well the photometric colour solution actually fitted.
+
+    Siril prints the fit and then throws it away as far as this script is
+    concerned: the report said "colour calibration done" and nothing about
+    whether the solution was worth having.  The numbers that matter are
+    the SIGMA of each ratio fit -- how far the measured star colours
+    scatter around the ones predicted from catalogue spectra -- the star
+    count behind them, and the white-balance factors that came out.
+
+    Read only, never acted on: this changes no pixel.  An unrecognised
+    format yields {} and the report stays silent, because a number nobody
+    measured is worse than no number.
+    """
+    out: dict = {}
+    for raw in delta.splitlines():
+        line = re.sub(r"^\d{2}:\d{2}:\d{2}:\s*", "", raw).strip()
+        m = re.match(r"^Image ([RGB])/([RGB]) = .*\(sigma:\s*([\d.eE+-]+)\)",
+                     line)
+        if m:
+            try:
+                out.setdefault("sigma", {})[
+                    f"{m.group(1)}/{m.group(2)}"] = float(m.group(3))
+            except ValueError:
+                pass
+            continue
+        m = re.match(r"^Found a solution for color calibration using "
+                     r"(\d+) stars", line)
+        if m:
+            out["stars"] = int(m.group(1))
+            continue
+        m = re.match(r"^(\d+) stars excluded from the calculation", line)
+        if m:
+            out["excluded"] = int(m.group(1))
+            continue
+        m = re.match(r"^K(\d):\s*([\d.eE+-]+)$", line)
+        if m:
+            try:
+                out.setdefault("k", {})[int(m.group(1))] = float(m.group(2))
+            except ValueError:
+                pass
+            continue
+        if "imprecise solution" in line:
+            out["imprecise"] = True
+    # The white-balance block is printed TWICE, before and after
+    # renormalisation, and the second one is what was applied.  Keeping
+    # the last of each key is enough; the dict already does that.
+    return out if out.get("sigma") or out.get("k") else {}
 
 
 def _parse_align_pairs(delta: str, index_to_filter: dict) -> tuple:

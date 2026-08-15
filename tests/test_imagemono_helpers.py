@@ -36,7 +36,8 @@ WANT = ("_format_duration", "_median", "_exp_tag", "_night_key", "_path_date",
         "_signature_matches", "_effective_exposure", "_mix_words",
         "_palette_roles", "_is_nb_palette", "_fits_ext", "_is_fits_like",
         "_first_with_role", "_detect_palette", "_auto_channel_map",
-        "_unfillable_channels", "_align_pairs_warn", "_weight_token")
+        "_unfillable_channels", "_align_pairs_warn", "_weight_token",
+        "_parse_spcc_fit")
 for node in tree.body:
     if isinstance(node, ast.FunctionDef) and node.name in WANT:
         exec("from __future__ import annotations\n"
@@ -190,6 +191,51 @@ for pal, chans in ns["_MIX_PALETTES"].items():
     for ch, mix in chans.items():
         check(abs(sum(mix.values()) - 1.0) < 1e-9,
               f"{pal} {ch} weights sum to 1")
+
+print("\n8b) the SPCC fit is read back from Siril's own words")
+# Verbatim from two runs of the same 94 frames, HOS and HSO.  Siril's
+# "imprecise solution" warning fires on BOTH, so it cannot separate them;
+# the sigmas differ by a factor of 40 and can.
+HOS_LOG = """21:46:59: Applying aperture photometry to 2594 stars.
+21:46:59: 1042 stars excluded from the calculation
+21:46:59: SPCC Linear Fits
+21:46:59: Image R/G = -0.058264 + 1.425576 * Catalog R/G (sigma: 6.159311)
+21:46:59: Image B/G = 0.005830 + 1.442021 * Catalog B/G (sigma: 5.388299)
+21:46:59: Found a solution for color calibration using 1554 stars. Factors:
+21:46:59: K0: 0.872
+21:46:59: K1: 1.000
+21:46:59: K2: 0.848
+21:46:59: The photometric color calibration seems to have found an imprecise \
+solution, consider correcting the image gradient first
+21:46:59: Spectrophotometric Color Calibration succeeded."""
+HSO_LOG = """21:46:59: 1042 stars excluded from the calculation
+21:46:59: Image R/G = -0.223529 + 1.165380 * Catalog R/G (sigma: 0.148979)
+21:46:59: Image B/G = 0.004268 + 0.685778 * Catalog B/G (sigma: 0.238639)
+21:46:59: Found a solution for color calibration using 1552 stars. Factors:
+21:46:59: K0: 0.858
+21:46:59: K1: 0.847
+21:46:59: K2: 1.000"""
+sp = ns["_parse_spcc_fit"]
+hos, hso = sp(HOS_LOG), sp(HSO_LOG)
+print(f"   HOS: {hos.get('sigma')}  stars={hos.get('stars')}")
+print(f"   HSO: {hso.get('sigma')}  stars={hso.get('stars')}")
+check(hos["sigma"] == {"R/G": 6.159311, "B/G": 5.388299},
+      "both ratio sigmas are read")
+check(hos["stars"] == 1554 and hos["excluded"] == 1042,
+      "so are the star counts behind them")
+check(hos["k"] == {0: 0.872, 1: 1.0, 2: 0.848},
+      "and the white-balance factors that were applied")
+check(hos.get("imprecise") and not hso.get("imprecise"),
+      "Siril's own warning is recorded where it appears")
+check(max(hso["sigma"].values()) < ns["SPCC_SIGMA_LIMIT"]
+      < max(hos["sigma"].values()),
+      "the threshold separates the two runs the warning could not")
+# Timestamps are stripped the same way _parse_align_pairs strips them,
+# and a run that logged nothing recognisable must stay silent.
+check(sp("") == {} and sp("nothing to see here\nSaving FITS: x") == {},
+      "an unrecognised log yields nothing rather than a wrong number")
+check(sp("Image R/G = 1 + 2 * Catalog R/G (sigma: not-a-number)") == {},
+      "and an unparseable sigma is dropped, not guessed")
 
 print("\n9) file extensions, including the compound ones")
 for name, ext, like in (("a.fit", ".fit", True), ("a.fits", ".fits", True),

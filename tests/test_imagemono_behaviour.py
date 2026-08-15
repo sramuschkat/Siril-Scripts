@@ -361,6 +361,26 @@ check(wd.index("if self._measured.get(filt):")
       < wd.index("elif k_sigma and self._quality_filter_args(staged)"),
       "a measurement is not presented as an estimate")
 
+print("\n6b) the colour solution's quality survives into the report")
+cc = body("_colour_calibrate")
+check(cc.index("before = self._log_snapshot()") < cc.index("self._cmd(*cmd)"),
+      "the log is snapshotted before the command, not after")
+check("self._read_spcc_fit(before, label)" in cc,
+      "and read back only once the command succeeded")
+rd = body("_read_spcc_fit")
+check("after.startswith(log_before)" in rd,
+      "the delta is claimed only when nothing else logged in between")
+check("if not fit:\n            return" in rd,
+      "an unparseable log stays silent rather than reporting a guess")
+check("SPCC_SIGMA_LIMIT" in rd,
+      "a weak solution is named at the time it happens")
+check("self._spcc_fit = fit" in rd and "_spcc_fit" in body("_write_docs"),
+      "and reaches output.md, where two runs can be compared")
+doc = body("_write_docs")
+check("insensitive" in doc,
+      "the report warns that a small sigma on neighbouring wavelengths "
+      "means an insensitive measurement, not a good one")
+
 print("\n7) the disk is freed generation by generation, honestly")
 dg = body("_drop_generation")
 check("os.lstat(path).st_size" in dg,

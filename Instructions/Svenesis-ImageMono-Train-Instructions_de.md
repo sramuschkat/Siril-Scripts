@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.7.0** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.7.1** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.7.0](#17-neu-in-170)
+17. [Neu in 1.7.1](#17-neu-in-171)
 
 ---
 
@@ -600,6 +600,21 @@ Der Kompromiss: **ein nie gebautes Master lässt sich später nicht wiederverwen
 
 An echten Daten zeigt sich das im Fit selbst: die Steigung Katalog gegen Bild ging von ~3,0 unter OSC-Annahmen auf ~0,95, sobald Mono-Sensor und Filter beschrieben waren.
 
+### Den Fit lesen — was der Weißabgleich wert ist
+
+Siril vergleicht die gemessene Farbe jedes Sterns mit derjenigen, die aus seinem Katalogspektrum vorhergesagt wird, und gibt das **Sigma** dieses Vergleichs aus. `output.md` führt es jetzt mit, zusammen mit der Sternzahl und den herausgekommenen Weißabgleichsfaktoren — denn „colour calibration done" liest sich gleich, ob die Sterne dem Katalog eng folgten oder wild darum streuten.
+
+| Sigma eines Verhältnis-Fits | Bedeutung |
+|---|---|
+| deutlich unter 1 | die gemessenen Farben folgen dem Katalog; der Weißabgleich ist eine Messung |
+| über 1 | ⚠️ die Lösung ist schwach — sie wurde angewendet, ist aber ein Startpunkt |
+
+Sirils eigene Warnung *„imprecise solution"* trennt diese Fälle **nicht**: bei zwei Läufen derselben 94 Frames erschien sie in beiden, während sich die Sigmas um den Faktor vierzig unterschieden.
+
+**Sigmas nur zwischen Läufen vergleichen, deren Kanäle dieselben Linien tragen.** Zwei Kanäle auf benachbarten Wellenlängen — etwa Ha bei 656,3 nm und SII bei 671,6 nm — ergeben für jeden Stern ein Verhältnis nahe 1; der Fit hat dann kaum Hebel, und sein Sigma fällt klein aus, weil die Messung *unempfindlich* ist, nicht weil die Lösung gut wäre. Die Zahl vergleicht Läufe einer Palette, sie rangiert keine Paletten.
+
+Im Schmalband ist die übliche Ursache eines wirklich großen Sigmas *Normalize narrowband channels*: die Option ebnet genau das Linienverhältnis ein, das SPCC danach kalibrieren soll. Ein Kanal, der auf wenigen Sternpaaren ausgerichtet wurde, tut es ebenfalls — siehe die Sternpaar-Tabelle im selben Report.
+
 ### Die Namen richtig treffen
 
 Ein Sensor- oder Filtername, den Siril nicht kennt, ist für Siril **kein Fehler** — es setzt still etwas anderes ein. Die klassische Falle:
@@ -843,7 +858,13 @@ Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.7.0
+## 17. Neu in 1.7.1
+
+- **`output.md` sagt jetzt, wie gut die Farblösung gepasst hat.** Siril gibt das Sigma jedes Verhältnis-Fits aus — wie weit die gemessenen Sternfarben um die aus Katalogspektren vorhergesagten streuen — und das Skript hat es verworfen; „colour calibration done" las sich damit für eine solide und eine hoffnungslose Lösung gleich. Der Report führt Sigmas, Sternzahlen und Weißabgleichsfaktoren, und ein Sigma über 1 wird markiert. Siehe §10.
+- **Sirils eigene Warnung „imprecise solution" trennt diese Fälle nicht**: bei zwei Läufen derselben 94 Frames erschien sie in beiden, während sich die Sigmas um den Faktor vierzig unterschieden. Das Sigma trennt sie.
+- **Mit einem Vorbehalt, den der Report selbst nennt:** zwei Kanäle auf benachbarten Wellenlängen ergeben für jeden Stern ein Verhältnis nahe 1; das Sigma dieses Fits ist klein, weil die Messung unempfindlich ist, nicht weil die Lösung gut wäre. Sigmas innerhalb einer Palette vergleichen, nicht zwischen Paletten.
+
+## Was in 1.7.0 neu war
 
 - **Fünf weitere Schmalband-Paletten: `SOH`, `HHO`, `OOS`, `SHH`, `SOO`.** Die Tabelle wurde Zeile für Zeile gegen Franklin Mareks **Perfect Palette Picker** in der Seti Astro Suite Pro geprüft — die Quelle, aus der Cyril Richards PalettePicker übernommen hat. `SOH` erwies sich als die eine Permutation dreier verschiedener Linien, die in unserer eigenen Tabelle fehlte, ohne dass etwas dahinterstand. Jetzt sind alle sechs Permutationen und acht Zweilinien-Varianten da, und die Suite schlägt fehl, wenn wieder eine verschwindet.
 - **Die Koeffizienten von Realistic1 / Realistic2 wurden gegen dieselbe Quelle geprüft** und stimmen exakt überein, Ziffer für Ziffer — eine Tabelle, die wir bisher nur aus zweiter Hand hatten.

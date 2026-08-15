@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.7.0** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.7.1** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.7.0](#17-whats-new-in-170)
+17. [What's New in 1.7.1](#17-whats-new-in-171)
 
 ---
 
@@ -600,6 +600,21 @@ The trade-off: **a master that was never built cannot be reused later.** If you 
 
 On real data the difference shows up in the fit itself: the catalogue-vs-image slope went from ~3.0 under OSC assumptions to ~0.95 once the mono sensor and filters were described.
 
+### Reading the fit — how much the white balance is worth
+
+Siril compares each star's measured colour with the one predicted from its catalogue spectrum, and prints the **sigma** of that comparison. `output.md` now carries it, together with the star count and the white-balance factors that came out, because "colour calibration done" reads the same whether the stars followed the catalogue closely or scattered wildly around it.
+
+| Sigma of a ratio fit | Reading |
+|---|---|
+| well under 1 | the measured colours follow the catalogue; the white balance is a measurement |
+| above 1 | ⚠️ the solution is weak — it was still applied, but treat it as a starting point |
+
+Siril prints its own *"imprecise solution"* warning, and that one does **not** separate these cases: on two runs of the same 94 frames it fired on both, while the sigmas differed by a factor of forty.
+
+**Compare sigmas only between runs whose channels carry the same lines.** Two channels on neighbouring wavelengths — Ha at 656.3 nm and SII at 671.6 nm, say — give a ratio near 1 for every star, so the fit has almost no lever arm and its sigma comes out small because the measurement is *insensitive*, not because the solution is good. The number is a comparison tool between runs of one palette, not a ranking of palettes.
+
+On narrowband the usual cause of a genuinely large sigma is *Normalize narrowband channels*: it flattens the very line ratio SPCC then tries to calibrate. A channel aligned on few star pairs does it too — see the star-pair table in the same report.
+
 ### Getting the names right
 
 A sensor or filter name Siril does not recognise is **not an error for Siril** — it quietly substitutes something else. The classic trap:
@@ -843,7 +858,13 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.7.0
+## 17. What's New in 1.7.1
+
+- **`output.md` now says how well the colour solution fitted.** Siril prints the sigma of each ratio fit — how far the measured star colours scatter around the ones predicted from catalogue spectra — and the script used to drop it, so "colour calibration done" read the same for a solid solution and a hopeless one. The report carries the sigmas, the star counts and the white-balance factors, and a sigma above 1 is flagged. See §10.
+- **Siril's own "imprecise solution" warning does not separate those cases**: on two runs of the same 94 frames it fired on both, while the sigmas differed by a factor of forty. The sigma does separate them.
+- **With a caveat the report states itself:** two channels on neighbouring wavelengths give a ratio near 1 for every star, so that fit's sigma is small because the measurement is insensitive, not because the solution is good. Compare sigmas within a palette, not across palettes.
+
+## What was new in 1.7.0
 
 - **Five more narrowband palettes: `SOH`, `HHO`, `OOS`, `SHH`, `SOO`.** The table was checked line by line against Franklin Marek's **Perfect Palette Picker** in Seti Astro Suite Pro, the source Cyril Richard's PalettePicker adapted. `SOH` turned out to be the one permutation of three different lines our own table was missing, with nothing behind its absence. All six permutations and eight two-line variants are offered now, and the suite fails if one goes missing again.
 - **The Realistic1 / Realistic2 coefficients were verified against that same source** and match it exactly, digit for digit — a table we had only second-hand until now.
