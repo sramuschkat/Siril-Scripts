@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.7.2** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.7.3** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.7.2](#17-neu-in-172)
+17. [Neu in 1.7.3](#17-neu-in-173)
 
 ---
 
@@ -858,7 +858,12 @@ Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.7.2
+## 17. Neu in 1.7.3
+
+- **Behoben: mit *Delete `_work/` when finished* scheiterte jeder Filter an der Registrierung.** Sirils `merge` kopiert seine Quellframes nicht, es verlinkt sie symbolisch — 30 Frames in 4 ms sind keine Kopie von 30 × 36 MB. Die kalibrierten Teile direkt nach dem Merge freizugeben machte die gemergte Sequenz damit zu toten Links, und die Registrierung starb auf allen drei Kanälen mit *failed to find or open merged_HA_00001.fit*. Die Teile werden jetzt erst freigegeben, wenn die Registrierung eigene Frames geschrieben hat.
+- Der Fehler war so lange latent, wie es den Teil-Pfad gibt, wurde aber nur ausgelöst, wenn ein Filter Belichtungszeiten mischte **und** die Aufräum-Option an war. Da 1.6.0 jeden Mehrnacht-Lauf nach Nacht aufteilt, wurde er allgemein — für jeden, der dieses Häkchen setzt.
+
+## Was in 1.7.2 neu war
 
 - **Die beiden Log-Auswertungen hatten stillschweigend aufgehört zu arbeiten.** Die Sternpaar-Zahlen und die neuen Farbfit-Werte werden aus Sirils Log gelesen, indem ein Schnappschuss vor einem Schritt mit einem danach verglichen wird. Dieser Vergleich unterstellte, das Log wachse nur — sein Puffer ist aber begrenzt, und bei einem vollen Drei-Filter-Lauf fallen die ältesten Zeilen vorne heraus; danach ist kein früherer Schnappschuss mehr ein Präfix. Beide Leser kehrten dann wortlos zurück, eine ausgefallene Diagnose sah also genauso aus wie eine, die nichts zu sagen hat.
 - **Die Differenz wird jetzt am Ende des Schnappschusses verankert** statt an seinem Anfang; das übersteht ein abgeschnittenes Vorderende. Ist auch dieser Anker weg, sagt der Lauf es einmal und nennt die Folge — am Bild ändert sich nichts, es sind Diagnosen.

@@ -73,7 +73,7 @@ code = "from __future__ import annotations\n" + "\n".join(
     textwrap.dedent(body(n)) for n in
     ("_stack_all_filters", "_calib_split", "_calibrate_in_parts",
      "_master_stem", "_release_work", "_find_fullframe",
-     "_drop_generation", "_drop_staged"))
+     "_drop_generation", "_drop_staged", "_drop_parts"))
 for _fn in ("_exp_tag", "_path_date"):
     code += "\n" + textwrap.dedent(
         ast.get_source_segment(src, next(
@@ -85,7 +85,7 @@ exec(code, ns)
 class Worker:
     for _n in ("_stack_all_filters", "_calib_split", "_calibrate_in_parts",
                "_master_stem", "_release_work", "_drop_generation",
-               "_drop_staged"):
+               "_drop_staged", "_drop_parts"):
         locals()[_n] = ns[_n]
 
     def __init__(self, tmp, groups, masters, fail_merge=False,
@@ -99,6 +99,7 @@ class Worker:
                       "rejmap": False}
         self._ext, self._ftok, self._target = ".fit", {}, "M 16"
         self._calib_notes, self._split_filters = {}, {}
+        self._part_cleanup = {}
         self._blank_skipped, self._stacked_counts = 0, {}
         self._qf_decision, self._rej_labels = {}, {}
         self._measured, self._reg_stats = {}, {}
@@ -334,6 +335,55 @@ check(not any(c.startswith("calibrate lights_120s") and "-dark=" in c
       "but no 120s part is given the 300s dark",
       str([c for c in w.cmds if c.startswith("calibrate lights_120s")]))
 shutil.rmtree(tmp)
+
+print("\n5f) the merged parts outlive the merge — `merge` SYMLINKS them")
+# Siril's `merge` wrote 30 frames in 4 ms, which no real copy of 30 x
+# 36 MB can do: it symlinks its sources.  Freeing the parts right after
+# it therefore turned merged_<filt> into dangling links, and EVERY filter
+# died with "failed to find or open merged_HA_00001.fit".  Latent since
+# the split existed; universal once every run splits by night.
+class Worker3(Worker):
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.events = []
+
+    def _drop_generation(self, d, seq):
+        self.events.append(("drop", seq))
+
+    def _drop_staged(self, d):
+        self.events.append(("staged", os.path.basename(d)))
+
+    def _register(self, seq, filt):
+        self.events.append(("register", seq))
+        return f"r_{seq}"
+
+
+tmp = tempfile.mkdtemp()
+w = Worker3(tmp, nightly({"2026-08-12": 10, "2026-08-14": 12}),
+            {"dark": {("s",): ("/d.fit", {})}}, False, FN)
+w._opts["cleanup_work"] = True
+w._stack_all_filters()
+reg = next(i for i, e in enumerate(w.events) if e[0] == "register")
+early = [e for e in w.events[:reg]
+         if e[0] == "staged" or "lights_n" in str(e[1])]
+print(f"   before register: {w.events[:reg]}")
+check(not early,
+      "nothing the merged sequence points at is freed before registration",
+      str(early))
+check(("drop", "pp_lights_n20260812") in w.events[reg:]
+      and ("staged", "lights_n20260814") in w.events[reg:],
+      "and all of it IS freed once registration wrote frames of its own",
+      str(w.events[reg:]))
+shutil.rmtree(tmp)
+
+parts = body("_calibrate_in_parts")
+check("_drop_generation" not in parts and "_drop_staged" not in parts,
+      "the merge step frees nothing itself — that was the bug")
+check("self._part_cleanup[filt]" in parts,
+      "it records what to free instead")
+drv = body("_stack_all_filters")
+check(drv.index("self._register(seq, filt)") < drv.index("_drop_parts(filt)"),
+      "and the driver frees it strictly after registration")
 
 print("\n5e) one night only: nothing is split")
 w, res, tmp = run(nightly({"2026-08-12": 10}),

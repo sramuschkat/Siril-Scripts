@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.7.2** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.7.3** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.7.2](#17-whats-new-in-172)
+17. [What's New in 1.7.3](#17-whats-new-in-173)
 
 ---
 
@@ -858,7 +858,12 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.7.2
+## 17. What's New in 1.7.3
+
+- **Fixed: with *Delete `_work/` when finished* on, every filter failed at registration.** Siril's `merge` does not copy its source frames, it symlinks them — 30 frames written in 4 ms is not a copy of 30 × 36 MB. Freeing the calibrated parts right after the merge therefore turned the merged sequence into dangling links, and registration died with *failed to find or open merged_HA_00001.fit* on all three channels. The parts are now freed after registration has written frames of its own.
+- The fault was latent for as long as the per-part path existed, but it only fired when a filter mixed exposures **and** the cleanup option was on. Since 1.6.0 splits every multi-night run by night, it became universal — for anyone who ticks that box.
+
+## What was new in 1.7.2
 
 - **The two log-reading diagnostics had quietly stopped working.** The star-pair counts and the new colour-fit numbers are read from Siril's own log by comparing a snapshot taken before a step with one taken after. That comparison assumed the log only ever grows — but its buffer is bounded, and on a full three-filter run the oldest lines drop off the front, after which no earlier snapshot is a prefix any more. Both readers then returned without a word, so a diagnostic that had stopped working looked exactly like one with nothing to say.
 - **The delta is now anchored on the tail of the snapshot** instead of its head, which survives a trimmed front. If even that anchor is gone, the run says so once and names the consequence — nothing about the image changes, these are diagnostics.

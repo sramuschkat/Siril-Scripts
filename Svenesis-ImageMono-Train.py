@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.7.2
+Script Version: 1.7.3
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.7.2
+# Script Version: 1.7.3
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +97,30 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.7.3 - `merge` symlinks its sources, and we deleted them
+      - With "Delete _work/ when finished" ticked, EVERY filter failed at
+        registration: "FITS error: failed to find or open
+        merged_HA_00001.fit".  `_calibrate_in_parts` freed the calibrated
+        parts the moment the merge returned, on the assumption -- written
+        into `_drop_generation`'s own docstring -- that every step writes
+        a full copy of every frame.  Siril's `merge` does not: it wrote
+        30 frames in 4 ms, which no copy of 30 x 36 MB can, because it
+        SYMLINKS its sources.  The merged sequence was left pointing at
+        files that no longer existed
+      - The parts are recorded in `_part_cleanup` and freed by
+        `_drop_parts` after registration has written frames of its own.
+        Peak disk is unchanged -- still about two generations -- because
+        the merged sequence occupies no space of its own
+      - Latent for as long as the per-part path existed: it needed a
+        filter with MIXED EXPOSURES and the cleanup option on.  1.6.0
+        made every multi-night run take that path, which turned a corner
+        case into every run for anyone who ticks that box
+      - The regression test drives the real `_stack_all_filters` with
+        cleanup on and asserts the ORDER: nothing the merged sequence
+        points at may be freed before registration, and all of it must be
+        freed after.  Verified by putting the old deletion back and
+        watching four checks fail
+
 1.7.2 - Both log readers had quietly stopped working
       - The alignment star-pair counts have never appeared on a real
         three-filter run, and 1.7.1's colour-fit numbers did not either.
@@ -1127,7 +1151,7 @@ from PyQt6.QtGui import QColor, QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.7.2"
+VERSION = "1.7.3"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -2318,6 +2342,10 @@ class StackWorker(QThread):
         # and merged again -- recorded so the report can say so, since
         # nothing in the finished master reveals it.
         self._split_filters: dict = {}
+        # {filter: (process dir, sequences, staged dirs)} that a merged
+        # sequence still symlinks to, freed once registration has written
+        # frames of its own.
+        self._part_cleanup: dict = {}
         # Set by _compose when L is kept separate (correct LRGB path).
         self._separate_lum = None
         # Human-readable record of what the finish step actually did, for the
@@ -3848,6 +3876,10 @@ class StackWorker(QThread):
                     # only a renaming step (seqapplyreg) leaves a
                     # predecessor behind to delete.
                     self._drop_generation(proc_dir, previous)
+                    # And only now the parts the merge still pointed at:
+                    # registration has written real frames of its own, so
+                    # nothing references the symlinked originals any more.
+                    self._drop_parts(filt)
 
                 # Registration itself can drop frames -- a sub with no
                 # detectable stars (clouds, a passing veil) simply fails to
@@ -4005,12 +4037,21 @@ class StackWorker(QThread):
         merged = f"merged_{self._tok(filt)}"
         self._cmd("merge", *seqs, merged)
         # The merge copied every frame, so each part is now a duplicate.
+        # The parts CANNOT be deleted here.  `merge` writes its sequence in
+        # milliseconds -- 30 frames in 4 ms, where a real copy of 30 x
+        # 36 MB could not be -- because it SYMLINKS the source frames
+        # instead of copying them.  Dropping the parts at this point left
+        # `merged_<filt>` a set of dangling links, and registration then
+        # failed with "failed to find or open merged_HA_00001.fit" on
+        # every filter.  They are recorded and dropped once registration
+        # has written real frames of its own.
         proc_dir = os.path.dirname(staged[0][3].rstrip(os.sep))
         proc_dir = os.path.join(proc_dir, "process")
-        for tag, _exp, _night, d, _k in staged:
-            self._drop_generation(proc_dir, f"pp_lights_{tag}")
-            self._drop_generation(proc_dir, f"lights_{tag}")
-            self._drop_staged(d)
+        self._part_cleanup[filt] = (
+            proc_dir,
+            [n for tag, _e, _n, _d, _k in staged
+             for n in (f"pp_lights_{tag}", f"lights_{tag}")],
+            [d for _t, _e, _n, d, _k in staged])
         # Only now, and only if a master was really applied: a merge that
         # raised sends the caller down the single-pass path, and a split
         # that calibrated nothing is not a calibration story to tell.
@@ -4027,6 +4068,23 @@ class StackWorker(QThread):
             f"  Merged {len(seqs)} sequence(s) into {merged} "
             f"({applied} calibrated).", LogColor.GREEN)
         return merged
+
+    def _drop_parts(self, filt: str) -> None:
+        """Free the calibrated parts a merged sequence pointed at.
+
+        Deferred out of `_calibrate_in_parts` because Siril's `merge`
+        symlinks its sources rather than copying them: deleting the parts
+        while `merged_<filt>` was the current sequence turned it into
+        dangling links, and registration failed on every filter.  Safe
+        the moment registration has written frames of its own.
+        """
+        proc_dir, seqs, staged = self._part_cleanup.pop(filt, (None, [], []))
+        if not proc_dir:
+            return
+        for name in seqs:
+            self._drop_generation(proc_dir, name)
+        for d in staged:
+            self._drop_staged(d)
 
     def _drop_generation(self, process_dir: str, seq: str) -> None:
         """Delete one sequence's frames now that its successor exists.
