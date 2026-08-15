@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.5.0** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.6.0** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.5.0](#17-neu-in-150)
+17. [Neu in 1.6.0](#17-neu-in-160)
 
 ---
 
@@ -163,7 +163,9 @@ Darks und Bias gehören in einen separaten **Library**-Ordner (siehe §7), weil 
 1. **Skript starten.** Es muss kein Bild geladen sein.
 2. **Select Target Folder…** — den Wurzelordner **eines** Ziels wählen.
 3. Optional einen **Library…**-Ordner mit deinen wiederverwendbaren Darks und Bias setzen. Er wird zwischen Läufen gemerkt.
-4. **Analyze Folder** drücken. Der Overview-Tab listet nun jeden Filter mit Frameanzahl, Gesamtbelichtung, Belichtungszeit, Gain und Sensortemperatur — dazu die gefundenen Kalibrierungsframes.
+4. **Analyze Folder** drücken. Die Tabelle **Discovered Filters** listet nun jeden Filter mit Frameanzahl, **den Flats, die er verwenden wird**, Gesamtbelichtung, Belichtungszeit, Gain und Sensortemperatur — dazu die gefundenen Kalibrierungsframes.
+
+   Die Spalte **Flats** zeigt die Zahl, die für diesen Filter tatsächlich gestackt wird, und bei welcher Belichtungszeit — sie folgt also *Match flats to the same night*: Schalter umlegen, und die Zahl ändert sich mit. Der Tooltip nennt die Nächte, aus denen die Flats stammen, und womit sie offset-korrigiert werden. Ein Filter ohne Flats zeigt `—` in Warnfarbe — das Einzige in dieser Tabelle, das man vor dem Lauf sehen sollte.
 5. **Palette** prüfen. *Auto* schlägt eine aus den gefundenen Filtern vor, und immer nur eine, deren drei Kanäle sich tatsächlich füllen lassen.
 6. Unter **Auto-finish** die **SPCC**-Felder prüfen. Sie sind für ein bestimmtes Rig vorbelegt — trage deinen eigenen Sensor- und Filternamen ein (siehe §10).
 7. **Stack All Filters** drücken und den **Log**-Tab beobachten.
@@ -238,7 +240,9 @@ Die **Kamera** gehört zum Schlüssel, weil Bildgröße und Binning nur ein Indi
 
 **Die Belichtungszeit ist eine Toleranz, keine Identität.** Das thermische Signal skaliert mit der Belichtung, ein 290-s-Dark entfernt also nahezu das, was ein 300-s-Dark entfernen würde — es abzulehnen ließe die Lights unkalibriert, und das ist das schlechtere Ergebnis. Das nächstgelegene Dark innerhalb des Bandes wird verwendet und **im Log benannt**, mit der Bestätigung, dass alles andere übereinstimmt. Darüber hinaus läuft der Lauf ohne Dark weiter und sagt das auch: ein 60-s-Dark auf 300-s-Lights liegt 80 % daneben und wird nie angewendet.
 
-**Ein Filter mit gemischten Belichtungszeiten wird in Teilen kalibriert.** Ein Dark entfernt nur das thermische Signal, das während *seiner eigenen* Belichtung entstanden ist — ein einzelnes Dark auf 120-s- und 300-s-Subs ist also für keine der beiden richtig. Jede Belichtungszeit wird separat bereitgestellt, mit ihrem eigenen Dark kalibriert, und die kalibrierten Teile werden vor der Registrierung wieder zusammengeführt (`merge`) — der Kanal endet damit weiterhin als **ein** Master, und genau das braucht das Farbkomposit. Nur das Dark hängt von der Belichtungszeit ab; ohne Darks im Lauf gibt es nichts aufzuteilen und der gewöhnliche Einzeldurchlauf greift. Der Report nennt jeden Kanal, bei dem das passiert ist.
+**Ein Filter mit gemischten Belichtungszeiten — oder Nächten — wird in Teilen kalibriert.** Zwei Master binden jeweils nur einen Teil der Frames, und jeder steuert eine Dimension bei. Ein Dark entfernt nur das thermische Signal, das während *seiner eigenen* Belichtung entstanden ist — ein einzelnes Dark auf 120-s- und 300-s-Subs ist also für keine der beiden richtig. Ein Flat beschreibt nur den Strahlengang, durch den es aufgenommen wurde — ist *Match flats to the same night* an, will also jede Nacht ihr eigenes.
+
+Beide sind unabhängig voneinander, die Teile sind daher ihr Kreuzprodukt, und eine Dimension mit nur einem Wert fällt heraus: ohne Darks wird nie nach Belichtung geteilt, mit nur einem Master-Flat nie nach Nacht. Jeder Teil wird separat bereitgestellt, mit seinen eigenen Mastern kalibriert, und die kalibrierten Teile werden vor der Registrierung wieder zusammengeführt (`merge`) — der Kanal endet damit weiterhin als **ein** Master, und genau das braucht das Farbkomposit. Der Report nennt jeden Kanal, bei dem das passiert ist, und welche Dimension ihn geteilt hat.
 
 **Über Nächte gepoolte Flats werden gegeneinander geprüft.** Kein Header sagt, ob der optische Aufbau zwischen zwei Sessions verändert wurde — die Division des einen Flats durch das andere sagt es: ein passendes Paar ergibt ein gleichförmiges Bild, ein unpassendes zeigt die Vignettierung oder den Staub, der sich verschoben hat. Jeder Frame wird zuerst durch seinen eigenen Median geteilt, ein helleres Panel oder eine abklingende Dämmerung zählt also nicht als Abweichung; übrig bleibt die Form.
 
@@ -248,7 +252,15 @@ Die **Kamera** gehört zum Schlüssel, weil Bildgröße und Binning nur ein Indi
 | 0,15 % – 0,30 % | brauchbar, wird im Report vermerkt |
 | über 0,30 % | am Aufbau wurde vermutlich etwas verändert; der Report nennt die Nächte und verweist auf *Match flats to the same night* |
 
-Die Prüfung schweigt, wenn diese Option schon an ist, wenn es nur eine Nacht gibt oder wenn die Frames nicht lesbar sind. Verfahren und Schwellen stammen aus dem **Flat On Flat Analyzer** von Carlo Mollicone im offiziellen Siril-Skript-Repository.
+Die Prüfung schweigt, wenn es nur eine Nacht gibt oder wenn die Frames nicht lesbar sind. Ist *Match flats to the same night* an, läuft sie weiter und wird weiter berichtet — die Zahl zeigt ja, dass die Aufteilung ihren zusätzlichen Stack wert ist — aber sie ist keine Warnung mehr, und sie rät nie dazu, etwas einzuschalten, das schon an ist. Verfahren und Schwellen stammen aus dem **Flat On Flat Analyzer** von Carlo Mollicone im offiziellen Siril-Skript-Repository.
+
+**Ein Master-Flat pro Nacht.** Ist *Match flats to the same night* an, bekommt jede Nacht, die Flats **und** Lights eines Filters hat, ihr eigenes Master-Flat, und nur die Lights dieser Nacht werden dadurch geteilt. Die kalibrierten Nächte werden vor der Registrierung wieder zusammengeführt (`merge`), der Filter endet also weiterhin als **ein** Master — die Aufteilung ist eine Sache der Kalibrierung, nicht des Stackens.
+
+Zwei Bedingungen müssen für eine eigene Nacht erfüllt sein: Flats **und** Lights dieses Filters. Flats aus einer Nacht, in der der Filter nie belichtet hat, ergäben ein Master, das niemand öffnet; eine Nacht mit Lights, aber ohne Flats, fällt auf ein gepooltes Master zurück — Log und Report nennen sie, statt sie stillschweigend zu schlucken. Weniger als zwei geeignete Nächte heißt: es gibt nichts zu trennen, und das gewohnte gepoolte Master wird verwendet.
+
+Das gepoolte Master wird auch dann gebaut, wenn jede Nacht ihr eigenes hat. Es ist die Rückfallebene für zwei Wege, die an einer Stelle erreicht werden, an der ein Stack nicht mehr gefahrlos möglich ist — eine Light-Nacht ohne eigene Flats, und eine Teilkalibrierung, die scheitert und auf einen einzelnen Durchgang zurückfällt.
+
+**Die Aufteilung tauscht Flat-Rauschen gegen Flat-Genauigkeit.** Ein gepooltes Master mittelt die Frames aller Nächte, ein Nacht-Master nur die dieser einen. Unter zehn Flats pro Nacht sagt das Log es, denn dort beginnt der Tausch ins Gewicht zu fallen — lohnend, wenn am Strahlengang wirklich etwas verändert wurde, verschenkt, wenn nicht. Wer mit einem Panel jede Nacht Flats aufnimmt, behält mit zehn bis zwanzig pro Filter und Nacht beide Eigenschaften.
 
 **Darks werden zusätzlich nach Temperatur gruppiert**, damit ein −10-°C- und ein −20-°C-Satz niemals zu einem Master gemittelt werden, das für keines von beiden stimmt. Bias wird nicht so aufgeteilt — er ist temperaturunabhängig.
 
@@ -258,7 +270,7 @@ Die Prüfung schweigt, wenn diese Option schon an ist, wenn es nur eine Nacht gi
 |---|---|
 | **Apply calibration when frames exist** | Hauptschalter. Aus = rohe Lights stacken, wie früher. |
 | **Cosmetic correction (hot pixels)** | `-cc=dark` — entfernt Hot- und Coldpixel anhand der Statistik des Darks. Setzt ein Dark voraus. |
-| **Match flats to the same night** | Nutzt nur Flats aus dem Datumsordner der Lights. Einschalten, wenn zwischen den Sessions umgebaut wurde; auslassen, um Flats für ein rauschärmeres Master zu poolen. |
+| **Match flats to the same night** | Baut **pro Nacht** ein eigenes Master-Flat und teilt die Lights jeder Nacht durch ihr eigenes; die kalibrierten Nächte werden vor der Registrierung wieder zusammengeführt. Einschalten, wenn zwischen den Sessions am Strahlengang etwas verändert wurde; auslassen, um Flats für ein rauschärmeres Master zu poolen. |
 
 ### Die Offset-Kette der Flats
 
@@ -822,7 +834,16 @@ Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.5.0
+## 17. Neu in 1.6.0
+
+- **Der Offset der Flats wird pro Filter gewählt.** Ein automatisches Flat-Panel setzt die Belichtung je Filter; der Offset passt jetzt zu *dieser* Zeit — ein Dark-Flat des Filters, sonst ein Dark innerhalb von 20 % seiner Flat-Belichtung, sonst der Bias. Bisher galt ein Offset für den ganzen Lauf, und zwei Filter mit verschiedenen Flat-Zeiten ließen ihn für **alle** auf den synthetischen Offset zurückfallen.
+- **Das Kalibrierungs-Panel zeigt diese Entscheidung vorab**: pro Filter, wie viele Flats bei welcher Belichtung und womit sie offset-korrigiert werden. Ein Filter, den die Library nicht bedienen kann, wird benannt.
+- **„Match flats to the same night" baut ein Master-Flat pro Nacht.** Bisher verwarf die Option nur Flats aus Nächten ohne Lights — was nichts ändert, wenn jede Nacht beides hat, und genau das ist der Normalfall bei einem automatischen Panel. Jetzt bekommt jede Nacht mit Flats *und* Lights ihr eigenes Master, die Lights dieser Nacht werden dadurch geteilt, und die kalibrierten Nächte werden vor der Registrierung wieder zusammengeführt — der Filter endet weiterhin als ein Master.
+- **Eine Nacht ohne eigene Flats wird benannt, nicht geschluckt.** Sie fällt auf ein gepooltes Master zurück, und Log, Kalibrierungs-Panel und `output.md` sagen, welche Nacht und warum.
+- **Die Übereinstimmungsprüfung misst weiter, wenn die Option an ist.** Die Zahl zeigt, dass die Aufteilung ihren zusätzlichen Stack wert ist; sie ist nur keine Warnung mehr. Und wenn die Option an ist, aber nicht helfen kann — nur eine der aufgenommenen Nächte hat eigene Flats — sagt sie das, statt zum Einschalten von etwas zu raten, das schon an ist.
+- **Der Report nennt, welche Dimension einen Kanal geteilt hat** — Belichtungen, Nächte oder beides — und listet das Master-Flat jeder Nacht.
+
+## Was in 1.5.0 neu war
 
 - **Elf Paletten mehr** — die Schmalband-Zuordnungen HSO, HOS, OSS, OHH, OSH, OHS und HSS sowie die gewichteten Mischungen Realistic1 und Realistic2. Eine Tabelle steuert Zuordnung, Dropdown, Kanalmeldungen, SPCC-Wellenlängen und dieses Handbuch — auseinanderlaufen können sie damit nicht. Siehe §9.
 - **Die dynamischen Paletten fehlen bewusst**, und §9 sagt warum: ihr Blendfaktor `t^(1-t)` fällt auf linearen Daten in sich zusammen. Dieselbe Rechnung steht jetzt für den Ha→Rot-Regler, der bei linearen Helligkeiten einen Anteil Ha addiert und sonst nichts.

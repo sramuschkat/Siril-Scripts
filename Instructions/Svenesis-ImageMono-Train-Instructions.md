@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.5.0** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.6.0** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.5.0](#17-whats-new-in-150)
+17. [What's New in 1.6.0](#17-whats-new-in-160)
 
 ---
 
@@ -163,7 +163,9 @@ Darks and bias belong in a separate **Library** folder (see §7), because they a
 1. **Run the script.** No image needs to be loaded.
 2. **Select Target Folder…** — pick the root folder of **one** target.
 3. Optionally set a **Library…** folder holding your reusable darks and bias. It is remembered between runs.
-4. Press **Analyze Folder**. The Overview tab now lists every filter with its frame count, total integration, exposure, gain and sensor temperature — plus whatever calibration frames were found.
+4. Press **Analyze Folder**. The **Discovered Filters** table now lists every filter with its frame count, **the flats it will use**, total integration, exposure, gain and sensor temperature — plus whatever calibration frames were found.
+
+   The **Flats** column shows the number that will really be stacked for that filter and at what exposure, so it follows *Match flats to the same night*: flip that switch and the number changes with it. Its tooltip names the nights the flats come from and what they will be offset-corrected with. A filter with no flats reads `—` in warning colour — the one thing in that table worth catching before the run starts.
 5. Check the **Palette**. *Auto* proposes one from the filters found and only ever proposes one whose three channels can actually be filled.
 6. Under **Auto-finish**, check the **SPCC** fields. They ship pre-filled for one particular rig — replace them with your own sensor and filter names (see §10).
 7. Press **Stack All Filters** and watch the **Log** tab.
@@ -238,7 +240,9 @@ The **camera** is part of the key because image size and binning are only a prox
 
 **Exposure is a tolerance, not an identity.** The thermal signal scales with exposure, so a 290-second dark removes very nearly what a 300-second one would, while refusing it would leave the lights uncalibrated — the worse outcome. The nearest dark inside the band is used and **named in the log**, with everything else confirmed to agree. Beyond it the run continues without a dark and says so: a 60-second dark on 300-second lights is 80 % off and is never applied.
 
-**A filter that mixes exposures is calibrated in parts.** A dark only removes the thermal signal that grew during *its own* exposure, so a single dark applied to 120-second and 300-second subs is right for neither. Each exposure is staged separately, calibrated with its own dark, and the calibrated parts are merged again (`merge`) before registration — so the channel still ends as **one** master, which is what the colour composite needs. Only the dark depends on exposure; with no darks in the run there is nothing to split for and the ordinary single pass runs. The report names every channel this happened to.
+**A filter that mixes exposures, or nights, is calibrated in parts.** Two masters bind a part of the frames rather than all of them, and each contributes one dimension. A dark only removes the thermal signal that grew during *its own* exposure, so a single dark applied to 120-second and 300-second subs is right for neither. A flat only describes the optical train it was shot through, so with *Match flats to the same night* on, each night wants its own.
+
+The two are independent, so the parts are their cross product, and a dimension with a single value drops out of it: no darks means the exposure never splits, one master flat means the night never does. Each part is staged separately, calibrated with its own masters, and the calibrated parts are merged again (`merge`) before registration — so the channel still ends as **one** master, which is what the colour composite needs. The report names every channel this happened to, and which dimension split it.
 
 **Flats pooled across nights are checked against each other.** Nothing in the headers says whether the optical train moved between two sessions — but dividing one night's flat by another's does: a matching pair gives a uniform image, a mismatched one shows the vignetting or dust that shifted. Each frame is normalised by its own median first, so a brighter panel or a fading twilight sky is not counted as disagreement; what remains is the shape.
 
@@ -248,7 +252,15 @@ The **camera** is part of the key because image size and binning are only a prox
 | 0.15 % – 0.30 % | usable, noted in the report |
 | above 0.30 % | the train was probably touched; the report names the nights and points at *Match flats to the same night* |
 
-The check is silent when that option is already on, when there is only one night, or when the frames cannot be read. Method and thresholds come from the **Flat On Flat Analyzer** by Carlo Mollicone in the official Siril script repository.
+The check is silent when there is only one night or when the frames cannot be read. With *Match flats to the same night* on it still runs and is still reported — the number is what shows the split is earning its extra stack — but it stops being a warning, and it never advises switching on something that is already on. Method and thresholds come from the **Flat On Flat Analyzer** by Carlo Mollicone in the official Siril script repository.
+
+**One master flat per night.** With *Match flats to the same night* on, every night that has both flats and lights of a filter gets its own master flat, and only that night's lights are divided by it. The calibrated nights are merged again (`merge`) before registration, so the filter still ends as **one** master — splitting is a calibration concern, not a stacking one.
+
+Two conditions have to hold for a night to get its own master: it must have flats **and** lights of that filter. Flats from a night the filter never imaged would build a master nothing opens; a night with lights but no flats has to fall back to a pooled master, and the log and the report name it rather than absorbing it silently. Fewer than two qualifying nights means there is nothing to keep apart, and the ordinary pooled master is used.
+
+The pooled master is built even when every night has its own. It is the fallback on two paths reached at a point where stacking one is no longer safe — a light night whose flats are missing, and a per-part calibration that fails and drops back to a single pass.
+
+**The split trades flat noise for flat accuracy.** A pooled master averages every night's frames; a per-night master averages only that night's. Below ten flats in a night the log says so, because that is where the trade starts to matter — worth it when the optical train really moved, wasteful when it did not. If you shoot flats every night through a panel, ten to twenty per filter per night keeps both properties.
 
 **Darks are also grouped by temperature**, so a −10 °C and a −20 °C set can never be averaged into a single master that is correct for neither. Bias is not split that way — it is temperature-independent.
 
@@ -258,7 +270,7 @@ The check is silent when that option is already on, when there is only one night
 |---|---|
 | **Apply calibration when frames exist** | Master switch. Off = stack raw lights, as before. |
 | **Cosmetic correction (hot pixels)** | `-cc=dark` — removes hot and cold pixels using the dark's own statistics. Requires a dark. |
-| **Match flats to the same night** | Uses only flats from the same date folder as the lights. Turn this on if the rig was rebuilt between sessions; leave it off to pool flats for a lower-noise master. |
+| **Match flats to the same night** | Builds one master flat **per night** and divides each night's lights by its own, then merges the calibrated nights again before registration. Turn this on if the optical train was touched between sessions; leave it off to pool flats for a lower-noise master. |
 
 ### The flat offset chain
 
@@ -822,7 +834,16 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.5.0
+## 17. What's New in 1.6.0
+
+- **The flats' offset is chosen per filter.** An automatic flat panel sets the exposure per filter; the offset now matches *that* exposure — a dark-flat for the filter, else a dark within 20 % of its flat exposure, else the bias. Previously one offset served the whole run, and two filters with different flat exposures made it fall back to the synthetic offset for **all** of them.
+- **The calibration panel previews that decision** before the run: per filter, how many flats at what exposure and what they will be offset-corrected with. A filter the library cannot serve is named.
+- **"Match flats to the same night" builds one master flat per night.** It used to drop flats from nights that had no lights — which changes nothing when every night has both, the ordinary case for an automatic panel. Now each night with flats *and* lights gets its own master, that night's lights are divided by it, and the calibrated nights are merged again before registration, so the filter still ends as one master.
+- **A night whose flats are missing is named, not absorbed.** It falls back to a pooled master, and the log, the calibration panel and `output.md` all say which night and why.
+- **The agreement check keeps measuring when the option is on.** The number is what shows the split is worth its extra stack; it simply stops being a warning. When the option is on but cannot help — only one imaged night has flats of its own — it says that instead of advising you to switch on what is already on.
+- **The report names which dimension split a channel** — exposures, nights or both — and lists the master flat each night received.
+
+## What was new in 1.5.0
 
 - **Eleven more palettes** — the narrowband assignments HSO, HOS, OSS, OHH, OSH, OHS and HSS, plus the weighted mixes Realistic1 and Realistic2. One table drives the mapping, the dropdown, the channel messages, the SPCC wavelengths and this manual, so none of them can drift apart. See §9.
 - **The dynamic palettes are deliberately absent**, and §9 says why: their `t^(1-t)` blend factor collapses on linear data. The same arithmetic is now stated for the Ha→Red slider, which at linear levels adds a fraction of Ha and nothing more.

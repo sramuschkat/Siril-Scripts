@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.5.0
+Script Version: 1.6.0
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.5.0
+# Script Version: 1.6.0
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +97,127 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.6.0 - Flat calibration that follows the panel, and the night
+      - "Match flats to the same night" now does what its label promises.
+        It used to drop flats from nights that had no lights -- which on
+        the data it was written for changed nothing at all, because every
+        night held both.  A run whose flats disagreed by 1.66% between
+        two nights was told to switch it on, and switching it on was a
+        no-op.  Now every night that has flats AND lights of a filter
+        gets its OWN master flat, and only that night's lights are
+        divided by it; the calibrated nights are merged again before
+        registration, so the filter still ends as one master
+      - The split that already existed for exposures was generalised
+        rather than duplicated.  Two masters bind part of the frames
+        instead of all of them -- the dark by exposure, the flat by
+        night -- they are independent, so the parts are their cross
+        product and a dimension with one value drops out of it.
+        `_exposure_split` became `_calib_split` and returns the night
+        alongside the exposure; `_calibrate_args` takes a night and
+        resolves the flat through it
+      - A light night whose flats are missing falls back to the pooled
+        master and is NAMED -- in the log, in the calibration panel and
+        in output.md.  A silent fallback would make a run look per-night
+        when half of it was not
+      - The pooled master is built even when every night has its own.
+        It is the fallback on two paths that are reached where stacking
+        one is no longer safe: that missing night, and a per-part
+        calibration that fails and drops back to a single pass.  The
+        first draft skipped it to save a stack, which would have
+        calibrated the fallback path with no flat at all
+      - The flat-agreement check no longer goes silent when the option
+        is on: the measurement is what shows the split is earning its
+        extra stack.  It stops being a warning instead.  And when the
+        option is on but cannot help -- only one imaged night has flats
+        -- it says that, rather than advising the user to switch on what
+        is already switched on
+      - Splitting trades flat NOISE for flat ACCURACY -- a pooled master
+        averages every night's frames, a per-night one only that night's
+        -- so a night under FLAT_THIN_SET (10) flats is named.  Not a
+        refusal: a thin flat describing the right optical train still
+        beats a thick one describing the wrong one.  The user can only
+        weigh that if the thin sets are said out loud
+      - The report names WHICH dimension split a channel ("exposures",
+        "nights", or both) and lists the master flat each night got.
+        `_split_filters` became a dict for it, so the sentence is
+        derived from what happened rather than assumed
+
+1.5.1 - Flat calibration that follows the panel
+      - `calibrate` was handed -flat= / -dark= / -bias= UNQUOTED, so a
+        target folder containing a space broke every calibrated run:
+        "Eagle Nebula" split the argument and Siril reported
+        "/Users/.../Eagle.[any_allowed_extension] not found".  The rule
+        learned for SPCC applies here too -- the quotes go around the
+        WHOLE argument, flag included.  The call-site quoting check could
+        not see these: they are built in _calibrate_args and splatted
+        into _cmd, so a second check now inspects the argument strings
+        themselves, and it was verified to fail when the bug is put back
+      - `load_seq` was asked for the bare sequence stem first and the
+        underscored name second, so every filter logged a failed command
+        and a swallowed CommandError before the retry succeeded -- three
+        alarming lines in a run that was going perfectly.  Siril writes
+        the file WITH the trailing underscore (`r_pp_lights_`) even
+        though `stack` takes the stem, so that form is tried first now.
+        The bare name stays as the fallback
+      - An em-dash in the Flats column meant three different things: no
+        flats at all, none for THIS filter, and "calibration is switched
+        off".  A user whose 60 flats were discovered and correctly grouped
+        read the first meaning and concluded the discovery was broken.
+        The column now answers what was FOUND -- a discovery fact -- and
+        shows the switch as a suffix: "20 x 3s (off)" instead of "—",
+        with a tooltip naming the checkbox that would use them.  The
+        calibration panel counts them too rather than saying only
+        "Calibration is switched off"
+      - The offset for a filter's flats must agree with them in CAMERA,
+        GAIN, BINNING, SIZE and TEMPERATURE, not only in exposure.  A
+        panel that sets a different gain per filter is exactly the case
+        this misses: 3 s at G0 and 3 s at G125 are the same exposure and
+        a different pedestal, and matching on exposure alone would have
+        subtracted the wrong one.  The same judge the dark matching uses
+        (`_signature_matches`, with the exposure overridden so its own
+        tolerance is not weighed twice), and a set that matches the
+        exposure but not the camera state is named in the log rather than
+        silently used.  The panel's preview applies the identical rule --
+        a preview that promised a match the run then refuses would be
+        worse than no preview
+      - The Discovered Filters table gained a Flats column: how many
+        flats that filter will use and at what exposure, with the nights
+        they come from and the offset they will be corrected with in the
+        tooltip.  It shows the number that will really be STACKED, so it
+        follows "Match flats to the same night" -- flipping that switch
+        redraws the table rather than leaving it describing a run that is
+        no longer going to happen.  A filter with no flats reads "—" in
+        warning colour, because that is the one thing in the table worth
+        spotting from across the room
+      - The regression suite lives in the repository now, under tests/.
+        It used to sit in a session scratch folder, which was wiped -- 48
+        checks gone with it.  Rebuilt as five suites (static sweeps, the
+        pure helpers executed on hostile input, the run itself against a
+        stubbed Siril, version and document consistency, the flat offset)
+        with a runner, `python3 tests/run_imagemono_tests.py`
+      - The frozen-CHANGELOG check had a hole: it skipped the comparison
+        when the working version EQUALED the released one -- which is
+        exactly the case where new bullets get appended to an entry that
+        already shipped.  It compares unconditionally now, and caught this
+        release doing it: the flat-offset work had been written into the
+        released 1.5.0 entry.  Moved here, 1.5.0 restored byte-identical
+      - The flats' offset is chosen PER FILTER.  An automatic flat panel
+        sets the exposure per filter to reach the same level -- a
+        narrowband flat runs seconds where Luminance runs a fraction of
+        one -- and the old code picked ONE offset for the whole run.
+        Worse, it gave up entirely the moment two filters differed
+        ("flats of mixed exposure: no single right answer") and fell back
+        to Siril's synthetic offset for every filter, including the ones
+        it could have served.  Now each filter gets, in order: a dark-flat
+        set for that filter, a DARK set within 20% of ITS flat exposure, the
+        master bias, the synthetic offset.  Masters are cached per source
+        group, so filters sharing an exposure stack it once
+      - The calibration panel previews that decision before the run: per
+        filter, how many flats at what exposure and what they will be
+        offset-corrected with.  A filter for which nothing in the library
+        matches is named, with the reason, instead of quietly getting the
+        synthetic offset -- which is what the old behaviour did for every
+        filter at once
 1.5.0 - Composition beyond SHO/HOO, and calibration that follows the exposure
       - Audit fixes found by RUNNING the pure helpers on hostile input
         rather than reading them.  _format_duration guarded ValueError and
@@ -870,13 +991,13 @@ from PyQt6.QtWidgets import (
     QAbstractItemView, QCompleter,
 )
 from PyQt6.QtCore import Qt, QSettings, QUrl, pyqtSignal, QThread
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtGui import QColor, QDesktopServices
 
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -1358,6 +1479,12 @@ def _fits_filter(path: str) -> str:
 # beyond that something in the optical train moved.
 FLAT_MATCH_GOOD = 0.0015
 FLAT_MATCH_LIMIT = 0.0030
+
+# Below this many frames, a master flat carries enough of its own noise to
+# be worth mentioning.  It is not a refusal -- a thin flat that describes
+# the right optical train still beats a thick one that describes the wrong
+# one -- so it only ever produces a note when the nights are split.
+FLAT_THIN_SET = 10
 
 
 def _flat_disagreement(a: str, b: str) -> float | None:
@@ -2020,18 +2147,29 @@ class StackWorker(QThread):
         self._masters: dict = {}
         # filter -> human-readable list of the masters applied to it.
         self._calib_notes: dict = {}
+        # Built offset masters, keyed by their source group, so two filters
+        # sharing a flat exposure stack it once.
+        self._offset_cache: dict = {}
+        # filter -> what its flats were offset-corrected with, for the report.
+        self._flat_offset_note: dict = {}
         # {filter: (spread, other_night, reference_night)} for flats that
         # disagree across nights -- the report has to name them.
         self._flat_warn: dict = {}
+        # {filter: {night: master path}} when the flats are kept per night.
+        # Empty means one pooled master per filter, the historical shape.
+        self._flat_nights: dict = {}
+        # {filter: [(night, n_lights, what)]} -- what each night's lights
+        # were really flat-corrected with, for the log and the report.
+        self._night_notes: dict = {}
         # Written by _synthetic_luminance; the report and todo.md name it.
         self._synth_lum: str = ""
         # How the composite was actually assembled -- in memory or through
         # rgbcomp.  The report states the route that ran, not the usual one.
         self._compose_how: str = ""
-        # Filters whose frames were calibrated per exposure and merged
-        # again -- recorded so the report can say so, since nothing in the
-        # finished master reveals it.
-        self._split_filters: set = set()
+        # {filter: why} for filters whose frames were calibrated in parts
+        # and merged again -- recorded so the report can say so, since
+        # nothing in the finished master reveals it.
+        self._split_filters: dict = {}
         # Set by _compose when L is kept separate (correct LRGB path).
         self._separate_lum = None
         # Human-readable record of what the finish step actually did, for the
@@ -2229,9 +2367,13 @@ class StackWorker(QThread):
         and is quoted in the report.
 
         The sequence has to be loaded for the API to answer, so this runs
-        `load_seq` first.  Siril writes the sequence file with a trailing
-        underscore, and different scripts in the wild load it both ways,
-        so both are tried before giving up.
+        `load_seq` first.  Siril names the file with a trailing underscore
+        (`r_pp_lights_`) even though `stack` and friends take the bare
+        stem, so the underscored form is tried FIRST -- asking for the
+        bare name first made every filter log a failed command and a
+        swallowed error before the second attempt succeeded.  The bare
+        name stays as the fallback: scripts in the wild load it both
+        ways, and an older Siril may yet write it without.
 
         `expect` is the frame count taken from the files on disk.  If a
         load quietly leaves an EARLIER sequence current, `get_seq()`
@@ -2244,7 +2386,7 @@ class StackWorker(QThread):
         fallback it always was.
         """
         data = None
-        for name in (seq, f"{seq}_"):
+        for name in (f"{seq}_", seq):
             try:
                 self._cmd("load_seq", f'"{name}"')
                 data = self.siril.get_seq()
@@ -2640,7 +2782,8 @@ class StackWorker(QThread):
                 # Flats must be offset-corrected before normalising, else the
                 # division carries the sensor pedestal into the lights.
                 if bias_master:
-                    self._cmd("calibrate", kind, f"-bias={bias_master}")
+                    self._cmd("calibrate", kind,
+                              f'"-bias={bias_master}"')
                     seq = f"pp_{kind}"
                     self._emit("    flats offset-corrected with "
                                f"{os.path.basename(bias_master)}",
@@ -2687,37 +2830,28 @@ class StackWorker(QThread):
                 (self._calib or {}).values()):
             return
         c = self._calib
-        self._masters = {KIND_BIAS: None, KIND_DARKFLAT: None,
-                         KIND_DARK: {}, KIND_FLAT: {}}
+        self._masters = {KIND_BIAS: None, KIND_DARK: {}, KIND_FLAT: {}}
 
-        # 1) Bias and dark-flat first: the flats need one of them.
-        for kind in (KIND_BIAS, KIND_DARKFLAT):
-            groups = c.get(kind) or {}
-            if not groups:
-                continue
-            # Bias keys are signature tuples that may contain None, which
-            # plain sorted() refuses to compare; dark-flat keys are filter
-            # names.  _sig_sort_key handles both.
-            key = sorted(groups, key=lambda k: _sig_sort_key(k)
-                         if isinstance(k, tuple) else ((False, k),))[0]
+        # 1) The bias first -- it is the last resort for every filter's
+        #    flats, so it has to exist before the flat loop.  Dark-flats
+        #    are NOT built here: `_flat_offset_for` picks and stacks the
+        #    right one per filter, because the flat exposure differs per
+        #    filter as soon as a panel sets it automatically.
+        groups = c.get(KIND_BIAS) or {}
+        if groups:
+            key = sorted(groups, key=_sig_sort_key)[0]
             if len(groups) > 1:
                 self._emit(
-                    f"  {kind}: {len(groups)} sets found, using the first.",
+                    f"  bias: {len(groups)} sets found, using the first.",
                     LogColor.SALMON)
             grp = groups[key]
-            self._masters[kind] = self._stack_calib_group(
-                kind, grp, self._master_name(kind, grp["info"]))
+            self._masters[KIND_BIAS] = self._stack_calib_group(
+                KIND_BIAS, grp, self._master_name(KIND_BIAS, grp["info"]))
 
-        # Dark-flats are the better offset reference for flats; bias is the
-        # fallback.  (Both carry the pedestal; the dark-flat also carries the
-        # flat exposure's dark signal.)
-        flat_offset = self._masters.get(KIND_DARKFLAT) or \
-            self._masters.get(KIND_BIAS) or ""
-        if not flat_offset:
-            flat_offset = self._dark_as_darkflat(c) or ""
-
-        # 2) One master flat per filter.  Optionally restricted to the nights
-        #    the lights of that filter were actually taken.
+        # 2) The master flats.  With "Match flats to the same night" on,
+        #    every night that has BOTH flats and lights gets its OWN master
+        #    and only that night's lights are calibrated with it.  Off, one
+        #    pooled master per filter covers the whole run.
         by_date = self._opts.get("flats_by_date", False)
         for filt, grp in (c.get(KIND_FLAT) or {}).items():
             if filt not in self._groups:
@@ -2728,34 +2862,83 @@ class StackWorker(QThread):
                     f"  flat {filt}: no lights use this filter — not "
                     "stacked.", LogColor.BLUE)
                 continue
-            self._check_flat_consistency(filt, grp["files"])
+            lit = set((self._groups.get(filt) or {}).get("dates") or [])
+            per_night = self._flats_per_night(grp, lit) if by_date else {}
+            self._check_flat_consistency(filt, grp["files"], bool(per_night))
+            # Per filter, because the panel gives each filter its own flat
+            # exposure and the offset has to match THAT one.  The offset is
+            # a library set, so it is the same for every night.
+            offset = self._flat_offset_for(filt, grp, c)
+
+            built: dict = {}
+            for night in sorted(per_night):
+                m = self._stack_calib_group(
+                    KIND_FLAT, dict(grp, files=per_night[night]),
+                    self._master_name(KIND_FLAT, grp["info"], filt, night),
+                    offset)
+                if m:
+                    built[night] = m
+            if built:
+                self._flat_nights[filt] = built
+                self._emit(
+                    f"  {filt}: {len(built)} master flat(s), one per night "
+                    "— " + ", ".join(f"{n} x{len(per_night[n])}"
+                                     for n in sorted(built))
+                    + ".", LogColor.GREEN)
+                # Splitting trades flat NOISE for flat ACCURACY: a pooled
+                # master averages every night's frames, a per-night one
+                # only that night's.  Worth it when the train moved,
+                # wasteful when it did not -- and the user can only weigh
+                # that if the thin sets are named.
+                thin = sorted(n for n in built
+                              if len(per_night[n]) < FLAT_THIN_SET)
+                if thin:
+                    few = ", ".join(f"{n} ({len(per_night[n])})"
+                                    for n in thin)
+                    self._emit(
+                        f"  {filt}: only {few}"
+                        f" — under {FLAT_THIN_SET} flats a per-night master "
+                        "carries visibly more noise than a pooled one. Worth "
+                        "it when the optical train really moved; otherwise "
+                        "pooling is the better trade.", LogColor.SALMON)
+
+            # The pooled master is built even when every night has its own.
+            # It is the fallback on two paths that are reached at a point
+            # where stacking one is no longer safe: a light night whose
+            # flats are missing, and a per-part calibration that fails and
+            # drops back to a single pass.  One extra stack of a few dozen
+            # flats is cheap; discovering mid-run that the fallback does
+            # not exist means calibrating with no flat at all.
+            uncovered = lit - set(built)
             use = dict(grp)
-            # The restriction must reach the master's NAME as well: without
-            # it a per-night master and a pooled one share a filename, and
-            # the cache would hand back the pooled one -- silently ignoring
-            # the option the user just switched on.
+            # A restricted pool must not share a filename with the full
+            # one -- the cache is keyed by name, and would hand back
+            # whichever was stacked first.
             night_tag = ""
-            if by_date:
-                nights = set((self._groups.get(filt) or {}).get("dates") or [])
-                if nights:
-                    kept = [p for p in grp["files"] if _path_date(p) in nights]
-                    dropped = len(grp["files"]) - len(kept)
-                    if kept and dropped:
-                        use = dict(grp, files=kept)
-                        night_tag = "-".join(sorted(nights))
-                        self._emit(
-                            f"  {filt}: using {len(kept)} flat(s) from the "
-                            f"matching night(s); {dropped} from other dates "
-                            "ignored.", LogColor.BLUE)
-                    elif not kept:
-                        self._emit(
-                            f"  {filt}: no flats from the same night — "
-                            "falling back to all available flats.",
-                            LogColor.SALMON)
+            if by_date and lit:
+                kept = [p for p in grp["files"] if _path_date(p) in lit]
+                dropped = len(grp["files"]) - len(kept)
+                if kept and dropped:
+                    use = dict(grp, files=kept)
+                    night_tag = "-".join(sorted(lit))
+                    self._emit(
+                        f"  {filt}: using {len(kept)} flat(s) from the "
+                        f"matching night(s); {dropped} from other dates "
+                        "ignored.", LogColor.BLUE)
+                elif not kept:
+                    self._emit(
+                        f"  {filt}: no flats from the same night — "
+                        "falling back to all available flats.",
+                        LogColor.SALMON)
+            if built and uncovered:
+                self._emit(
+                    f"  {filt}: no flats for {', '.join(sorted(uncovered))} "
+                    "— those night(s) fall back to a master pooled from the "
+                    "others.", LogColor.SALMON)
             m = self._stack_calib_group(
                 KIND_FLAT, use,
                 self._master_name(KIND_FLAT, grp["info"], filt, night_tag),
-                flat_offset)
+                offset)
             if m:
                 self._masters[KIND_FLAT][filt] = m
 
@@ -2825,7 +3008,28 @@ class StackWorker(QThread):
             LogColor.SALMON)
         return best
 
-    def _check_flat_consistency(self, filt: str, files: list) -> None:
+    @staticmethod
+    def _flats_per_night(grp: dict, lit: set) -> dict:
+        """``{night: flat files}`` for the nights worth keeping apart.
+
+        A night qualifies only when it holds flats AND lights of this
+        filter.  Flats from a night this filter never imaged would build
+        a master nothing opens, and a light night without flats has to
+        fall back to a pooled master whatever we do here.
+
+        Returns ``{}`` when fewer than two nights qualify: with one, the
+        per-night master and the pooled one would hold the same frames,
+        so splitting the run would buy nothing and cost a merge.
+        """
+        by_night: dict = {}
+        for path in grp.get("files") or []:
+            night = _path_date(path)
+            if night and night in lit:
+                by_night.setdefault(night, []).append(path)
+        return by_night if len(by_night) > 1 else {}
+
+    def _check_flat_consistency(self, filt: str, files: list,
+                                handled: bool = False) -> None:
         """Warn when the flats of one filter come from different optics.
 
         Pooling flats across nights is right for a rig that never moves
@@ -2836,11 +3040,14 @@ class StackWorker(QThread):
 
         One frame per night is enough; the point is the shape of the
         illumination, which every frame of a set shares.  Silent when
-        there is only one night, when the frames cannot be read, or when
-        the option to keep nights apart is already on.
+        there is only one night or when the frames cannot be read.
+
+        ``handled`` says the nights are already being calibrated apart.
+        The measurement still runs and is still reported -- it is the
+        evidence that the option is earning its keep -- but it stops
+        being a warning, and it must not advise switching on something
+        that is on.
         """
-        if self._opts.get("flats_by_date", False):
-            return                      # the user already keeps them apart
         by_night: dict = {}
         for path in files:
             by_night.setdefault(_path_date(path) or "?", path)
@@ -2864,70 +3071,154 @@ class StackWorker(QThread):
                 worst, worst_night = spread, night
         if worst is None:
             return
-        if worst <= FLAT_MATCH_GOOD:
+        if worst <= FLAT_MATCH_GOOD and not handled:
             self._emit(
                 f"  flat {filt}: {len(nights)} nights agree to "
                 f"{worst * 100:.2f}% — pooling them is right.",
                 LogColor.BLUE)
             return
+        if handled:
+            # Kept apart already: the number is the reason the split is
+            # worth its extra stack, not something to act on.
+            self._emit(
+                f"  flat {filt}: {len(nights)} nights differ by up to "
+                f"{worst * 100:.2f}% ({worst_night} vs {nights[-1]}) — each "
+                "night is calibrated with its own flats, so the difference "
+                "never reaches the lights.", LogColor.GREEN)
+            return
         level = "usable" if worst <= FLAT_MATCH_LIMIT else "a real mismatch"
         self._flat_warn[filt] = (worst, worst_night, nights[-1])
+        # The advice has to fit what is actually switched on.  Telling a
+        # user to enable an option they enabled is how a report loses its
+        # authority -- and here it would be enabled and simply unable to
+        # help, which is a different problem with a different fix.
+        if self._opts.get("flats_by_date", False):
+            fix = ("Only one of the imaged nights has flats of its own, so "
+                   "they cannot be kept apart — shoot flats for each night, "
+                   "or expect this residual.")
+        else:
+            fix = ("Switch on 'Match flats to the same night' to calibrate "
+                   "each night with its own flats.")
         self._emit(
             f"  flat {filt}: the set from {worst_night} differs from "
             f"{nights[-1]} by {worst * 100:.2f}% — {level}. "
             + ("Above " if worst > FLAT_MATCH_LIMIT else "Under ")
             + f"{FLAT_MATCH_LIMIT * 100:.1f}% usually means the optical "
             "train was touched between the nights, and one pooled master "
-            "then corrects neither. Switch on 'Match flats to the same "
-            "night' to keep them apart.",
+            "then corrects neither. " + fix,
             LogColor.SALMON if worst > FLAT_MATCH_LIMIT else LogColor.BLUE)
 
-    def _dark_as_darkflat(self, c: dict):
-        """A plain DARK at the flats' exposure, used as their offset.
+    def _offset_fits(self, grp: dict, flat_info: dict, filt: str,
+                     what: str) -> bool:
+        """Is this offset set shot with the same camera state as the flats?
 
-        A dark-flat is just a dark taken with the flat's exposure, and
-        plenty of capture software writes it as IMAGETYP=DARK -- the
-        keyword says nothing about the intent.  Refusing it because of a
-        label leaves the flats on a synthetic offset when a measured one
-        is sitting right there.
+        Matching on exposure alone is not enough.  An offset for flats is
+        a dark for the flats: it has to agree in CAMERA, GAIN, BINNING,
+        SIZE and TEMPERATURE, exactly like any other dark -- a panel that
+        sets a different gain per filter would otherwise be offset with a
+        set shot at another gain, and the pedestal it removes would be the
+        wrong one.
 
-        The tolerance is wider than for lights (20% against 5%): flat
-        exposures are short, so the absolute difference stays small, and
-        the dark signal being corrected is correspondingly tiny.  Nothing
-        happens unless flats exist and no real dark-flat or bias was
-        found.
+        Only the exposure is judged separately, by the caller, because
+        that one carries a deliberate tolerance.  The probe overrides it
+        so `_signature_matches` does not weigh it twice.
         """
-        flats = c.get(KIND_FLAT) or {}
-        darks = c.get(KIND_DARK) or {}
-        if not flats or not darks:
-            return None
-        exps = {float((g.get("info") or {}).get("exp_s") or 0)
-                for g in flats.values()}
-        exps.discard(0.0)
-        if len(exps) != 1:
-            return None     # flats of mixed exposure: no single right answer
-        want = exps.pop()
-        best = best_delta = best_grp = None
-        for sig, grp in darks.items():
-            have = (grp.get("info") or {}).get("exp_s")
-            if not have:
-                continue
-            delta = abs(float(have) - want)
-            if delta / want > DARKFLAT_EXPOSURE_TOLERANCE:
-                continue
-            if best_delta is None or delta < best_delta:
-                best, best_delta, best_grp = sig, delta, grp
-        if best is None:
-            return None
-        got = float(best_grp["info"]["exp_s"])
+        probe = dict(grp.get("info") or {}, exp_s=flat_info.get("exp_s"))
+        if _signature_matches(probe, flat_info):
+            return True
         self._emit(
-            f"  No dark-flat or bias found; using a {got:g}s dark set as "
-            f"the flats' offset (they were shot at {want:g}s).  "
-            "A dark at the flat exposure IS a dark-flat, whatever the "
-            "IMAGETYP keyword calls it.", LogColor.BLUE)
-        return self._stack_calib_group(
-            KIND_DARKFLAT, best_grp,
-            self._master_name(KIND_DARKFLAT, best_grp["info"]))
+            f"  {filt}: a {what} set matches the flat exposure but not the "
+            "camera state (gain, binning, size or temperature) — not used "
+            "as their offset.", LogColor.SALMON)
+        return False
+
+    def _flat_offset_for(self, filt: str, flat_grp: dict, c: dict) -> str:
+        """The offset master to calibrate ONE filter's flats against.
+
+        Chosen per filter, because an automatic flat panel adjusts the
+        exposure per filter to hit the same level: a narrowband flat runs
+        seconds where a Luminance flat runs a fraction of one.  A single
+        offset for all of them is right only by accident, and the previous
+        code gave up entirely ("flats of mixed exposure: no single right
+        answer") the moment two filters differed -- silently falling back
+        to the synthetic offset for every one of them.
+
+        Order, best first:
+          1. a real DARK-FLAT set for this filter,
+          2. a DARK set at this filter's flat exposure (within
+             DARKFLAT_EXPOSURE_TOLERANCE) -- a dark at the flat exposure
+             IS a dark-flat, whatever IMAGETYP calls it, and it carries
+             that exposure's dark current and hot pixels, which a bias
+             does not,
+          3. the master bias,
+          4. "" -- the caller then uses Siril's synthetic offset.
+
+        Masters are cached per source group, so two filters sharing an
+        exposure stack it once.
+        """
+        want = float((flat_grp.get("info") or {}).get("exp_s") or 0.0)
+
+        # 1) a dark-flat shot for this very filter
+        info = flat_grp.get("info") or {}
+        df = (c.get(KIND_DARKFLAT) or {}).get(filt)
+        if df and not self._offset_fits(df, info, filt, "dark-flat"):
+            df = None
+        if df:
+            key = (KIND_DARKFLAT, filt)
+            if key not in self._offset_cache:
+                self._offset_cache[key] = self._stack_calib_group(
+                    KIND_DARKFLAT, df,
+                    self._master_name(KIND_DARKFLAT, df["info"], filt)) or ""
+            if self._offset_cache[key]:
+                self._flat_offset_note[filt] = (
+                    f"dark-flat set for {filt}")
+                return self._offset_cache[key]
+
+        # 2) a dark at this filter's flat exposure
+        if want > 0:
+            best = best_delta = None
+            for sig, grp in (c.get(KIND_DARK) or {}).items():
+                have = (grp.get("info") or {}).get("exp_s")
+                if not have:
+                    continue
+                delta = abs(float(have) - want)
+                if delta / want > DARKFLAT_EXPOSURE_TOLERANCE:
+                    continue
+                if not self._offset_fits(grp, info, filt, f"{have:g}s dark"):
+                    continue
+                if best_delta is None or delta < best_delta:
+                    best, best_delta = sig, delta
+            if best is not None:
+                key = (KIND_DARK, best)
+                grp = c[KIND_DARK][best]
+                if key not in self._offset_cache:
+                    self._offset_cache[key] = self._stack_calib_group(
+                        KIND_DARKFLAT, grp,
+                        self._master_name(KIND_DARKFLAT, grp["info"])) or ""
+                if self._offset_cache[key]:
+                    got = float(grp["info"]["exp_s"])
+                    self._flat_offset_note[filt] = (
+                        f"{got:g}s dark set (flats are {want:g}s)")
+                    self._emit(
+                        f"  {filt}: flats at {want:g}s are offset-corrected "
+                        f"with a {got:g}s dark set — a dark at the flat "
+                        "exposure IS a dark-flat, whatever IMAGETYP calls "
+                        "it.", LogColor.BLUE)
+                    return self._offset_cache[key]
+
+        # 3) the bias
+        bias = self._masters.get(KIND_BIAS) or ""
+        if bias:
+            self._flat_offset_note[filt] = "master bias"
+            if want > 0:
+                self._emit(
+                    f"  {filt}: no dark-flat and no dark near {want:g}s — "
+                    "using the master bias as the flats' offset.",
+                    LogColor.BLUE)
+            return bias
+
+        self._flat_offset_note[filt] = "synthetic offset"
+        return ""
 
     def _darks_in_demand(self, groups: dict) -> set:
         """Dark signatures some part of this run can actually use.
@@ -2974,14 +3265,37 @@ class StackWorker(QThread):
                 "stacked.", LogColor.BLUE)
         return wanted
 
+    def _flat_for(self, filt: str, night: str = "") -> str:
+        """The master flat for one filter, for one night's frames.
+
+        With the nights kept apart this returns that night's own master.
+        A night whose flats are missing falls back to the pooled one --
+        stated in the log, because a silent fallback would make a run
+        look per-night when half of it was not.
+        """
+        nights = self._flat_nights.get(filt) or {}
+        if night and nights:
+            own = nights.get(night)
+            if own:
+                self._night_notes.setdefault(filt, []).append(
+                    (night, os.path.basename(own)))
+                return own
+            self._emit(
+                f"  {filt} {night}: no flats from this night — using the "
+                "pooled master.", LogColor.SALMON)
+        return (self._masters.get(KIND_FLAT) or {}).get(filt) or ""
+
     def _calibrate_args(self, filt: str, light_info: dict,
-                        warn_mixed: bool = True) -> list:
+                        warn_mixed: bool = True, night: str = "") -> list:
         """Build the `calibrate` arguments for one filter, or [] for none.
 
         ``warn_mixed`` is False when the caller has already split the
-        filter by exposure (`_exposure_split`): the warning about a dark
+        filter by exposure (`_calib_split`): the warning about a dark
         that fits only some of the frames would then be describing a
         problem that was just solved.
+
+        ``night`` selects that night's master flat when the flats are
+        being kept per night; empty means the pooled one.
         """
         if not self._opts.get("calibrate", True) or not self._masters:
             return []
@@ -2996,7 +3310,7 @@ class StackWorker(QThread):
         if dark is None:
             dark = self._closest_dark(light_info, filt)
         if dark:
-            args.append(f"-dark={dark}")
+            args.append(f'"-dark={dark}"')
             used.append(f"dark={os.path.basename(dark)}")
             # The match was made against ONE representative light.  If the
             # filter mixes exposures, the dark is right for only some of
@@ -3017,9 +3331,9 @@ class StackWorker(QThread):
                 "temperature, binning or image size differ) — continuing "
                 "without one.", LogColor.SALMON)
 
-        flat = (self._masters.get(KIND_FLAT) or {}).get(filt)
+        flat = self._flat_for(filt, night)
         if flat:
-            args.append(f"-flat={flat}")
+            args.append(f'"-flat={flat}"')
             used.append(f"flat={os.path.basename(flat)}")
 
         # Bias goes to the lights ONLY when no dark is used: a master dark
@@ -3027,7 +3341,7 @@ class StackWorker(QThread):
         # remove it twice.  Lc = (L - D) / (F - O).
         if not dark and self._masters.get(KIND_BIAS):
             bias = self._masters[KIND_BIAS]
-            args.append(f"-bias={bias}")
+            args.append(f'"-bias={bias}"')
             used.append(f"bias={os.path.basename(bias)}")
 
         if used:
@@ -3089,31 +3403,57 @@ class StackWorker(QThread):
         parts.append("fullframe")
         return "_".join(parts)
 
-    def _exposure_split(self, filt: str) -> list:
-        """``[(tag, exposure, files)]`` when a filter needs calibrating in
-        parts, or ``[]`` when one pass over all its frames is right.
+    def _calib_split(self, filt: str) -> list:
+        """``[(tag, exposure, night, files)]`` when a filter needs
+        calibrating in parts, or ``[]`` when one pass over all its frames
+        is right.
 
-        A master dark is only valid for the exposure it was shot at: the
-        thermal signal it removes grew for exactly that long.  A filter
-        holding 120 s and 300 s subs therefore cannot be calibrated in one
-        pass -- whichever dark is chosen is wrong for the other half.  The
-        frames are split by exposure, each part gets its own dark, and the
-        calibrated parts are merged again before registration, so the
-        channel still ends as ONE master (which is what the composite
-        needs).
+        Two masters bind a part of the frames rather than all of them,
+        and each contributes one dimension:
 
-        Only the DARK depends on exposure.  Flats and bias do not, so with
-        no darks in the run there is nothing to split for and the ordinary
-        single pass is both correct and faster.
+        * the DARK is valid only for the exposure it was shot at -- the
+          thermal signal it removes grew for exactly that long, so a
+          filter holding 120 s and 300 s subs cannot take one dark;
+        * the FLAT is valid only for the optical train it was shot
+          through.  With the nights kept apart, each night's lights want
+          that night's flats.
+
+        The dimensions are independent, so the parts are their cross
+        product, and a dimension with one value collapses out of it: no
+        darks means the exposure never splits, one flat master means the
+        night never does.  Each part is calibrated with its own masters
+        and they are merged again before registration, so the channel
+        still ends as ONE master -- splitting is a calibration concern,
+        not a stacking one.
         """
         if not self._opts.get("calibrate", True):
             return []
-        if not self._masters.get(KIND_DARK):
-            return []
         by_exp = (self._groups.get(filt) or {}).get("by_exp") or {}
-        if len(by_exp) < 2:
+        split_exp = bool(self._masters.get(KIND_DARK)) and len(by_exp) > 1
+        split_night = len(self._flat_nights.get(filt) or {}) > 1
+        if not split_exp and not split_night:
             return []
-        return [(_exp_tag(exp), exp, by_exp[exp]) for exp in sorted(by_exp)]
+
+        base = ((self._groups.get(filt) or {}).get("info") or {}).get("exp_s")
+        parts: dict = {}
+        for exp, files in by_exp.items():
+            for path in files:
+                key = (exp if split_exp else base,
+                       _path_date(path) if split_night else "")
+                parts.setdefault(key, []).append(path)
+        out = []
+        for (exp, night), files in sorted(
+                parts.items(), key=lambda kv: (kv[0][1], kv[0][0] or 0.0)):
+            bits = []
+            if split_exp:
+                bits.append(_exp_tag(exp))
+            if split_night:
+                # A night that never made it into a flat master still gets
+                # its own part -- it is calibrated with the pooled flat,
+                # and keeping it separate is what lets the log say so.
+                bits.append("n" + (_safe(night).replace("-", "") or "undated"))
+            out.append(("_".join(bits), exp, night, files))
+        return out
 
     def _unused_by_palette(self, filters: list) -> set:
         """Filters to leave unstacked, when the user asked for that.
@@ -3239,21 +3579,22 @@ class StackWorker(QThread):
             lights_dir = os.path.join(work, "lights")
             if os.path.isdir(work):
                 shutil.rmtree(work, ignore_errors=True)
-            # A dark is only valid for the exposure it was shot at, so a
-            # filter mixing exposures is staged in parts -- one per
-            # exposure -- and merged again after calibration.
-            splits = self._exposure_split(filt)
+            # A dark is only valid for the exposure it was shot at and a
+            # flat only for the night it was shot on, so a filter that
+            # mixes either is staged in parts and merged again after
+            # calibration.
+            splits = self._calib_split(filt)
             staged: list = []
             n_linked = 0
             blank_mark = self._blank_skipped
-            for tag, exp, sub in splits:
+            for tag, exp, night, sub in splits:
                 d = os.path.join(work, f"lights_{tag}")
                 k = self._link_frames(sub, d)
                 if k:
-                    staged.append((tag, exp, d, k))
+                    staged.append((tag, exp, night, d, k))
                     n_linked += k
             if splits and len(staged) < 2:
-                # Only one exposure survived staging (the rest were blank or
+                # Only one part survived staging (the rest were blank or
                 # unreadable): there is nothing left to split, so take the
                 # ordinary path -- and undo the blank tally, which the
                 # single pass is about to count again.
@@ -3263,8 +3604,9 @@ class StackWorker(QThread):
             if staged:
                 self._emit(
                     f"  Staged {n_linked} frame(s) in "
-                    f"{len(staged)} exposure group(s): "
-                    + ", ".join(f"{e:g}s x{k}" for _t, e, _d, k in staged),
+                    f"{len(staged)} calibration group(s): "
+                    + ", ".join(
+                        f"{t} x{k}" for t, _e, _n, _d, k in staged),
                     LogColor.BLUE)
             else:
                 n_linked = self._link_frames(files, lights_dir)
@@ -3454,7 +3796,7 @@ class StackWorker(QThread):
 
     def _calibrate_in_parts(self, filt: str, staged: list,
                             conv: str) -> str:
-        """Calibrate each exposure with its own dark, then merge the parts.
+        """Calibrate each part with its own masters, then merge them.
 
         Returns the merged sequence name, with Siril left in the filter's
         `process` directory -- the same state the single-pass branch
@@ -3475,30 +3817,33 @@ class StackWorker(QThread):
         notes: list = []
         seqs: list = []
         applied = 0
-        for tag, exp, d, _k in staged:
+        for tag, exp, night, d, _k in staged:
             self._cmd("cd", f'"{d}"')
             self._cmd(conv, f"lights_{tag}", "-out=../process")
             self._cmd("cd", "../process")
-            # Everything except the exposure is shared: same filter, same
-            # camera, same night.  Only the dark lookup changes.
+            # Everything else is shared: same filter, same camera.  Only
+            # the dark (exposure) and the flat (night) lookups change.
             info = dict(base, exp_s=exp, exp=f"{exp:g}s")
-            args = self._calibrate_args(filt, info, warn_mixed=False)
+            args = self._calibrate_args(filt, info, warn_mixed=False,
+                                        night=night)
+            what = " ".join(x for x in (f"{exp:g}s" if exp else "", night)
+                            if x) or tag
             if args:
-                self._emit(f"  {exp:g}s: calibrate lights_{tag} "
+                self._emit(f"  {what}: calibrate lights_{tag} "
                            + " ".join(args), LogColor.BLUE)
                 self._cmd("calibrate", f"lights_{tag}", *args)
                 seqs.append(f"pp_lights_{tag}")
-                notes.append(f"{exp:g}s: {self._calib_notes.get(filt, '')}")
+                notes.append(f"{what}: {self._calib_notes.get(filt, '')}")
                 applied += 1
             else:
-                # No master fits this exposure.  Its frames still belong in
+                # No master fits this part.  Its frames still belong in
                 # the stack -- uncalibrated, and named as such in the log.
                 self._emit(
-                    f"  {exp:g}s: no calibration master matches this "
-                    "exposure; its frames go in uncalibrated.",
+                    f"  {what}: no calibration master matches these "
+                    "frames; they go in uncalibrated.",
                     LogColor.SALMON)
                 seqs.append(f"lights_{tag}")
-                notes.append(f"{exp:g}s: uncalibrated")
+                notes.append(f"{what}: uncalibrated")
         if applied:
             self._calib_notes[filt] = " | ".join(notes)
         else:
@@ -3506,9 +3851,9 @@ class StackWorker(QThread):
         merged = f"merged_{self._tok(filt)}"
         self._cmd("merge", *seqs, merged)
         # The merge copied every frame, so each part is now a duplicate.
-        proc_dir = os.path.dirname(staged[0][2].rstrip(os.sep))
+        proc_dir = os.path.dirname(staged[0][3].rstrip(os.sep))
         proc_dir = os.path.join(proc_dir, "process")
-        for tag, _exp, d, _k in staged:
+        for tag, _exp, _night, d, _k in staged:
             self._drop_generation(proc_dir, f"pp_lights_{tag}")
             self._drop_generation(proc_dir, f"lights_{tag}")
             self._drop_staged(d)
@@ -3516,7 +3861,14 @@ class StackWorker(QThread):
         # raised sends the caller down the single-pass path, and a split
         # that calibrated nothing is not a calibration story to tell.
         if applied:
-            self._split_filters.add(filt)
+            # Name the dimension that actually split, so the report says
+            # which master the parts were kept apart FOR.
+            why = []
+            if len({e for _t, e, _n, _d, _k in staged}) > 1:
+                why.append("exposures")
+            if len({n for _t, _e, n, _d, _k in staged if n}) > 1:
+                why.append("nights")
+            self._split_filters[filt] = " and ".join(why) or "parts"
         self._emit(
             f"  Merged {len(seqs)} sequence(s) into {merged} "
             f"({applied} calibrated).", LogColor.GREEN)
@@ -3941,16 +4293,27 @@ class StackWorker(QThread):
                   "dark is used.")
                 for filt in sorted(self._calib_notes):
                     A(f"    - **{filt}:** {self._calib_notes[filt]}")
-                if self._split_filters:
-                    which = ", ".join(sorted(self._split_filters))
-                    A(f"    - **{which}** mixed exposures, so "
-                      + ("that channel was" if len(self._split_filters) == 1
-                         else "those channels were")
-                      + " calibrated in parts — each exposure with its own "
-                      "dark — and the calibrated parts merged again before "
-                      "registration (`merge`). A dark only removes the "
-                      "thermal signal that grew during ITS exposure, so one "
-                      "dark for two exposures is right for neither.")
+                for why in sorted(set(self._split_filters.values())):
+                    which = ", ".join(sorted(
+                        f for f, w in self._split_filters.items() if w == why))
+                    one = which.count(",") == 0
+                    A(f"    - **{which}** span several {why}, so "
+                      + ("that channel was" if one else "those channels were")
+                      + " calibrated in parts and the parts merged again "
+                      "before registration (`merge`), which is why "
+                      + ("it still ends" if one else "they still end")
+                      + " as one master per filter."
+                      + (" A dark only removes the thermal signal that grew "
+                         "during ITS exposure, so one dark for two exposures "
+                         "is right for neither." if "exposures" in why else "")
+                      + (" A flat only describes the optical train it was "
+                         "shot through, so each night's lights were divided "
+                         "by that night's own master flat."
+                         if "nights" in why else ""))
+                for filt, notes in sorted(self._night_notes.items()):
+                    seen = sorted(set(notes))
+                    A(f"    - **{filt}** per night: "
+                      + "; ".join(f"{n} → `{m}`" for n, m in seen))
                 for filt, (spread, other, ref) in sorted(
                         self._flat_warn.items()):
                     A(f"    - ⚠️ **{filt}: the flats of {other} and {ref} "
@@ -6511,9 +6874,9 @@ class ImageMonoTrainWindow(QMainWindow):
         group = QGroupBox("Discovered Filters")
         layout = QVBoxLayout(group)
 
-        self.tbl_filters = QTableWidget(0, 4)
+        self.tbl_filters = QTableWidget(0, 5)
         self.tbl_filters.setHorizontalHeaderLabels(
-            ["Filter", "Lights", "Integration", "Details"])
+            ["Filter", "Lights", "Flats", "Integration", "Details"])
         self.tbl_filters.verticalHeader().setVisible(False)
         self.tbl_filters.setEditTriggers(
             QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -6523,7 +6886,8 @@ class ImageMonoTrainWindow(QMainWindow):
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         self.tbl_filters.setMinimumHeight(130)
         layout.addWidget(self.tbl_filters)
 
@@ -6589,8 +6953,14 @@ class ImageMonoTrainWindow(QMainWindow):
         self.chk_flats_by_date.setToolTip(
             "OFF: all flats of a filter are pooled into one master — correct "
             "for a permanently mounted rig, and less noisy.\n"
-            "ON: only flats from the same date folder as the lights are used "
-            "— pick this if the optical train was changed between nights.")
+            "ON: every night gets its OWN master flat, and that night's "
+            "lights are divided by it. The calibrated nights are merged "
+            "again before registration, so the filter still ends as one "
+            "master.\n"
+            "Pick this when the optical train was touched between nights — "
+            "the log measures how far the nights disagree and says so.\n"
+            "A night whose flats are missing falls back to a pooled master, "
+            "and the log names it.")
         _nofocus(self.chk_flats_by_date)
         layout.addWidget(self.chk_flats_by_date)
 
@@ -6634,6 +7004,7 @@ class ImageMonoTrainWindow(QMainWindow):
         # switched back on).
         if self._groups:
             self._show_calib_summary()
+            self._refresh_filter_table()
 
     def _set_library(self, path: str) -> None:
         self._library = path or ""
@@ -8012,6 +8383,162 @@ class ImageMonoTrainWindow(QMainWindow):
         self._analyze_worker.failed.connect(self._on_worker_failed)
         self._analyze_worker.start()
 
+    def _flat_offset_preview(self) -> list:
+        """``[(filter, flats, exposure, offset)]`` -- what the run WOULD use.
+
+        The same rule `_flat_offset_for` applies at run time, evaluated on
+        the scan alone: no file is read, nothing is stacked.  With a panel
+        setting the flat exposure per filter, "is there something to
+        offset-correct MY flats with" is the question the calibration
+        panel has to answer before the run, not after it.
+        """
+        c = self._calib or {}
+        flats = c.get(KIND_FLAT) or {}
+        darkflats = c.get(KIND_DARKFLAT) or {}
+        darks = c.get(KIND_DARK) or {}
+        has_bias = bool(c.get(KIND_BIAS))
+        out = []
+        for filt in sorted(flats):
+            grp = flats[filt]
+            info = grp.get("info") or {}
+            want = float(info.get("exp_s") or 0.0)
+            if filt in darkflats and _signature_matches(
+                    dict(darkflats[filt].get("info") or {},
+                         exp_s=info.get("exp_s")), info):
+                offset = "dark-flat"
+            else:
+                # The same rule the run applies, camera state included --
+                # a preview that promised a match the run then refuses
+                # would be worse than no preview.
+                near = [float(g["info"]["exp_s"])
+                        for g in darks.values()
+                        if (g.get("info") or {}).get("exp_s")
+                        and want > 0
+                        and abs(float(g["info"]["exp_s"]) - want) / want
+                        <= DARKFLAT_EXPOSURE_TOLERANCE
+                        and _signature_matches(
+                            dict(g["info"], exp_s=info.get("exp_s")), info)]
+                if near:
+                    best = min(near, key=lambda e: abs(e - want))
+                    offset = f"{best:g}s dark"
+                elif has_bias:
+                    offset = "bias"
+                else:
+                    offset = "synthetic"
+            out.append((filt, len(grp["files"]), want, offset))
+        return out
+
+    def _refresh_filter_table(self) -> tuple:
+        """Draw the discovered-filters table; return (lights, seconds).
+
+        Split out of the analysis handler because the Flats column depends
+        on a switch the user can still flip afterwards: "Match flats to
+        the same night" changes how many flats a filter will really use,
+        and a table that kept the old number would be describing a run
+        that is no longer going to happen.
+        """
+        filters = sorted(self._groups.keys())
+        self.tbl_filters.setRowCount(len(filters))
+        total_lights = 0
+        total_exp = 0.0
+        for r, filt in enumerate(filters):
+            g = self._groups[filt]
+            n = len(g["files"])
+            total_lights += n
+            exp_total = g.get("exp_total", 0.0)
+            total_exp += exp_total
+            samp = g.get("sample", {})
+            detail = " ".join(
+                v for v in (samp.get("exp"), samp.get("gain"),
+                            samp.get("temp")) if v) or "—"
+            self.tbl_filters.setItem(r, 0, QTableWidgetItem(filt))
+            self.tbl_filters.setItem(r, 1, QTableWidgetItem(str(n)))
+            flat_cell, flat_tip = self._flats_cell(filt)
+            item = QTableWidgetItem(flat_cell)
+            item.setToolTip(flat_tip)
+            if flat_cell == "—" or flat_cell.endswith("(off)"):
+                # A filter with no flat is the one thing in this table
+                # worth spotting from across the room.
+                item.setForeground(QColor("#ffaa88"))
+            self.tbl_filters.setItem(r, 2, item)
+            self.tbl_filters.setItem(
+                r, 3, QTableWidgetItem(_format_duration(exp_total)))
+            self.tbl_filters.setItem(r, 4, QTableWidgetItem(detail))
+        return total_lights, total_exp
+
+    def _flats_cell(self, filt: str) -> tuple:
+        """``(text, tooltip)`` describing the flats this filter WILL use.
+
+        The same restriction the run applies: with "Match flats to the
+        same night" on, only the flats from the nights this filter's
+        lights were taken count -- so the number in the table is the
+        number that will be stacked, not the number that happens to lie
+        in the folder.
+
+        The tooltip carries the detail that would not fit: the nights the
+        flats come from, and what they will be offset-corrected with.
+        """
+        # The column answers "what was FOUND for this filter", which is a
+        # discovery fact.  Whether it will be applied is the calibration
+        # switch's business and is shown as a suffix -- an em-dash for
+        # both would make "none there" and "switched off" look identical,
+        # and the difference is the whole question the user is asking.
+        grp = ((self._calib or {}).get(KIND_FLAT) or {}).get(filt)
+        if not grp:
+            return "—", (f"No flats found for {filt}. Vignetting and dust "
+                         "shadows will stay in this channel.")
+        if not self.chk_calibrate.isChecked():
+            n = len(grp["files"])
+            exp = float((grp.get("info") or {}).get("exp_s") or 0.0)
+            text = f"{n} × {exp:g}s" if exp else str(n)
+            return f"{text} (off)", (
+                f"{n} flat(s) found for {filt}, but 'Apply calibration "
+                "when frames exist' is switched off — they will not be "
+                "used. Tick it to calibrate with them.")
+        files = grp["files"]
+        lit = set((self._groups.get(filt) or {}).get("dates") or [])
+        # The identical rule the run uses, called on the run's own code --
+        # a preview that promised a per-night split the run then refuses
+        # would be worse than no preview.
+        per_night = (StackWorker._flats_per_night(grp, lit)
+                     if self.chk_flats_by_date.isChecked() else {})
+        if per_night:
+            files = [p for n in per_night for p in per_night[n]]
+        elif self.chk_flats_by_date.isChecked() and lit:
+            kept = [p for p in files if _path_date(p) in lit]
+            if kept:
+                files = kept
+        nights = sorted({_path_date(p) or "?" for p in files})
+        exp = float((grp.get("info") or {}).get("exp_s") or 0.0)
+        text = f"{len(files)} × {exp:g}s" if exp else str(len(files))
+        offset = dict((f, off) for f, _n, _e, off
+                      in self._flat_offset_preview()).get(filt, "—")
+        tip = [f"{len(files)} flat(s) for {filt}"
+               + (f" at {exp:g}s" if exp else ""),
+               "From: " + ", ".join(nights),
+               f"Offset-corrected with: {offset}"]
+        if per_night:
+            tip.append("One master per night — "
+                       + ", ".join(f"{n} ×{len(per_night[n])}"
+                                   for n in sorted(per_night))
+                       + ". Each night's lights are divided by its own, and "
+                       "the results merged back into one master.")
+            missing = sorted(lit - set(per_night))
+            if missing:
+                tip.append("No flats for " + ", ".join(missing)
+                           + " — those nights fall back to a pooled master.")
+        elif len(nights) > 1 and not self.chk_flats_by_date.isChecked():
+            tip.append("Pooled across nights — right for a rig that was not "
+                       "touched in between. 'Match flats to the same night' "
+                       "gives each night its own master.")
+        elif self.chk_flats_by_date.isChecked() and len(lit) > 1:
+            # The lights span nights; the flats do not.  Keyed on the LIT
+            # nights, because that is what the user is being told cannot
+            # be separated -- the flats have already been narrowed to one.
+            tip.append("Only one of the imaged nights has flats of its own, "
+                       "so they cannot be kept apart — pooled.")
+        return text, "\n".join(tip)
+
     def _show_calib_summary(self, unsupported: int = 0) -> None:
         """Report what calibration material the scan turned up."""
         if unsupported:
@@ -8020,7 +8547,20 @@ class ImageMonoTrainWindow(QMainWindow):
                 "is not supported (its headers cannot be read).",
                 LogColor.SALMON)
         if not self.chk_calibrate.isChecked():
-            self.lbl_calib_found.setText("Calibration is switched off.")
+            c = self._calib or {}
+            found = sum(len(g["files"]) for kind in
+                        (KIND_FLAT, KIND_DARKFLAT, KIND_DARK, KIND_BIAS)
+                        for g in (c.get(kind) or {}).values())
+            self.lbl_calib_found.setText(
+                "Calibration is switched off."
+                + (f"  {found} calibration frame(s) were found and will "
+                   "NOT be used." if found else ""))
+            if found:
+                self._log(
+                    f"Calibration is switched off, so the {found} "
+                    "calibration frame(s) that were found stay unused. "
+                    "Tick 'Apply calibration when frames exist' to use "
+                    "them.", LogColor.SALMON)
             return
         c = self._calib or {}
         bits = []
@@ -8035,6 +8575,64 @@ class ImageMonoTrainWindow(QMainWindow):
             plural = "" if len(groups) == 1 else "s"
             bits.append(f"{label}: {len(groups)} {unit}{plural} "
                         f"({frames} frames)")
+        preview = self._flat_offset_preview()
+        if preview:
+            # One line per filter: how many flats, at what exposure, and
+            # what they will be offset-corrected with.  "synthetic" is the
+            # one worth noticing -- it means the library has nothing that
+            # matches THIS filter's flat exposure.
+            shown = ", ".join(
+                f"{f} {n}×{exp:g}s → {off}" for f, n, exp, off in preview)
+            bits.append("flat offset: " + shown)
+            weak = [f for f, _n, _e, off in preview if off == "synthetic"]
+            if weak:
+                self._log(
+                    "No dark-flat or bias matches the flat exposure of "
+                    + ", ".join(weak)
+                    + " — Siril's synthetic offset will be used there. A "
+                    "dark set at that exposure in the Library would be "
+                    "better.", LogColor.SALMON)
+        # Per-night calibration changes how many masters get built and
+        # which lights each one touches, so it belongs in the summary
+        # rather than only in the run log -- by then it is too late to
+        # reconsider it.
+        if self.chk_flats_by_date.isChecked():
+            split = {}
+            for filt, grp in (c.get(KIND_FLAT) or {}).items():
+                if filt not in (self._groups or {}):
+                    continue
+                lit = set((self._groups.get(filt) or {}).get("dates") or [])
+                per_night = StackWorker._flats_per_night(grp, lit)
+                if per_night:
+                    split[filt] = (sorted(per_night),
+                                   sorted(lit - set(per_night)))
+            if split:
+                bits.append("per night: " + ", ".join(
+                    f"{f} {len(n)} master(s)" for f, (n, _m) in
+                    sorted(split.items())))
+                self._log(
+                    "Flats are kept per night: "
+                    + "; ".join(f"{f} → {', '.join(n)}"
+                                for f, (n, _m) in sorted(split.items()))
+                    + ". Each night's lights are divided by its own master "
+                    "and the results merged before registration.",
+                    LogColor.GREEN)
+                gaps = {f: m for f, (_n, m) in split.items() if m}
+                if gaps:
+                    self._log(
+                        "No flats of their own for "
+                        + "; ".join(f"{f} {', '.join(m)}"
+                                    for f, m in sorted(gaps.items()))
+                        + " — those nights fall back to a pooled master.",
+                        LogColor.SALMON)
+            elif any(len((self._groups.get(f) or {}).get("dates") or []) > 1
+                     for f in (c.get(KIND_FLAT) or {})
+                     if f in (self._groups or {})):
+                self._log(
+                    "'Match flats to the same night' is on, but no filter "
+                    "has flats from two of its imaged nights — there is "
+                    "nothing to keep apart, so one pooled master is used.",
+                    LogColor.SALMON)
         if bits:
             self.lbl_calib_found.setText(" · ".join(bits))
             self._log("Calibration found — " + " · ".join(bits),
@@ -8084,25 +8682,7 @@ class ImageMonoTrainWindow(QMainWindow):
 
         # Populate the table.
         filters = sorted(self._groups.keys())
-        self.tbl_filters.setRowCount(len(filters))
-        total_lights = 0
-        total_exp = 0.0
-        for r, filt in enumerate(filters):
-            g = self._groups[filt]
-            n = len(g["files"])
-            total_lights += n
-            exp_total = g.get("exp_total", 0.0)
-            total_exp += exp_total
-            samp = g.get("sample", {})
-            detail = " ".join(
-                v for v in (samp.get("exp"), samp.get("gain"),
-                            samp.get("temp")) if v) or "—"
-            self.tbl_filters.setItem(r, 0, QTableWidgetItem(filt))
-            self.tbl_filters.setItem(r, 1, QTableWidgetItem(str(n)))
-            self.tbl_filters.setItem(
-                r, 2, QTableWidgetItem(_format_duration(exp_total)))
-            self.tbl_filters.setItem(r, 3, QTableWidgetItem(detail))
-
+        total_lights, total_exp = self._refresh_filter_table()
         total_txt = _format_duration(total_exp)
         self.lbl_header.setText(
             f"{self._target}: {len(filters)} filter(s), "
@@ -8556,7 +9136,13 @@ class ImageMonoTrainWindow(QMainWindow):
             "<li>Click <b>Select Target Folder…</b> and pick the root "
             "folder of one target.</li>"
             "<li>The script <b>analyzes</b> the tree and lists every filter "
-            "with its light-frame count (exposure / gain / temperature).</li>"
+            "with its light-frame count, the <b>flats</b> it will use for "
+            "that filter, and the integration time (exposure / gain / "
+            "temperature).  The Flats column shows the number that will "
+            "really be stacked — it follows <i>Match flats to the same "
+            "night</i> — and its tooltip names the nights they come from "
+            "and what they will be offset-corrected with.  A filter with "
+            "no flats reads <tt>—</tt> in warning colour.</li>"
             "<li>Review the <b>Discovered Filters</b> table and the "
             "<b>Overview</b> tab.</li>"
             "<li>Adjust <b>Stacking Options</b> if needed (defaults are "
@@ -9109,16 +9695,22 @@ class ImageMonoTrainWindow(QMainWindow):
             f"disagreement.  Under {FLAT_MATCH_GOOD:.2%} the nights agree; "
             f"up to {FLAT_MATCH_LIMIT:.2%} is still usable; beyond that the "
             "report names the nights and points at <i>Match flats to the "
-            "same night</i>.  Silent when that option is already on.</li>"
-            "<li><b>A filter that mixes exposures is calibrated in "
-            "parts.</b>  A dark only removes the thermal signal that grew "
+            "same night</i>.  With that option on the measurement still "
+            "runs and is still reported — it is what shows the split is "
+            "earning its extra stack — but it stops being a warning.</li>"
+            "<li><b>A filter that mixes exposures, or nights, is calibrated "
+            "in parts.</b>  A dark only removes the thermal signal that grew "
             "during <i>its own</i> exposure, so one dark for 120&nbsp;s and "
-            "300&nbsp;s subs is right for neither.  Each exposure is staged "
-            "and calibrated with its own dark, and the calibrated parts are "
+            "300&nbsp;s subs is right for neither; a flat only describes the "
+            "optical train it was shot through, so with <i>Match flats to "
+            "the same night</i> on, each night wants its own.  The two are "
+            "independent, so the parts are their cross product and a "
+            "dimension with one value drops out.  Each part is staged and "
+            "calibrated with its own masters, and the calibrated parts are "
             "merged again (<tt>merge</tt>) before registration — the channel "
             "still becomes <b>one</b> master, which is what the composite "
-            "needs.  Only the dark depends on exposure, so with no darks in "
-            "the run nothing is split.</li>"
+            "needs.  With no darks in the run the exposure never splits, and "
+            "with one master flat the night never does.</li>"
             "<li><b>Bias is never applied together with a dark.</b>  A master "
             "dark already contains the offset; subtracting bias as well would "
             "remove it twice.  <tt>-bias=</tt> is only added when no dark is "
@@ -9143,9 +9735,13 @@ class ImageMonoTrainWindow(QMainWindow):
             "without one it has no effect.</li>"
             "<li><b>Match flats to the same night</b> — <i>off</i> pools all "
             "flats of a filter into one, less noisy master (right for a "
-            "permanently mounted rig); <i>on</i> uses only the flats from the "
-            "same date folder as the lights (right if the optical train was "
-            "changed between nights).</li>"
+            "permanently mounted rig); <i>on</i> builds one master flat "
+            "<b>per night</b> and divides each night's lights by its own, "
+            "then merges the calibrated nights again before registration, so "
+            "the filter still ends as one master.  Right whenever the "
+            "optical train was touched between nights — focus, rotation, a "
+            "cleaned corrector.  A night whose flats are missing falls back "
+            "to a pooled master, and the log names it.</li>"
             "</ul>"
             "<h3 style='color:#88aaff;'>Masters and reuse</h3>"
             f"<p>Every master built is written to <b>output/{CALIB_DIRNAME}/"

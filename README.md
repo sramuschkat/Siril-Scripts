@@ -596,7 +596,7 @@ Reads the current image from Siril, divides it into a configurable grid of tiles
 
 ## Svenesis ImageMono Train
 
-**File:** `Svenesis-ImageMono-Train.py` (v1.5.0) — **[Detailed Instructions](Instructions/Svenesis-ImageMono-Train-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-ImageMono-Train-Instructions_de.md)**
+**File:** `Svenesis-ImageMono-Train.py` (v1.6.0) — **[Detailed Instructions](Instructions/Svenesis-ImageMono-Train-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-ImageMono-Train-Instructions_de.md)**
 
 > ⚠️ Public preview — not yet submitted to the official Siril Script Repository.
 
@@ -623,8 +623,8 @@ Siril computes **Lc = (L − D) / (F − O)**. Everything is optional: the scrip
 - **Matching runs on FITS headers, not filenames:** the camera (`INSTRUME`), gain, binning and image size must match exactly, temperature within ±2 °C. The exposure is a **5 % band**, not an identity — the thermal signal scales with time, so a 290 s dark removes very nearly what a 300 s one would, and refusing it would leave the lights uncalibrated. The nearest dark inside the band is used and **named in the log**; beyond it the run continues without one and says so. A 60 s dark on 300 s lights is 80 % off and is never applied.
 - **Darks are grouped by temperature too**, so a −10 °C and a −20 °C set can never be averaged into one master that is correct for neither. Bias is not split — it is temperature-independent.
 - **Bias is never applied together with a dark** (the master dark already contains the offset), and flats are offset-corrected before stacking in four steps: real bias / dark-flat → a plain **DARK shot at the flats' exposure** (within 20 % — a dark at the flat exposure *is* a dark-flat, whatever `IMAGETYP` calls it) → Siril's synthetic `=64*$OFFSET` → raw. Calibration never aborts a run.
-- **A filter that mixes exposures is calibrated in parts** — each exposure with its own dark, merged again before registration. A dark only removes the thermal signal that grew during *its* exposure, so one dark for 120 s and 300 s subs is right for neither.
-- Optional **cosmetic correction** (`-cc=dark`, hot/cold pixels from the dark's own statistics) and **"match flats to the same night"** for rigs that were rebuilt between sessions.
+- **A filter that mixes exposures, or nights, is calibrated in parts** — each exposure with its own dark, each night with its own flat, merged again before registration. A dark only removes the thermal signal that grew during *its* exposure, so one dark for 120 s and 300 s subs is right for neither; a flat only describes the optical train it was shot through, so nights that were not shot through the same one want their own.
+- Optional **cosmetic correction** (`-cc=dark`, hot/cold pixels from the dark's own statistics) and **"match flats to the same night"**, which builds one master flat per night and divides each night's lights by its own — for rigs that were touched between sessions.
 - Masters are cached in `calib/` under readable, header-derived names (`M101_RED_-10C_3s_G100_flat`) and reused on later runs.
 
 #### Stacking — adaptive, not one-size-fits-all
