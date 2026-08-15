@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.6.0** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.6.1** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.6.0](#17-neu-in-160)
+17. [Neu in 1.6.1](#17-neu-in-161)
 
 ---
 
@@ -163,9 +163,11 @@ Darks und Bias gehören in einen separaten **Library**-Ordner (siehe §7), weil 
 1. **Skript starten.** Es muss kein Bild geladen sein.
 2. **Select Target Folder…** — den Wurzelordner **eines** Ziels wählen.
 3. Optional einen **Library…**-Ordner mit deinen wiederverwendbaren Darks und Bias setzen. Er wird zwischen Läufen gemerkt.
-4. **Analyze Folder** drücken. Die Tabelle **Discovered Filters** listet nun jeden Filter mit Frameanzahl, **den Flats, die er verwenden wird**, Gesamtbelichtung, Belichtungszeit, Gain und Sensortemperatur — dazu die gefundenen Kalibrierungsframes.
+4. Die Ordnerauswahl analysiert sofort — **Re-scan Folder** ist für danach da, wenn Frames dazukommen oder die Library wechselt. Die Tabelle **Discovered Filters** listet jeden Filter mit Frameanzahl, **womit seine Lights kalibriert werden**, und der Gesamtbelichtung.
 
-   Die Spalte **Flats** zeigt die Zahl, die für diesen Filter tatsächlich gestackt wird, und bei welcher Belichtungszeit — sie folgt also *Match flats to the same night*: Schalter umlegen, und die Zahl ändert sich mit. Der Tooltip nennt die Nächte, aus denen die Flats stammen, und womit sie offset-korrigiert werden. Ein Filter ohne Flats zeigt `—` in Warnfarbe — das Einzige in dieser Tabelle, das man vor dem Lauf sehen sollte.
+   Die Spalte **Calibration** beantwortet die Frage, für die die Tabelle da ist: *was passiert mit diesen Lights?* Sie liest `Dark + Flat ×3`, `Flat`, `Bias + Flat` oder `none` — die Master, die diesen Filter wirklich erreichen, in der Reihenfolge, in der `Lc = (L − D) / (F − O)` sie anwendet; `×3` heißt ein Master-Flat pro Nacht. Sie folgt jedem Schalter darunter: *Match flats to the same night* umlegen, und das `×3` erscheint oder verschwindet.
+
+   Ein **`⚠` in Warnfarbe heißt: kein Dark passt zu diesen Lights.** Das ist die größte Qualitätslücke, die ein Lauf haben kann, und sie tauchte bisher erst auf, wenn der Lauf schon lief — eine Library mit 442 Darks liest sich beim Überfliegen als „Darks werden angewendet", auch wenn alle 442 drei Sekunden lang sind und die Lights 300 s. Der Tooltip nennt die Belichtungszeiten, die tatsächlich vorliegen, warum sie abgelehnt wurden, und was helfen würde. Belichtungszeit, Gain und Sensortemperatur wandern in eine Zeile unter die Tabelle, solange alle Filter sie teilen, und kehren als Spalte zurück, sobald sie sich unterscheiden.
 5. **Palette** prüfen. *Auto* schlägt eine aus den gefundenen Filtern vor, und immer nur eine, deren drei Kanäle sich tatsächlich füllen lassen.
 6. Unter **Auto-finish** die **SPCC**-Felder prüfen. Sie sind für ein bestimmtes Rig vorbelegt — trage deinen eigenen Sensor- und Filternamen ein (siehe §10).
 7. **Stack All Filters** drücken und den **Log**-Tab beobachten.
@@ -834,7 +836,14 @@ Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.6.0
+## 17. Neu in 1.6.1
+
+- **Die Tabelle Discovered Filters sagt, was passieren wird — nicht, was gefunden wurde.** Die Spalte Flats zählte Flats im Ordner; bei einem Rig mit automatischem Panel ist das für jeden Filter dieselbe Zahl, während das Entscheidende unsichtbar blieb: diese 300-s-Lights bekommen **überhaupt kein Dark**. Die Spalte **Calibration** nennt jetzt die Master, die den Filter wirklich erreichen (`Dark + Flat ×3`, `Flat`, `none`), und ein `⚠` in Warnfarbe markiert einen Filter ohne Dark. Der Tooltip nennt die Belichtungszeiten, die die Library tatsächlich hat, und was helfen würde.
+- **Die Kalibrierungs-Zusammenfassung steht jetzt unter den Schaltern, die sie beschreibt**, und ist von vier Zeilen auf eine geschrumpft. Pro-Filter-Text, der die Tabelle Zeile für Zeile wiederholte, geht ins Log, wo Länge nichts kostet; die Zeile trägt Library-Fakten und die Dark-Lücke.
+- **Die Tabelle passt ihre Höhe an die Zeilen an**, und die Details-Spalte (Belichtung / Gain / Sollwert) tritt unter die Tabelle, solange alle Filter denselben Wert teilen.
+- **Aus „Analyze Folder" wurde „Re-scan Folder"** — die Ordnerauswahl analysiert schon länger selbst, zwei gestapelte Buttons sahen also aus wie zwei Schritte, von denen einer bereits gelaufen war.
+
+## Was in 1.6.0 neu war
 
 - **Der Offset der Flats wird pro Filter gewählt.** Ein automatisches Flat-Panel setzt die Belichtung je Filter; der Offset passt jetzt zu *dieser* Zeit — ein Dark-Flat des Filters, sonst ein Dark innerhalb von 20 % seiner Flat-Belichtung, sonst der Bias. Bisher galt ein Offset für den ganzen Lauf, und zwei Filter mit verschiedenen Flat-Zeiten ließen ihn für **alle** auf den synthetischen Offset zurückfallen.
 - **Das Kalibrierungs-Panel zeigt diese Entscheidung vorab**: pro Filter, wie viele Flats bei welcher Belichtung und womit sie offset-korrigiert werden. Ein Filter, den die Library nicht bedienen kann, wird benannt.

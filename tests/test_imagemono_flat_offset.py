@@ -173,7 +173,6 @@ else:
     check(True, "empty, no flats, zero exposure — all answered")
 
 print("\n5) the discovered-filters table shows the flats per filter")
-cell = _method("ImageMonoTrainWindow", "_flats_cell")
 ns2 = dict(ns)
 ns2["_path_date"] = lambda path: path.split("/")[0]
 exec("from __future__ import annotations\n"
@@ -189,12 +188,17 @@ class _SW:
 
 
 ns2["StackWorker"] = _SW
-exec("from __future__ import annotations\n" + cell, ns2)
+ns2["DARK_EXPOSURE_TOLERANCE"] = 0.05
+for _m in ("_flats_cell", "_dark_preview", "_calib_cell"):
+    exec("from __future__ import annotations\n"
+         + _method("ImageMonoTrainWindow", _m), ns2)
 
 
 class T:
     _flat_offset_preview = ns2["_flat_offset_preview"]
     _flats_cell = ns2["_flats_cell"]
+    _dark_preview = ns2["_dark_preview"]
+    _calib_cell = ns2["_calib_cell"]
 
 
 def _cb(v):
@@ -267,33 +271,103 @@ print(f"   no flats:      [{text}]")
 check(text == "—" and "No flats found" in tip,
       "a filter without flats says so, with the consequence")
 
+print("\n5c) the Calibration column says what the LIGHTS will be given")
+# The column used to count flats in the folder.  Every filter on a rig
+# with an automatic panel read the same "20 × 3s", while the fact that
+# mattered -- these 300 s lights get no dark at all -- appeared nowhere
+# in the window and only once, mid-run, in the log.
+t._groups = {"HA": {"dates": ["2026-08-12", "2026-08-13", "2026-08-14"],
+                    "info": {"exp_s": 300.0, "gain_v": 125, "binning": 1,
+                             "temp_v": -10.0, "instrument": "Ares-M"}}}
+t._calib = {"flat": {"HA": three_nights}, "darkflat": {},
+            "dark": {("d3",): {"files": ["d"] * 442,
+                               "info": {"exp_s": 3.0, "gain_v": 125,
+                                        "binning": 1, "temp_v": -10.0,
+                                        "instrument": "Ares-M"}}},
+            "bias": {}}
+t.chk_calibrate, t.chk_cosmetic = _cb(True), _cb(True)
+t.chk_flats_by_date = _cb(True)
+text, tip, warn = t._calib_cell("HA")
+print(f"   442 darks, all 3s vs 300s lights: [{text}]")
+check(text == "⚠ Flat ×3" and warn,
+      "a library full of darks that fit nothing does NOT read as a dark",
+      text)
+check("442 dark(s)" in tip and "3s" in tip and "300s lights" in tip,
+      "the tooltip names the count, the exposures and the mismatch", tip)
+check("NOT be dark-corrected" in tip, "and states the consequence plainly")
+
+# The same library with a matching set: the warning has to disappear.
+t._calib["dark"][("d300",)] = {"files": ["d"] * 30,
+                               "info": {"exp_s": 300.0, "gain_v": 125,
+                                        "binning": 1, "temp_v": -10.0,
+                                        "instrument": "Ares-M"}}
+text, tip, warn = t._calib_cell("HA")
+print(f"   ...plus a 300s set:                [{text}]")
+check(text == "Dark + Flat ×3" and not warn,
+      "both masters are named, in the order the formula applies them", text)
+check("Cosmetic correction" in tip,
+      "and the tooltip says cosmetic correction now has a dark to read")
+
+# 290s against 300s is inside the 5% band the run itself accepts.
+t._calib["dark"][("d300",)]["info"]["exp_s"] = 290.0
+text, _tip, warn = t._calib_cell("HA")
+check(text == "Dark + Flat ×3" and not warn,
+      "a dark inside the documented exposure band still counts", text)
+t._calib["dark"][("d300",)]["info"]["exp_s"] = 200.0
+text, _tip, warn = t._calib_cell("HA")
+check(text == "⚠ Flat ×3" and warn, "one outside it does not", text)
+
+# Same exposure, wrong gain: refused, exactly as the run refuses it.
+t._calib["dark"][("d300",)]["info"].update({"exp_s": 300.0, "gain_v": 0})
+text, _tip, warn = t._calib_cell("HA")
+check(warn, "a dark at the right exposure but the wrong gain is refused")
+
+t.chk_flats_by_date = _cb(False)
+text, _tip, _w = t._calib_cell("HA")
+check(text == "⚠ Flat", "pooled flats drop the ×N", text)
+
 t.chk_calibrate = _cb(False)
-text, tip = t._flats_cell("HA")
-print(f"   calibration off: [{text}]")
-# "none found" and "switched off" must not look identical -- that is the
-# ambiguity that made a working discovery look like a broken one.
-check(text == "30 × 3s (off)",
-      "flats found stay visible when calibration is off", text)
-check("switched off" in tip and "will not be used" in tip,
-      "and the tooltip says they will not be used, and how to change it")
-check(t._flats_cell("LUM")[0] == "—",
-      "while a filter with no flats still reads —")
+text, tip, warn = t._calib_cell("HA")
+print(f"   calibration off:                   [{text}]")
+check(text == "off" and not warn,
+      "switched off is a choice, not a defect — no warning colour", text)
+check("switched off" in tip and "stay unused" in tip,
+      "but the tooltip counts what goes unused, and how to change it")
 
 table = _method("ImageMonoTrainWindow", "_refresh_filter_table")
+check("self._calib_cell(filt)" in table, "the table renderer asks for it")
+check("self._fit_table_height()" in table,
+      "and sizes itself to the rows it drew")
+check("setColumnHidden(4" in table,
+      "a Details column identical on every row moves out of the table")
 check('setHorizontalHeaderLabels' not in table
-      and "self._flats_cell(filt)" in table,
-      "the table renderer asks for the cell")
+      , "the header is set once, in the builder")
 build = _method("ImageMonoTrainWindow", "_build_filters_group")
-check('"Filter", "Lights", "Flats", "Integration", "Details"' in build,
+check('"Filter", "Lights", "Calibration", "Integration", "Details"' in build,
       "the column exists in the header")
 check("QTableWidget(0, 5)" in build, "and the table has five columns")
+check("setMinimumHeight(130)" not in build,
+      "the table no longer reserves height for rows it may never have")
 
-print("\n6) the panel says what a filter will get, and warns where nothing "
-      "matches")
+print("\n6) the panel says what the LIBRARY holds, and warns about the gap")
 summary = _method("ImageMonoTrainWindow", "_show_calib_summary")
-check("_flat_offset_preview()" in summary, "the label is built from it")
-check("synthetic" in summary and "Library" in summary,
-      "and an unserved filter is named with what would fix it")
+check("_dark_preview(filt)" in summary,
+      "the no-dark gap is computed for every filter")
+check("no dark for" in summary and "#ffaa88" in summary,
+      "and shown in warning colour rather than buried in the run log")
+# Per-filter prose belonged in the table, not in a 9pt paragraph that
+# said "→ 3s dark" once per filter and "3 master(s)" once per filter.
+for gone in ('bits.append("flat offset: ', 'bits.append("per night: '):
+    check(gone not in summary,
+          f"per-filter prose is out of the label ({gone.strip()}…)")
+check("_flat_offset_preview()" in summary and "synthetic" in summary,
+      "the offset detail survives — in the log, where length is free")
+
+print("\n7) the switches sit above the summary they change")
+grp = _method("ImageMonoTrainWindow", "_build_calibration_group")
+for box in ("chk_cosmetic", "chk_flats_by_date"):
+    check(grp.index(f"self.{box} = QCheckBox") < grp.index("lbl_calib_found"),
+          f"{box} comes before the label describing its effect")
 
 print()
 if fails:

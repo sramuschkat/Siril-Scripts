@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.6.0** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.6.1** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.6.0](#17-whats-new-in-160)
+17. [What's New in 1.6.1](#17-whats-new-in-161)
 
 ---
 
@@ -163,9 +163,11 @@ Darks and bias belong in a separate **Library** folder (see §7), because they a
 1. **Run the script.** No image needs to be loaded.
 2. **Select Target Folder…** — pick the root folder of **one** target.
 3. Optionally set a **Library…** folder holding your reusable darks and bias. It is remembered between runs.
-4. Press **Analyze Folder**. The **Discovered Filters** table now lists every filter with its frame count, **the flats it will use**, total integration, exposure, gain and sensor temperature — plus whatever calibration frames were found.
+4. Selecting the folder analyses it straight away — **Re-scan Folder** is there for afterwards, once you add frames or change the Library. The **Discovered Filters** table lists every filter with its frame count, **what its lights will be calibrated with**, and total integration.
 
-   The **Flats** column shows the number that will really be stacked for that filter and at what exposure, so it follows *Match flats to the same night*: flip that switch and the number changes with it. Its tooltip names the nights the flats come from and what they will be offset-corrected with. A filter with no flats reads `—` in warning colour — the one thing in that table worth catching before the run starts.
+   The **Calibration** column answers the question the table exists for: *what will happen to these lights?* It reads `Dark + Flat ×3`, `Flat`, `Bias + Flat` or `none` — the masters that will actually reach that filter, in the order `Lc = (L − D) / (F − O)` applies them, with `×3` meaning one master flat per night. It follows every switch below it: flip *Match flats to the same night* and the `×3` appears or goes.
+
+   A **`⚠` in warning colour means no dark fits these lights.** That is the largest quality gap a run can have, and it used to surface only once the run was already going — a library holding 442 darks reads as "darks are applied" to anyone glancing at it, even when all 442 are 3-second flat-darks and the lights are 300 s. The tooltip names the exposures the library does hold, why they were refused, and what would fix it. The exposure, gain and sensor temperature move to a line under the table while every filter shares them, and return as a column the moment they differ.
 5. Check the **Palette**. *Auto* proposes one from the filters found and only ever proposes one whose three channels can actually be filled.
 6. Under **Auto-finish**, check the **SPCC** fields. They ship pre-filled for one particular rig — replace them with your own sensor and filter names (see §10).
 7. Press **Stack All Filters** and watch the **Log** tab.
@@ -834,7 +836,14 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.6.0
+## 17. What's New in 1.6.1
+
+- **The Discovered Filters table says what will happen, not what was found.** The Flats column counted flats in the folder — on a rig with an automatic panel that is the same number for every filter, while the fact that mattered was invisible: those 300-second lights get **no dark at all**. The **Calibration** column now names the masters that will really reach each filter (`Dark + Flat ×3`, `Flat`, `none`), and a `⚠` in warning colour marks a filter with no dark. The tooltip names the exposures the library does hold and what would fix it.
+- **The calibration summary moved below the switches it describes**, and shrank from four lines to one. Per-filter prose that repeated the table row by row now goes to the log, where length is free; the label carries library-level facts and the no-dark gap.
+- **The table sizes itself to its rows**, and the Details column (exposure / gain / setpoint) steps out from under the table while every filter shares one value.
+- **"Analyze Folder" is now "Re-scan Folder"** — selecting a folder has analysed it for some time, so two stacked buttons looked like two steps of a sequence, one of which had already run.
+
+## What was new in 1.6.0
 
 - **The flats' offset is chosen per filter.** An automatic flat panel sets the exposure per filter; the offset now matches *that* exposure — a dark-flat for the filter, else a dark within 20 % of its flat exposure, else the bias. Previously one offset served the whole run, and two filters with different flat exposures made it fall back to the synthetic offset for **all** of them.
 - **The calibration panel previews that decision** before the run: per filter, how many flats at what exposure and what they will be offset-corrected with. A filter the library cannot serve is named.

@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.6.0
+Script Version: 1.6.1
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.6.0
+# Script Version: 1.6.1
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +97,38 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.6.1 - The table says what will happen, not what was found
+      - The Discovered Filters table gained a CALIBRATION column in place
+        of the Flats one.  Counting flats answered a question the user
+        was not asking: on a rig with an automatic panel every filter
+        read the same "20 x 3s", while the fact that mattered -- these
+        300 s lights get NO DARK AT ALL -- appeared nowhere in the
+        window and once, mid-run, in the log.  The column now names the
+        masters that will really reach those lights ("Dark + Flat x3",
+        "Flat", "none") in the order Lc = (L - D) / (F - O) applies
+        them, and a warning-coloured ⚠ marks a filter with no dark
+      - `_dark_preview` mirrors the run's own rule -- `_signature_matches`
+        first, then the exposure alone inside DARK_EXPOSURE_TOLERANCE --
+        so the column cannot promise what the run will refuse.  Its
+        tooltip names the exposures the library DOES hold: "442 dark(s)
+        at 3s — none matches 300s lights"
+      - The calibration summary moved BELOW the switches it describes.
+        It sat above them, so flipping a box rewrote a sentence the eye
+        had already left behind
+      - and it shrank from four lines to one.  Per-filter prose ("→ 3s
+        dark" once per filter, "3 master(s)" once per filter) duplicated
+        the table row by row; it lives in the log now, where length is
+        free.  The label carries library-level facts only, plus the
+        no-dark gap in warning colour
+      - The table sizes itself to its rows.  A fixed 130 px minimum left
+        a hand's width of empty grid under a three-filter run
+      - The Details column (exposure / gain / setpoint) hides while every
+        filter shares one value and reappears the moment they differ.
+        Three identical cells spent width on nothing
+      - "Analyze Folder" became "Re-scan Folder": picking a folder has
+        analysed it for some time, so two stacked buttons looked like two
+        steps of a sequence, one of which had already run
+
 1.6.0 - Flat calibration that follows the panel, and the night
       - "Match flats to the same night" now does what its label promises.
         It used to drop flats from nights that had no lights -- which on
@@ -997,7 +1029,7 @@ from PyQt6.QtGui import QColor, QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -1485,6 +1517,11 @@ FLAT_MATCH_LIMIT = 0.0030
 # the right optical train still beats a thick one that describes the wrong
 # one -- so it only ever produces a note when the nights are split.
 FLAT_THIN_SET = 10
+
+# Rows the Discovered Filters table shows before it starts scrolling.
+# Eight covers every filter wheel worth the name; beyond that the table
+# would push the rest of the panel out of the window.
+FILTER_TABLE_MAX_ROWS = 8
 
 
 def _flat_disagreement(a: str, b: str) -> float | None:
@@ -6860,10 +6897,15 @@ class ImageMonoTrainWindow(QMainWindow):
         self.lbl_folder.setStyleSheet("color:#888888;font-size:9pt;")
         layout.addWidget(self.lbl_folder)
 
-        self.btn_analyze = QPushButton("Analyze Folder")
+        # Picking a folder analyses it, so this button is only ever the
+        # repeat -- naming it "Analyze Folder" made two stacked buttons
+        # look like two steps of a sequence, one of which had already run.
+        self.btn_analyze = QPushButton("Re-scan Folder")
         _nofocus(self.btn_analyze)
         self.btn_analyze.setToolTip(
-            "Read every FITS header and group the LIGHT frames by filter.")
+            "Read every FITS header again and regroup the LIGHT frames by "
+            "filter.  Selecting a folder already does this; use it after "
+            "adding frames or changing the Library.")
         self.btn_analyze.clicked.connect(self._on_analyze)
         self.btn_analyze.setEnabled(False)
         layout.addWidget(self.btn_analyze)
@@ -6876,7 +6918,7 @@ class ImageMonoTrainWindow(QMainWindow):
 
         self.tbl_filters = QTableWidget(0, 5)
         self.tbl_filters.setHorizontalHeaderLabels(
-            ["Filter", "Lights", "Flats", "Integration", "Details"])
+            ["Filter", "Lights", "Calibration", "Integration", "Details"])
         self.tbl_filters.verticalHeader().setVisible(False)
         self.tbl_filters.setEditTriggers(
             QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -6888,8 +6930,14 @@ class ImageMonoTrainWindow(QMainWindow):
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        self.tbl_filters.setMinimumHeight(130)
+        self._fit_table_height()
         layout.addWidget(self.tbl_filters)
+
+        # Carries the Details column's value while every filter shares it.
+        self.lbl_uniform = QLabel("")
+        self.lbl_uniform.setStyleSheet("color:#888888;font-size:9pt;")
+        self.lbl_uniform.setVisible(False)
+        layout.addWidget(self.lbl_uniform)
 
         self.lbl_target = QLabel("Target: —")
         self.lbl_target.setStyleSheet("color:#88aaff;font-weight:bold;")
@@ -6934,11 +6982,6 @@ class ImageMonoTrainWindow(QMainWindow):
         self.lbl_library.setStyleSheet("color:#888888;font-size:9pt;")
         layout.addWidget(self.lbl_library)
 
-        self.lbl_calib_found = QLabel("Analyze a folder to see what is found.")
-        self.lbl_calib_found.setWordWrap(True)
-        self.lbl_calib_found.setStyleSheet("color:#88aaff;font-size:9pt;")
-        layout.addWidget(self.lbl_calib_found)
-
         self.chk_cosmetic = QCheckBox("Cosmetic correction (hot pixels)")
         self.chk_cosmetic.setChecked(True)
         self.chk_cosmetic.setToolTip(
@@ -6963,6 +7006,14 @@ class ImageMonoTrainWindow(QMainWindow):
             "and the log names it.")
         _nofocus(self.chk_flats_by_date)
         layout.addWidget(self.chk_flats_by_date)
+
+        # Last, because it describes the result of every switch above it.
+        # It used to sit over them, so flipping a box rewrote a sentence
+        # the eye had already left behind.
+        self.lbl_calib_found = QLabel("Analyze a folder to see what is found.")
+        self.lbl_calib_found.setWordWrap(True)
+        self.lbl_calib_found.setStyleSheet("color:#88aaff;font-size:9pt;")
+        layout.addWidget(self.lbl_calib_found)
 
         parent_layout.addWidget(group)
 
@@ -8431,16 +8482,16 @@ class ImageMonoTrainWindow(QMainWindow):
     def _refresh_filter_table(self) -> tuple:
         """Draw the discovered-filters table; return (lights, seconds).
 
-        Split out of the analysis handler because the Flats column depends
-        on a switch the user can still flip afterwards: "Match flats to
-        the same night" changes how many flats a filter will really use,
-        and a table that kept the old number would be describing a run
-        that is no longer going to happen.
+        Split out of the analysis handler because the Calibration column
+        depends on switches the user can still flip afterwards, and a
+        table that kept the old answer would be describing a run that is
+        no longer going to happen.
         """
         filters = sorted(self._groups.keys())
         self.tbl_filters.setRowCount(len(filters))
         total_lights = 0
         total_exp = 0.0
+        details = []
         for r, filt in enumerate(filters):
             g = self._groups[filt]
             n = len(g["files"])
@@ -8451,20 +8502,146 @@ class ImageMonoTrainWindow(QMainWindow):
             detail = " ".join(
                 v for v in (samp.get("exp"), samp.get("gain"),
                             samp.get("temp")) if v) or "—"
+            details.append(detail)
             self.tbl_filters.setItem(r, 0, QTableWidgetItem(filt))
             self.tbl_filters.setItem(r, 1, QTableWidgetItem(str(n)))
-            flat_cell, flat_tip = self._flats_cell(filt)
-            item = QTableWidgetItem(flat_cell)
-            item.setToolTip(flat_tip)
-            if flat_cell == "—" or flat_cell.endswith("(off)"):
-                # A filter with no flat is the one thing in this table
-                # worth spotting from across the room.
+            text, tip, warn = self._calib_cell(filt)
+            item = QTableWidgetItem(text)
+            item.setToolTip(tip)
+            if warn:
+                # A channel that will not be dark-corrected is the one
+                # thing in this table worth spotting from across the room.
                 item.setForeground(QColor("#ffaa88"))
+            elif text == "off":
+                item.setForeground(QColor("#888888"))
             self.tbl_filters.setItem(r, 2, item)
             self.tbl_filters.setItem(
                 r, 3, QTableWidgetItem(_format_duration(exp_total)))
             self.tbl_filters.setItem(r, 4, QTableWidgetItem(detail))
+
+        # A column that repeats one value per row spends width on nothing.
+        # It moves under the table until a run actually mixes exposures,
+        # gains or setpoints -- which is exactly when it earns its place.
+        uniform = details[0] if details and len(set(details)) == 1 else ""
+        self.tbl_filters.setColumnHidden(4, bool(uniform))
+        self.lbl_uniform.setText(f"All filters: {uniform}" if uniform else "")
+        self.lbl_uniform.setVisible(bool(uniform))
+        self._fit_table_height()
         return total_lights, total_exp
+
+    def _fit_table_height(self) -> None:
+        """Give the table the height its rows need, and no more.
+
+        A fixed minimum left a hand's width of empty grid under a
+        three-filter run, pushing everything below it off the panel.
+        Capped, because a filter wheel with more slots than the cap is
+        better scrolled than allowed to fill the window.
+        """
+        rows = self.tbl_filters.rowCount()
+        head = self.tbl_filters.horizontalHeader().height()
+        row_h = (self.tbl_filters.sizeHintForRow(0) if rows
+                 else self.tbl_filters.verticalHeader().defaultSectionSize())
+        shown = min(max(rows, 1), FILTER_TABLE_MAX_ROWS)
+        self.tbl_filters.setFixedHeight(head + shown * row_h + 4)
+
+    def _dark_preview(self, filt: str) -> tuple:
+        """``(applies, note)`` — will this filter's lights get a dark?
+
+        Mirrors the run exactly: `_signature_matches` first, then the one
+        loosened dimension `_closest_dark` allows, the exposure, inside
+        DARK_EXPOSURE_TOLERANCE.  Everything else — camera, gain,
+        binning, size, temperature — still has to agree.
+
+        The note is written for the case that matters most: a library
+        full of darks that fit nothing.  "442 darks" reads like the
+        lights are dark-corrected; naming the exposures says why they
+        are not.
+        """
+        darks = (self._calib or {}).get(KIND_DARK) or {}
+        info = (self._groups.get(filt) or {}).get("info") or {}
+        want = float(info.get("exp_s") or 0.0)
+        if not darks:
+            return False, ("No darks in the library — dark current, hot "
+                           "pixels and amp glow stay in this channel.")
+        for _sig, grp in darks.items():
+            if _signature_matches(grp.get("info") or {}, info):
+                return True, f"Dark: {len(grp.get('files') or [])} frame(s)."
+        best = None
+        for _sig, grp in darks.items():
+            d = grp.get("info") or {}
+            have = d.get("exp_s")
+            if not have or not want:
+                continue
+            # Judge everything BUT the exposure, then the exposure alone.
+            if not _signature_matches(dict(d, exp_s=want), info):
+                continue
+            share = abs(float(have) - want) / want
+            if share <= DARK_EXPOSURE_TOLERANCE and (
+                    best is None or share < best[0]):
+                best = (share, float(have), len(grp.get("files") or []))
+        if best:
+            return True, (f"Dark: closest set at {best[1]:g}s against "
+                          f"{want:g}s lights ({best[0] * 100:.0f}% off), "
+                          f"{best[2]} frame(s).")
+        have = sorted({float((g.get("info") or {}).get("exp_s") or 0.0)
+                       for g in darks.values()})
+        total = sum(len(g.get("files") or []) for g in darks.values())
+        return False, (
+            f"{total} dark(s) in the library, at "
+            + ", ".join(f"{e:g}s" for e in have if e)
+            + f" — none matches {want:g}s lights (or the camera state "
+              "differs). They will NOT be dark-corrected. A set at "
+            + (f"{want:g}s" if want else "the light exposure")
+            + " with the same gain and temperature would fix this.")
+
+    def _calib_cell(self, filt: str) -> tuple:
+        """``(text, tooltip, warn)`` — what this filter WILL be given.
+
+        The column used to answer "how many flats lie in the folder",
+        which is a discovery fact the user can already see elsewhere and
+        which was identical for every filter on the rig this was built
+        for.  It answers the useful question now: which masters reach
+        THESE lights.  A missing dark is the single largest quality gap
+        a run can have, and nothing in the window said so before -- the
+        log said it, once, in the middle of a run that had already
+        started.
+        """
+        if not self.chk_calibrate.isChecked():
+            c = self._calib or {}
+            found = sum(len(g.get("files") or []) for kind in
+                        (KIND_FLAT, KIND_DARKFLAT, KIND_DARK, KIND_BIAS)
+                        for g in (c.get(kind) or {}).values())
+            return "off", (
+                f"'Apply calibration when frames exist' is switched off, so "
+                f"the {found} calibration frame(s) that were found stay "
+                "unused. Tick it to calibrate with them."), False
+
+        parts, tips = [], []
+        dark_ok, dark_note = self._dark_preview(filt)
+        tips.append(dark_note)
+        if dark_ok:
+            parts.append("Dark")
+            if self.chk_cosmetic.isChecked():
+                tips.append("Cosmetic correction reads that dark's own "
+                            "statistics to repair hot and cold pixels.")
+
+        flat_text, flat_tip = self._flats_cell(filt)
+        tips.append(flat_tip)
+        if flat_text not in ("—",):
+            grp = ((self._calib or {}).get(KIND_FLAT) or {}).get(filt)
+            lit = set((self._groups.get(filt) or {}).get("dates") or [])
+            per_night = (StackWorker._flats_per_night(grp, lit)
+                         if grp and self.chk_flats_by_date.isChecked() else {})
+            parts.append(f"Flat ×{len(per_night)}" if per_night else "Flat")
+
+        if not dark_ok and (self._calib or {}).get(KIND_BIAS):
+            # Bias reaches the lights only when no dark does: a master
+            # dark already carries the offset.
+            parts.append("Bias")
+
+        text = " + ".join(parts) if parts else "none"
+        return (("⚠ " + text) if not dark_ok else text,
+                "\n".join(t for t in tips if t), not dark_ok)
 
     def _flats_cell(self, filt: str) -> tuple:
         """``(text, tooltip)`` describing the flats this filter WILL use.
@@ -8475,26 +8652,17 @@ class ImageMonoTrainWindow(QMainWindow):
         number that will be stacked, not the number that happens to lie
         in the folder.
 
-        The tooltip carries the detail that would not fit: the nights the
-        flats come from, and what they will be offset-corrected with.
+        Feeds the tooltip of the Calibration column rather than a column
+        of its own: the count was identical for every filter on a rig
+        with an automatic panel, so it earned no width.  The master
+        switch is NOT read here -- `_calib_cell` owns that decision, and
+        two places deciding it is how "none found" and "switched off"
+        came to look alike in the first place.
         """
-        # The column answers "what was FOUND for this filter", which is a
-        # discovery fact.  Whether it will be applied is the calibration
-        # switch's business and is shown as a suffix -- an em-dash for
-        # both would make "none there" and "switched off" look identical,
-        # and the difference is the whole question the user is asking.
         grp = ((self._calib or {}).get(KIND_FLAT) or {}).get(filt)
         if not grp:
             return "—", (f"No flats found for {filt}. Vignetting and dust "
                          "shadows will stay in this channel.")
-        if not self.chk_calibrate.isChecked():
-            n = len(grp["files"])
-            exp = float((grp.get("info") or {}).get("exp_s") or 0.0)
-            text = f"{n} × {exp:g}s" if exp else str(n)
-            return f"{text} (off)", (
-                f"{n} flat(s) found for {filt}, but 'Apply calibration "
-                "when frames exist' is switched off — they will not be "
-                "used. Tick it to calibrate with them.")
         files = grp["files"]
         lit = set((self._groups.get(filt) or {}).get("dates") or [])
         # The identical rule the run uses, called on the run's own code --
@@ -8563,27 +8731,32 @@ class ImageMonoTrainWindow(QMainWindow):
                     "them.", LogColor.SALMON)
             return
         c = self._calib or {}
+        # The label carries LIBRARY-level facts only: how much material
+        # there is and at what exposure.  What each FILTER will be given
+        # is one row per filter in the table above, and repeating it here
+        # as prose made four lines of 9pt blue in which nothing stood
+        # out -- three times "→ 3s dark", three times "3 master(s)".
         bits = []
-        for kind, label in ((KIND_FLAT, "flats"),
-                            (KIND_DARKFLAT, "dark-flats"),
-                            (KIND_DARK, "darks"), (KIND_BIAS, "bias")):
+        for kind, label in ((KIND_FLAT, "flat"), (KIND_DARKFLAT, "dark-flat"),
+                            (KIND_DARK, "dark"), (KIND_BIAS, "bias")):
             groups = c.get(kind) or {}
-            if not groups:
-                continue
             frames = sum(len(g["files"]) for g in groups.values())
-            unit = "filter" if kind in (KIND_FLAT, KIND_DARKFLAT) else "set"
-            plural = "" if len(groups) == 1 else "s"
-            bits.append(f"{label}: {len(groups)} {unit}{plural} "
-                        f"({frames} frames)")
+            if not frames:
+                continue
+            exps = sorted({float((g.get("info") or {}).get("exp_s") or 0.0)
+                           for g in groups.values()})
+            at = ("" if kind in (KIND_FLAT, KIND_BIAS) or not any(exps)
+                  else " at " + ", ".join(f"{e:g}s" for e in exps if e))
+            bits.append(f"{frames} {label}{'' if frames == 1 else 's'}{at}")
         preview = self._flat_offset_preview()
         if preview:
-            # One line per filter: how many flats, at what exposure, and
-            # what they will be offset-corrected with.  "synthetic" is the
-            # one worth noticing -- it means the library has nothing that
-            # matches THIS filter's flat exposure.
-            shown = ", ".join(
-                f"{f} {n}×{exp:g}s → {off}" for f, n, exp, off in preview)
-            bits.append("flat offset: " + shown)
+            # Log only: which offset each filter's flats get.  "synthetic"
+            # is the one worth noticing -- it means the library has
+            # nothing that matches THIS filter's flat exposure.
+            self._log(
+                "Flat offset — " + ", ".join(
+                    f"{f} {n}×{exp:g}s → {off}"
+                    for f, n, exp, off in preview), LogColor.BLUE)
             weak = [f for f, _n, _e, off in preview if off == "synthetic"]
             if weak:
                 self._log(
@@ -8607,9 +8780,6 @@ class ImageMonoTrainWindow(QMainWindow):
                     split[filt] = (sorted(per_night),
                                    sorted(lit - set(per_night)))
             if split:
-                bits.append("per night: " + ", ".join(
-                    f"{f} {len(n)} master(s)" for f, (n, _m) in
-                    sorted(split.items())))
                 self._log(
                     "Flats are kept per night: "
                     + "; ".join(f"{f} → {', '.join(n)}"
@@ -8633,15 +8803,29 @@ class ImageMonoTrainWindow(QMainWindow):
                     "has flats from two of its imaged nights — there is "
                     "nothing to keep apart, so one pooled master is used.",
                     LogColor.SALMON)
+        # The gap that used to be invisible until the run was already
+        # going: a library full of darks that fit nothing still reads
+        # "442 darks" to anyone glancing at this line.
+        no_dark, why = [], {}
+        for filt in sorted(self._groups or {}):
+            ok, note = self._dark_preview(filt)
+            if not ok:
+                no_dark.append(filt)
+                why.setdefault(note, []).append(filt)
         if bits:
-            self.lbl_calib_found.setText(" · ".join(bits))
-            self._log("Calibration found — " + " · ".join(bits),
-                      LogColor.GREEN)
+            head = " · ".join(bits)
+            self._log("Calibration found — " + head, LogColor.GREEN)
         else:
-            hint = ("" if self._library
-                    else "  Set a Library folder for darks / bias.")
-            self.lbl_calib_found.setText(
-                "No calibration frames found." + hint)
+            head = "No calibration frames found." + (
+                "" if self._library else "  Set a Library folder for "
+                "darks / bias.")
+        if no_dark:
+            head += ("<br><span style='color:#ffaa88;'>⚠ no dark for "
+                     + ", ".join(no_dark)
+                     + " — flat correction only</span>")
+            for note, which in sorted(why.items()):
+                self._log(f"{', '.join(which)}: {note}", LogColor.SALMON)
+        self.lbl_calib_found.setText(head)
 
     def _on_analyze_done(self, payload: dict) -> None:
         self._groups = payload["groups"]
@@ -9136,13 +9320,13 @@ class ImageMonoTrainWindow(QMainWindow):
             "<li>Click <b>Select Target Folder…</b> and pick the root "
             "folder of one target.</li>"
             "<li>The script <b>analyzes</b> the tree and lists every filter "
-            "with its light-frame count, the <b>flats</b> it will use for "
-            "that filter, and the integration time (exposure / gain / "
-            "temperature).  The Flats column shows the number that will "
-            "really be stacked — it follows <i>Match flats to the same "
-            "night</i> — and its tooltip names the nights they come from "
-            "and what they will be offset-corrected with.  A filter with "
-            "no flats reads <tt>—</tt> in warning colour.</li>"
+            "with its light-frame count, its integration time, and a "
+            "<b>Calibration</b> column saying which masters those lights "
+            "will really be given — <tt>Dark + Flat ×3</tt>, <tt>Flat</tt>, "
+            "<tt>none</tt>.  A <tt>⚠</tt> in warning colour means no dark "
+            "fits these lights; the tooltip names the exposures the library "
+            "does hold and what would fix it.  That gap used to surface "
+            "only once the run was already going.</li>"
             "<li>Review the <b>Discovered Filters</b> table and the "
             "<b>Overview</b> tab.</li>"
             "<li>Adjust <b>Stacking Options</b> if needed (defaults are "
