@@ -250,6 +250,21 @@ for path in (EN, DE):
           f"{name}: all {len(shared)} already-released section(s) unchanged",
           f"rewritten: {moved}")
 
+print("\n6c) every palette the code offers is written down")
+# The dropdown, the SPCC wavelengths and the help tab all derive from
+# _NB_PALETTES, so adding one is a single line -- which is exactly how a
+# palette reaches users while both manuals still list the old set.
+pal_ns = {}
+i = src.index("_NB_PALETTES = {")
+exec(src[i:src.index("\n}", i) + 2], pal_ns)
+names = sorted(pal_ns["_NB_PALETTES"])
+print(f"   {len(names)} assignment palettes: {', '.join(names)}")
+for lang, path in (("EN", EN), ("DE", DE)):
+    doc = open(path).read()
+    absent = [p for p in names if f"| {p} |" not in doc]
+    check(not absent, f"{lang}: all {len(names)} are in the palette table",
+          str(absent))
+
 print("\n7) both manuals stay parallel")
 en_h, de_h = docs["EN"].count("\n### "), docs["DE"].count("\n### ")
 print(f"   {en_h} sub-headings EN, {de_h} DE")

@@ -9,6 +9,7 @@ Run:  python3 tests/test_imagemono_helpers.py
 """
 import ast
 import datetime
+import itertools
 import math
 import os
 import re
@@ -170,6 +171,21 @@ for pal, roles in ns["_NB_PALETTES"].items():
           f"{pal} maps three emission lines")
     check(all(r in ns["_LINE_NM"] for r in roles),
           f"{pal} has a wavelength for every channel")
+    # The name IS the assignment, read left to right.  A palette whose
+    # letters disagree with its tuple would send SPCC the wavelengths of
+    # one palette while the composite shows another.
+    letter = {"ha": "H", "oiii": "O", "sii": "S"}
+    check(pal == "".join(letter[r] for r in roles),
+          f"{pal} is named after the channels it fills")
+
+# All six ways to give three DIFFERENT lines to three channels.  SOH was
+# missing until the table was checked against Perfect Palette Picker, with
+# nothing behind its absence -- an asymmetry no reader could have guessed.
+perms = {p for p, r in ns["_NB_PALETTES"].items() if len(set(r)) == 3}
+want = {"".join(p) for p in itertools.permutations("HOS")}
+check(perms == want, f"all six permutations are offered, missing {want - perms}")
+two = {p for p, r in ns["_NB_PALETTES"].items() if len(set(r)) == 2}
+check(len(two) == 8, f"and eight two-line variants ({len(two)})")
 for pal, chans in ns["_MIX_PALETTES"].items():
     for ch, mix in chans.items():
         check(abs(sum(mix.values()) - 1.0) < 1e-9,

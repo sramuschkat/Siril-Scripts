@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.6.2** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.7.0** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.6.2](#17-whats-new-in-162)
+17. [What's New in 1.7.0](#17-whats-new-in-170)
 
 ---
 
@@ -489,11 +489,16 @@ SHO and HOO are the two everyone knows. The rest are the same idea with the line
 | OHH | OIII | Ha | Ha |
 | OSH | OIII | SII | Ha |
 | OHS | OIII | Ha | SII |
+| SOH | SII | OIII | Ha |
 | HSS | Ha | SII | SII |
+| HHO | Ha | Ha | OIII |
+| OOS | OIII | OIII | SII |
+| SHH | SII | Ha | Ha |
+| SOO | SII | OIII | OIII |
 
-Each gets the same treatment as SHO: narrowband normalisation if enabled, and SPCC in narrowband mode with the wavelengths of the lines *this* palette put in each channel — the same table drives both, so a palette cannot be added with the wrong wavelengths sent to SPCC.
+That is all **six** ways to give three different lines to three channels, plus eight two-line variants. Each gets the same treatment as SHO: narrowband normalisation if enabled, and SPCC in narrowband mode with the wavelengths of the lines *this* palette put in each channel — the same table drives both, so a palette cannot be added with the wrong wavelengths sent to SPCC.
 
-The set beyond SHO/HOO comes from **Cyril Richard's PalettePicker** in the official Siril script repository (adapted there from Seti Astro Suite Pro).
+The set beyond SHO/HOO comes from **Cyril Richard's PalettePicker** in the official Siril script repository, and was checked against its source, Franklin Marek's **Perfect Palette Picker** in Seti Astro Suite Pro. That comparison is what added `SOH`, `HHO`, `OOS`, `SHH` and `SOO`: `SOH` was the one permutation missing from our own table, with nothing behind its absence.
 
 ---
 
@@ -517,6 +522,8 @@ Every palette above is either an assignment or a weighted sum. That is not a coi
 - **Assignments** move whole channels around. Linear or stretched, the result is identical.
 - **Weighted sums** are linear combinations, so they too commute with the stretch.
 - **Dynamic palettes** — Foraxx and its relatives — blend with a factor like `t^(1-t)` where `t = Ha·OIII`. On stretched data `t` spans [0,1] and the factor does real work. On linear data `t` is around 1e-6, `t^(1-t)` collapses towards zero, and the palette degenerates into "all OIII". They are **deliberately absent**.
+
+  Perfect Palette Picker settles this from its own side. Its gate is `np.clip(x, 1e-6, 1.0) ** (1.0 - x)` — and its **Linear Input Data** checkbox does not teach that gate to read linear data. It *stretches first*, `stretch_mono_image(img, target_median=0.25)`, and builds the palette from the stretched copy. Median 0.25 is where the gate has slope: `0.25^0.75 = 0.35`, `0.5^0.5 = 0.71`. At a linear 0.01 it returns 0.0105 — that is `t ≈ x`, which is the same thing as no gate at all. The checkbox exists because the palette cannot work without the stretch.
 
 Cyril Richard's PalettePicker states the same boundary from the other side: it dropped the ability to assemble *linear* images, because doing so would have forced an automatic stretch on the user. This script keeps the linear stage — which is where colour calibration belongs — and leaves the dynamic palettes to the tool built for the stretched stage.
 
@@ -836,7 +843,13 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.6.2
+## 17. What's New in 1.7.0
+
+- **Five more narrowband palettes: `SOH`, `HHO`, `OOS`, `SHH`, `SOO`.** The table was checked line by line against Franklin Marek's **Perfect Palette Picker** in Seti Astro Suite Pro, the source Cyril Richard's PalettePicker adapted. `SOH` turned out to be the one permutation of three different lines our own table was missing, with nothing behind its absence. All six permutations and eight two-line variants are offered now, and the suite fails if one goes missing again.
+- **The Realistic1 / Realistic2 coefficients were verified against that same source** and match it exactly, digit for digit — a table we had only second-hand until now.
+- **§9's account of the dynamic palettes is confirmed from the other side.** Perfect Palette Picker's *Linear Input Data* checkbox does not teach its `x^(1-x)` gate to read linear data: it stretches to `target_median=0.25` first and builds the palette from the stretched copy. The checkbox exists because the palette cannot work without the stretch.
+
+## What was new in 1.6.2
 
 - **The Discovered Filters table is sized for the rows it has.** Its height came from the content's ideal rather than the rows' own, so three filters were clipped a row and a half short — behind a scroll bar over a table with nothing to scroll. Hiding the Details column also hid the *stretching* column with it, leaving a blank panel on the right.
 - **The calibration summary says where the frames came from** — `Next to the lights: 60 flats` / `From the library: 442 darks at 3s`. Choosing a Library folder used to produce a path and no visible consequence, so a library that contributed nothing looked exactly like one that contributed everything. A chosen folder that gave the run nothing now says so in warning colour.

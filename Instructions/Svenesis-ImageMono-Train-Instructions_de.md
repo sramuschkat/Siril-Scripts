@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.6.2** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.7.0** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.6.2](#17-neu-in-162)
+17. [Neu in 1.7.0](#17-neu-in-170)
 
 ---
 
@@ -489,11 +489,16 @@ SHO und HOO kennt jeder. Der Rest ist dieselbe Idee mit den Linien an anderen Pl
 | OHH | OIII | Ha | Ha |
 | OSH | OIII | SII | Ha |
 | OHS | OIII | Ha | SII |
+| SOH | SII | OIII | Ha |
 | HSS | Ha | SII | SII |
+| HHO | Ha | Ha | OIII |
+| OOS | OIII | OIII | SII |
+| SHH | SII | Ha | Ha |
+| SOO | SII | OIII | OIII |
 
-Jede bekommt dieselbe Behandlung wie SHO: Schmalband-Normalisierung, wenn eingeschaltet, und SPCC im Narrowband-Modus mit den Wellenlängen der Linien, die *diese* Palette in den jeweiligen Kanal gelegt hat — dieselbe Tabelle steuert beides, eine Palette kann also nicht mit falschen Wellenlängen bei SPCC ankommen.
+Das sind alle **sechs** Arten, drei verschiedene Linien auf drei Kanäle zu verteilen, dazu acht Zweilinien-Varianten. Jede bekommt dieselbe Behandlung wie SHO: Schmalband-Normalisierung, wenn eingeschaltet, und SPCC im Narrowband-Modus mit den Wellenlängen der Linien, die *diese* Palette in den jeweiligen Kanal gelegt hat — dieselbe Tabelle steuert beides, eine Palette kann also nicht mit falschen Wellenlängen bei SPCC ankommen.
 
-Der Satz über SHO/HOO hinaus stammt aus **Cyril Richards PalettePicker** im offiziellen Siril-Skript-Repository (dort übernommen aus der Seti Astro Suite Pro).
+Der Satz über SHO/HOO hinaus stammt aus **Cyril Richards PalettePicker** im offiziellen Siril-Skript-Repository und wurde gegen dessen Quelle geprüft, Franklin Mareks **Perfect Palette Picker** in der Seti Astro Suite Pro. Dieser Vergleich hat `SOH`, `HHO`, `OOS`, `SHH` und `SOO` ergänzt: `SOH` war die eine Permutation, die in unserer eigenen Tabelle fehlte, ohne dass etwas dahinterstand.
 
 ---
 
@@ -517,6 +522,8 @@ Jede Palette oben ist entweder eine Zuordnung oder eine gewichtete Summe. Das is
 - **Zuordnungen** verschieben ganze Kanäle. Linear oder gestreckt — das Ergebnis ist dasselbe.
 - **Gewichtete Summen** sind Linearkombinationen, vertauschen also ebenfalls mit dem Stretch.
 - **Dynamische Paletten** — Foraxx und Verwandte — mischen mit einem Faktor wie `t^(1-t)`, wobei `t = Ha·OIII`. Auf gestreckten Daten läuft `t` über [0,1] und der Faktor leistet etwas. Auf linearen Daten liegt `t` bei etwa 1e-6, `t^(1-t)` fällt gegen null, und die Palette degeneriert zu „alles OIII". Sie fehlen hier **bewusst**.
+
+  Der Perfect Palette Picker entscheidet das von seiner Seite aus genauso. Sein Gate lautet `np.clip(x, 1e-6, 1.0) ** (1.0 - x)` — und sein Haken **Linear Input Data** bringt diesem Gate nicht bei, lineare Daten zu lesen. Er **streckt vorher**, `stretch_mono_image(img, target_median=0.25)`, und baut die Palette aus der gestreckten Kopie. Median 0,25 ist genau dort, wo das Gate Steigung hat: `0,25^0,75 = 0,35`, `0,5^0,5 = 0,71`. Bei linearen 0,01 liefert es 0,0105 — das ist `t ≈ x` und damit dasselbe wie gar kein Gate. Der Haken existiert, weil die Palette ohne das Strecken nicht funktioniert.
 
 Cyril Richards PalettePicker zieht dieselbe Grenze von der anderen Seite: er hat die Fähigkeit, *lineare* Bilder zusammenzusetzen, bewusst aufgegeben, weil das einen automatischen Stretch erzwungen hätte. Dieses Skript behält die lineare Stufe — dort gehört die Farbkalibrierung hin — und überlässt die dynamischen Paletten dem Werkzeug, das für die gestreckte Stufe gebaut ist.
 
@@ -836,7 +843,13 @@ Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.6.2
+## 17. Neu in 1.7.0
+
+- **Fünf weitere Schmalband-Paletten: `SOH`, `HHO`, `OOS`, `SHH`, `SOO`.** Die Tabelle wurde Zeile für Zeile gegen Franklin Mareks **Perfect Palette Picker** in der Seti Astro Suite Pro geprüft — die Quelle, aus der Cyril Richards PalettePicker übernommen hat. `SOH` erwies sich als die eine Permutation dreier verschiedener Linien, die in unserer eigenen Tabelle fehlte, ohne dass etwas dahinterstand. Jetzt sind alle sechs Permutationen und acht Zweilinien-Varianten da, und die Suite schlägt fehl, wenn wieder eine verschwindet.
+- **Die Koeffizienten von Realistic1 / Realistic2 wurden gegen dieselbe Quelle geprüft** und stimmen exakt überein, Ziffer für Ziffer — eine Tabelle, die wir bisher nur aus zweiter Hand hatten.
+- **Die Darstellung der dynamischen Paletten in §9 ist von der anderen Seite bestätigt.** Der Haken *Linear Input Data* im Perfect Palette Picker bringt dessen Gate `x^(1-x)` nicht bei, lineare Daten zu lesen: er streckt zuerst auf `target_median=0.25` und baut die Palette aus der gestreckten Kopie. Der Haken existiert, weil die Palette ohne das Strecken nicht funktioniert.
+
+## Was in 1.6.2 neu war
 
 - **Die Tabelle Discovered Filters ist auf ihre Zeilen bemessen.** Ihre Höhe kam vom Idealmaß des Inhalts statt von den Zeilen selbst, drei Filter wurden deshalb anderthalb Zeilen zu kurz abgeschnitten — hinter einem Scrollbalken über einer Tabelle, die nichts zu scrollen hatte. Das Ausblenden der Details-Spalte versteckte außerdem die *dehnende* Spalte mit, sodass rechts eine leere Fläche stehen blieb.
 - **Die Kalibrierungs-Zusammenfassung sagt, woher die Frames kommen** — `Next to the lights: 60 flats` / `From the library: 442 darks at 3s`. Die Wahl eines Library-Ordners erzeugte bisher einen Pfad und keine sichtbare Folge; eine Library, die nichts beitrug, sah aus wie eine, die alles beitrug. Ein gewählter Ordner, der nichts geliefert hat, sagt das jetzt in Warnfarbe.

@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.6.2
+Script Version: 1.7.0
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.6.2
+# Script Version: 1.7.0
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +97,41 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.7.0 - The palette table, checked against its source
+      - Five more narrowband assignments: SOH, HHO, OOS, SHH, SOO.  The
+        table was read line by line against Franklin Marek's Perfect
+        Palette Picker in Seti Astro Suite Pro -- the source Cyril
+        Richard's PalettePicker adapted -- and SOH turned out to be the
+        one permutation of three different lines OUR table was missing,
+        with nothing behind its absence.  All six permutations and eight
+        two-line variants are offered now
+      - Adding them was five lines: the dropdown, `_palette_roles`, the
+        SPCC wavelengths, the channel messages and the help tab's own
+        table all derive from `_NB_PALETTES`.  That was the point of
+        keeping one table
+      - The Realistic1 / Realistic2 coefficients were verified against
+        the same source and match digit for digit -- a table we had only
+        second-hand.  Checked for a hidden divisor too (a summed channel
+        divided by the number of contributing images would be a silent
+        scale difference): there is none, only weighted sums
+      - The suite now derives its expectations from the table: every
+        palette must be NAMED after the channels it fills, all six
+        permutations must exist, and both manuals must list every
+        palette the code offers.  Proved by removing SOH and watching
+        two suites fail
+      - §9's account of the dynamic palettes is confirmed from the other
+        side.  Perfect Palette Picker's "Linear Input Data" checkbox does
+        not teach its `x ** (1.0 - x)` gate to read linear data: it
+        stretches first, `stretch_mono_image(img, target_median=0.25)`,
+        and builds the palette from the stretched copy.  0.25 is where
+        the gate has slope (0.25^0.75 = 0.35); at a linear 0.01 it
+        returns 0.0105, which is t ≈ x and the same as no gate at all.
+        Foraxx and Dynamic Inverse stay out, and the manuals now say why
+        with the reference implementation's own numbers
+      - Not adopted: the reference's closing `rgb / rgb.max()`.  It
+        normalises a display image to [0,1]; our output is linear 32-bit
+        and SPCC measures those levels straight after
+
 1.6.2 - Table sizing, and what the library gave
       - The calibration summary says WHERE the frames came from --
         "Next to the lights: 60 flats" / "From the library: 442 darks at
@@ -1046,7 +1081,7 @@ from PyQt6.QtGui import QColor, QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.6.2"
+VERSION = "1.7.0"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -6608,7 +6643,12 @@ _NB_PALETTES = {
     "OHH": ("oiii", "ha", "ha"),
     "OSH": ("oiii", "sii", "ha"),
     "OHS": ("oiii", "ha", "sii"),
+    "SOH": ("sii", "oiii", "ha"),
     "HSS": ("ha", "sii", "sii"),
+    "HHO": ("ha", "ha", "oiii"),
+    "OOS": ("oiii", "oiii", "sii"),
+    "SHH": ("sii", "ha", "ha"),
+    "SOO": ("sii", "oiii", "oiii"),
 }
 
 # Weighted palettes MIX the lines instead of assigning them.  A weighted
