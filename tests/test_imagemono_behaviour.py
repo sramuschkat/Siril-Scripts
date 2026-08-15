@@ -368,8 +368,14 @@ check(cc.index("before = self._log_snapshot()") < cc.index("self._cmd(*cmd)"),
 check("self._read_spcc_fit(before, label)" in cc,
       "and read back only once the command succeeded")
 rd = body("_read_spcc_fit")
-check("after.startswith(log_before)" in rd,
-      "the delta is claimed only when nothing else logged in between")
+check("_log_delta_or_warn(log_before" in rd
+      and "_log_delta_or_warn(log_before" in body("_read_align_pairs"),
+      "both readers ask the same helper for their step's own output")
+warn = body("_log_delta_or_warn")
+check("_log_read_warned" in warn and "self._emit(" in warn,
+      "which says so ONCE when it cannot, instead of returning in silence")
+check("Nothing about the image changes" in warn,
+      "and names the consequence, so the note cannot read as a failure")
 check("if not fit:\n            return" in rd,
       "an unparseable log stays silent rather than reporting a guess")
 check("SPCC_SIGMA_LIMIT" in rd,

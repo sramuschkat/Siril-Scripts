@@ -596,7 +596,7 @@ Reads the current image from Siril, divides it into a configurable grid of tiles
 
 ## Svenesis ImageMono Train
 
-**File:** `Svenesis-ImageMono-Train.py` (v1.7.1) — **[Detailed Instructions](Instructions/Svenesis-ImageMono-Train-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-ImageMono-Train-Instructions_de.md)**
+**File:** `Svenesis-ImageMono-Train.py` (v1.7.2) — **[Detailed Instructions](Instructions/Svenesis-ImageMono-Train-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-ImageMono-Train-Instructions_de.md)**
 
 > ⚠️ Public preview — not yet submitted to the official Siril Script Repository.
 

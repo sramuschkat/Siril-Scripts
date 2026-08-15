@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.7.1
+Script Version: 1.7.2
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.7.1
+# Script Version: 1.7.2
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +97,26 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.7.2 - Both log readers had quietly stopped working
+      - The alignment star-pair counts have never appeared on a real
+        three-filter run, and 1.7.1's colour-fit numbers did not either.
+        Both read Siril's log as the DELTA between a snapshot taken
+        before a step and one after, and both tested that delta with
+        `after.startswith(before)` -- which assumes the log only ever
+        grows.  It does not: the buffer is bounded, the oldest lines drop
+        off the front, and after that no earlier snapshot is a prefix
+        again.  `get_siril_log()` was working the whole time; the test on
+        its result was wrong
+      - `_log_delta` anchors on the TAIL of the snapshot (the last
+        LOG_ANCHOR_CHARS = 400 characters) instead of its head, which
+        survives a trimmed front.  Proved with a buffer whose first half
+        is dropped between the two snapshots
+      - And the silence was the reason it went unnoticed for so long: a
+        reader that gave up without a word is indistinguishable from one
+        that found nothing to report.  `_log_delta_or_warn` says it once
+        per run and names the consequence -- nothing about the image
+        changes, these are diagnostics
+
 1.7.1 - The colour solution's quality is no longer thrown away
       - Siril prints how well SPCC fitted -- the SIGMA of each ratio, how
         far the measured star colours scatter around the ones predicted
@@ -1107,7 +1127,7 @@ from PyQt6.QtGui import QColor, QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.7.1"
+VERSION = "1.7.2"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -1608,6 +1628,11 @@ FILTER_TABLE_MAX_ROWS = 8
 # solid narrowband fit, 6.2 for one whose channels had been flattened by
 # narrowband normalisation first.
 SPCC_SIGMA_LIMIT = 1.0
+
+# How much of a log snapshot's tail identifies where it ended.  Long enough
+# to be unique against a few thousand lines of Siril output, short enough
+# that a bounded log buffer still holds it after the step that follows.
+LOG_ANCHOR_CHARS = 400
 
 
 def _flat_disagreement(a: str, b: str) -> float | None:
@@ -2334,6 +2359,8 @@ class StackWorker(QThread):
         # Siril's own log.  Empty when nothing was calibrated or the
         # output could not be parsed -- the report then stays silent.
         self._spcc_fit: dict = {}
+        # Said once per run, not once per reader.
+        self._log_read_warned = False
         # Filters left unstacked because the palette does not read them.
         self._skipped_by_palette: list = []
         # filter -> registration options that could not be honoured.
@@ -6232,6 +6259,29 @@ class StackWorker(QThread):
             _log_swallowed(exc)
             return None
 
+    def _log_delta_or_warn(self, log_before, what: str):
+        """The step's own log output, or None -- and never in silence.
+
+        Both readers used to give up without a word when the delta could
+        not be established, so a diagnostic that had quietly stopped
+        working was indistinguishable from one that had nothing to say.
+        On a full three-filter run that was not hypothetical: Siril's log
+        buffer fills, its oldest lines drop off, and no snapshot is a
+        prefix of a later one any more.
+        """
+        after = self._log_snapshot()
+        delta = _log_delta(log_before, after)
+        if delta is not None:
+            return delta
+        if not self._log_read_warned:
+            self._log_read_warned = True
+            self._emit(
+                f"  Siril's log could not be read back, so {what} are not "
+                "reported. Nothing about the image changes — these are "
+                "diagnostics. It happens when the log has scrolled past "
+                "what its buffer holds.", LogColor.SALMON)
+        return None
+
     def _read_spcc_fit(self, log_before, label: str) -> None:
         """Record how well the colour solution fitted, and say it out loud.
 
@@ -6244,12 +6294,10 @@ class StackWorker(QThread):
 
         Diagnostic only; nothing downstream reads it.
         """
-        if log_before is None:
+        delta = self._log_delta_or_warn(log_before, "the colour fit")
+        if delta is None:
             return
-        after = self._log_snapshot()
-        if after is None or not after.startswith(log_before):
-            return          # something else logged; the delta is not ours
-        fit = _parse_spcc_fit(after[len(log_before):])
+        fit = _parse_spcc_fit(delta)
         if not fit:
             return          # format not recognised -- say nothing
         fit["method"] = label
@@ -6278,17 +6326,10 @@ class StackWorker(QThread):
         and that the script used to throw away: the user had to find it in
         Siril's own log, among several hundred lines.
         """
-        if log_before is None:
+        delta = self._log_delta_or_warn(log_before, "the star-pair counts")
+        if delta is None:
             return
-        try:
-            after = self.siril.get_siril_log() or ""
-        except Exception as exc:
-            _log_swallowed(exc)
-            return
-        if not after.startswith(log_before):
-            return          # something else logged; the delta is not ours
-        pairs, ref = _parse_align_pairs(after[len(log_before):],
-                                        index_to_filter)
+        pairs, ref = _parse_align_pairs(delta, index_to_filter)
         if not pairs:
             return          # format not recognised -- say nothing
         self._align_pairs, self._align_ref = pairs, ref
@@ -6502,6 +6543,35 @@ ALIGN_PAIRS_FLOOR = 30
 # ...and a channel far below the rest of the same run is suspect even when
 # it clears the floor: the others prove how many pairs were available.
 ALIGN_PAIRS_FRACTION = 0.25
+
+
+def _log_delta(before, after):
+    """What was logged between two snapshots, or None if it cannot be told.
+
+    The obvious test -- ``after.startswith(before)`` -- assumes Siril's log
+    only ever grows.  It does not: the buffer is bounded, and on a run long
+    enough to fill it the oldest lines drop off the front, after which no
+    snapshot is a prefix of a later one again.  Both readers then returned
+    in silence, which is why the alignment star-pair counts never appeared
+    on a full three-filter run and looked like a format the parser did not
+    recognise.
+
+    So the delta is found by ANCHORING on the tail of the snapshot instead
+    of its head.  That survives a trimmed front, and fails only when the
+    step logged more than the whole buffer holds -- in which case the
+    honest answer is None and the caller says so out loud.
+    """
+    if before is None or after is None:
+        return None
+    if not before:
+        return after                    # nothing preceded; it is all delta
+    if after.startswith(before):
+        return after[len(before):]      # the ordinary, cheap case
+    anchor = before[-LOG_ANCHOR_CHARS:]
+    cut = after.rfind(anchor)
+    if cut < 0:
+        return None
+    return after[cut + len(anchor):]
 
 
 def _parse_spcc_fit(delta: str) -> dict:

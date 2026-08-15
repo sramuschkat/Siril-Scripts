@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.7.1** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.7.2** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.7.1](#17-neu-in-171)
+17. [Neu in 1.7.2](#17-neu-in-172)
 
 ---
 
@@ -858,7 +858,12 @@ Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.7.1
+## 17. Neu in 1.7.2
+
+- **Die beiden Log-Auswertungen hatten stillschweigend aufgehört zu arbeiten.** Die Sternpaar-Zahlen und die neuen Farbfit-Werte werden aus Sirils Log gelesen, indem ein Schnappschuss vor einem Schritt mit einem danach verglichen wird. Dieser Vergleich unterstellte, das Log wachse nur — sein Puffer ist aber begrenzt, und bei einem vollen Drei-Filter-Lauf fallen die ältesten Zeilen vorne heraus; danach ist kein früherer Schnappschuss mehr ein Präfix. Beide Leser kehrten dann wortlos zurück, eine ausgefallene Diagnose sah also genauso aus wie eine, die nichts zu sagen hat.
+- **Die Differenz wird jetzt am Ende des Schnappschusses verankert** statt an seinem Anfang; das übersteht ein abgeschnittenes Vorderende. Ist auch dieser Anker weg, sagt der Lauf es einmal und nennt die Folge — am Bild ändert sich nichts, es sind Diagnosen.
+
+## Was in 1.7.1 neu war
 
 - **`output.md` sagt jetzt, wie gut die Farblösung gepasst hat.** Siril gibt das Sigma jedes Verhältnis-Fits aus — wie weit die gemessenen Sternfarben um die aus Katalogspektren vorhergesagten streuen — und das Skript hat es verworfen; „colour calibration done" las sich damit für eine solide und eine hoffnungslose Lösung gleich. Der Report führt Sigmas, Sternzahlen und Weißabgleichsfaktoren, und ein Sigma über 1 wird markiert. Siehe §10.
 - **Sirils eigene Warnung „imprecise solution" trennt diese Fälle nicht**: bei zwei Läufen derselben 94 Frames erschien sie in beiden, während sich die Sigmas um den Faktor vierzig unterschieden. Das Sigma trennt sie.

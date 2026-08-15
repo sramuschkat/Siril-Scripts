@@ -37,7 +37,7 @@ WANT = ("_format_duration", "_median", "_exp_tag", "_night_key", "_path_date",
         "_palette_roles", "_is_nb_palette", "_fits_ext", "_is_fits_like",
         "_first_with_role", "_detect_palette", "_auto_channel_map",
         "_unfillable_channels", "_align_pairs_warn", "_weight_token",
-        "_parse_spcc_fit")
+        "_parse_spcc_fit", "_log_delta")
 for node in tree.body:
     if isinstance(node, ast.FunctionDef) and node.name in WANT:
         exec("from __future__ import annotations\n"
@@ -191,6 +191,30 @@ for pal, chans in ns["_MIX_PALETTES"].items():
     for ch, mix in chans.items():
         check(abs(sum(mix.values()) - 1.0) < 1e-9,
               f"{pal} {ch} weights sum to 1")
+
+print("\n8a) the log delta survives a buffer that drops its oldest lines")
+# The reason the star-pair counts never appeared on a real three-filter
+# run: `after.startswith(before)` assumes the log only grows.  Siril's
+# buffer is bounded, so on a long run the front falls off and no earlier
+# snapshot is a prefix again — after which BOTH readers returned silently.
+ld = ns["_log_delta"]
+before = "line %d\n" * 0 + "".join(f"old line {i}\n" for i in range(200))
+step = "".join(f"step line {i}\n" for i in range(20))
+check(ld(before, before + step) == step, "the ordinary growing case")
+# Now the same, with the first half of the buffer dropped.
+slid = (before + step)[len(before) // 2:]
+check(ld(before, slid) == step,
+      "and the case that actually happens: the front was trimmed away")
+check(ld("", "anything") == "anything",
+      "an empty snapshot means everything after it is the delta")
+check(ld(None, "x") is None and ld("x", None) is None,
+      "an unreadable log yields None, not a wrong answer")
+# If the step outran the whole buffer, the anchor is gone and the honest
+# answer is None -- the caller then says so rather than guessing.
+check(ld(before, "totally unrelated buffer contents") is None,
+      "and so does a buffer that no longer holds the anchor at all")
+probe("anchor is bounded", lambda: ns["LOG_ANCHOR_CHARS"],
+      check=lambda n: 100 <= n <= 2000)
 
 print("\n8b) the SPCC fit is read back from Siril's own words")
 # Verbatim from two runs of the same 94 frames, HOS and HSO.  Siril's

@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.7.1** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.7.2** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.7.1](#17-whats-new-in-171)
+17. [What's New in 1.7.2](#17-whats-new-in-172)
 
 ---
 
@@ -858,7 +858,12 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.7.1
+## 17. What's New in 1.7.2
+
+- **The two log-reading diagnostics had quietly stopped working.** The star-pair counts and the new colour-fit numbers are read from Siril's own log by comparing a snapshot taken before a step with one taken after. That comparison assumed the log only ever grows — but its buffer is bounded, and on a full three-filter run the oldest lines drop off the front, after which no earlier snapshot is a prefix any more. Both readers then returned without a word, so a diagnostic that had stopped working looked exactly like one with nothing to say.
+- **The delta is now anchored on the tail of the snapshot** instead of its head, which survives a trimmed front. If even that anchor is gone, the run says so once and names the consequence — nothing about the image changes, these are diagnostics.
+
+## What was new in 1.7.1
 
 - **`output.md` now says how well the colour solution fitted.** Siril prints the sigma of each ratio fit — how far the measured star colours scatter around the ones predicted from catalogue spectra — and the script used to drop it, so "colour calibration done" read the same for a solid solution and a hopeless one. The report carries the sigmas, the star counts and the white-balance factors, and a sigma above 1 is flagged. See §10.
 - **Siril's own "imprecise solution" warning does not separate those cases**: on two runs of the same 94 frames it fired on both, while the sigmas differed by a factor of forty. The sigma does separate them.
