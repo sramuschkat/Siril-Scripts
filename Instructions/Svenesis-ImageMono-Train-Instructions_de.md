@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.6.1** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.6.2** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.6.1](#17-neu-in-161)
+17. [Neu in 1.6.2](#17-neu-in-162)
 
 ---
 
@@ -836,7 +836,12 @@ Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.6.1
+## 17. Neu in 1.6.2
+
+- **Die Tabelle Discovered Filters ist auf ihre Zeilen bemessen.** Ihre Höhe kam vom Idealmaß des Inhalts statt von den Zeilen selbst, drei Filter wurden deshalb anderthalb Zeilen zu kurz abgeschnitten — hinter einem Scrollbalken über einer Tabelle, die nichts zu scrollen hatte. Das Ausblenden der Details-Spalte versteckte außerdem die *dehnende* Spalte mit, sodass rechts eine leere Fläche stehen blieb.
+- **Die Kalibrierungs-Zusammenfassung sagt, woher die Frames kommen** — `Next to the lights: 60 flats` / `From the library: 442 darks at 3s`. Die Wahl eines Library-Ordners erzeugte bisher einen Pfad und keine sichtbare Folge; eine Library, die nichts beitrug, sah aus wie eine, die alles beitrug. Ein gewählter Ordner, der nichts geliefert hat, sagt das jetzt in Warnfarbe.
+
+## Was in 1.6.1 neu war
 
 - **Die Tabelle Discovered Filters sagt, was passieren wird — nicht, was gefunden wurde.** Die Spalte Flats zählte Flats im Ordner; bei einem Rig mit automatischem Panel ist das für jeden Filter dieselbe Zahl, während das Entscheidende unsichtbar blieb: diese 300-s-Lights bekommen **überhaupt kein Dark**. Die Spalte **Calibration** nennt jetzt die Master, die den Filter wirklich erreichen (`Dark + Flat ×3`, `Flat`, `none`), und ein `⚠` in Warnfarbe markiert einen Filter ohne Dark. Der Tooltip nennt die Belichtungszeiten, die die Library tatsächlich hat, und was helfen würde.
 - **Die Kalibrierungs-Zusammenfassung steht jetzt unter den Schaltern, die sie beschreibt**, und ist von vier Zeilen auf eine geschrumpft. Pro-Filter-Text, der die Tabelle Zeile für Zeile wiederholte, geht ins Log, wo Länge nichts kostet; die Zeile trägt Library-Fakten und die Dark-Lücke.

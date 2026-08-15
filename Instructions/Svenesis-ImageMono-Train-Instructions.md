@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.6.1** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.6.2** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.6.1](#17-whats-new-in-161)
+17. [What's New in 1.6.2](#17-whats-new-in-162)
 
 ---
 
@@ -836,7 +836,12 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.6.1
+## 17. What's New in 1.6.2
+
+- **The Discovered Filters table is sized for the rows it has.** Its height came from the content's ideal rather than the rows' own, so three filters were clipped a row and a half short — behind a scroll bar over a table with nothing to scroll. Hiding the Details column also hid the *stretching* column with it, leaving a blank panel on the right.
+- **The calibration summary says where the frames came from** — `Next to the lights: 60 flats` / `From the library: 442 darks at 3s`. Choosing a Library folder used to produce a path and no visible consequence, so a library that contributed nothing looked exactly like one that contributed everything. A chosen folder that gave the run nothing now says so in warning colour.
+
+## What was new in 1.6.1
 
 - **The Discovered Filters table says what will happen, not what was found.** The Flats column counted flats in the folder — on a rig with an automatic panel that is the same number for every filter, while the fact that mattered was invisible: those 300-second lights get **no dark at all**. The **Calibration** column now names the masters that will really reach each filter (`Dark + Flat ×3`, `Flat`, `none`), and a `⚠` in warning colour marks a filter with no dark. The tooltip names the exposures the library does hold and what would fix it.
 - **The calibration summary moved below the switches it describes**, and shrank from four lines to one. Per-filter prose that repeated the table row by row now goes to the log, where length is free; the label carries library-level facts and the no-dark gap.

@@ -363,6 +363,48 @@ for gone in ('bits.append("flat offset: ', 'bits.append("per night: '):
 check("_flat_offset_preview()" in summary and "synthetic" in summary,
       "the offset detail survives — in the log, where length is free")
 
+print("\n6b) the library's contribution is visible, not inferred")
+ns3 = dict(ns, os=os)
+exec("from __future__ import annotations\n"
+     + _method("ImageMonoTrainWindow", "_count_from"), ns3)
+
+
+class L:
+    _count_from = ns3["_count_from"]
+
+
+lw = L()
+lw._library = "/Work/_CALIB"
+here = ["/Work/M16/FLAT/a.fit", "/Work/M16/FLAT/b.fit"]
+there = ["/Work/_CALIB/DARK/x.fit"]
+check(lw._count_from(here + there, "lib") == 1
+      and lw._count_from(here + there, "near") == 2,
+      "frames are split by where they physically sit")
+check(lw._count_from(["/Work/_CALIBRATION/y.fit"], "lib") == 0,
+      "a folder that merely starts with the library's name is not inside it")
+lw._library = ""
+check(lw._count_from(here + there, "lib") == 0
+      and lw._count_from(here + there, "near") == 3,
+      "with no library set every frame counts as local")
+
+summary = _method("ImageMonoTrainWindow", "_show_calib_summary")
+check("Next to the lights:" in summary and "From the library:" in summary,
+      "the label names both origins separately")
+check("nothing usable found" in summary,
+      "and a library that contributed nothing says so — the case where "
+      "picking a folder looked identical to not picking one")
+
+print("\n6c) the table is sized and stretched for the columns it shows")
+fit = _method("ImageMonoTrainWindow", "_fit_table_height")
+check("sizeHintForRow(" not in fit and "sectionSize(i)" in fit,
+      "row heights come from the rows, not from their content hint")
+check("frameWidth()" in fit, "and the frame is counted, or the last row "
+      "is clipped behind a scroll bar with nothing to scroll")
+table = _method("ImageMonoTrainWindow", "_refresh_filter_table")
+check("ResizeMode.Stretch" in table,
+      "hiding Details moves the stretch, so the table does not end in a "
+      "blank panel")
+
 print("\n7) the switches sit above the summary they change")
 grp = _method("ImageMonoTrainWindow", "_build_calibration_group")
 for box in ("chk_cosmetic", "chk_flats_by_date"):

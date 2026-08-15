@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.6.1
+Script Version: 1.6.2
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.6.1
+# Script Version: 1.6.2
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +97,23 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.6.2 - Table sizing, and what the library gave
+      - The calibration summary says WHERE the frames came from --
+        "Next to the lights: 60 flats" / "From the library: 442 darks at
+        3s".  Choosing a library folder used to produce a path and no
+        visible consequence: the counts rose somewhere inside one line,
+        and a library that contributed nothing looked exactly like one
+        that contributed everything.  A chosen folder that gave the run
+        nothing now says so, in warning colour
+      - The table's height was computed from `sizeHintForRow`, which is
+        the CONTENT's ideal and counts neither the grid line nor the cell
+        padding: three filters came out a row and a half short, behind a
+        scroll bar over a table with nothing to scroll.  It sums the
+        rows' own section sizes and the frame now
+      - Hiding the Details column hid the STRETCHING section with it, so
+        its share of the width belonged to nobody and the table ended in
+        a blank panel.  The stretch moves to whichever column is last
+
 1.6.1 - The table says what will happen, not what was found
       - The Discovered Filters table gained a CALIBRATION column in place
         of the Flats one.  Counting flats answered a question the user
@@ -1029,7 +1046,7 @@ from PyQt6.QtGui import QColor, QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.6.1"
+VERSION = "1.6.2"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -8523,6 +8540,13 @@ class ImageMonoTrainWindow(QMainWindow):
         # It moves under the table until a run actually mixes exposures,
         # gains or setpoints -- which is exactly when it earns its place.
         uniform = details[0] if details and len(set(details)) == 1 else ""
+        # Details was the stretching section.  Hiding it left its share of
+        # the width belonging to nobody, so the table ended in a blank
+        # panel -- the stretch has to move to whatever column is last.
+        hdr = self.tbl_filters.horizontalHeader()
+        keep, drop = (3, 4) if uniform else (4, 3)
+        hdr.setSectionResizeMode(drop, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(keep, QHeaderView.ResizeMode.Stretch)
         self.tbl_filters.setColumnHidden(4, bool(uniform))
         self.lbl_uniform.setText(f"All filters: {uniform}" if uniform else "")
         self.lbl_uniform.setVisible(bool(uniform))
@@ -8537,12 +8561,35 @@ class ImageMonoTrainWindow(QMainWindow):
         Capped, because a filter wheel with more slots than the cap is
         better scrolled than allowed to fill the window.
         """
-        rows = self.tbl_filters.rowCount()
-        head = self.tbl_filters.horizontalHeader().height()
-        row_h = (self.tbl_filters.sizeHintForRow(0) if rows
-                 else self.tbl_filters.verticalHeader().defaultSectionSize())
+        tbl = self.tbl_filters
+        rows = tbl.rowCount()
         shown = min(max(rows, 1), FILTER_TABLE_MAX_ROWS)
-        self.tbl_filters.setFixedHeight(head + shown * row_h + 4)
+        vh = tbl.verticalHeader()
+        # The rows' OWN heights, not sizeHintForRow: the hint is the
+        # content's ideal and ignores the grid line and cell padding, so
+        # three rows came out a row and a half short -- with a scroll bar
+        # over a table that had nothing to scroll.
+        body = (sum(vh.sectionSize(i) for i in range(shown)) if rows
+                else vh.defaultSectionSize())
+        tbl.setFixedHeight(tbl.horizontalHeader().height() + body
+                           + 2 * tbl.frameWidth())
+
+    def _count_from(self, files: list, where: str) -> int:
+        """How many of these frames sit inside the library ("lib") or
+        beside the lights ("near").
+
+        Path-based rather than recorded at discovery, because discovery
+        pools both sources into one group the moment they share a camera
+        state -- which is the point of a library, and also the reason
+        the counts alone could not tell the user whether picking one had
+        done anything.
+        """
+        lib = self._library
+        root = (os.path.normpath(lib) + os.sep) if lib else ""
+        inside = (0 if not root else
+                  sum(1 for f in files
+                      if os.path.normpath(f).startswith(root)))
+        return inside if where == "lib" else len(files) - inside
 
     def _dark_preview(self, filt: str) -> tuple:
         """``(applies, note)`` — will this filter's lights get a dark?
@@ -8736,18 +8783,39 @@ class ImageMonoTrainWindow(QMainWindow):
         # is one row per filter in the table above, and repeating it here
         # as prose made four lines of 9pt blue in which nothing stood
         # out -- three times "→ 3s dark", three times "3 master(s)".
-        bits = []
+        # Split by WHERE it came from.  Picking a library folder otherwise
+        # produced a path and no visible consequence: the counts went up
+        # somewhere in a single line, and a library that contributed
+        # nothing looked exactly like one that contributed everything.
+        near, lib = [], []
         for kind, label in ((KIND_FLAT, "flat"), (KIND_DARKFLAT, "dark-flat"),
                             (KIND_DARK, "dark"), (KIND_BIAS, "bias")):
             groups = c.get(kind) or {}
-            frames = sum(len(g["files"]) for g in groups.values())
-            if not frames:
-                continue
-            exps = sorted({float((g.get("info") or {}).get("exp_s") or 0.0)
-                           for g in groups.values()})
-            at = ("" if kind in (KIND_FLAT, KIND_BIAS) or not any(exps)
-                  else " at " + ", ".join(f"{e:g}s" for e in exps if e))
-            bits.append(f"{frames} {label}{'' if frames == 1 else 's'}{at}")
+            for where, files in ((near, "near"), (lib, "lib")):
+                n = sum(self._count_from(g["files"], files)
+                        for g in groups.values())
+                if not n:
+                    continue
+                exps = sorted({float((g.get("info") or {}).get("exp_s") or 0.0)
+                               for g in groups.values()
+                               if self._count_from(g["files"], files)})
+                at = ("" if kind in (KIND_FLAT, KIND_BIAS) or not any(exps)
+                      else " at " + ", ".join(f"{e:g}s" for e in exps if e))
+                where.append(f"{n} {label}{'' if n == 1 else 's'}{at}")
+        bits = []
+        if near:
+            bits.append("Next to the lights: " + " · ".join(near))
+        if lib:
+            bits.append("From the library: " + " · ".join(lib))
+        elif self._library:
+            # The one case worth colouring: a folder was chosen and it
+            # gave the run nothing.
+            bits.append("<span style='color:#ffaa88;'>From the library: "
+                        "nothing usable found</span>")
+            self._log(
+                f"The library folder {self._library} holds no calibration "
+                "frames this run can use — check that it contains DARK or "
+                "BIAS frames for this camera.", LogColor.SALMON)
         preview = self._flat_offset_preview()
         if preview:
             # Log only: which offset each filter's flats get.  "synthetic"
@@ -8813,8 +8881,10 @@ class ImageMonoTrainWindow(QMainWindow):
                 no_dark.append(filt)
                 why.setdefault(note, []).append(filt)
         if bits:
-            head = " · ".join(bits)
-            self._log("Calibration found — " + head, LogColor.GREEN)
+            head = "<br>".join(bits)
+            self._log("Calibration found — "
+                      + " | ".join(re.sub(r"<[^>]+>", "", b) for b in bits),
+                      LogColor.GREEN)
         else:
             head = "No calibration frames found." + (
                 "" if self._library else "  Set a Library folder for "
