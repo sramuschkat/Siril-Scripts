@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.7.6
+Script Version: 1.7.7
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.7.6
+# Script Version: 1.7.7
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +97,42 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.7.7 - Two places where the arithmetic did not match the reasoning
+      - Calibration masters were stacked with a bare `rej 3 3`.  A bare
+        `rej` is Siril's DEFAULT, and the default is winsorized -- the
+        band `_rejection_args` reserves for 11-30 frames.  It was being
+        applied to both ends of the range: a per-night master flat of
+        five frames, where winsorizing estimates sigma from five points
+        and replaces outliers with their own neighbours, and a library
+        dark of four hundred, where a linear fit models the trend across
+        the stack that winsorizing cannot see
+      - Calibration masters now go through the SAME frame-count bands as
+        the light stacks, GESDT retry included.  On the M 16 run that
+        moves the five- and ten-frame per-night flats to sigma 3/3 and
+        the 442-frame darkflat to linear fit 5/4; the twenty-frame pooled
+        flat keeps winsorized, which it should have had all along
+      - Rejection stays ON for calibration masters whatever the light
+        stacks were told.  The switch in front of the user is about
+        integrating his frames; one cosmic left in a master flat reaches
+        every light that master divides
+      - The synthetic luminance averaged its channels with equal weight
+        while claiming "the combined signal-to-noise".  An unweighted
+        mean is SNR-optimal only when the inputs carry comparable signal,
+        and in SHO they do not.  With signals 20 / 2 / 1 at equal noise
+        the average gives SNR 13.3 where Ha alone gives 20 -- the
+        luminance came out WORSE than the best channel in it.  Narrowband
+        normalisation made it worse still, because `linear_match` scales
+        the weak channel's noise up with its signal first
+      - It now uses the matched-filter weights, w ~ s/n**2, measured on
+        each master through Siril's own statistics: `bgnoise` is the
+        noise, and the structure is what is left of the total standard
+        deviation after removing the noise in quadrature.  Same example:
+        87% / 9% / 4% and SNR 20.1.  Weights are named in the log and in
+        the report, and a channel carrying over 80% is called out
+      - Equal weights remain as the fallback when the statistics cannot
+        be read, and the run says so.  `get_image_stats` joined
+        OPTIONAL_API so a sirilpy without it is named at startup
+
 1.7.6 - The flat-on-flat check was measuring shot noise, not the optics
       - It divided ONE flat of one night by ONE flat of another, per
         pixel, and read the standard deviation.  Two subs of the SAME
@@ -1246,7 +1282,7 @@ from PyQt6.QtGui import QColor, QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.7.6"
+VERSION = "1.7.7"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -1889,6 +1925,10 @@ OPTIONAL_API = (
     ("Finding Siril's data directory",
      ("get_siril_userdatadir",),
      "the SPCC database is looked for in the usual places instead"),
+    ("Per-master statistics",
+     ("get_image_stats",),
+     "the synthetic luminance falls back to an equal-weight average, "
+     "which a faint channel can drag below the best single one"),
 )
 
 
@@ -2501,6 +2541,10 @@ class StackWorker(QThread):
         self._night_notes: dict = {}
         # Written by _synthetic_luminance; the report and todo.md name it.
         self._synth_lum: str = ""
+        # {filter: share} of the synthetic luminance, so the
+        # report can print the weighting instead of implying
+        # an average.
+        self._synth_lum_weights: dict = {}
         # How the composite was actually assembled -- in memory or through
         # rgbcomp.  The report states the route that ran, not the usual one.
         self._compose_how: str = ""
@@ -3075,6 +3119,8 @@ class StackWorker(QThread):
           * flats             -> calibrated against bias/dark-flat when one is
             available, then stacked with multiplicative normalisation.
           * darks / bias      -> plain stack, no normalisation.
+        Either way the rejection algorithm comes from `_rejection_args`,
+        the same frame-count bands the light stacks use.
         Returns None (and logs) if anything goes wrong -- calibration must
         never abort a run.
         """
@@ -3151,16 +3197,46 @@ class StackWorker(QThread):
                 norm = "-norm=mul"
             else:
                 norm = "-nonorm"
-            self._cmd("stack", seq, "rej", "3", "3", norm,
-                      "-out=" + out_name)
+            # The rejection algorithm follows the SAME frame-count bands as
+            # the light stacks (`_rejection_args`).  This used to send a
+            # bare `rej 3 3`, and a bare `rej` is Siril's default --
+            # winsorized ("If omitted, the default Winsorized is used").
+            # That is the band meant for 11-30 frames, and it was applied
+            # to both ends of the range: a per-night master flat of five
+            # frames, where winsorizing estimates sigma from five points
+            # and replaces outliers with their neighbours, and a library
+            # dark of four hundred, where a linear fit models the trend
+            # across the stack that winsorizing cannot see.
+            #
+            # Rejection is always ON here whatever the light stacks were
+            # told.  The option in front of the user is about integrating
+            # HIS frames; a cosmic ray left in a master flat reaches every
+            # light that master calibrates, which is a different trade.
+            rej_tokens, rej_label = _rejection_args(staged, True)
+            tail = [norm, "-out=" + out_name]
+            try:
+                self._cmd(*(["stack", seq] + rej_tokens + tail))
+            except (CommandError, DataError, SirilError) as exc:
+                # Same reasoning as `_stack`: only GESDT is new enough for
+                # an older build to refuse the token outright, and only
+                # that case may retry with another algorithm.
+                fallback = _rejection_fallback(rej_tokens)
+                if fallback is None:
+                    raise
+                fb_tokens, rej_label = fallback
+                self._emit(
+                    f"    rejection '{rej_tokens[1]}' was refused ({exc}); "
+                    f"retrying with {rej_label}.", LogColor.SALMON)
+                self._cmd(*(["stack", seq] + fb_tokens + tail))
             produced = os.path.join(work, "process", out_name + self._ext)
             if not os.path.exists(produced):
                 self._emit(f"  {kind}: stacking produced no master.",
                            LogColor.RED)
                 return None
             shutil.copy2(produced, dest)
-            self._emit(f"  Built master {kind} from {staged} frames -> "
-                       f"{os.path.basename(dest)}", LogColor.GREEN)
+            self._emit(f"  Built master {kind} from {staged} frames "
+                       f"({rej_label}) -> {os.path.basename(dest)}",
+                       LogColor.GREEN)
             return dest
         except (CommandError, DataError, SirilError) as exc:
             self._emit(f"  {kind}: master build failed ({exc}).", LogColor.RED)
@@ -4993,12 +5069,19 @@ class StackWorker(QThread):
                  "*quick* mode)." if baked else
                  f"{self._compose_how or 'with `rgbcomp`'}."))
             if self._synth_lum:
+                w = self._synth_lum_weights
                 A(f"- **Synthetic luminance** → "
                   f"`{MASTERS_DIRNAME}/"
-                  f"{os.path.basename(self._synth_lum)}`, the average of "
-                  "the emission-line masters.  It was **not** combined "
-                  "into the colour image: that belongs after the stretch "
-                  "(see `todo.md`).")
+                  f"{os.path.basename(self._synth_lum)}`, "
+                  + (", ".join(f"{f} {w[f] * 100:.0f}%"
+                               for f in sorted(w)) if w else
+                     "the average of the emission-line masters")
+                  + ".  The shares are the matched-filter weights "
+                    "(signal/noise² of each master, measured on the master "
+                    "itself), so a faint channel cannot drag the result "
+                    "below the best single one.  It was **not** combined "
+                    "into the colour image: that belongs after the stretch "
+                    "(see `todo.md`).")
             if baked and any(s.startswith("Colour calibration: SPCC")
                              or s.startswith("Colour calibration: PCC")
                              for s in self._finish_steps):
@@ -5914,13 +5997,56 @@ class StackWorker(QThread):
             out[ch] = dst + self._ext
         return out
 
+    def _master_snr(self, path: str):
+        """``(signal, background noise)`` of one linear master, or None.
+
+        Both come from Siril's own statistics.  `bgnoise` is the RMS of
+        the background; the image's total standard deviation holds signal
+        and noise together.  Variances add, so removing the noise part in
+        quadrature leaves the RMS of the STRUCTURE -- how much this master
+        actually carries, which is what a weight has to follow.
+
+        Returns None whenever the numbers are missing or do not make sense
+        (no noise, or a total below it), so the caller falls back to equal
+        weights rather than weighting on a guess.
+        """
+        try:
+            self._cmd("load", f'"{path}"')
+            st = self.siril.get_image_stats(0)
+            noise = float(getattr(st, "bgnoise", 0.0) or 0.0)
+            total = float(getattr(st, "sigma", 0.0) or 0.0)
+        except Exception as exc:
+            _log_swallowed(exc)
+            return None
+        if not (math.isfinite(noise) and math.isfinite(total)):
+            return None
+        if noise <= 0 or total <= noise:
+            return None
+        return math.sqrt(total * total - noise * noise), noise
+
     def _synthetic_luminance(self, palette: str, paths: dict,
                              helpers: str) -> None:
-        """Average the emission-line masters into a luminance master.
+        """Combine the emission-line masters into a luminance master.
 
         A narrowband night has no L filter, and the detail is spread over
-        two or three channels.  Averaging them gives a master with the
+        two or three channels.  Combining them gives a master with the
         combined signal-to-noise, which is what a luminance layer is for.
+
+        The combination is WEIGHTED, and that is the whole difficulty.  An
+        equal-weight average is only SNR-optimal when the channels carry
+        comparable signal, and in SHO they do not: SII regularly runs an
+        order of magnitude below Ha.  Averaging a channel with signal 20
+        and two with 2 and 1 (equal noise) gives 23/sqrt(3) = 13.3 where
+        Ha alone gives 20 -- the "luminance" comes out WORSE than the best
+        single channel it was built from.  Narrowband normalisation makes
+        it worse still, because `linear_match` scales the weak channel's
+        noise up along with its signal before this ever runs.
+
+        The weights are therefore the matched-filter ones, w ~ s/n**2
+        (measured by `_master_snr`), normalised to sum to 1 so the result
+        keeps the scale of an average.  Equal weights remain the fallback
+        when the statistics cannot be read, and the log says which was
+        used -- a weighting nobody can see is a weighting nobody can check.
 
         It is deliberately NOT combined into the colour image here.  A
         luminance combine done on linear data lifts the bright end before
@@ -5938,9 +6064,44 @@ class StackWorker(QThread):
                 "  Synthetic luminance needs at least two distinct "
                 "channels; skipped.", LogColor.SALMON)
             return
-        terms = [f"${self._pm_stage(path, helpers, f'L{i}')}$"
-                 for i, path in enumerate(srcs.values())]
-        expr = f"({'+'.join(terms)})/{len(terms)}"
+
+        # Measure BEFORE staging: `_master_snr` loads each master, and the
+        # PixelMath expression below is built from the staged copies.
+        measured: dict = {}
+        for filt, path in srcs.items():
+            sn = self._master_snr(path)
+            if sn is None:
+                measured = {}
+                break
+            measured[filt] = sn
+        weights = _matched_weights(measured) if measured else {}
+        if weights:
+            self._emit(
+                "  Synthetic luminance weights (signal/noise² of each "
+                "master): "
+                + ", ".join(
+                    f"{f} {weights[f] * 100:.0f}% (S/N "
+                    f"{measured[f][0] / measured[f][1]:.1f})"
+                    for f in sorted(weights)), LogColor.BLUE)
+            top = max(weights, key=lambda f: weights[f])
+            if weights[top] >= 0.8:
+                self._emit(
+                    f"  {top} carries {weights[top] * 100:.0f}% of it — the "
+                    "other channel(s) are too faint to add much, so this "
+                    f"luminance is close to {top} alone.", LogColor.SALMON)
+        else:
+            weights = {f: 1.0 / len(srcs) for f in srcs}
+            self._emit(
+                "  Synthetic luminance: per-master statistics unavailable, "
+                "falling back to an equal-weight average.  A channel much "
+                "fainter than the others will drag the result down.",
+                LogColor.SALMON)
+
+        terms = []
+        for i, (filt, path) in enumerate(srcs.items()):
+            var = self._pm_stage(path, helpers, f"L{i}")
+            terms.append(f"{weights[filt]:.6g}*${var}$")
+        expr = "+".join(terms)
         out = os.path.join(self._out_dir, MASTERS_DIRNAME,
                            f"{_safe(self._target)}_SynthL")
         try:
@@ -5952,9 +6113,11 @@ class StackWorker(QThread):
                        LogColor.SALMON)
             return
         self._synth_lum = out + self._ext
+        self._synth_lum_weights = dict(weights)
         self._emit(
-            f"  Synthetic luminance ({' + '.join(sorted(srcs))}) / "
-            f"{len(terms)} -> {os.path.basename(self._synth_lum)}. It is "
+            "  Synthetic luminance "
+            + " + ".join(f"{weights[f]:.2f}·{f}" for f in sorted(weights))
+            + f" -> {os.path.basename(self._synth_lum)}. It is "
             "not combined into the colour image: that belongs after the "
             "stretch (see todo.md).", LogColor.GREEN)
 
@@ -7096,6 +7259,39 @@ def _weight_token(opts: dict) -> str:
     return WEIGHT_TOKENS.get(opts.get("weight_method", ""), "wfwhm")
 
 
+def _matched_weights(measured: dict) -> dict:
+    """Normalised matched-filter weights from ``{key: (signal, noise)}``.
+
+    For a weighted sum of images with independent noise, the combination
+    that maximises the signal-to-noise of the result is w ~ s/n**2 -- the
+    weights a matched filter uses.  Equal weights are the special case
+    where every input carries the same signal AND the same noise, which
+    narrowband masters emphatically do not.
+
+    Normalised to sum to 1, so the result keeps the scale of an average
+    rather than the scale of a sum.
+
+    Returns ``{}`` -- never a partial answer -- when any input is missing
+    or nonsensical.  That is the caller's signal to fall back to equal
+    shares and say so, rather than to weight on numbers it does not have.
+    """
+    raw: dict = {}
+    for key, pair in measured.items():
+        try:
+            signal, noise = float(pair[0]), float(pair[1])
+        except (TypeError, ValueError, IndexError, KeyError):
+            return {}
+        if not (math.isfinite(signal) and math.isfinite(noise)):
+            return {}
+        if noise <= 0 or signal < 0:
+            return {}
+        raw[key] = signal / (noise * noise)
+    total = sum(raw.values())
+    if not raw or total <= 0 or not math.isfinite(total):
+        return {}
+    return {k: v / total for k, v in raw.items()}
+
+
 def _rejection_fallback(tokens: list) -> tuple[list[str], str] | None:
     """A retry for a rejection Siril may not know, or None.
 
@@ -7729,8 +7925,11 @@ class ImageMonoTrainWindow(QMainWindow):
         self.chk_rejection.setToolTip(
             "Reject hot pixels, cosmics and satellite trails during "
             "integration.  The algorithm is chosen per filter from the "
-            "frame count: percentile for few frames (≤4), winsorized for "
-            "more, linear fit for large sets.  Recommended.")
+            "frame count: percentile (≤4), sigma (5–10), winsorized "
+            "(11–30), GESDT (31–300), linear fit above.  Recommended.\n\n"
+            "Applies to the light stacks.  Master flats, darks and bias "
+            "are always rejected — through the same bands — because one "
+            "cosmic left in a master reaches every light it calibrates.")
         _nofocus(self.chk_rejection)
         layout.addWidget(self.chk_rejection)
 
@@ -8086,8 +8285,11 @@ class ImageMonoTrainWindow(QMainWindow):
         self.chk_synth_lum.setChecked(False)
         self.chk_synth_lum.setToolTip(
             "Narrowband only, and only when there is no Luminance filter: "
-            "averages the emission-line masters into "
+            "combines the emission-line masters into "
             "masters/TARGET_SynthL.fit.\n"
+            "Weighted by each master's own signal/noise², not averaged: "
+            "a plain average of a strong Ha with a faint SII comes out "
+            "worse than the Ha alone.  The log names the shares.\n"
             "It is NOT combined into the colour image here. A luminance "
             "combine belongs after the stretch — todo.md walks you "
             "through it — and doing it linearly is the same mistake as "

@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.7.6** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.7.7** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.7.6](#17-whats-new-in-176)
+17. [What's New in 1.7.7](#17-whats-new-in-177)
 
 ---
 
@@ -311,6 +311,10 @@ GESDT's two numbers are **not** sigmas — they are the maximum rejected fractio
 
 The tier is chosen for the frames that are **actually integrated**, not the ones that were found. A sub without enough detectable stars cannot be registered, and Siril excludes it; the script counts what Siril really exported. On one real night, 3 of 6 OIII frames were lost to cloud — the surviving 3 got percentile clipping, where the naive count would have applied sigma clipping to three frames and rejected nothing at all.
 
+**The master flats, darks and bias go through the same table.** They used to be stacked with a bare `rej 3 3` — and a bare `rej` selects Siril's default, which is winsorized: the band meant for 11–30 frames, applied to a per-night master flat of five and to a library dark of four hundred alike. On one M 16 run that meant sigma clipping for the five- and ten-frame flats and a linear fit for the 442-frame dark set, neither of which they were getting.
+
+Rejection stays **on** for calibration masters even when the switch is off for the light stacks. That switch is about integrating your own frames; a cosmic ray left in a master flat reaches every light that master divides.
+
 **The count is measured, not estimated.** After registration the script asks Siril for the sequence it produced — `get_seq()` hands back which frames are still included and, for each of them, the FWHM, roundness and star count Siril measured. Those numbers stand in the report as measurements, in their own table.
 
 This matters beyond the report: the quality filters run at *registration* time, so the exported count already has them applied. Subtracting their share a second time — as the script used to, for both the report and the rejection band — chose the algorithm for a smaller population than the one being integrated. A channel of 34 exported frames was treated as 30, which is a different band. An estimate now stands in only when the sequence cannot be read at all, and the report marks it with `≈`.
@@ -551,7 +555,13 @@ Cyril Richard's PalettePicker states the same boundary from the other side: it d
 
 ### Synthetic luminance
 
-A narrowband night has no Luminance filter, and the detail sits spread across two or three channels. **Build a synthetic luminance master** averages the emission-line masters into `masters/TARGET_SynthL.fit`, which carries their combined signal-to-noise.
+A narrowband night has no Luminance filter, and the detail sits spread across two or three channels. **Build a synthetic luminance master** combines the emission-line masters into `masters/TARGET_SynthL.fit`, which carries their combined signal-to-noise.
+
+**Combines, not averages** — and the difference decides whether the file is worth having. An equal-weight mean is only optimal when the channels carry comparable signal, and in SHO they do not: SII regularly runs an order of magnitude below Ha. Averaging signals of 20, 2 and 1 at equal noise gives SNR 13.3, where Ha *alone* gives 20. The "luminance" would be worse than the best channel inside it. Narrowband normalisation makes it worse again, because `linear_match` scales the weak channel's noise up along with its signal before this ever runs.
+
+So each master is weighted by what it actually carries — the matched-filter weights, w ∝ signal / noise², measured on the master itself through Siril's statistics (`bgnoise` is the noise; the structure is what is left of the total standard deviation once the noise is removed in quadrature). The same three channels come out at 87 % / 9 % / 4 %, SNR 20.1. The log and `output.md` name the shares, and a channel carrying more than 80 % is called out — at that point the luminance is essentially that one channel, which is worth knowing before you build on it.
+
+If the per-master statistics cannot be read, the run falls back to an equal-weight average **and says so**.
 
 It is deliberately **not** combined into the colour image. A luminance combine on linear data lifts the bright end before colour calibration — the same mistake *Quick linear LRGB* makes, measured on real data at 531 clipped stars against 68. `todo.md` picks the file up as Part B and combines it after the stretch, where it belongs.
 
@@ -896,7 +906,12 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.7.6
+## 17. What's New in 1.7.7
+
+- **Calibration masters now use the same rejection table as the light stacks.** They were stacked with a bare `rej 3 3`, and a bare `rej` selects Siril's default — winsorized, the band reserved for 11–30 frames. It was going to both ends of the range at once: a per-night master flat of five frames, where winsorizing estimates sigma from five points and replaces outliers with their own neighbours, and a library dark of four hundred, where a linear fit models the trend across the stack that winsorizing cannot see. On the M 16 run the five- and ten-frame flats move to sigma 3/3 and the 442-frame darkflat set to linear fit 5/4. Rejection stays on for calibration masters whatever the light stacks were told — that switch is about integrating your own frames, and one cosmic left in a master flat reaches every light it divides. §8 has the detail.
+- **The synthetic luminance is weighted, not averaged.** It claimed "the combined signal-to-noise" while taking an equal-weight mean, which is optimal only when the channels carry comparable signal — and in SHO they do not. With signals 20 / 2 / 1 at equal noise the average gives SNR 13.3 where Ha *alone* gives 20: the luminance was coming out worse than the best channel inside it, and narrowband normalisation made it worse again by scaling the weak channel's noise up with its signal first. It now uses the matched-filter weights, w ∝ signal / noise², measured on each master through Siril's own statistics. Same three channels: 87 % / 9 % / 4 %, SNR 20.1. The log and the report name the shares, a channel over 80 % is called out, and an equal-weight average survives as a stated fallback when the statistics cannot be read. §9 has the detail.
+
+## What was new in 1.7.6
 
 - **The flat-on-flat check was measuring shot noise, not the optics.** It divided *one* flat of one night by *one* flat of another, pixel by pixel, and read the standard deviation. Two subs of the **same** night — where the shape difference is zero by construction — come out at **1.78 %** on a real 24 000 ADU flat, against a limit of 0.30 %. The check therefore reported "a real mismatch", six times over, on every dataset it has ever seen, and advised switching on an option to cure a difference that was not there. With that option already on, it printed the same number as the justification for the split.
 - **The cause was borrowing thresholds without their method.** The 0.15 % / 0.30 % figures come from the *Flat On Flat Analyzer*, which compares two **master** flats and **block-averages** the map to ~250 px on the long side before it measures. On a 3008 px frame that is 12×12 binning; together with the stacking, the two steps take a factor of roughly 27 out of the noise. Both are now done here: a whole night is averaged to stand in for the master, and the binning reproduces the reference tool's.

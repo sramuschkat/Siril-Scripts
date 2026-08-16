@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.7.6** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.7.7** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.7.6](#17-neu-in-176)
+17. [Neu in 1.7.7](#17-neu-in-177)
 
 ---
 
@@ -311,6 +311,10 @@ Die beiden GESDT-Zahlen sind **keine** Sigmas — es sind der maximal verworfene
 
 Die Stufe wird für die Frames gewählt, die **tatsächlich integriert** werden, nicht für die gefundenen. Ein Sub ohne genügend erkennbare Sterne lässt sich nicht registrieren und wird von Siril ausgeschlossen; das Skript zählt, was Siril wirklich exportiert hat. In einer realen Nacht gingen 3 von 6 OIII-Frames durch Wolken verloren — die verbliebenen 3 bekamen Percentile Clipping, während die naive Zählung Sigma Clipping auf drei Frames angewendet und damit gar nichts verworfen hätte.
 
+**Die Master-Flats, -Darks und -Bias laufen durch dieselbe Tabelle.** Sie wurden bisher mit einem nackten `rej 3 3` gestapelt — und ein nacktes `rej` wählt Sirils Vorgabe, also winsorized: die Stufe für 11–30 Frames, angewendet auf ein Nacht-Master-Flat aus fünf Frames ebenso wie auf ein Bibliotheks-Dark aus vierhundert. Beim M-16-Lauf heißt das jetzt Sigma Clipping für die Fünf- und Zehn-Frame-Flats und Linear Fit für den 442-Frame-Darkflat-Satz — beides bekamen sie vorher nicht.
+
+Für Kalibriermaster bleibt die Rejection **an**, auch wenn der Schalter für die Light-Stacks aus ist. Der Schalter betrifft das Integrieren deiner eigenen Frames; ein kosmischer Treffer, der in einem Master-Flat stehenbleibt, erreicht jedes Light, das durch dieses Master geteilt wird.
+
 **Die Zahl ist gemessen, nicht geschätzt.** Nach der Registrierung fragt das Skript Siril nach der erzeugten Sequenz — `get_seq()` liefert zurück, welche Frames noch enthalten sind, und für jeden davon FWHM, Rundheit und Sternzahl, wie Siril sie gemessen hat. Diese Werte stehen im Report als Messungen, in einer eigenen Tabelle.
 
 Das reicht über den Report hinaus: die Qualitätsfilter laufen zum *Registrierungs*zeitpunkt, die exportierte Anzahl hat sie also bereits berücksichtigt. Ihren Anteil ein zweites Mal abzuziehen — wie es das Skript bisher tat, sowohl für den Report als auch für die Rejection-Stufe — wählte den Algorithmus für eine kleinere Population als die tatsächlich integrierte. Ein Kanal mit 34 exportierten Frames wurde als 30 behandelt, und das ist eine andere Stufe. Eine Schätzung springt jetzt nur noch ein, wenn die Sequenz gar nicht lesbar ist, und der Report kennzeichnet sie mit `≈`.
@@ -551,7 +555,13 @@ Cyril Richards PalettePicker zieht dieselbe Grenze von der anderen Seite: er hat
 
 ### Synthetische Luminanz
 
-Eine Schmalbandnacht hat keinen Luminanzfilter, und das Detail verteilt sich auf zwei oder drei Kanäle. **Build a synthetic luminance master** mittelt die Emissionslinien-Master zu `masters/TARGET_SynthL.fit`, das ihr gemeinsames Signal-Rausch-Verhältnis trägt.
+Eine Schmalbandnacht hat keinen Luminanzfilter, und das Detail verteilt sich auf zwei oder drei Kanäle. **Build a synthetic luminance master** kombiniert die Emissionslinien-Master zu `masters/TARGET_SynthL.fit`, das ihr gemeinsames Signal-Rausch-Verhältnis trägt.
+
+**Kombiniert, nicht gemittelt** — und dieser Unterschied entscheidet, ob die Datei etwas taugt. Ein ungewichtetes Mittel ist nur dann optimal, wenn alle Kanäle vergleichbares Signal tragen, und in SHO tun sie das nicht: SII liegt regelmäßig eine Größenordnung unter Ha. Signale von 20, 2 und 1 bei gleichem Rauschen gemittelt ergeben SNR 13,3 — Ha *allein* ergibt 20. Die „Luminanz" wäre schlechter als der beste Kanal in ihr. Die Schmalband-Normalisierung verschärft das noch, weil `linear_match` das Rauschen des schwachen Kanals zusammen mit seinem Signal hochskaliert, bevor das hier überhaupt läuft.
+
+Jedes Master wird deshalb danach gewichtet, was es tatsächlich beiträgt — die Matched-Filter-Gewichte w ∝ Signal / Rauschen², am Master selbst über Sirils Statistik gemessen (`bgnoise` ist das Rauschen; die Struktur ist das, was von der Gesamtstandardabweichung übrig bleibt, wenn man das Rauschen quadratisch abzieht). Dieselben drei Kanäle kommen auf 87 % / 9 % / 4 % und SNR 20,1. Log und `output.md` nennen die Anteile, und ein Kanal über 80 % wird ausdrücklich genannt — dann ist die Luminanz im Wesentlichen dieser eine Kanal, und das sollte man wissen, bevor man darauf aufbaut.
+
+Sind die Master-Statistiken nicht lesbar, fällt der Lauf auf ein ungewichtetes Mittel zurück **und sagt es**.
 
 Es wird bewusst **nicht** ins Farbbild kombiniert. Eine Luminanz-Kombination auf linearen Daten hebt das helle Ende vor der Farbkalibrierung an — derselbe Fehler, den *Quick linear LRGB* macht, an echten Daten gemessen mit 531 geclippten Sternen gegen 68. `todo.md` nimmt die Datei als Teil B auf und kombiniert sie nach dem Strecken, wo sie hingehört.
 
@@ -896,7 +906,12 @@ Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.7.6
+## 17. Neu in 1.7.7
+
+- **Kalibriermaster laufen jetzt durch dieselbe Rejection-Tabelle wie die Light-Stacks.** Sie wurden mit einem nackten `rej 3 3` gestapelt, und ein nacktes `rej` wählt Sirils Vorgabe — winsorized, die Stufe für 11–30 Frames. Sie traf beide Enden des Bereichs gleichzeitig: ein Nacht-Master-Flat aus fünf Frames, wo Winsorizing Sigma aus fünf Punkten schätzt und Ausreißer durch ihre eigenen Nachbarn ersetzt, und ein Bibliotheks-Dark aus vierhundert, wo ein Linear Fit den Trend über den Stack modelliert, den Winsorizing nicht sieht. Beim M-16-Lauf gehen die Fünf- und Zehn-Frame-Flats auf Sigma 3/3, der 442-Frame-Darkflat-Satz auf Linear Fit 5/4. Für Kalibriermaster bleibt die Rejection an, unabhängig davon, was den Light-Stacks gesagt wurde — der Schalter betrifft das Integrieren deiner eigenen Frames, und ein kosmischer Treffer in einem Master-Flat erreicht jedes Light, das dadurch geteilt wird. Details in §8.
+- **Die synthetische Luminanz wird gewichtet, nicht gemittelt.** Sie versprach „das gemeinsame Signal-Rausch-Verhältnis" und bildete dabei ein ungewichtetes Mittel — optimal nur, wenn die Kanäle vergleichbares Signal tragen, was in SHO nicht der Fall ist. Bei Signalen 20 / 2 / 1 mit gleichem Rauschen ergibt das Mittel SNR 13,3, Ha *allein* aber 20: die Luminanz kam schlechter heraus als der beste Kanal in ihr, und die Schmalband-Normalisierung verschärfte das noch, weil sie das Rauschen des schwachen Kanals vorher mit seinem Signal hochskaliert. Jetzt gelten die Matched-Filter-Gewichte w ∝ Signal / Rauschen², an jedem Master über Sirils eigene Statistik gemessen. Dieselben drei Kanäle: 87 % / 9 % / 4 %, SNR 20,1. Log und Report nennen die Anteile, ein Kanal über 80 % wird ausdrücklich genannt, und das ungewichtete Mittel bleibt als benannter Rückfall, wenn die Statistik nicht lesbar ist. Details in §9.
+
+## Was in 1.7.6 neu war
 
 - **Die Flat-auf-Flat-Prüfung hat Photonenrauschen gemessen, nicht die Optik.** Sie teilte *ein* Flat der einen Nacht durch *ein* Flat der anderen, Pixel für Pixel, und las die Standardabweichung. Zwei Subs **derselben** Nacht — deren Formunterschied konstruktionsbedingt null ist — ergeben an einem echten 24 000-ADU-Flat **1,78 %**, bei einer Grenze von 0,30 %. Die Prüfung meldete also „a real mismatch", um das Sechsfache darüber, bei jedem Datensatz, den sie je gesehen hat, und riet dazu, eine Option gegen einen Unterschied einzuschalten, den es nicht gab. War die Option schon an, druckte sie dieselbe Zahl als Begründung der Aufteilung.
 - **Die Ursache war, Schwellen ohne ihr Verfahren zu übernehmen.** Die 0,15 % / 0,30 % stammen aus dem *Flat On Flat Analyzer*, der zwei **Master**-Flats vergleicht und die Karte vor der Messung auf ~250 px an der langen Seite **blockmittelt**. An einem 3008-px-Frame ist das 12×12; zusammen mit dem Stacken nehmen beide Schritte rund den Faktor 27 aus dem Rauschen. Beides passiert jetzt auch hier: Eine ganze Nacht wird gemittelt und vertritt so den Master, und die Blockung bildet die des Referenzwerkzeugs nach.

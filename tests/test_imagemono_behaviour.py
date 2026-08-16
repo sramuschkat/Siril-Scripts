@@ -520,6 +520,46 @@ check(len(wrote.split(",")) == len(read.split(",")),
       "the warning tuple is written and read with the same arity",
       f"({wrote}) vs ({read})")
 
+oapi_src = src[src.index("OPTIONAL_API = ("):
+                src.index("def _missing_capabilities")]
+
+print("\n9c) calibration masters go through the same rejection bands")
+scg = body("_stack_calib_group")
+# A bare `rej 3 3` is Siril's DEFAULT, winsorized -- the band meant for
+# 11-30 frames, and it used to be sent for a 5-frame flat and a 442-frame
+# dark alike.
+check('"rej", "3", "3"' not in scg, "the fixed winsorized 3/3 is gone")
+check("_rejection_args(staged, True)" in scg,
+      "the algorithm follows the frame count, as it does for the lights")
+check("_rejection_fallback(rej_tokens)" in scg,
+      "and an older build that refuses GESDT still gets its retry")
+# Always on: the user's rejection switch is about integrating HIS frames.
+check("_rejection_args(staged, self._opts" not in scg
+      and 'self._opts.get("rejection"' not in scg,
+      "rejection is not optional for a master every light is divided by")
+check("rej_label" in scg and "Built master" in scg,
+      "and the log names the algorithm that ran")
+
+print("\n9d) the synthetic luminance is weighted by what each line carries")
+sl = body("_synthetic_luminance")
+check("/{len(terms)}" not in sl and "len(terms)}" not in sl,
+      "the plain division by the channel count is gone")
+check("_matched_weights(measured)" in sl,
+      "the shares come from the matched-filter weights")
+check("weights[filt]:.6g}*$" in sl,
+      "and the PixelMath expression is a weighted sum")
+check("1.0 / len(srcs)" in sl and "equal-weight average" in sl,
+      "equal weights survive as the stated fallback")
+ms = body("_master_snr")
+check("bgnoise" in ms and "sigma" in ms,
+      "signal and noise both come from Siril's own statistics")
+check("total * total - noise * noise" in ms,
+      "and the signal is the structure left after removing noise in "
+      "quadrature")
+check("total <= noise" in ms, "a total below the noise floor is refused")
+check('"get_image_stats"' in oapi_src,
+      "get_image_stats is declared optional, so a missing one is announced")
+
 print("\n10) the capability report names what is missing")
 oapi = src[src.index("OPTIONAL_API = ("):src.index("def _missing_capabilities")]
 for call in ("get_seq", "set_image_pixeldata", "get_siril_log"):
