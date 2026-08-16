@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.7.4** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.7.5** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.7.4](#17-neu-in-174)
+17. [Neu in 1.7.5](#17-neu-in-175)
 
 ---
 
@@ -352,6 +352,22 @@ Sie greifen zum **Registrierungszeitpunkt**, damit verworfene Frames gar nicht e
 | **Save rejection map (QA)** | Schreibt pro Kanal nach `qa/`, was verworfen wurde. |
 | **Drizzle** | Braucht **geditherte** Subs, und genügend davon. Unter etwa 40 Frames warnen Log und Bericht, dass es eher Rauschen als Auflösung hinzufügt. |
 | **Register via plate solving** | Optional mit Distortion-Master; fällt automatisch auf Sternausrichtung zurück. |
+| **Output normalization** | Skaliert den fertigen Master nach `[0, 1]`. Siehe unten — sie tut mehr, als der Name vermuten lässt. |
+
+### Output-Normalisierung ist affin, und pro Kanal
+
+Bei 32-Bit-Ausgabe setzt Siril sie so um:
+
+```c
+fit->fdata[i] = (fit->fdata[i] - mini) / (maxi - mini);   /* median_and_mean.c */
+```
+
+`mini` und `maxi` sind das dunkelste und das hellste Pixel **dieses** Masters. Daraus folgen zwei Dinge, die der Optionsname nicht verrät:
+
+- Sie **zieht auch einen Offset ab**, ist also eine affine Abbildung, keine Verstärkung.
+- Die beiden Zahlen stammen aus **einzelnen Extrempixeln**, und jeder Filter bekommt sein eigenes Paar. Die Kanäle verlassen den Stack damit auf drei zusammenhanglosen Skalen.
+
+Für ein Bild ist das harmlos — gestreckt wird ohnehin, und SPCC passt je Kanal einen Faktor an und schluckt es. Es zählt, wenn die **absoluten Pegel** zählen: Photometrie, oder der Vergleich des Ha/OIII-Verhältnisses zwischen Läufen. Dann abschalten — und wissen, dass *Normalize narrowband channels* nicht das Einzige ist, was zwischen dir und dem physikalischen Linienverhältnis steht.
 
 ### Wenn die Registrierung nicht alles kann
 
@@ -556,6 +572,8 @@ Wählst du eine Palette, die deine Filter nicht füllen können, sagt das Skript
 ### Kanalübergreifende Ausrichtung
 
 Jeder Filter wird gegen seinen *eigenen* Referenzframe gestackt, die Master können also auf leicht verschiedenen Pixelrastern liegen. Zur Korrektur werden alle Master in eine kleine Sequenz gelegt, neu registriert und mit `-framing=min` neu projiziert — das Ergebnis sind Kanäle, die **pixelidentisch** groß sind und exakt übereinanderliegen.
+
+**Das kostet eine zweite Interpolation.** `seqapplyreg` läuft auf dem Weg zu einem Kanal zweimal: einmal über die Subframes dieses Filters, einmal über die drei fertigen Master. Beide Male mit begrenzter Interpolation, und jedes Resampling weicht das Bild ein wenig auf. Die Alternative mit nur einem Resampling — alle Frames *aller* Filter vor dem Stacken gegen eine gemeinsame Referenz registrieren — bräuchte eine Referenz mit genug Sternen für den sternärmsten Schmalbandkanal, also ausgerechnet den Frame, der am wenigsten davon hat, und gäbe die filtereigene Referenz auf, die jeden Stack so scharf macht, wie es seine beste Nacht erlaubt. Der Kompromiss ist bewusst gewählt; ob der zweite Durchgang genug Material hatte, zeigt die Sternpaar-Tabelle in `output.md`.
 
 ### Wie das Komposit zusammengesetzt wird
 
@@ -874,7 +892,12 @@ Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.7.4
+## 17. Neu in 1.7.5
+
+- **Die Output-Normalisierung ist dokumentiert, wie sie wirklich arbeitet.** Aus Sirils Quelltext gelesen: bei 32-Bit-Ausgabe ist sie `(x − min) / (max − min)` mit den *eigenen* Extremwerten des Masters — eine affine Abbildung pro Kanal, getrieben von einzelnen Pixeln, keine gemeinsame Skala. Der Tooltip behauptete, sie normalisiere „den Hintergrundpegel", und ein Hinweis im Lauf behauptete, das Abschalten von *Normalize narrowband channels* lasse das physikalische Linienverhältnis unangetastet. Beides stimmte nicht, solange diese Option an war. §8 erklärt es jetzt, und der Hinweis nennt beide Optionen.
+- **Die zweite Interpolation steht jetzt da.** `seqapplyreg` läuft auf dem Weg zu einem Kanal zweimal — einmal über die Subframes, einmal über die fertigen Master — und jedes Resampling weicht das Bild ein wenig auf. §9 sagt das und sagt, warum die Alternative mit nur einem Resampling nicht gewählt wurde: sie bräuchte eine gemeinsame Referenz mit genug Sternen für den sternärmsten Schmalbandkanal.
+
+## Was in 1.7.4 neu war
 
 - **SCNR (Grünentfernung) läuft nicht mehr auf dem Komposit.** Siril rechnet sie als `green = min(green, (red + blue) / 2)`. Bei einem Breitbandbild ist das die richtige Kur gegen Farbrauschen; bei einer Zuordnungspalette trägt der Grünkanal eine **echte Emissionslinie** — bei SHO das Ha — und der Ausdruck beschneidet gemessenen Fluss überall dort, wo diese Linie dominiert. Bei einem M-16-Lauf im Mittel rund 3 % des Ha, in den hellen Säulen erheblich mehr. Sie ist außerdem nichtlinear und zerstörte damit genau die Eigenschaft, mit der das Komposit übergeben wird. `todo.md` führt die Grünentfernung jetzt als deinen eigenen Schritt nach dem Strecken, in beiden Zweigen, und nennt, was sie rechnet.
 - **Die Farbzusammenführung selbst wurde gegen beide Referenzimplementierungen geprüft** — Cyril Richards PalettePicker und Franklin Mareks Perfect Palette Picker. Beide setzen das RGB genauso zusammen wie dieses Skript (`new` + `set_image_pixeldata`), und beide arbeiten auf **gestreckten** Daten, weshalb keine von beiden farbkalibrieren kann. Genau das ist der Unterschied — und die Reihenfolge (ausrichten → normieren → kombinieren → platesolve → Hintergrund → kalibrieren) stimmt. SCNR führt auch keine der beiden aus.

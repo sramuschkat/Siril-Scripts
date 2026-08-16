@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.7.4
+Script Version: 1.7.5
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.7.4
+# Script Version: 1.7.5
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +97,33 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.7.5 - Two claims corrected against Siril's source
+      - "Output normalization" was described as normalising "the final
+        integrated frame's background level".  It does not.  On 32-bit
+        output Siril applies
+        `fit->fdata[i] = (fit->fdata[i] - mini) / (maxi - mini)`
+        (src/stacking/median_and_mean.c) with mini/maxi taken from THAT
+        master's own darkest and brightest pixel: an affine transform,
+        per channel, anchored on single extreme pixels
+      - Which makes the run note wrong too.  It told the user that
+        switching off 'Normalize narrowband channels' "leaves the
+        physical line ratio intact for SPCC to calibrate" -- but the
+        three masters had already left the stack on three unrelated
+        scales.  The note now names both options, and only when output
+        normalisation is actually on.  The default is unchanged: for a
+        picture it is harmless, and SPCC absorbs a per-channel factor.
+        What changed is that the user can now find that out
+      - The report says it too, where it used to print the bare phrase
+        "output-normalized"
+      - The SECOND interpolation is documented.  `seqapplyreg` runs twice
+        on the way to a channel -- over the sub-frames, then over the
+        finished masters -- and each resampling softens the image.  The
+        single-resample alternative would need one shared reference
+        carrying enough stars for the sparsest narrowband channel, which
+        is the frame least likely to have them, and would give up the
+        per-filter reference.  A deliberate trade, now written down
+        instead of only lived with
+
 1.7.4 - SCNR removed from the finish; the combination checked at source
       - `rmgreen` ran on EVERY composite, unconditionally.  Siril computes
         it as `green = min(green, 0.5 * (red + blue))`
@@ -1186,7 +1213,7 @@ from PyQt6.QtGui import QColor, QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.7.4"
+VERSION = "1.7.5"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -4705,8 +4732,12 @@ class StackWorker(QThread):
             else:
                 A("    - **Weighting:** off — every sub contributed equally.")
             A("    - **Bit depth:** 32-bit float"
-              + (", output-normalized." if opts.get("output_norm", True)
-                 else "."))
+              + (", output-normalized — each master was rescaled into "
+                 "[0, 1] as `(x − min) / (max − min)` from its **own** "
+                 "extremes, so the channels are no longer on one absolute "
+                 "scale. Harmless for a picture; switch it off when the "
+                 "levels matter."
+                 if opts.get("output_norm", True) else "."))
             if opts.get("bg_master", True):
                 how = ("RBF" if opts.get("bg_rbf") else "polynomial, degree 1")
                 A(N()
@@ -6123,9 +6154,13 @@ class StackWorker(QThread):
             self._emit(
                 "  Note: 'Normalize narrowband channels' already forced the "
                 "channels onto a common level, so SPCC is now measuring a "
-                "ratio that was flattened on purpose. Turning that option "
-                "off leaves the physical line ratio intact for SPCC to "
-                "calibrate; keep it on only when you are not calibrating.",
+                "ratio that was flattened on purpose. Switch it off while "
+                "calibrating."
+                + (" 'Output normalization' rescales each master by its "
+                   "own min and max as well, so the line ratio is not "
+                   "untouched either way — switch that off too if you "
+                   "want SPCC to see the physical one."
+                   if self._opts.get("output_norm", True) else ""),
                 LogColor.SALMON)
 
         attempts: list = []
@@ -7657,7 +7692,14 @@ class ImageMonoTrainWindow(QMainWindow):
         self.chk_output_norm = QCheckBox("Output normalization")
         self.chk_output_norm.setChecked(True)
         self.chk_output_norm.setToolTip(
-            "Normalise the final integrated frame's background level.")
+            "Rescales the finished master into [0, 1].  On 32-bit output "
+            "Siril does this as (x − min) / (max − min) using that "
+            "master's OWN extremes, so it is an affine transform per "
+            "channel, not a shared one.\n"
+            "Harmless for a picture. Switch it OFF when the absolute "
+            "levels matter — SPCC on narrowband, or any photometry — "
+            "because each filter is then scaled by two numbers that come "
+            "from its own darkest and brightest pixel.")
         _nofocus(self.chk_output_norm)
         layout.addWidget(self.chk_output_norm)
 

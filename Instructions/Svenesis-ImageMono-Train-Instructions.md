@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.7.4** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.7.5** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.7.4](#17-whats-new-in-174)
+17. [What's New in 1.7.5](#17-whats-new-in-175)
 
 ---
 
@@ -352,6 +352,22 @@ They are applied at **registration time**, so rejected frames are never even re-
 | **Save rejection map (QA)** | Writes what was rejected, per channel, into `qa/`. |
 | **Drizzle** | Needs **dithered** subs and enough of them. Below ~40 frames the log and the report warn that it will likely add noise instead of resolution. |
 | **Register via plate solving** | With optional distortion master; falls back to star alignment automatically. |
+| **Output normalization** | Rescales the finished master into `[0, 1]`. See below — it does more than the name suggests. |
+
+### Output normalization is affine, and per channel
+
+On 32-bit output Siril implements it as
+
+```c
+fit->fdata[i] = (fit->fdata[i] - mini) / (maxi - mini);   /* median_and_mean.c */
+```
+
+where `mini` and `maxi` are **that master's own** darkest and brightest pixel. Two things follow, and neither is obvious from the option's name:
+
+- It **subtracts an offset** as well as scaling, so it is an affine transform, not a gain.
+- The two numbers come from **single extreme pixels**, and each filter gets its own pair. The channels therefore leave the stack on three unrelated scales.
+
+For a picture that is harmless — you are going to stretch anyway, and SPCC fits one factor per channel and absorbs it. It matters when the **absolute levels** do: photometry, or comparing the Ha/OIII ratio between runs. If that is what you are after, switch it off — and note that *Normalize narrowband channels* is not the only thing standing between you and the physical line ratio.
 
 ### When registration cannot do everything
 
@@ -556,6 +572,8 @@ If you pick a palette the filters cannot fill, the script says so **when you cho
 ### Cross-filter alignment
 
 Each filter is stacked against its *own* reference frame, so the masters can sit on slightly different pixel grids. To fix that, all masters are pooled into one small sequence, re-registered, and re-projected with `-framing=min`, producing channels that are **pixel-identical** in size and overlay exactly.
+
+**This costs a second interpolation.** `seqapplyreg` runs twice on the way to a channel: once over the sub-frames of that filter, once over the three finished masters. Both use clamped interpolation, and each resampling softens the image a little. The single-resample alternative — registering the frames of *every* filter against one shared reference before stacking — would need that reference to carry enough stars for the sparsest narrowband channel, which is exactly the frame least likely to have them, and it gives up the per-filter reference that makes each stack as sharp as its own best night allows. The trade was made knowingly; the star-pair table in `output.md` is where you can see whether the second pass had enough to work with.
 
 ### How the composite is assembled
 
@@ -874,7 +892,12 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.7.4
+## 17. What's New in 1.7.5
+
+- **Output normalization is documented for what it actually does.** Read from Siril's source: on 32-bit output it is `(x − min) / (max − min)` with that master's *own* extremes — an affine transform per channel, driven by single pixels, not a shared scale. The tooltip claimed it normalised "the background level", and a run note claimed that switching off *Normalize narrowband channels* left the physical line ratio intact. Neither was true while this option was on. §8 now explains it, and the note names both options.
+- **The second interpolation is stated.** `seqapplyreg` runs twice on the way to a channel — once over the sub-frames, once over the finished masters — and each resampling softens the image a little. §9 says so, and says why the single-resample alternative was not taken: it needs one shared reference carrying enough stars for the sparsest narrowband channel.
+
+## What was new in 1.7.4
 
 - **SCNR (green removal) no longer runs on the composite.** Siril computes it as `green = min(green, (red + blue) / 2)`. On a broadband image that is the right cure for colour noise; on an assignment palette the green channel carries a **real emission line** — Ha in SHO — and the expression cuts measured flux wherever that line dominates. About 3 % of Ha on average on one M 16 run, and considerably more in the bright pillars. It is also non-linear, so it broke the one property the composite is handed over with. `todo.md` now carries green removal as your own step, after the stretch, in both the broadband and the narrowband branch, and states what it computes.
 - **The colour combination itself was checked against both reference implementations** — Cyril Richard's PalettePicker and Franklin Marek's Perfect Palette Picker. Both assemble the RGB the same way this script does (`new` + `set_image_pixeldata`), and both work on **stretched** input, which is why neither can colour-calibrate. Doing it linear, with SPCC and background extraction, is the difference — and the order (align → normalise → combine → plate-solve → background → calibrate) is right. Neither reference runs SCNR either.
