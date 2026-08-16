@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.7.3
+Script Version: 1.7.4
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -53,7 +53,7 @@ What it does:
   luminance is kept separate so it can be combined after stretching
   (Siril's recommended order).
 - Auto-finish on the composite: plate-solve, background extraction, colour
-  calibration and SCNR -- leaving a calibrated, still-linear result.
+  calibration -- leaving a calibrated, still-linear result.
 - Sensor- and filter-aware colour calibration (SPCC), including a
   narrowband mode that calibrates SHO / HOO by emission-line wavelength;
   degrades step by step to plain PCC and a local Gaia catalog.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.7.3
+# Script Version: 1.7.4
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +97,41 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.7.4 - SCNR removed from the finish; the combination checked at source
+      - `rmgreen` ran on EVERY composite, unconditionally.  Siril computes
+        it as `green = min(green, 0.5 * (red + blue))`
+        (src/filters/scnr.c).  On a broadband image that is its proper
+        use -- nothing in the sky is genuinely green, so a cast is colour
+        noise.  On an ASSIGNMENT palette the green channel carries a real
+        emission line: in SHO that is Ha, and the expression cuts it back
+        to the mean of SII and OIII wherever it dominates.  Measured from
+        one M 16 run's own numbers (linear_match gave OIII 1.45x and SII
+        0.94x of Ha, SPCC then applied K = 0.952 / 1.000 / 0.722), the
+        clip came to about 3% of Ha on average and far more in the bright
+        pillars
+      - It is also non-linear and per-pixel, so it contradicted the line
+        two steps below it: "Saved the ... still-LINEAR composite".  The
+        manual already refused `invert -> rmgreen -> invert` for the
+        magenta stars on exactly this ground; the same reasoning now
+        applies to plain SCNR.  todo.md carries it in BOTH branches --
+        for broadband as the ordinary cure it is, for narrowband with the
+        formula spelled out so the cost is visible before it runs
+      - The combination itself was read against both reference tools.
+        Cyril Richard's PalettePicker and Franklin Marek's Perfect Palette
+        Picker assemble the RGB exactly as this script does (`new` +
+        `set_image_pixeldata`), both require STRETCHED input -- "Inputs
+        must be non-linear (already stretched)" -- and therefore neither
+        colour-calibrates, extracts a background, or runs SCNR.  Working
+        linear is what buys SPCC, and the order stands: align ->
+        normalise -> combine -> plate-solve -> background -> calibrate.
+        Their closing `rgb / rgb.max()` stays unadopted, as in 1.7.0
+      - `_spcc_names_via_command` still tested the log with
+        `after.startswith(before)` -- the third place making the
+        assumption 1.7.2 corrected in two.  On a long session the SPCC
+        name check therefore reported "database not found" and let a
+        wrong filter name through, which is the one thing it exists to
+        catch.  It goes through `_log_delta` now
+
 1.7.3 - `merge` symlinks its sources, and we deleted them
       - With "Delete _work/ when finished" ticked, EVERY filter failed at
         registration: "FITS error: failed to find or open
@@ -1061,7 +1096,7 @@ CHANGELOG:
         Siril's guidance); optional "quick" one-step linear LRGB
       - HaRGB: Ha screen-blended into Red with an adjustable strength
       - Auto-finish: plate-solve -> background -> PCC (broadband only,
-        with a local-Gaia fallback) -> SCNR -> save linear
+        with a local-Gaia fallback) -> save linear
       - Cross-filter alignment onto a common grid (framing=min), so the
         channels are pixel-identical for combination
       - Adaptive pixel rejection by frame count, weighted-FWHM weighting,
@@ -1151,7 +1186,7 @@ from PyQt6.QtGui import QColor, QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.7.3"
+VERSION = "1.7.4"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -5020,9 +5055,15 @@ class StackWorker(QThread):
               "(Generalised Hyperbolic Stretch)*. Aim for a **neutral grey "
               "background** around 0.10–0.15 and don't clip the bright stars. "
               "This is the single most impactful step — take your time.")
-            A("4. **Denoise** *(optional)* — reduce colour noise now while "
+            A("4. **SCNR** (remove green) *(optional)* — *Image Processing "
+              "→ Remove Green Noise*, or `rmgreen`. Nothing in a broadband "
+              "sky is genuinely green, so a green cast is colour noise "
+              "and this is its usual cure. It runs here rather than in "
+              "the script because it is non-linear, and the composite is "
+              "handed over linear on purpose.")
+            A("5. **Denoise** *(optional)* — reduce colour noise now while "
               "it's easy.")
-            A("5. **Saturation** *(optional)* — boost gently for richer "
+            A("6. **Saturation** *(optional)* — boost gently for richer "
               "colour.")
             A("")
             if lum:
@@ -5036,29 +5077,29 @@ class StackWorker(QThread):
                       "lifts the bright end before colour calibration, "
                       "which is the same mistake *Quick linear LRGB* makes.")
                     A("")
-                A("6. **Sharpen while linear** *(optional)* — deconvolution or "
+                A("7. **Sharpen while linear** *(optional)* — deconvolution or "
                   "a tool like BlurXTerminator. The luminance carries all the "
                   "fine detail, so this is where sharpening pays off most.")
-                A("7. **Stretch L** to taste — this defines the contrast and "
+                A("8. **Stretch L** to taste — this defines the contrast and "
                   "detail of the final image.")
-                A("8. **Denoise, then sharpen** *(optional)*.")
+                A("9. **Denoise, then sharpen** *(optional)*.")
                 A("")
                 A("## Part C — Combine L + RGB  *(do this LAST)*")
                 A("")
-                A("9. With **both already stretched**, combine them: in Siril "
-                  "use *Image Processing → RGB composition* with the "
+                A("10. With **both already stretched**, combine them: in "
+                  "Siril use *Image Processing → RGB composition* with the "
                   "**luminance** slot, or the command "
                   "`rgbcomp -lum=<stretched L> <stretched RGB>`. The luminance "
                   "supplies detail, the RGB supplies colour.")
-                A("10. **Final touches** — curves, local contrast, star "
+                A("11. **Final touches** — curves, local contrast, star "
                   "reduction, crop the edges.")
-                A("11. **Export** a 16-bit TIFF or PNG.")
+                A("12. **Export** a 16-bit TIFF or PNG.")
             else:
                 A("## Part B — Finish")
                 A("")
-                A("6. **Final touches** — curves, local contrast, star "
+                A("7. **Final touches** — curves, local contrast, star "
                   "reduction, crop the edges.")
-                A("7. **Export** a 16-bit TIFF or PNG.")
+                A("8. **Export** a 16-bit TIFF or PNG.")
             A("")
             A("---")
             A("")
@@ -5147,8 +5188,13 @@ class StackWorker(QThread):
         A("4. **Colour balance** to the look you want (the classic Hubble "
           "gold/teal): per-channel *Curves*, or Siril's colour tools. A "
           "little goes a long way.")
-        A("5. **SCNR** (remove green) again if a green cast or green stars "
-          "reappear after stretching.")
+        A("5. **SCNR** (remove green) — *Image Processing → Remove Green "
+          "Noise*, or `rmgreen`. Do it **here**, on the stretched image, "
+          "and judge it by eye: Siril computes `green = min(green, "
+          "(red + blue) / 2)`, and in this palette the green channel "
+          "carries a real emission line, so too much of it cuts measured "
+          "signal rather than a cast. The script does not do it for you "
+          "for that reason.")
         A("6. **Denoise** — narrowband is noisier than broadband — then "
           "**boost saturation** for the vivid emission-line colours.")
         A("7. **Star reduction** *(recommended)* — SHO stars look best small; "
@@ -6193,7 +6239,7 @@ class StackWorker(QThread):
 
         Runs, all resiliently (a failing step logs and is skipped, never
         aborts): plate-solve (every colour calibration method needs a WCS),
-        background extraction, colour calibration and SCNR green removal.
+        background extraction and colour calibration.
         The calibrated *linear* result is saved over the composite.  If a
         stretched preview is requested, an autostretched copy is written
         alongside as ``*_preview`` and returned for loading.  Returns the
@@ -6260,12 +6306,21 @@ class StackWorker(QThread):
                 "Colour calibration skipped — the composite could not be "
                 "plate-solved, and every method needs astrometry.")
 
-        # SCNR green removal (mono-narrowband / RGB both benefit).
-        try:
-            self._cmd("rmgreen")
-            self._finish_steps.append("Removed the green cast (SCNR).")
-        except (CommandError, DataError, SirilError) as exc:
-            _log_swallowed(exc)
+        # SCNR is deliberately NOT run here.  Siril computes it as
+        # `green = min(green, 0.5 * (red + blue))` (src/filters/scnr.c),
+        # which on an ASSIGNMENT palette clips a real emission line: in
+        # SHO the green channel IS Ha, so the strongest measured line gets
+        # cut back to the mean of the other two wherever it dominates.  On
+        # one M 16 run that was about 3% of Ha on average and far more in
+        # the bright pillars.
+        #
+        # It is also non-linear and per-pixel, so running it would break
+        # the one property this whole file promises two steps later: that
+        # the composite handed over is still linear.  The manual already
+        # argues exactly this for the magenta-star remedy -- inverting
+        # linear data is not inverting stretched data -- and the same
+        # reasoning applies to plain SCNR.  todo.md owns it, after the
+        # stretch, where the user can see what it costs.
 
         # Save the LINEAR composite over the original.  "Calibrated" is
         # only true when a calibration actually ran: HaRGB skips it on
@@ -6761,11 +6816,16 @@ def _spcc_names_via_command(siril, what: str) -> set:
     except Exception as exc:
         _log_swallowed(exc)
         return set()
-    if not after.startswith(before):
-        # Something else logged in between; the delta is not trustworthy.
+    # Through `_log_delta`, not `startswith`: this was the third place
+    # making the same wrong assumption -- that Siril's log only grows.
+    # Its buffer is bounded, and once the front has been trimmed no
+    # earlier snapshot is a prefix again, after which the name check
+    # silently reported "database not found" for the rest of the session.
+    delta = _log_delta(before, after)
+    if delta is None:
         return set()
     names, header_seen = set(), False
-    for raw in after[len(before):].splitlines():
+    for raw in delta.splitlines():
         line = re.sub(r"^\d{2}:\d{2}:\d{2}:\s*", "", raw).strip()
         if not line or line.startswith("Running command"):
             continue
@@ -10107,7 +10167,7 @@ class ImageMonoTrainWindow(QMainWindow):
             "<li><b>Background extraction</b> (subsky) to flatten "
             "gradients.</li>"
             "<li><b>Colour calibration</b> — see the chain below.</li>"
-            "<li><b>SCNR</b> green-cast removal.</li>"
+
             "</ol>"
             "<h3 style='color:#88aaff;'>Colour calibration: SPCC, then PCC"
             "</h3>"
@@ -10394,7 +10454,7 @@ class ImageMonoTrainWindow(QMainWindow):
             "<p style='color:#888;'><i>Legend:</i> <tt>TARGET</tt> = object "
             "name; masters are the aligned <tt>masters/TARGET_FILTER.fit</tt> "
             "files.  <b>Auto-finish</b> = plate-solve → "
-            "background → (PCC) → SCNR → save linear.</p>"
+            "background → (PCC) → save linear.</p>"
 
             "<hr><h3 style='color:#88aaff;'>First: what the four dropdowns "
             "are</h3>"
@@ -10422,7 +10482,7 @@ class ImageMonoTrainWindow(QMainWindow):
             "master is <b>not</b> baked in (that would skew PCC and give weak "
             "colour).  You add L after stretching.</p>"
             "<pre style='color:#aaddaa'>rgbcomp  R  G  B  -out=TARGET_RGB\n"
-            "platesolve → subsky → pcc → rmgreen → save   (linear)</pre>"
+            "platesolve → subsky → pcc → save   (linear)</pre>"
             "<p><b>Output:</b> <tt>TARGET_RGB.fit</tt> (calibrated, linear) "
             "&nbsp;+&nbsp; <tt>masters/…_LUMINOS.fit</tt> kept separate.<br>"
             "<b>You finish:</b> stretch RGB and L, then combine luminance "
@@ -10432,7 +10492,7 @@ class ImageMonoTrainWindow(QMainWindow):
             "font-weight:normal'>(broadband, no luminance)</span></h3>"
             "<p><b>Mapping:</b> R=Red&nbsp; G=Green&nbsp; B=Blue</p>"
             "<pre style='color:#aaddaa'>rgbcomp  R  G  B  -out=TARGET_RGB\n"
-            "platesolve → subsky → pcc → rmgreen → save   (linear)</pre>"
+            "platesolve → subsky → pcc → save   (linear)</pre>"
             "<p><b>Output:</b> <tt>TARGET_RGB.fit</tt>. Just stretch it.</p>"
 
             "<hr><h3 style='color:#88aaff;'>Quick linear LRGB &nbsp;"
@@ -10443,7 +10503,7 @@ class ImageMonoTrainWindow(QMainWindow):
             "look only.</p>"
             "<pre style='color:#aaddaa'>rgbcomp -lum=L  R  G  B  "
             "-out=TARGET_LRGB\n"
-            "platesolve → subsky → pcc → rmgreen → save   (linear)</pre>"
+            "platesolve → subsky → pcc → save   (linear)</pre>"
             "<p><b>Output:</b> <tt>TARGET_LRGB.fit</tt>.</p>"
 
             "<hr><h3 style='color:#88aaff;'>SHO &nbsp;<span style='color:#888;"
@@ -10455,7 +10515,7 @@ class ImageMonoTrainWindow(QMainWindow):
             "<pre style='color:#aaddaa'>linear_match Ha 0 0.92   → SII_nbnorm\n"
             "linear_match Ha 0 0.92   → OIII_nbnorm\n"
             "rgbcomp  SII_nbnorm  Ha  OIII_nbnorm  -out=TARGET_SHO\n"
-            "platesolve → subsky → (PCC skipped) → rmgreen → save</pre>"
+            "platesolve → subsky → (PCC skipped) → save</pre>"
             "<p><b>Output:</b> <tt>TARGET_SHO.fit</tt> (linear).<br>"
             "<b>You finish:</b> stretch, then colour-balance / saturation to "
             "taste (Ha often still leans green).</p>"
@@ -10465,7 +10525,7 @@ class ImageMonoTrainWindow(QMainWindow):
             "<p><b>Mapping:</b> R=Ha&nbsp; G=OIII&nbsp; B=OIII</p>"
             "<pre style='color:#aaddaa'>linear_match Ha 0 0.92   → OIII_nbnorm\n"
             "rgbcomp  Ha  OIII_nbnorm  OIII_nbnorm  -out=TARGET_HOO\n"
-            "platesolve → subsky → (PCC skipped) → rmgreen → save</pre>"
+            "platesolve → subsky → (PCC skipped) → save</pre>"
             "<p><b>Output:</b> <tt>TARGET_HOO.fit</tt> (linear).</p>"
             "<p><b>OIII feeds Green and Blue</b>, which is why two filters "
             "are enough — and why SPCC reports "
@@ -10492,7 +10552,7 @@ class ImageMonoTrainWindow(QMainWindow):
             "<pre style='color:#aaddaa'>pm \"1-(1-$R$)*(1-k*$Ha$)\"  → "
             "TARGET_RED_Ha      (k = Ha→Red %)\n"
             "rgbcomp  TARGET_RED_Ha  G  B  -out=TARGET_HaRGB\n"
-            "platesolve → subsky → (PCC skipped) → rmgreen → save</pre>"
+            "platesolve → subsky → (PCC skipped) → save</pre>"
             "<p><b>Output:</b> <tt>TARGET_HaRGB.fit</tt> + L separate.<br>"
             "<b>Note:</b> classic HaRGB is refined <i>after</i> stretching; "
             "this is a linear starting point — tune the strength, or redo the "

@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.7.3** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.7.4** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.7.3](#17-neu-in-173)
+17. [Neu in 1.7.4](#17-neu-in-174)
 
 ---
 
@@ -684,6 +684,22 @@ Standardmäßig bleibt die **Luminanz getrennt**: das RGB wird für sich kalibri
 
 Wenn du sie nutzt, vermerken Bericht und `todo.md`, dass der resultierende Weißabgleich brauchbar, aber nur näherungsweise ist.
 
+### Was Auto-finish tut — und das eine, was es bewusst nicht tut
+
+```
+platesolve → subsky → SPCC (oder PCC) → speichern, weiterhin linear
+```
+
+**Die Grünentfernung (SCNR) gehört nicht dazu.** Siril rechnet sie als
+
+```
+green = min(green, (red + blue) / 2)
+```
+
+Für ein Breitbandbild ist das genau richtig — nichts am Himmel ist wirklich grün, ein Grünstich ist also Farbrauschen. Bei einer **Zuordnungspalette ist es das nicht**: der Grünkanal trägt eine echte Emissionslinie. Bei SHO ist das Ha, das stärkste Signal der meisten Nebel, und der Ausdruck stutzt es überall dort auf den Mittelwert von SII und OIII, wo es dominiert. Das ist gemessener Fluss, kein Stich. Bei einem M-16-Lauf waren es im Mittel rund 3 % des Ha und in den hellen Säulen erheblich mehr.
+
+Sie ist außerdem **nichtlinear und pixelweise**, würde also genau die Eigenschaft zerstören, mit der das Komposit übergeben wird. Dieselbe Begründung galt schon für das Gegenmittel gegen Magentasterne (`invert` → `rmgreen` → `invert`) und gilt jetzt durchgängig: `todo.md` führt die Grünentfernung als deinen eigenen Schritt nach dem Strecken, wo du siehst, was sie kostet.
+
 ---
 
 ## 11. Ausgabedateien
@@ -858,7 +874,13 @@ Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.7.3
+## 17. Neu in 1.7.4
+
+- **SCNR (Grünentfernung) läuft nicht mehr auf dem Komposit.** Siril rechnet sie als `green = min(green, (red + blue) / 2)`. Bei einem Breitbandbild ist das die richtige Kur gegen Farbrauschen; bei einer Zuordnungspalette trägt der Grünkanal eine **echte Emissionslinie** — bei SHO das Ha — und der Ausdruck beschneidet gemessenen Fluss überall dort, wo diese Linie dominiert. Bei einem M-16-Lauf im Mittel rund 3 % des Ha, in den hellen Säulen erheblich mehr. Sie ist außerdem nichtlinear und zerstörte damit genau die Eigenschaft, mit der das Komposit übergeben wird. `todo.md` führt die Grünentfernung jetzt als deinen eigenen Schritt nach dem Strecken, in beiden Zweigen, und nennt, was sie rechnet.
+- **Die Farbzusammenführung selbst wurde gegen beide Referenzimplementierungen geprüft** — Cyril Richards PalettePicker und Franklin Mareks Perfect Palette Picker. Beide setzen das RGB genauso zusammen wie dieses Skript (`new` + `set_image_pixeldata`), und beide arbeiten auf **gestreckten** Daten, weshalb keine von beiden farbkalibrieren kann. Genau das ist der Unterschied — und die Reihenfolge (ausrichten → normieren → kombinieren → platesolve → Hintergrund → kalibrieren) stimmt. SCNR führt auch keine der beiden aus.
+- **Behoben: die SPCC-Namensprüfung hatte denselben Log-Lesefehler** wie die beiden in 1.7.2 reparierten Leser — eine dritte Stelle, die annahm, Sirils Log wachse nur. Sie geht jetzt über `_log_delta`, ein falscher Filtername wird also auch spät in einer langen Sitzung noch erkannt, statt dass die Prüfung stillschweigend „Datenbank nicht gefunden" meldet.
+
+## Was in 1.7.3 neu war
 
 - **Behoben: mit *Delete `_work/` when finished* scheiterte jeder Filter an der Registrierung.** Sirils `merge` kopiert seine Quellframes nicht, es verlinkt sie symbolisch — 30 Frames in 4 ms sind keine Kopie von 30 × 36 MB. Die kalibrierten Teile direkt nach dem Merge freizugeben machte die gemergte Sequenz damit zu toten Links, und die Registrierung starb auf allen drei Kanälen mit *failed to find or open merged_HA_00001.fit*. Die Teile werden jetzt erst freigegeben, wenn die Registrierung eigene Frames geschrieben hat.
 - Der Fehler war so lange latent, wie es den Teil-Pfad gibt, wurde aber nur ausgelöst, wenn ein Filter Belichtungszeiten mischte **und** die Aufräum-Option an war. Da 1.6.0 jeden Mehrnacht-Lauf nach Nacht aufteilt, wurde er allgemein — für jeden, der dieses Häkchen setzt.

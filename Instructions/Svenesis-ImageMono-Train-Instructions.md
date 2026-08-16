@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.7.3** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.7.4** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.7.3](#17-whats-new-in-173)
+17. [What's New in 1.7.4](#17-whats-new-in-174)
 
 ---
 
@@ -684,6 +684,22 @@ By default, **luminance stays separate** for LRGB: the RGB is calibrated on its 
 
 If you use it, the report and `todo.md` both note that the resulting white balance is good-but-approximate.
 
+### What auto-finish does — and the one thing it deliberately does not
+
+```
+platesolve → subsky → SPCC (or PCC) → save, still linear
+```
+
+**Green removal (SCNR) is not part of it.** Siril computes it as
+
+```
+green = min(green, (red + blue) / 2)
+```
+
+which is exactly right for a broadband image — nothing in the sky is genuinely green, so a green cast is colour noise. On an **assignment palette it is not**: the green channel carries a real emission line. In SHO that line is Ha, the strongest signal in most nebulae, and the expression cuts it back to the mean of SII and OIII wherever it dominates. That is measured flux, not a cast. On one M 16 run it came to about 3 % of Ha on average, and considerably more in the bright pillars.
+
+It is also **non-linear and per-pixel**, so running it would break the one property the composite is handed over with. The script applies the same reasoning to the magenta-star remedy (`invert` → `rmgreen` → `invert`) and now applies it consistently: `todo.md` carries green removal as a step of your own, after the stretch, where you can see what it costs.
+
 ---
 
 ## 11. Output Files
@@ -858,7 +874,13 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.7.3
+## 17. What's New in 1.7.4
+
+- **SCNR (green removal) no longer runs on the composite.** Siril computes it as `green = min(green, (red + blue) / 2)`. On a broadband image that is the right cure for colour noise; on an assignment palette the green channel carries a **real emission line** — Ha in SHO — and the expression cuts measured flux wherever that line dominates. About 3 % of Ha on average on one M 16 run, and considerably more in the bright pillars. It is also non-linear, so it broke the one property the composite is handed over with. `todo.md` now carries green removal as your own step, after the stretch, in both the broadband and the narrowband branch, and states what it computes.
+- **The colour combination itself was checked against both reference implementations** — Cyril Richard's PalettePicker and Franklin Marek's Perfect Palette Picker. Both assemble the RGB the same way this script does (`new` + `set_image_pixeldata`), and both work on **stretched** input, which is why neither can colour-calibrate. Doing it linear, with SPCC and background extraction, is the difference — and the order (align → normalise → combine → plate-solve → background → calibrate) is right. Neither reference runs SCNR either.
+- **Fixed: the SPCC name check had the same log-reading bug** as the two readers repaired in 1.7.2 — a third place assuming Siril's log only grows. It now goes through `_log_delta`, so a wrong filter name is still caught late in a long session instead of the check silently reporting "database not found".
+
+## What was new in 1.7.3
 
 - **Fixed: with *Delete `_work/` when finished* on, every filter failed at registration.** Siril's `merge` does not copy its source frames, it symlinks them — 30 frames written in 4 ms is not a copy of 30 × 36 MB. Freeing the calibrated parts right after the merge therefore turned the merged sequence into dangling links, and registration died with *failed to find or open merged_HA_00001.fit* on all three channels. The parts are now freed after registration has written frames of its own.
 - The fault was latent for as long as the per-part path existed, but it only fired when a filter mixed exposures **and** the cleanup option was on. Since 1.6.0 splits every multi-night run by night, it became universal — for anyone who ticks that box.

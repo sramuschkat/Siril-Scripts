@@ -411,6 +411,25 @@ check(wd.index("if self._measured.get(filt):")
       < wd.index("elif k_sigma and self._quality_filter_args(staged)"),
       "a measurement is not presented as an estimate")
 
+print("\n6a) the linear composite stays linear — no SCNR in the pipeline")
+# Siril computes SCNR as green = min(green, (red + blue) / 2).  On an
+# assignment palette the green channel IS an emission line -- Ha in SHO --
+# so that clips measured flux, not a cast.  It is also non-linear, which
+# would break the property the very next step promises.
+fin = body("_finish_composite")
+check('"rmgreen"' not in fin,
+      "the finish step does not run rmgreen")
+check("still-LINEAR" in fin,
+      "and still promises a linear composite — the two must not both hold")
+check("scnr.c" in fin,
+      "the reason is recorded where the call used to be, with its source")
+todo = body("_todo_text")
+check(todo.count("rmgreen") >= 2,
+      "todo.md hands green removal to the user, in both palette branches",
+      str(todo.count("rmgreen")))
+check("min(green" in todo or "(red + blue) / 2" in todo,
+      "and states what it computes, so the cost is visible before it runs")
+
 print("\n6b) the colour solution's quality survives into the report")
 cc = body("_colour_calibrate")
 check(cc.index("before = self._log_snapshot()") < cc.index("self._cmd(*cmd)"),

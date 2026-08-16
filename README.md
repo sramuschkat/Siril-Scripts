@@ -596,7 +596,7 @@ Reads the current image from Siril, divides it into a configurable grid of tiles
 
 ## Svenesis ImageMono Train
 
-**File:** `Svenesis-ImageMono-Train.py` (v1.7.3) — **[Detailed Instructions](Instructions/Svenesis-ImageMono-Train-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-ImageMono-Train-Instructions_de.md)**
+**File:** `Svenesis-ImageMono-Train.py` (v1.7.4) — **[Detailed Instructions](Instructions/Svenesis-ImageMono-Train-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-ImageMono-Train-Instructions_de.md)**
 
 > ⚠️ Public preview — not yet submitted to the official Siril Script Repository.
 
@@ -651,7 +651,7 @@ Siril computes **Lc = (L − D) / (F − O)**. Everything is optional: the scrip
 - **Composed in memory** (`new` + pixel data), with `rgbcomp` as the fallback and as the only route for the *Quick linear LRGB* luminance transfer. Optional **synthetic luminance** for narrowband nights — built, named, and left for the post-stretch combine.
 - **Narrowband normalisation — but not together with SPCC.** SHO/HOO channels can be linear-matched to the Ha reference so a Hubble-palette stack does not come out green. Leave that off while SPCC calibrates: `linear_match` flattens the Ha/OIII flux ratio on purpose, and that ratio is exactly what SPCC's narrowband mode measures against catalogue spectra. The log, the report and `todo.md` all say which of the two to switch off — and when the recommended pairing is in place, `todo.md` says so instead of asking you to turn normalisation back on.
 - **Luminance stays separate** for LRGB — per Siril's guidance, L is combined *after* stretching, because baking it in linearly skews the photometry and weakens colour. A one-step "quick LRGB" remains available.
-- **Auto-finish** on the composite: plate-solve → background extraction → colour calibration → SCNR. The result is saved **linear**, ready for your own stretch.
+- **Auto-finish** on the composite: plate-solve → background extraction → colour calibration. The result is saved **linear**, ready for your own stretch — green removal (SCNR) is left to you, because it is non-linear and, on a narrowband palette, cuts a real emission line.
 - **SPCC instead of PCC.** Spectrophotometric Colour Calibration accounts for your sensor's and filters' response curves — Siril's own documentation calls it the more accurate method and PCC obsolete, and for a mono rig behind a filter wheel that distinction matters. On real data the difference is visible in the fit itself: the catalogue-vs-image slope went from ~3.0 (OSC assumptions) to ~0.95 once the mono sensor and filters were described.
 - **Names are checked before the run.** A sensor or filter name Siril does not recognise is *not* an error for it — it quietly substitutes something else. `IMX533`, for instance, exists only in the OSC tables, so a filter-wheel rig gets calibrated as a colour camera, silently. The script reads the SPCC database Siril itself uses (read-only, located via sirilpy) and reports a name that is missing, ambiguous, or only a partial match. A database it cannot find means *cannot check*, never *invalid*.
 - **Pre-filled for the author's rig** — Player One Ares-M Pro (IMX533 mono) with Antlia LRGB V-Pro and 4.5 nm Edge SHO filters. Overwrite the fields for your own kit (they are remembered), or change the `DEFAULT_SPCC_*` constants near the top of the script.
