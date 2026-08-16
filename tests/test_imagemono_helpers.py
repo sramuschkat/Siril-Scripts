@@ -278,23 +278,70 @@ exec("from __future__ import annotations\n" + seg, fns)
 good, limit = fns["FLAT_MATCH_GOOD"], fns["FLAT_MATCH_LIMIT"]
 check(good < limit, f"thresholds ordered: {good} < {limit}")
 
+# The shipped functions, not a re-implementation of them.  This block once
+# held its own copy of the arithmetic and went on passing while the real
+# check reported shot noise as a mismatch on every dataset it saw.
+norm, spread_of = fns["_flat_normalise"], fns["_flat_ratio_spread"]
+
 
 def spread(x, y):
-    sx = x[::4, ::4] / np.median(x[::4, ::4])
-    sy = y[::4, ::4] / np.median(y[::4, ::4])
-    return float(np.nanstd(sx / sy))
+    return spread_of(norm(x), norm(y))
 
 
-base_img = np.ones((256, 256)) * 1000.0
-vign = np.linspace(0.8, 1.0, 256)[None, :] * np.ones((256, 1))
-a = base_img * vign
+SIDE = 2000
+ramp = np.linspace(0.8, 1.0, SIDE)[None, :] * np.ones((SIDE, 1))
+base_img = np.ones((SIDE, SIDE)) * 24000.0
+a = base_img * ramp
 s_same = spread(a, a * 3.0)
-s_moved = spread(a, base_img * (np.linspace(0.75, 1.0, 256)[None, :]
-                                * np.ones((256, 1))))
+s_moved = spread(a, base_img * (np.linspace(0.75, 1.0, SIDE)[None, :]
+                                * np.ones((SIDE, 1))))
 print(f"   same optics, 3x brighter: {s_same:.5f}")
 print(f"   vignetting moved        : {s_moved:.5f}")
 check(s_same < good, "a brightness difference is not a disagreement")
 check(s_moved > limit, "a moved vignette is")
+
+# Noise, and nothing else.  Two sets shot through the SAME optics differ by
+# exactly zero in shape, so whatever the check returns for them is its own
+# error bar -- and it has to land under the "these nights agree" threshold.
+# The per-frame scatter is the one measured on a real 24 000 ADU flat.
+rng = np.random.default_rng(20260816)
+PER_FRAME = 0.0126
+
+
+def night(n_frames):
+    """The mean of `n_frames` noisy realisations of the same optics."""
+    total = np.zeros((SIDE, SIDE))
+    for _ in range(n_frames):
+        total += a * (1.0 + rng.normal(0.0, PER_FRAME, (SIDE, SIDE)))
+    return total / n_frames
+
+
+one_a, one_b = night(1), night(1)
+five_a, five_b = night(5), night(5)
+raw = float(np.nanstd((one_a / np.median(one_a)) / (one_b / np.median(one_b))))
+print(f"   noise only, one frame each, unbinned: {raw:.5f}")
+check(raw > limit, "unbinned single frames are pure noise ABOVE the limit")
+n_binned = spread(one_a, one_b)
+n_full = spread(five_a, five_b)
+print(f"   noise only, one frame each, binned  : {n_binned:.5f}")
+print(f"   noise only, five frames each, binned: {n_full:.5f}")
+check(n_binned < raw, "binning alone already suppresses most of it")
+check(n_full < good, "a whole night, binned, lands under the agree threshold")
+check(n_full < n_binned, "and averaging the night is what closes the gap")
+
+# The floor is measured the way the run measures it: one night, split.
+floor = spread_of(norm(night(2)), norm(night(2)))
+check(floor > n_full,
+      f"halves give a conservative floor: {floor:.5f} > {n_full:.5f}")
+
+# A real mismatch still has to survive both noise-suppressing steps.
+moved = a * 0 + base_img * (np.linspace(0.75, 1.0, SIDE)[None, :]
+                            * np.ones((SIDE, 1)))
+noisy_moved = np.zeros((SIDE, SIDE))
+for _ in range(5):
+    noisy_moved += moved * (1.0 + rng.normal(0.0, PER_FRAME, (SIDE, SIDE)))
+check(spread(five_a, noisy_moved / 5) > limit,
+      "a moved vignette is still caught through the noise")
 
 print()
 if fails:

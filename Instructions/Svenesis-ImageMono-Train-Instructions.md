@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.7.5** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.7.6** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.7.5](#17-whats-new-in-175)
+17. [What's New in 1.7.6](#17-whats-new-in-176)
 
 ---
 
@@ -246,7 +246,9 @@ The **camera** is part of the key because image size and binning are only a prox
 
 The two are independent, so the parts are their cross product, and a dimension with a single value drops out of it: no darks means the exposure never splits, one master flat means the night never does. Each part is staged separately, calibrated with its own masters, and the calibrated parts are merged again (`merge`) before registration — so the channel still ends as **one** master, which is what the colour composite needs. The report names every channel this happened to, and which dimension split it.
 
-**Flats pooled across nights are checked against each other.** Nothing in the headers says whether the optical train moved between two sessions — but dividing one night's flat by another's does: a matching pair gives a uniform image, a mismatched one shows the vignetting or dust that shifted. Each frame is normalised by its own median first, so a brighter panel or a fading twilight sky is not counted as disagreement; what remains is the shape.
+**Flats pooled across nights are checked against each other.** Nothing in the headers says whether the optical train moved between two sessions — but dividing one night's flats by another's does: a matching pair gives a uniform image, a mismatched one shows the vignetting or dust that shifted. Each night is normalised by its own median first, so a brighter panel or a fading twilight sky is not counted as disagreement; what remains is the shape.
+
+Two steps happen before the spread is read, and the thresholds below are meaningless without them. Every frame of a night is **averaged**, standing in for the master flat that does not exist yet at this point in the run; and the map is **binned** to about 250 px on the long side. Vignetting and dust are hundreds of pixels across and survive both untouched, while photon noise — which on a single 24 000 ADU sub runs to 1.8 %, six times the limit below — does not.
 
 | Spread of the ratio | Reading |
 |---|---|
@@ -254,7 +256,9 @@ The two are independent, so the parts are their cross product, and a dimension w
 | 0.15 % – 0.30 % | usable, noted in the report |
 | above 0.30 % | the train was probably touched; the report names the nights and points at *Match flats to the same night* |
 
-The check is silent when there is only one night or when the frames cannot be read. With *Match flats to the same night* on it still runs and is still reported — the number is what shows the split is earning its extra stack — but it stops being a warning, and it never advises switching on something that is already on. Method and thresholds come from the **Flat On Flat Analyzer** by Carlo Mollicone in the official Siril script repository.
+The check also measures its own **noise floor**: the reference night is split in half and compared with itself, and since two halves of one night differ by nothing but noise, whatever that returns is the error bar on the number above it. A difference that does not clear the floor is reported as "no shape difference is detectable" rather than as a figure — each half averages half as many frames as the night-to-night comparison, so the floor is a deliberately conservative bound.
+
+The check is silent when there is only one night or when the frames cannot be read. With *Match flats to the same night* on it still runs and is still reported — the number is what shows the split is earning its extra stack — but it stops being a warning, and it never advises switching on something that is already on. Method and thresholds come from the **Flat On Flat Analyzer** by Carlo Mollicone in the official Siril script repository, including the averaging and the binning.
 
 **One master flat per night.** With *Match flats to the same night* on, every night that has both flats and lights of a filter gets its own master flat, and only that night's lights are divided by it. The calibrated nights are merged again (`merge`) before registration, so the filter still ends as **one** master — splitting is a calibration concern, not a stacking one.
 
@@ -892,7 +896,14 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.7.5
+## 17. What's New in 1.7.6
+
+- **The flat-on-flat check was measuring shot noise, not the optics.** It divided *one* flat of one night by *one* flat of another, pixel by pixel, and read the standard deviation. Two subs of the **same** night — where the shape difference is zero by construction — come out at **1.78 %** on a real 24 000 ADU flat, against a limit of 0.30 %. The check therefore reported "a real mismatch", six times over, on every dataset it has ever seen, and advised switching on an option to cure a difference that was not there. With that option already on, it printed the same number as the justification for the split.
+- **The cause was borrowing thresholds without their method.** The 0.15 % / 0.30 % figures come from the *Flat On Flat Analyzer*, which compares two **master** flats and **block-averages** the map to ~250 px on the long side before it measures. On a 3008 px frame that is 12×12 binning; together with the stacking, the two steps take a factor of roughly 27 out of the noise. Both are now done here: a whole night is averaged to stand in for the master, and the binning reproduces the reference tool's.
+- **The check now measures its own noise floor.** The reference night is split in half and compared with itself; two halves of one night differ by nothing but noise, so that number is the error bar. Below it the run reports "no shape difference is detectable" instead of a figure that means nothing. §5 explains both steps.
+- **On the M 16 run this moves all three filters from "a real mismatch" at 1.78 % to agreement at 0.06–0.08 %**, against a floor of 0.06 %. The per-night masters of that same run agree to 0.027 %. Per-night flat calibration is unaffected and still worth using — it guards against a train that really did move. What changed is that its report no longer invents evidence for itself.
+
+## What was new in 1.7.5
 
 - **Output normalization is documented for what it actually does.** Read from Siril's source: on 32-bit output it is `(x − min) / (max − min)` with that master's *own* extremes — an affine transform per channel, driven by single pixels, not a shared scale. The tooltip claimed it normalised "the background level", and a run note claimed that switching off *Normalize narrowband channels* left the physical line ratio intact. Neither was true while this option was on. §8 now explains it, and the note names both options.
 - **The second interpolation is stated.** `seqapplyreg` runs twice on the way to a channel — once over the sub-frames, once over the finished masters — and each resampling softens the image a little. §9 says so, and says why the single-resample alternative was not taken: it needs one shared reference carrying enough stars for the sparsest narrowband channel.

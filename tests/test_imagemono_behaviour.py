@@ -8,6 +8,7 @@ Run:  python3 tests/test_imagemono_behaviour.py
 """
 import ast
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -490,6 +491,34 @@ check(pick.index("KIND_DARKFLAT) or {}).get(filt)")
       "dark-flat, then a dark at that exposure, then bias")
 check("self._offset_cache" in pick,
       "filters sharing an exposure stack it once")
+
+print("\n9b) the flat check compares nights, not single frames")
+fc = body("_check_flat_consistency")
+# The bug this section exists for: `setdefault(night, path)` kept ONE sub
+# per night, so the spread was shot noise -- 1.78% against a 0.30% limit,
+# on every dataset.  A whole night has to reach the measurement.
+check("setdefault(_path_date(path) or \"?\", []).append(path)" in fc,
+      "every frame of a night is collected, not the first one")
+shape = src[src.index("def _flat_shape"):src.index("def _flat_normalise")]
+check("stack + frame" in shape and "stack / used" in shape,
+      "and the night is averaged before anything is measured")
+check("_rebin_mean" in src[src.index("def _flat_normalise"):
+                           src.index("def _flat_ratio_spread")],
+      "then binned down, the way the thresholds' own source tool does")
+# The floor, and the branch that uses it, must come BEFORE the thresholds:
+# a difference inside the error bar is not a small mismatch, it is none.
+check(fc.index("floor = _flat_ratio_spread") < fc.index("<= FLAT_MATCH_GOOD"),
+      "the noise floor is measured before any threshold is applied")
+check("worst <= floor" in fc, "and a difference under it is reported as none")
+check("base[:cut]" in fc and "base[cut:]" in fc,
+      "the floor comes from one night split in half — zero shape difference")
+# Written as a 4-tuple, read as a 4-tuple.  These sit ~1200 lines apart.
+wrote = re.search(r"self\._flat_warn\[filt\] = \(([^)]*)\)", fc).group(1)
+read = re.search(r"for filt, \(([^)]*)\) in sorted\(\s*self\._flat_warn",
+                 wd).group(1)
+check(len(wrote.split(",")) == len(read.split(",")),
+      "the warning tuple is written and read with the same arity",
+      f"({wrote}) vs ({read})")
 
 print("\n10) the capability report names what is missing")
 oapi = src[src.index("OPTIONAL_API = ("):src.index("def _missing_capabilities")]

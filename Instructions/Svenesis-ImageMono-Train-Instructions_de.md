@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.7.5** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.7.6** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.7.5](#17-neu-in-175)
+17. [Neu in 1.7.6](#17-neu-in-176)
 
 ---
 
@@ -246,7 +246,9 @@ Die **Kamera** gehört zum Schlüssel, weil Bildgröße und Binning nur ein Indi
 
 Beide sind unabhängig voneinander, die Teile sind daher ihr Kreuzprodukt, und eine Dimension mit nur einem Wert fällt heraus: ohne Darks wird nie nach Belichtung geteilt, mit nur einem Master-Flat nie nach Nacht. Jeder Teil wird separat bereitgestellt, mit seinen eigenen Mastern kalibriert, und die kalibrierten Teile werden vor der Registrierung wieder zusammengeführt (`merge`) — der Kanal endet damit weiterhin als **ein** Master, und genau das braucht das Farbkomposit. Der Report nennt jeden Kanal, bei dem das passiert ist, und welche Dimension ihn geteilt hat.
 
-**Über Nächte gepoolte Flats werden gegeneinander geprüft.** Kein Header sagt, ob der optische Aufbau zwischen zwei Sessions verändert wurde — die Division des einen Flats durch das andere sagt es: ein passendes Paar ergibt ein gleichförmiges Bild, ein unpassendes zeigt die Vignettierung oder den Staub, der sich verschoben hat. Jeder Frame wird zuerst durch seinen eigenen Median geteilt, ein helleres Panel oder eine abklingende Dämmerung zählt also nicht als Abweichung; übrig bleibt die Form.
+**Über Nächte gepoolte Flats werden gegeneinander geprüft.** Kein Header sagt, ob der optische Aufbau zwischen zwei Sessions verändert wurde — die Division der Flats einer Nacht durch die einer anderen sagt es: ein passendes Paar ergibt ein gleichförmiges Bild, ein unpassendes zeigt die Vignettierung oder den Staub, der sich verschoben hat. Jede Nacht wird zuerst durch ihren eigenen Median geteilt, ein helleres Panel oder eine abklingende Dämmerung zählt also nicht als Abweichung; übrig bleibt die Form.
+
+Vor der Messung passieren zwei Dinge, ohne die die Schwellen unten bedeutungslos sind. Alle Frames einer Nacht werden **gemittelt** und vertreten so das Master-Flat, das es an dieser Stelle des Laufs noch nicht gibt; und die Karte wird auf etwa 250 px an der langen Seite **geblockt**. Vignettierung und Staub sind Hunderte Pixel groß und überstehen beides unverändert — Photonenrauschen, das an einem einzelnen 24 000-ADU-Sub 1,8 % erreicht und damit das Sechsfache der Grenze unten, nicht.
 
 | Streuung des Verhältnisses | Bedeutung |
 |---|---|
@@ -254,7 +256,9 @@ Beide sind unabhängig voneinander, die Teile sind daher ihr Kreuzprodukt, und e
 | 0,15 % – 0,30 % | brauchbar, wird im Report vermerkt |
 | über 0,30 % | am Aufbau wurde vermutlich etwas verändert; der Report nennt die Nächte und verweist auf *Match flats to the same night* |
 
-Die Prüfung schweigt, wenn es nur eine Nacht gibt oder wenn die Frames nicht lesbar sind. Ist *Match flats to the same night* an, läuft sie weiter und wird weiter berichtet — die Zahl zeigt ja, dass die Aufteilung ihren zusätzlichen Stack wert ist — aber sie ist keine Warnung mehr, und sie rät nie dazu, etwas einzuschalten, das schon an ist. Verfahren und Schwellen stammen aus dem **Flat On Flat Analyzer** von Carlo Mollicone im offiziellen Siril-Skript-Repository.
+Die Prüfung misst außerdem ihren eigenen **Rauschboden**: Die Referenznacht wird halbiert und mit sich selbst verglichen, und da zwei Hälften derselben Nacht sich um nichts als Rauschen unterscheiden, ist das Ergebnis die Fehlergrenze der Zahl darüber. Ein Unterschied, der den Boden nicht überschreitet, wird als „kein Formunterschied nachweisbar" gemeldet statt als Zahl — jede Hälfte mittelt halb so viele Frames wie der Nacht-zu-Nacht-Vergleich, der Boden ist also bewusst konservativ.
+
+Die Prüfung schweigt, wenn es nur eine Nacht gibt oder wenn die Frames nicht lesbar sind. Ist *Match flats to the same night* an, läuft sie weiter und wird weiter berichtet — die Zahl zeigt ja, dass die Aufteilung ihren zusätzlichen Stack wert ist — aber sie ist keine Warnung mehr, und sie rät nie dazu, etwas einzuschalten, das schon an ist. Verfahren und Schwellen stammen aus dem **Flat On Flat Analyzer** von Carlo Mollicone im offiziellen Siril-Skript-Repository, samt Mittelung und Blockung.
 
 **Ein Master-Flat pro Nacht.** Ist *Match flats to the same night* an, bekommt jede Nacht, die Flats **und** Lights eines Filters hat, ihr eigenes Master-Flat, und nur die Lights dieser Nacht werden dadurch geteilt. Die kalibrierten Nächte werden vor der Registrierung wieder zusammengeführt (`merge`), der Filter endet also weiterhin als **ein** Master — die Aufteilung ist eine Sache der Kalibrierung, nicht des Stackens.
 
@@ -892,7 +896,14 @@ Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.7.5
+## 17. Neu in 1.7.6
+
+- **Die Flat-auf-Flat-Prüfung hat Photonenrauschen gemessen, nicht die Optik.** Sie teilte *ein* Flat der einen Nacht durch *ein* Flat der anderen, Pixel für Pixel, und las die Standardabweichung. Zwei Subs **derselben** Nacht — deren Formunterschied konstruktionsbedingt null ist — ergeben an einem echten 24 000-ADU-Flat **1,78 %**, bei einer Grenze von 0,30 %. Die Prüfung meldete also „a real mismatch", um das Sechsfache darüber, bei jedem Datensatz, den sie je gesehen hat, und riet dazu, eine Option gegen einen Unterschied einzuschalten, den es nicht gab. War die Option schon an, druckte sie dieselbe Zahl als Begründung der Aufteilung.
+- **Die Ursache war, Schwellen ohne ihr Verfahren zu übernehmen.** Die 0,15 % / 0,30 % stammen aus dem *Flat On Flat Analyzer*, der zwei **Master**-Flats vergleicht und die Karte vor der Messung auf ~250 px an der langen Seite **blockmittelt**. An einem 3008-px-Frame ist das 12×12; zusammen mit dem Stacken nehmen beide Schritte rund den Faktor 27 aus dem Rauschen. Beides passiert jetzt auch hier: Eine ganze Nacht wird gemittelt und vertritt so den Master, und die Blockung bildet die des Referenzwerkzeugs nach.
+- **Die Prüfung misst jetzt ihren eigenen Rauschboden.** Die Referenznacht wird halbiert und mit sich selbst verglichen; zwei Hälften derselben Nacht unterscheiden sich um nichts als Rauschen, diese Zahl ist also die Fehlergrenze. Darunter meldet der Lauf „kein Formunterschied nachweisbar" statt einer Zahl ohne Bedeutung. §5 erklärt beide Schritte.
+- **Beim M-16-Lauf kippen damit alle drei Filter von „a real mismatch" bei 1,78 % auf Übereinstimmung bei 0,06–0,08 %**, gegen einen Boden von 0,06 %. Die Master derselben Nächte stimmen auf 0,027 % überein. Die Flat-Kalibrierung pro Nacht ist davon unberührt und weiterhin sinnvoll — sie schützt gegen einen Aufbau, der sich wirklich verändert hat. Geändert hat sich, dass ihr Report sich die Belege dafür nicht mehr selbst erfindet.
+
+## Was in 1.7.5 neu war
 
 - **Die Output-Normalisierung ist dokumentiert, wie sie wirklich arbeitet.** Aus Sirils Quelltext gelesen: bei 32-Bit-Ausgabe ist sie `(x − min) / (max − min)` mit den *eigenen* Extremwerten des Masters — eine affine Abbildung pro Kanal, getrieben von einzelnen Pixeln, keine gemeinsame Skala. Der Tooltip behauptete, sie normalisiere „den Hintergrundpegel", und ein Hinweis im Lauf behauptete, das Abschalten von *Normalize narrowband channels* lasse das physikalische Linienverhältnis unangetastet. Beides stimmte nicht, solange diese Option an war. §8 erklärt es jetzt, und der Hinweis nennt beide Optionen.
 - **Die zweite Interpolation steht jetzt da.** `seqapplyreg` läuft auf dem Weg zu einem Kanal zweimal — einmal über die Subframes, einmal über die fertigen Master — und jedes Resampling weicht das Bild ein wenig auf. §9 sagt das und sagt, warum die Alternative mit nur einem Resampling nicht gewählt wurde: sie bräuchte eine gemeinsame Referenz mit genug Sternen für den sternärmsten Schmalbandkanal.

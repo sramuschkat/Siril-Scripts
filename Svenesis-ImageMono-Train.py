@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.7.5
+Script Version: 1.7.6
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.7.5
+# Script Version: 1.7.6
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +97,39 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.7.6 - The flat-on-flat check was measuring shot noise, not the optics
+      - It divided ONE flat of one night by ONE flat of another, per
+        pixel, and read the standard deviation.  Two subs of the SAME
+        night -- where the shape difference is zero by construction --
+        come out at 1.78% on a real 24 000 ADU flat.  The limit it was
+        judged against is 0.30%.  So the check reported "a real
+        mismatch", six times over, on every dataset it has ever seen,
+        and advised switching on an option to cure a difference that was
+        not there.  With the option already on, it printed the same
+        number as the justification for the split
+      - The thresholds come from Carlo Mollicone's Flat On Flat Analyzer,
+        and they were adopted without the two things that tool does
+        before it measures: it compares master flats, not subs, and it
+        block-averages the map to ~250 px on the long side first.  On a
+        3008 px frame that is 12x12 binning.  Together the two steps take
+        roughly a factor of 27 out of the noise
+      - Both are now done here.  Every frame of a night is averaged to
+        stand in for the master that does not exist yet at that point,
+        and `_rebin_mean` reproduces the reference tool's binning
+      - The check also measures its own noise floor, by splitting the
+        reference night in half and comparing it with itself: two halves
+        of one night differ by nothing but noise, so whatever that
+        returns is the error bar.  Below it, the run says no difference
+        is detectable instead of naming a number that means nothing.
+        Each half averages half as many frames as the night-to-night
+        comparison, which makes the floor conservative on purpose
+      - On the M 16 run this moves all three filters from "a real
+        mismatch" at 1.78% to agreement at 0.06-0.08%, against a floor of
+        0.06%.  The per-night masters of that run agree to 0.027%
+      - Per-night flat calibration is unaffected and still recommended --
+        it guards against an optical train that really did move.  What
+        changed is that its report no longer invents evidence for itself
+
 1.7.5 - Two claims corrected against Siril's source
       - "Output normalization" was described as normalising "the final
         integrated frame's background level".  It does not.  On 32-bit
@@ -1213,7 +1246,7 @@ from PyQt6.QtGui import QColor, QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.7.5"
+VERSION = "1.7.6"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -1693,8 +1726,29 @@ def _fits_filter(path: str) -> str:
 # a perfect pair gives a uniform image -- and reads the spread of the
 # result.  Below 0.15% the pair is excellent, up to 0.3% still usable,
 # beyond that something in the optical train moved.
+#
+# These numbers are only meaningful together with the two noise-suppressing
+# steps the reference tool takes before it measures, and taking the numbers
+# without the steps is how this check spent several versions reporting shot
+# noise as a mismatch.  It (a) compares two flat MASTERS, not two subs, and
+# (b) block-averages the map down to ~250 px on the long side first.  On a
+# 3008 px frame that is 12x12 binning: together the two steps divide the
+# per-pixel noise by roughly sqrt(n_frames) * 12 -- a factor of ~27 for a
+# five-frame set.  Measured on a real 24 000 ADU flat, the per-pixel spread
+# between two subs of the SAME night -- where the shape difference is zero
+# by construction -- is 1.78%, six times the limit below.  Rebinned masters
+# of two different nights of the same run give 0.03%.
 FLAT_MATCH_GOOD = 0.0015
 FLAT_MATCH_LIMIT = 0.0030
+
+# Long side of the map the spread is read from, in pixels.  The reference
+# tool's own figure, and the reason its thresholds are what they are.
+FLAT_COMPARE_TARGET = 250
+# Frames averaged per night to stand in for that night's master.  The
+# master itself does not exist yet when this check runs, and past a handful
+# of frames the noise is already far below the shape difference being
+# looked for, so reading more only costs time on a cloud-synced folder.
+FLAT_COMPARE_MAX_FRAMES = 8
 
 # Below this many frames, a master flat carries enough of its own noise to
 # be worth mentioning.  It is not a refusal -- a thin flat that describes
@@ -1721,39 +1775,89 @@ SPCC_SIGMA_LIMIT = 1.0
 LOG_ANCHOR_CHARS = 400
 
 
-def _flat_disagreement(a: str, b: str) -> float | None:
-    """Spread of the ratio between two flats, or None if unreadable.
+def _rebin_mean(arr, target: int = FLAT_COMPARE_TARGET):
+    """Block-average a 2-D array until its long side is at most `target`.
 
-    Each frame is divided by its own median first, so a difference in
-    illumination level -- twilight fading, a panel at another brightness
-    -- does not count as disagreement.  What is left is the SHAPE:
-    vignetting, dust, spacing.  The standard deviation of that ratio is
-    the number the reference tool judges.
-
-    Only a strided sample is read (every 4th pixel in each axis, a
-    sixteenth of the frame).  Dust shadows and vignetting are large,
-    smooth structures; they do not hide between pixels, and a flat is
-    read here purely to be compared, never to be applied.
+    Copied in behaviour from the reference tool's `_rebin`: an integer
+    factor, the remainder trimmed off, plain block means.  Averaging is
+    what makes the measurement possible -- a k*k block divides the noise
+    by k while leaving vignetting and dust, which are hundreds of pixels
+    across, exactly where they were.
     """
-    try:
-        with fits.open(a, memmap=True, ignore_missing_simple=True) as ha, \
-                fits.open(b, memmap=True, ignore_missing_simple=True) as hb:
-            da = next((h.data for h in ha if getattr(h, "data", None)
-                       is not None), None)
-            db = next((h.data for h in hb if getattr(h, "data", None)
-                       is not None), None)
-            if da is None or db is None or da.shape != db.shape:
-                return None
-            sa = np.asarray(da[..., ::4, ::4], dtype=np.float64)
-            sb = np.asarray(db[..., ::4, ::4], dtype=np.float64)
-    except Exception as exc:
-        _log_swallowed(exc)
+    factor = max(arr.shape[-2:]) // max(1, target)
+    if factor <= 1:
+        return arr
+    h = (arr.shape[0] // factor) * factor
+    w = (arr.shape[1] // factor) * factor
+    return (arr[:h, :w]
+            .reshape(h // factor, factor, w // factor, factor)
+            .mean(axis=(1, 3)))
+
+
+def _flat_shape(paths: list, limit: int = FLAT_COMPARE_MAX_FRAMES):
+    """One night's flats as a normalised shape map, or None.
+
+    The frames are AVERAGED before anything else, which is what makes
+    this stand in for the master that does not exist yet.  Then the map
+    is block-averaged (see `_rebin_mean`) and divided by its own median,
+    so a difference in illumination level -- twilight fading, a panel at
+    another brightness -- does not count as disagreement.  What is left
+    is the SHAPE: vignetting, dust, spacing.
+    """
+    stack = None
+    used = 0
+    for path in paths[:limit]:
+        try:
+            with fits.open(path, memmap=True,
+                           ignore_missing_simple=True) as hdul:
+                data = next((h.data for h in hdul
+                             if getattr(h, "data", None) is not None), None)
+                if data is None:
+                    continue
+                # float32 throughout the heavy part: a flat sits near
+                # 24 000 ADU and eight of them sum to under 200 000, which
+                # a 24-bit mantissa holds exactly.  The map is a few
+                # hundred pixels across by the time precision could matter.
+                frame = np.asarray(data, dtype=np.float32)
+        except Exception as exc:
+            _log_swallowed(exc)
+            continue
+        while frame.ndim > 2:               # (C, H, W) -> one plane
+            frame = frame.mean(axis=0)
+        if stack is None:
+            stack = frame
+        elif stack.shape == frame.shape:
+            stack = stack + frame
+        else:
+            continue                        # a different sensor size, skip
+        used += 1
+    if stack is None or not used:
         return None
-    ma, mb = float(np.median(sa)), float(np.median(sb))
-    if ma <= 0 or mb <= 0:
+    return _flat_normalise(stack / used)
+
+
+def _flat_normalise(frame):
+    """Bin a summed flat down and divide it by its own median, or None.
+
+    The whole array side of the measurement, kept free of file reading so
+    it can be checked against input with a known answer -- including the
+    one that matters, a pair that differs by NOTHING but noise.
+    """
+    shape = np.asarray(_rebin_mean(frame), dtype=np.float64)
+    median = float(np.median(shape))
+    return shape / median if median > 0 else None
+
+
+def _flat_ratio_spread(sa, sb) -> float | None:
+    """Standard deviation of one shape map divided by the other.
+
+    Kept apart from the reading so the number itself can be checked
+    against arrays with a known answer, without a FITS file in sight.
+    """
+    if sa is None or sb is None or sa.shape != sb.shape:
         return None
-    ratio = (sa / ma) / np.where(sb / mb <= 0, np.nan, sb / mb)
-    with np.errstate(invalid="ignore"):
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ratio = sa / np.where(sb <= 0, np.nan, sb)
         spread = float(np.nanstd(ratio))
     return spread if np.isfinite(spread) else None
 
@@ -3282,9 +3386,19 @@ class StackWorker(QThread):
         another's does say it: a matching pair gives a uniform result, a
         mismatched one shows the vignetting or dust that moved.
 
-        One frame per night is enough; the point is the shape of the
-        illumination, which every frame of a set shares.  Silent when
-        there is only one night or when the frames cannot be read.
+        Every frame of a night is used, not one of them: a single sub
+        carries enough shot noise to swamp the difference being looked
+        for (see `FLAT_MATCH_GOOD`).  Silent when there is only one night
+        or when the frames cannot be read.
+
+        A measurement without its own error bar cannot be judged, so the
+        noise floor is measured too, by splitting the reference night in
+        half and comparing it with itself -- two halves of one night have
+        no shape difference by construction, so whatever that comparison
+        returns is noise.  Each half averages half as many frames as the
+        night-to-night comparison does, which makes the floor a
+        deliberately conservative bound: a difference below it is noise
+        beyond doubt.
 
         ``handled`` says the nights are already being calibrated apart.
         The measurement still runs and is still reported -- it is the
@@ -3294,7 +3408,7 @@ class StackWorker(QThread):
         """
         by_night: dict = {}
         for path in files:
-            by_night.setdefault(_path_date(path) or "?", path)
+            by_night.setdefault(_path_date(path) or "?", []).append(path)
         if len(by_night) < 2:
             return
         # "?" (undated) sorts AFTER every digit, so a plain sort would
@@ -3306,19 +3420,47 @@ class StackWorker(QThread):
         ruler = dated[-1]               # the most recent dated night
         nights = [n for n in sorted(by_night) if n != ruler] + [ruler]
         base = by_night[ruler]
+        # Each night is read and averaged ONCE.  A helper taking two file
+        # lists would re-read the reference night for every comparison, and
+        # these are the largest files the run touches.
+        base_shape = _flat_shape(base)
         worst = worst_night = None
         for night in nights[:-1]:
-            spread = _flat_disagreement(base, by_night[night])
+            spread = _flat_ratio_spread(base_shape,
+                                        _flat_shape(by_night[night]))
             if spread is None:
                 continue
             if worst is None or spread > worst:
                 worst, worst_night = spread, night
         if worst is None:
             return
-        if worst <= FLAT_MATCH_GOOD and not handled:
+        # The reference night against itself: the noise floor of the
+        # number just measured, in the same units and the same pipeline.
+        floor = None
+        if len(base) > 1:
+            cut = len(base) // 2
+            floor = _flat_ratio_spread(_flat_shape(base[:cut]),
+                                       _flat_shape(base[cut:]))
+        bar = (f" (noise floor {floor * 100:.3f}%)"
+               if floor is not None else "")
+        # Agreement, in two grades: inside the error bar, where naming a
+        # figure would be naming noise, and merely small.  What the split
+        # option changes here is only the closing clause -- it must not turn
+        # agreement into a difference it is then credited with preventing,
+        # which is the whole reason this measurement was rebuilt.
+        if (floor is not None and worst <= floor) or worst <= FLAT_MATCH_GOOD:
+            if floor is not None and worst <= floor:
+                found = (f"agree to within the measurement limit "
+                         f"({worst * 100:.3f}% against a noise floor of "
+                         f"{floor * 100:.3f}%), with no shape difference "
+                         "detectable")
+            else:
+                found = f"agree to {worst * 100:.3f}%{bar}"
             self._emit(
-                f"  flat {filt}: {len(nights)} nights agree to "
-                f"{worst * 100:.2f}% — pooling them is right.",
+                f"  flat {filt}: {len(nights)} nights {found}"
+                + (" — keeping them apart costs an extra stack and changes "
+                   "nothing here, but it stays right if the train moves."
+                   if handled else ", so pooling them is right."),
                 LogColor.BLUE)
             return
         if handled:
@@ -3326,12 +3468,12 @@ class StackWorker(QThread):
             # worth its extra stack, not something to act on.
             self._emit(
                 f"  flat {filt}: {len(nights)} nights differ by up to "
-                f"{worst * 100:.2f}% ({worst_night} vs {nights[-1]}) — each "
-                "night is calibrated with its own flats, so the difference "
-                "never reaches the lights.", LogColor.GREEN)
+                f"{worst * 100:.3f}%{bar} ({worst_night} vs {nights[-1]}) "
+                "— each night is calibrated with its own flats, so the "
+                "difference never reaches the lights.", LogColor.GREEN)
             return
         level = "usable" if worst <= FLAT_MATCH_LIMIT else "a real mismatch"
-        self._flat_warn[filt] = (worst, worst_night, nights[-1])
+        self._flat_warn[filt] = (worst, worst_night, nights[-1], floor)
         # The advice has to fit what is actually switched on.  Telling a
         # user to enable an option they enabled is how a report loses its
         # authority -- and here it would be enabled and simply unable to
@@ -3345,7 +3487,7 @@ class StackWorker(QThread):
                    "each night with its own flats.")
         self._emit(
             f"  flat {filt}: the set from {worst_night} differs from "
-            f"{nights[-1]} by {worst * 100:.2f}% — {level}. "
+            f"{nights[-1]} by {worst * 100:.3f}%{bar} — {level}. "
             + ("Above " if worst > FLAT_MATCH_LIMIT else "Under ")
             + f"{FLAT_MATCH_LIMIT * 100:.1f}% usually means the optical "
             "train was touched between the nights, and one pooled master "
@@ -4588,10 +4730,10 @@ class StackWorker(QThread):
                     seen = sorted(set(notes))
                     A(f"    - **{filt}** per night: "
                       + "; ".join(f"{n} → `{m}`" for n, m in seen))
-                for filt, (spread, other, ref) in sorted(
+                for filt, (spread, other, ref, floor) in sorted(
                         self._flat_warn.items()):
                     A(f"    - ⚠️ **{filt}: the flats of {other} and {ref} "
-                      f"differ by {spread * 100:.2f}%.** They were pooled "
+                      f"differ by {spread * 100:.3f}%.** They were pooled "
                       "into one master anyway, which is right only if the "
                       "optical train did not move between those nights. "
                       + ("That is above the "
@@ -4601,8 +4743,13 @@ class StackWorker(QThread):
                          if spread > FLAT_MATCH_LIMIT else
                          "It is still inside the usable range, so this is "
                          "a note rather than a problem.")
-                      + " (Measured by dividing one night's flat by the "
-                      "other's — a matching pair gives a uniform result.)")
+                      + " (Measured by averaging each night's flats, binning "
+                      f"them to ~{FLAT_COMPARE_TARGET} px and dividing one "
+                      "by the other — a matching pair gives a uniform "
+                      "result."
+                      + (f"  The noise floor of that measurement is "
+                         f"{floor * 100:.3f}%." if floor is not None else "")
+                      + ")")
                 if opts.get("calib_library"):
                     A("    - Darks / bias were taken from the library "
                       f"`{opts['calib_library']}`; flats come from the "
@@ -10386,16 +10533,23 @@ class ImageMonoTrainWindow(QMainWindow):
             "<h3 style='color:#88aaff;'>Two rules worth knowing</h3>"
             "<ul>"
             "<li><b>Flats pooled across nights are checked against each "
-            "other.</b>  Dividing one night's flat by another's gives a "
+            "other.</b>  Dividing one night's flats by another's gives a "
             "uniform image when the optical train did not move, and shows "
-            "the vignetting or dust that did.  Each frame is normalised by "
+            "the vignetting or dust that did.  Each night is normalised by "
             "its own median first, so a brighter panel is not counted as "
             f"disagreement.  Under {FLAT_MATCH_GOOD:.2%} the nights agree; "
             f"up to {FLAT_MATCH_LIMIT:.2%} is still usable; beyond that the "
             "report names the nights and points at <i>Match flats to the "
             "same night</i>.  With that option on the measurement still "
             "runs and is still reported — it is what shows the split is "
-            "earning its extra stack — but it stops being a warning.</li>"
+            "earning its extra stack — but it stops being a warning.<br>"
+            "Those thresholds only hold if the noise is taken out first, "
+            "so a whole night is averaged rather than one frame picked, "
+            f"and the map is binned to about {FLAT_COMPARE_TARGET} px "
+            "before the spread is read.  Both steps come from the tool the "
+            "thresholds come from.  The check also measures its own noise "
+            "floor, by comparing one night with itself, and stays quiet "
+            "when the difference between nights does not clear it.</li>"
             "<li><b>A filter that mixes exposures, or nights, is calibrated "
             "in parts.</b>  A dark only removes the thermal signal that grew "
             "during <i>its own</i> exposure, so one dark for 120&nbsp;s and "
