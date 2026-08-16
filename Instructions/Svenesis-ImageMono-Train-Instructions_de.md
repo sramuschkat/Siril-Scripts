@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.7.9** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.7.10** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.7.9](#17-neu-in-179)
+17. [Neu in 1.7.10](#17-neu-in-1710)
 
 ---
 
@@ -473,7 +473,7 @@ Das ist kein Fehlschlag. Blau und Grün *sind* dasselbe Bild, ihr Verhältnis is
 R' = 1 − (1 − R) · (1 − k · Ha)        k = „Ha → Rot" / 100
 ```
 
-Ein Screen-Blend: er hebt den Rot-Kanal dort an, wo Ha stark ist, ohne je über 1 hinauszugehen. Weil Ha keinen Kanal *ersetzt*, hat es kein eigenes Dropdown — das Skript findet es automatisch über die Filterrolle unter den ausgerichteten Mastern, und das Log nennt das gewählte:
+Eine gewichtete Summe: Rot gewinnt Ha hinzu, ohne je über 1 hinauszugehen und ohne aufzuhören, linear zu sein. Weil Ha keinen Kanal *ersetzt*, hat es kein eigenes Dropdown — das Skript findet es automatisch über die Filterrolle unter den ausgerichteten Mastern, und das Log nennt das gewählte:
 
 ```
 HaRGB will blend HA into Red — Ha is an admixture, not a mapped channel.
@@ -487,15 +487,19 @@ Zwei weitere Besonderheiten:
 - **Für HaRGB entfällt die Farbkalibrierung.** Mit Ha im Rot-Kanal beschreibt die Sternphotometrie diesen Kanal nicht mehr, jede photometrische Kalibrierung würde also das Falsche messen. Das gespeicherte Komposit wird als *unkalibriert* gekennzeichnet — gleiche es von Hand ab.
 - **Die Luminanz bleibt trotzdem getrennt**, genau wie bei LRGB, und wird nach dem Strecken kombiniert.
 
-**Wie viel Ha tatsächlich hineingeht.** Die Beimischung lautet `1-(1-R)·(1-k·Ha)` — ein Screen-Blend, und auf *gestreckten* Daten ist das etwas spürbar anderes als eine Addition. Auf **linearen** Daten nicht. Bei typischen linearen Helligkeiten (0,001–0,01) stimmen beide auf besser als 0,1 % überein:
+**Wie viel Ha tatsächlich hineingeht.** Die Beimischung lautet `(R + k·Ha) / (1+k)` — eine gewichtete Summe. Bei 0 % ist der Kanal reines R, bei 100 % R und Ha zu gleichen Teilen. Sie überschreitet nie 1, verwirft R nie, und — darum geht es — sie ist **linear**, und genau so wird jedes Komposit dieses Skripts übergeben.
 
-| R | Ha | Screen-Blend | R + k·Ha |
+Bis 1.7.9 war es ein Screen-Blend, `1-(1-R)·(1-k·Ha)`. Ausmultipliziert `R + k·Ha − k·R·Ha`, und der Kreuzterm ist quadratisch im Fluss. Am schwachen Ende ist er unsichtbar, deshalb stand er so lange:
+
+| R | Ha | Screen-Blend | gewichtete Summe `(R+k·Ha)/(1+k)`, k=1 |
 |---|---|---|---|
-| 0,002 | 0,003 | 0,003497 | 0,003500 |
-| 0,02 | 0,03 | 0,034700 | 0,035000 |
-| 0,4 | 0,6 | 0,580000 | 0,700000 |
+| 0,002 | 0,003 | 0,003497 | 0,002500 |
+| 0,02 | 0,03 | 0,034700 | 0,025000 |
+| 0,8 | 0,8 | 0,960000 | 0,800000 |
 
-Der Regler addiert also einen Anteil Ha zu Rot, mehr passiert dort nicht. Die Screen-Form hat trotzdem ihren Zweck — sie kann 1,0 nie überschreiten, ein heller Sternkern lässt sich damit nicht ins Clipping schieben — aber die Lichterkompression, die ein Screen-Blend *nach* dem Strecken bringt, findet hier schlicht nicht statt. Wer die will, wiederholt die Beimischung nach dem Strecken.
+Am schwachen Ende stimmen Screen-Blend und einfache Summe auf besser als 0,1 % überein. Am hellen Ende nicht: bei R = 0,8 und k·Ha = 0,4 liefert die Screen-Form 0,88 statt 1,2 — 27 % Kompression genau der Sterne und Nebelkerne, die du danach streckst. Derselbe Einwand, der `rmgreen` in 1.7.4 aus dem Finish geworfen hat, gilt hier, also wurde die Beimischung in 1.7.10 zur gewichteten Summe.
+
+Wer die Lichterkompression eines Screen-Blends will, wiederholt die Beimischung **nach** dem Strecken, wo sie hingehört.
 
 ---
 
@@ -904,7 +908,15 @@ Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.7.9
+## 17. Neu in 1.7.10
+
+- **Die HaRGB-Beimischung ist jetzt linear.** Sie mischte Ha per Screen-Blend in Rot, `1-(1-R)·(1-k·Ha)`, dessen `R·Ha`-Kreuzterm quadratisch im Fluss ist. Am schwachen Ende unsichtbar — die Handbücher haben das sogar nachgemessen — aber bei R = 0,8 und k·Ha = 0,4 liefert er 0,88 statt 1,2, also **27 % Kompression** genau der Sterne und Nebelkerne, die du danach streckst. Nicht linear, und Linearität ist die eine Eigenschaft, mit der hier jedes Komposit übergeben wird — derselbe Einwand, der `rmgreen` in 1.7.4 entfernt hat. Es ist jetzt `(R + k·Ha) / (1+k)`: eine gewichtete Summe, ohne Rescale in [0,1], die R nie verwirft. Der Regler geht von reinem R bei 0 % bis zu einer gleichen Mischung bei 100 %, und das Log nennt die beiden verwendeten Gewichte. §9 rechnet es durch.
+- **Der Hilfe-Tab mit den Ausgabedateien behauptet nicht mehr, `_HaRGB` sei kalibriert.** Er nannte alle Komposite „calibrated and linear", während ein zweiter Tab korrekt sagte, HaRGB werde von der photometrischen Kalibrierung ausgenommen. Für diese eine Datei war beides falsch; die Ausnahme steht jetzt dort, wo die Dateien aufgezählt werden.
+- **Die `MIN_STACK_FRAMES`-Sperre gilt für die Kombination der Qualitätsfilter, nicht für jeden einzeln.** Siril behält die Frames, die *alle* Filter passieren — die Überlebenden sind eine Schnittmenge. Vier 60-%-Schnitte auf 20 Frames kamen einzeln durch und projizierten zusammen auf **2** Überlebende gegen einen Boden von 4. Die laufende Schätzung multipliziert die Anteile; das unterstellt eine Unabhängigkeit, die die Metriken nicht haben, also irrt sie in Richtung „Frames behalten", und das ist für diesen Boden die richtige Richtung. Normale Einstellungen bleiben unberührt: drei 90-%-Schnitte auf 30 Frames greifen weiterhin alle. Für k-sigma lässt sich gar nichts projizieren, dort wird stattdessen die Zahl kombinierter Schnitte gedeckelt (zwei).
+- **Die Integrationszeit eines Kanals mit gemischten Belichtungen ist als Schätzung markiert.** Die Skalierung über das Frame-Verhältnis unterstellt gleich lange Frames, und es ist nirgends festgehalten, *welche* verworfen wurden — bei 20×300 s + 10×120 s bis zu acht Minuten Abweichung. Die Zahl trägt jetzt ein **~**, und der Report sagt warum.
+- **Geprüft und bewusst nicht geändert:** die Qualitätsmediane lassen Nullen per Wahrheitswert-Test weg. Das sieht nach einem statistischen Fehler aus und ist keiner — sirilpy dokumentiert roundness als „0 when uninit, ]0, 1] when set", eine FWHM von null gibt es nicht, und ein Frame ohne Sterne ist nicht registrierbar und erreicht die Stichprobe nie. Die naheliegende Reparatur würde die Zahl verschlechtern. Die Begründung steht jetzt im Code.
+
+## Was in 1.7.9 neu war
 
 - **Die Log-Auswertungen hängen nicht mehr an einer Diagnose.** 1.7.8 hat eine Art repariert, auf die die Sternpaar-Zahlen verschwinden; der nächste Lauf ließ denselben Leser aus dem *anderen* Grund scheitern — das Log kam sauber zurück, der Anker war nur nicht darin. Sirils Log ist nicht der reine Anhänge-Strom, den beide Schnappschuss-Wege unterstellen: stderr anderer Prozesse landet ebenfalls darin, und bei diesem Lauf schrieb ein neu gestarteter Multiprocessing-Resource-Tracker einen `PermissionError`-Traceback mitten in den gemessenen Schritt. Die Leser fallen jetzt auf eine **Marke zurück, die der Schritt selbst schreibt**: die Ausrichtung auf das Verzeichnis, das `register` nennt, die Farbkalibrierung auf `Running command: <cmd>` — aus der Kommandoliste genommen, nicht aus einem Anzeigetext geschnitten, der jederzeit umformuliert werden darf. Gegen das echte Log nachgespielt, Tracebacks inklusive, holen beide 1376 und 1392 Sternpaare mit OIII als Referenz zurück: genau die Zahlen, die zwei Zeilen über der Fehlermeldung standen. Gibt Siril gar nichts heraus, wird weiterhin nichts gemeldet — die einzige ehrliche Antwort, die dann bleibt.
 - **Die Einmal-Warnung gilt pro Diagnose, nicht pro Lauf.** Ein gemeinsames Flag hieß, dass der erste scheiternde Leser auch die Meldung des zweiten verschluckte — bei diesem Lauf einen SPCC-Fit mit σ 5,5 und 6,7 gegen eine Grenze von 1,0, also genau die Zahl, die man sehen will.

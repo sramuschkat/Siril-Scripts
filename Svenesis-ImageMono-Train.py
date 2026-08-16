@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.7.9
+Script Version: 1.7.10
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.7.9
+# Script Version: 1.7.10
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +97,55 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.7.10 - The HaRGB blend made linear, and two guards that did not guard
+      - HaRGB screen-blended Ha into Red: `1-(1-R)*(1-k*Ha)`, which
+        expands to `R + k*Ha - k*R*Ha`.  That cross term is quadratic in
+        flux.  On faint nebulosity it is invisible -- which is why it
+        stood, and the manuals even measured it -- but at R=0.8 with
+        k*Ha=0.4 it returns 0.88 against 1.2, a 27% compression of exactly
+        the stars and nebula cores that get stretched afterwards.
+        Non-linear, in other words: the one property this file promises
+        about every composite it writes, and the same objection that took
+        `rmgreen` out of the finish in 1.7.4
+      - It is now `(R + k*Ha)/(1+k)`, a weighted sum.  Linear, bounded in
+        [0,1] without a rescale, and it never discards R: the slider runs
+        from plain R at 0% to an even mix at 100%, where the screen
+        blend's 100% had a strength that depended on the data.  The log
+        prints the two weights it used
+      - And the help tab that lists the output files claimed all of them
+        were "calibrated and linear", `_HaRGB` included, while a second
+        tab correctly said HaRGB is excluded from photometric calibration.
+        It was wrong on both counts for that one file; it now names the
+        exception where the files are listed
+      - The MIN_STACK_FRAMES floor is applied to the COMBINATION of the
+        quality filters, not to each one alone.  Siril keeps the frames
+        passing every filter given, so the survivors are an intersection:
+        four 60% cuts on 20 frames each cleared a per-filter check while
+        projecting to 2 survivors against a floor of 4.  The running
+        estimate multiplies the shares, which assumes independence the
+        metrics do not have -- so it errs towards keeping frames, the
+        right direction for a floor whose purpose is to leave rejection
+        something to work with.  Ordinary settings are untouched: three
+        90% cuts on 30 frames still all apply
+      - k-sigma had no floor at all, and cannot have one -- how many
+        frames lie beyond k sigma is a property of the data.  Rather than
+        invent a number, that mode now caps how many cuts are combined
+        (FILTER_MAX_KSIGMA = 2)
+      - A mixed-exposure channel's integration time is marked as the
+        estimate it is.  Scaling by the frame ratio assumes every frame is
+        the same length; nothing records WHICH frames were dropped, so the
+        average length stands in, and on 20x300s + 10x120s that can be
+        eight minutes out.  The figure now carries a tilde and the
+        footnote says why
+      - NOT changed, after checking: `_seq_quality` drops zeros from its
+        quality medians with a truthiness test, which looks like a
+        statistical bug and is not.  sirilpy documents roundness as "0
+        when uninit, ]0, 1] when set", an FWHM of zero does not exist, and
+        a frame with no stars cannot be registered so it never reaches
+        `included`.  The obvious repair -- `is not None` -- would pull
+        uninitialised frames into the median and make it worse.  The
+        reasoning is now in the code so the next reader stops sooner
+
 1.7.9 - The log readers stop depending on a diagnosis
       - 1.7.8 repaired one way the star-pair counts go missing: a refused
         transfer laundered into an empty string.  The very next run failed
@@ -1367,7 +1416,7 @@ from PyQt6.QtGui import QColor, QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.7.9"
+VERSION = "1.7.10"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -1451,6 +1500,13 @@ FILTER_MIN_FRAMES = 20
 
 # Warn when the quality filters throw away more than this share of a set.
 FILTER_WARN_FRACTION = 0.15
+
+# How many k-sigma cuts may be combined.  In percentage mode the survivors
+# can be projected and the MIN_STACK_FRAMES floor does the limiting; with
+# k-sigma they cannot -- how many frames lie beyond k sigma is a property
+# of the data.  Two cuts still leave a stack recognisable; four applied
+# blind is how a channel quietly ends up with three frames in it.
+FILTER_MAX_KSIGMA = 2
 
 # Rejection band edges, taken from AMSP by Cyril Richard (the author of
 # Siril) -- see the acknowledgement in the header.  They carry more weight
@@ -2803,11 +2859,32 @@ class StackWorker(QThread):
         Returns nothing at all below ``FILTER_MIN_FRAMES``: on a short run
         every dropped sub costs more SNR than the worst frame costs
         sharpness, so quiet filtering there would make the master worse.
+
+        The ``MIN_STACK_FRAMES`` floor is applied to the COMBINATION, not
+        to each filter on its own.  Siril keeps the frames that pass every
+        filter given, so the survivors are an intersection: three 60%
+        filters on eight frames each clear a per-filter check (int(4.8)=4)
+        while their intersection can be one or two.  The guard then
+        promised a floor it had no way to hold.
+
+        The running estimate multiplies the shares.  That assumes the
+        metrics are independent and they are not -- a bad frame tends to
+        be bad on several at once -- so the true count is HIGHER and the
+        guard stops one filter earlier than strictly necessary.  Erring
+        towards keeping frames is the right direction for a floor whose
+        whole purpose is to leave rejection something to work with.
+
+        k-sigma has no estimate at all: how many frames lie beyond k sigma
+        is a property of the data, not of the setting.  Rather than invent
+        a number, that mode caps how many k-sigma filters are stacked up
+        (see ``FILTER_MAX_KSIGMA``) and the report marks its counts as
+        upper bounds.
         """
         args: list = []
         if n_frames < FILTER_MIN_FRAMES:
             return args
         suffix = "k" if self._opts.get("filter_mode") == "k-sigma" else "%"
+        share = 1.0                 # projected survivors, as a fraction
         for key, flag in (("f_wfwhm", "-filter-wfwhm"),
                           ("f_round", "-filter-round"),
                           ("f_stars", "-filter-nbstars"),
@@ -2818,9 +2895,13 @@ class StackWorker(QThread):
             if suffix == "%":
                 if value >= 100:
                     continue                 # 100% keeps everything
-                # Never filter down to a stack too small to reject outliers.
-                if int(n_frames * value / 100) < MIN_STACK_FRAMES:
+                if int(n_frames * share * value / 100) < MIN_STACK_FRAMES:
                     continue
+                share *= value / 100.0
+            elif len(args) >= FILTER_MAX_KSIGMA:
+                # Nothing here can predict the survivors, so the only
+                # honest brake is on how many cuts are combined.
+                continue
             args.append(f"{flag}={value}{suffix}")
         return args
 
@@ -2884,6 +2965,25 @@ class StackWorker(QThread):
                 for key, attr in (("fwhm", "fwhm"),
                                   ("roundness", "roundness"),
                                   ("stars", "number_of_stars")):
+                    # The trailing `and getattr(...)` is a TRUTHINESS test,
+                    # so a zero is dropped from the sample.  That looks
+                    # like a statistical bug -- a real measurement of zero
+                    # would flatter the median by vanishing -- and it is
+                    # not, for all three fields:
+                    #
+                    #   roundness  sirilpy documents the field itself as
+                    #              "0 when uninit, ]0, 1] when set", so a
+                    #              zero is BY DEFINITION not a measurement;
+                    #   fwhm       a star with a full width of zero does
+                    #              not exist; the struct simply defaults
+                    #              the field to 0.0;
+                    #   stars      a frame Siril found no stars in cannot
+                    #              be registered, so it is never `incl`
+                    #              and never reaches `included` here.
+                    #
+                    # Written out because the fix for the apparent bug --
+                    # `is not None` -- would pull uninitialised frames into
+                    # the median and make the number worse.
                     vals = [float(getattr(layer[i], attr))
                             for i in included
                             if i < len(layer) and layer[i] is not None
@@ -4687,7 +4787,19 @@ class StackWorker(QThread):
                     effective, opts.get("rejection", True))
             # Integration time must follow the frames that were really
             # integrated, not the ones that were merely found.
+            #
+            # Scaling by the FRAME ratio silently assumes every frame of
+            # this filter is the same length.  When it mixes exposures --
+            # which this script supports on purpose, see `_calib_split` --
+            # that is an approximation: nothing here records WHICH frames
+            # were dropped, so the average length is the only estimate
+            # available.  On 20x300s + 10x120s it can be eight minutes out.
+            # It is used anyway, and marked, rather than quietly presented
+            # as measured.
             exp_used = exp * effective / n if n else 0.0
+            mixed_exp = len(g.get("by_exp") or {}) > 1 and effective != n
+            if mixed_exp:
+                any_estimated = True
             if self._measured.get(filt):
                 # Counted from the sequence Siril actually exported, so
                 # every filter it applied is already in this number.  No
@@ -4713,8 +4825,9 @@ class StackWorker(QThread):
             else:
                 used = str(effective)
             total_exp += exp_used
-            A(f"| {filt} | {n} | {used} | {_format_duration(exp_used)} "
-              f"| {rej_label} |")
+            A(f"| {filt} | {n} | {used} | "
+              + ("~" if mixed_exp else "")
+              + f"{_format_duration(exp_used)} | {rej_label} |")
         A("")
         A(f"**Total:** {total} light "
           + _plural(range(total), "frame", "frames") + " found across "
@@ -4740,7 +4853,10 @@ class StackWorker(QThread):
               "number can differ by one or two.  A **≤** marks a k-sigma "
               "filter, where how many frames fall outside k standard "
               "deviations is not predictable at all — that column is an "
-              "upper bound, and so is the integration time beside it.")
+              "upper bound, and so is the integration time beside it.  A "
+              "**~** on an integration time marks a channel that mixes "
+              "exposure lengths and lost frames: which ones were dropped "
+              "is not recorded, so their average length stands in.")
         if self._reg_stats:
             A("")
             A("**Registration quality**, read back from the sequences Siril "
@@ -5964,10 +6080,24 @@ class StackWorker(QThread):
                 green_basename = use_path[m_green]
                 blue_basename = use_path[m_blue]
 
-            # HaRGB: screen-blend the Ha master into the Red channel first,
-            # then compose as usual.  Ha is located by filter role among the
-            # aligned masters.  Values are in [0,1] (32-bit), so the screen
-            # blend 1-(1-R)*(1-k*Ha) stays bounded -- no rescale needed.
+            # HaRGB: blend the Ha master into the Red channel first, then
+            # compose as usual.  Ha is located by filter role among the
+            # aligned masters.
+            #
+            # A WEIGHTED SUM, not the screen blend this used to run.
+            # `1-(1-R)*(1-k*Ha)` expands to `R + k*Ha - k*R*Ha`, and that
+            # cross term is quadratic in flux: at R=0.8 with k*Ha=0.4 it
+            # returns 0.88 where the sum gives 1.2, a 27% compression of
+            # the bright end.  Non-linear, in other words -- the one
+            # property this file promises about every composite it writes,
+            # and the same objection that took `rmgreen` out in 1.7.4.
+            #
+            # `(R + k*Ha)/(1+k)` is linear, stays in [0,1] without a
+            # rescale (numerator <= 1+k), and never discards R: it is the
+            # weighted mean (1-w)*R + w*Ha with w = k/(1+k).  The slider
+            # therefore runs from "pure R" at 0% to an even mix at 100%,
+            # where the screen blend's 100% was an unbounded-looking
+            # brightening whose actual strength depended on the data.
             if palette == "HaRGB":
                 ha_filter = next(
                     (f for f in paths if _filter_role(f) == "ha"), None)
@@ -5978,10 +6108,14 @@ class StackWorker(QThread):
                     ha_var = self._pm_stage(paths[ha_filter], helpers, "Ha")
                     enhanced = os.path.join(
                         helpers, f"{_safe(self._target)}_RED_Ha")
-                    expr = f"1-(1-${r_var}$)*(1-{k:g}*${ha_var}$)"
+                    expr = (f"(${r_var}$+{k:g}*${ha_var}$)/{1.0 + k:g}"
+                            if k else f"${r_var}$")
                     self._emit(
-                        f"  HaRGB: blending {ha_filter} into Red at "
-                        f"{int(k * 100)}% (PixelMath).", LogColor.BLUE)
+                        f"  HaRGB: blending {ha_filter} into Red — "
+                        f"{1.0 / (1.0 + k):.2f}·{m_red} + "
+                        f"{k / (1.0 + k):.2f}·{ha_filter}, a weighted sum so "
+                        "the composite stays linear (PixelMath).",
+                        LogColor.BLUE)
                     # PixelMath resolves a variable against the working
                     # directory, so the staged copies decide the names.
                     self._cmd("cd", f'"{helpers}"')
@@ -8306,8 +8440,15 @@ class ImageMonoTrainWindow(QMainWindow):
         self.row_ha = QHBoxLayout()
         self.lbl_ha = QLabel("Ha → Red:")
         self.lbl_ha.setToolTip(
-            "How strongly the Ha master is screen-blended into the Red "
-            "channel: 1-(1-R)*(1-k*Ha).\n\n"
+            "How strongly the Ha master is mixed into the Red channel: "
+            "(R + k·Ha) / (1+k), a weighted sum.  0% is plain R, 100% "
+            "is an even mix of R and Ha — never more Ha than R, and "
+            "never a channel thrown away.\n\n"
+            "A weighted sum, not the screen blend up to 1.7.9, because "
+            "the screen blend is NON-LINEAR (its R·Ha cross term "
+            "compresses the bright end by ~27% at typical values) and "
+            "every composite this script writes is handed over "
+            "linear.\n\n"
             "Ha does not appear in the four channel dropdowns because it "
             "does not replace a channel — HaRGB keeps the ordinary "
             "R/G/B/L mapping and mixes Ha into Red on top of it.  The Ha "
@@ -8320,8 +8461,9 @@ class ImageMonoTrainWindow(QMainWindow):
         self.spin_ha.setValue(50)
         self.spin_ha.setSuffix(" %")
         self.spin_ha.setToolTip(
-            "HaRGB only: how strongly the Ha master is screen-blended into "
-            "the Red channel (0% = plain RGB, 100% = maximum Ha).")
+            "HaRGB only: how strongly the Ha master is mixed into the "
+            "Red channel.  0% = plain RGB, 100% = R and Ha in equal "
+            "parts.  A weighted sum, so the result stays linear.")
         _nofocus(self.spin_ha)
         self.row_ha.addWidget(self.spin_ha)
         self.row_ha.addStretch()
@@ -10544,7 +10686,8 @@ class ImageMonoTrainWindow(QMainWindow):
             "Channels are normalized to Ha first (see below).</li>"
             "<li><b>HOO</b> — Ha→R, OIII→G and B.</li>"
             "<li><b>HaRGB</b> — broadband RGB with the Ha master "
-            "screen-blended into Red (adjustable <b>Ha → Red</b> strength) "
+            "mixed into Red as a weighted sum (adjustable "
+            "<b>Ha → Red</b> strength) "
             "for stronger emission-nebula detail.  PCC is skipped (the Red "
             "channel is no longer photometric); balance colour manually.</li>"
             "</ul>"
@@ -11014,10 +11157,11 @@ class ImageMonoTrainWindow(QMainWindow):
             "font-weight:normal'>(Ha-enhanced broadband)</span></h3>"
             "<p><b>Mapping:</b> R=Red <i>(+Ha blended in)</i>&nbsp; G=Green"
             "&nbsp; B=Blue&nbsp; L=Luminance <i>(separate)</i></p>"
-            "<p>The Ha master is <b>screen-blended into Red</b> at the "
-            "<b>Ha → Red</b> strength you set, then composed like RGB.  Values "
-            "are in [0,1] so the blend stays bounded.  PCC is skipped (the "
-            "Red channel is no longer photometric).</p>"
+            "<p>The Ha master is <b>mixed into Red</b> as a weighted sum, "
+            "<tt>(R + k·Ha) / (1+k)</tt>, at the <b>Ha → Red</b> strength "
+            "you set, then composed like RGB.  A weighted sum keeps the "
+            "composite linear and stays in [0,1] without a rescale.  PCC "
+            "is skipped (the Red channel is no longer photometric).</p>"
             "<p><b>Why is Ha not in the filter fields?</b>  Because it does "
             "not replace a channel.  HaRGB keeps the ordinary R/G/B/L "
             "mapping and mixes Ha in on top of it, so there is nothing to "
@@ -11070,11 +11214,14 @@ class ImageMonoTrainWindow(QMainWindow):
             "on linear data <tt>t</tt> is around 1e-6 and the expression "
             "collapses.  Stretch first and use Siril's own <b>Palette "
             "Picker</b> for those.</p>"
-            "<p>Same arithmetic, same caveat for <b>Ha → Red</b>: at linear "
-            "levels the screen blend and plain addition agree to better "
-            "than 0.1%.  The slider adds a fraction of Ha to Red; the "
-            "screen form only guarantees it cannot clip.  The manual works "
-            "this through.</p>"
+            "<p><b>Ha → Red</b> used to be a screen blend, "
+            "<tt>1-(1-R)(1-k·Ha)</tt>.  On faint nebulosity that agrees "
+            "with a plain sum to better than 0.1%, which is why it stood "
+            "for so long — but its <tt>R·Ha</tt> cross term is quadratic, "
+            "and on the bright end it bites: R=0.8 with k·Ha=0.4 gives "
+            "0.88 against 1.2, a 27% compression of exactly the stars and "
+            "nebula cores you stretch afterwards.  Since 1.7.10 it is a "
+            "weighted sum, and the composite is linear everywhere.</p>"
 
             "<hr><h3 style='color:#88aaff;'>Synthetic luminance</h3>"
             "<p><b>Build a synthetic luminance master</b> averages the "
@@ -11129,8 +11276,12 @@ class ImageMonoTrainWindow(QMainWindow):
             "<ul>"
             "<li>The <b>colour composite</b> sits at the top, alone: "
             "<span style='font-family:monospace;color:#aaddaa;'>TARGET_RGB / "
-            "_SHO / _HOO / _HaRGB / _LRGB</span> — calibrated and linear, "
-            "loaded into Siril automatically.</li>"
+            "_SHO / _HOO / _HaRGB / _LRGB</span> — <b>linear</b>, loaded "
+            "into Siril automatically.  All of them are colour-calibrated "
+            "except <tt>_HaRGB</tt>: its Red carries blended Ha, so the "
+            "star colours are no longer physical and photometric "
+            "calibration is skipped for it (see <i>The Pipeline</i>).  "
+            "Balance that one by hand.</li>"
             "<li><b>masters/</b> holds two versions per channel: "
             "<span style='font-family:monospace;color:#aaddaa;'>"
             "TARGET_FILTER.fit</span> (aligned to a common grid — combine "

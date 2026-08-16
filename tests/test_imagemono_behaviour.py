@@ -676,6 +676,102 @@ check("what not in self._log_read_warned" in warn
       and "self._log_read_warned.add(what)" in warn,
       "the warn-once flag is per diagnostic, not per run")
 
+print("\n9g) the quality-filter floor holds for the COMBINATION")
+qf_ns = {"FILTER_MIN_FRAMES": 20, "MIN_STACK_FRAMES": 4,
+         "FILTER_MAX_KSIGMA": 2}
+exec("from __future__ import annotations\n"
+     + textwrap.dedent(body("_quality_filter_args")), qf_ns)
+
+
+class _QF:
+    _quality_filter_args = qf_ns["_quality_filter_args"]
+
+    def __init__(self, o):
+        self._opts = o
+
+
+def _opts(mode, **vals):
+    o = {"filter_mode": mode}
+    for k, v in vals.items():
+        o[k + "_on"], o[k + "_val"] = True, v
+    return o
+
+
+def _survivors(n, args):
+    share = 1.0
+    for a in args:
+        if a.endswith("%"):
+            share *= int(a.split("=")[1][:-1]) / 100
+    return int(n * share)
+
+
+# Siril keeps the frames passing EVERY filter, so the survivors are an
+# intersection.  Guarding each filter on its own let four 60% cuts on 20
+# frames through, projecting to 2 against a floor of 4.
+got = _QF(_opts("percent", f_wfwhm=60, f_round=60,
+                f_stars=60, f_bkg=60))._quality_filter_args(20)
+check(len(got) == 3 and _survivors(20, got) >= 4,
+      "four 60% cuts on 20 frames stop at three, projecting 4 not 2",
+      f"{got} -> {_survivors(20, got)}")
+got = _QF(_opts("percent", f_wfwhm=50, f_round=50,
+                f_stars=50))._quality_filter_args(20)
+check(len(got) == 2 and _survivors(20, got) >= 4,
+      "and three 50% cuts stop at two")
+# The ordinary setting must be untouched: a floor that fires on sane input
+# is a regression, not a fix.
+got = _QF(_opts("percent", f_wfwhm=90, f_round=90,
+                f_stars=90))._quality_filter_args(30)
+check(len(got) == 3 and _survivors(30, got) == 21,
+      "three 90% cuts on 30 frames still all apply")
+check(_QF(_opts("percent", f_wfwhm=90))._quality_filter_args(19) == [],
+      "and nothing at all below FILTER_MIN_FRAMES")
+# k-sigma cannot be projected, so the brake is on how many cuts combine.
+got = _QF(_opts("k-sigma", f_wfwhm=3, f_round=3,
+                f_stars=3, f_bkg=3))._quality_filter_args(30)
+check(len(got) == qf_ns["FILTER_MAX_KSIGMA"] and all(a.endswith("k")
+                                                     for a in got),
+      "k-sigma stacks at most FILTER_MAX_KSIGMA cuts", str(got))
+
+print("\n9h) HaRGB blends linearly, and the docs agree")
+cp = body("_compose")
+check("1-(1-$" not in cp and "1-(1-${" not in cp,
+      "the non-linear screen blend is gone")
+check("+{k:g}*$" in cp and "/{1.0 + k:g}" in cp,
+      "Red is a weighted sum (R + k*Ha)/(1+k)")
+# Bounded without a rescale, and R is never discarded.
+for k in (0.0, 0.5, 1.0):
+    for r, ha in ((0.0, 0.0), (1.0, 1.0), (0.8, 0.8), (0.002, 0.003)):
+        v = (r + k * ha) / (1.0 + k)
+        check(0.0 <= v <= 1.0, f"bounded at k={k}, R={r}, Ha={ha}", f"{v}")
+check(abs((0.8 + 1.0 * 0.0) / 2.0 - 0.4) < 1e-12,
+      "at 100% the mix is even, never pure Ha")
+# The output tab claimed every composite was "calibrated and linear" while
+# the pipeline tab correctly said HaRGB is excluded from calibration.
+help_src = src[src.index("def _show_help_dialog"):]
+check("— calibrated and linear" not in help_src,
+      "the blanket 'calibrated and linear' claim is gone")
+check("except <tt>_HaRGB</tt>" in help_src,
+      "and the one exception is named where the files are listed")
+
+print("\n9i) a mixed-exposure integration time is marked, not asserted")
+wd_exp = wd[wd.index("exp_used = exp * effective"):][:900]
+check("mixed_exp = len(g.get(\"by_exp\") or {}) > 1" in wd_exp,
+      "the mixed-exposure case is detected")
+check('("~" if mixed_exp else "")' in wd,
+      "and its integration time carries a tilde")
+check("their average length stands in" in wd,
+      "with the footnote saying why it is only an estimate")
+
+print("\n9j) zeros in the quality median are dropped ON PURPOSE")
+# Not a defect, though it looks like one: sirilpy documents roundness as
+# "0 when uninit, ]0, 1] when set", an FWHM of 0 is impossible, and a
+# frame with no stars cannot be registered so it never reaches `included`.
+sq = body("_seq_quality")
+check("getattr(layer[i], attr, None)]" in sq,
+      "the truthiness test is still there")
+check("0 when uninit" in sq or "uninit" in sq,
+      "and the reason is written down where the next reader will look")
+
 print("\n10) the capability report names what is missing")
 oapi = src[src.index("OPTIONAL_API = ("):src.index("def _missing_capabilities")]
 for call in ("get_seq", "set_image_pixeldata", "get_siril_log"):

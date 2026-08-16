@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.7.9** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.7.10** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.7.9](#17-whats-new-in-179)
+17. [What's New in 1.7.10](#17-whats-new-in-1710)
 
 ---
 
@@ -473,7 +473,7 @@ That is not a failure. Blue and Green *are* the same image, so their ratio is ex
 R' = 1 − (1 − R) · (1 − k · Ha)        k = "Ha → Red" / 100
 ```
 
-A screen blend, so it brightens the Red channel where Ha is strong without ever exceeding 1. Because Ha does not *replace* a channel, it has no dropdown of its own — the script finds it automatically by filter role among the aligned masters, and the Log names the one it picked:
+A weighted sum, so the Red channel gains Ha without ever exceeding 1 and without ceasing to be linear. Because Ha does not *replace* a channel, it has no dropdown of its own — the script finds it automatically by filter role among the aligned masters, and the Log names the one it picked:
 
 ```
 HaRGB will blend HA into Red — Ha is an admixture, not a mapped channel.
@@ -487,15 +487,19 @@ Two further specifics:
 - **Colour calibration is skipped for HaRGB.** With Ha blended into Red, star photometry no longer describes that channel, so any photometric calibration would be measuring the wrong thing. The saved composite is labelled *uncalibrated* — balance it by hand.
 - **The luminance is still kept separate**, exactly as in LRGB, and combined after stretching.
 
-**How much Ha actually goes in.** The blend is `1-(1-R)·(1-k·Ha)` — a screen blend, and on *stretched* data that is a meaningfully different thing from adding. On **linear** data it is not. At typical linear brightness (0,001–0,01) the two agree to better than 0,1 %:
+**How much Ha actually goes in.** The blend is `(R + k·Ha) / (1+k)` — a weighted sum. At 0 % the channel is plain R; at 100 % it is R and Ha in equal parts. It never exceeds 1, never discards R, and — the point — it is **linear**, which is what every composite this script writes is handed over as.
 
-| R | Ha | screen blend | R + k·Ha |
+Up to 1.7.9 it was a screen blend, `1-(1-R)·(1-k·Ha)`. That expands to `R + k·Ha − k·R·Ha`, and the cross term is quadratic in flux. On faint nebulosity it is invisible, which is why it stood so long:
+
+| R | Ha | screen blend | weighted sum `(R+k·Ha)/(1+k)`, k=1 |
 |---|---|---|---|
-| 0,002 | 0,003 | 0,003497 | 0,003500 |
-| 0,02 | 0,03 | 0,034700 | 0,035000 |
-| 0,4 | 0,6 | 0,580000 | 0,700000 |
+| 0,002 | 0,003 | 0,003497 | 0,002500 |
+| 0,02 | 0,03 | 0,034700 | 0,025000 |
+| 0,8 | 0,8 | 0,960000 | 0,800000 |
 
-So the slider adds a fraction of Ha to Red, and nothing more subtle than that. The screen form still earns its place — it can never exceed 1,0, so a bright star core cannot be pushed into clipping — but the highlight compression a screen blend gives *after* a stretch is simply not happening here. Redo the blend post-stretch if you want that behaviour.
+At the faint end the screen blend and a plain sum agree to better than 0,1 %. At the bright end they do not: with R = 0,8 and k·Ha = 0,4 the screen form returns 0,88 where the sum gives 1,2 — a 27 % compression of exactly the stars and nebula cores you stretch afterwards. The same objection that removed `rmgreen` from the finish in 1.7.4 applies here, so the blend became a weighted sum in 1.7.10.
+
+If you want the highlight compression a screen blend gives, repeat the blend **after** the stretch, where it belongs.
 
 ---
 
@@ -904,7 +908,15 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.7.9
+## 17. What's New in 1.7.10
+
+- **The HaRGB blend is linear now.** It screen-blended Ha into Red, `1-(1-R)·(1-k·Ha)`, whose `R·Ha` cross term is quadratic in flux. Invisible on faint nebulosity — the manuals even measured that — but at R = 0,8 with k·Ha = 0,4 it returns 0,88 against 1,2, a **27 % compression** of exactly the stars and nebula cores you stretch afterwards. Non-linear, in other words: the one property every composite here is handed over with, and the same objection that removed `rmgreen` in 1.7.4. It is now `(R + k·Ha) / (1+k)` — a weighted sum, bounded in [0,1] without a rescale, never discarding R. The slider runs from plain R at 0 % to an even mix at 100 %, and the log prints the two weights it used. §9 works it through.
+- **The help tab listing the output files no longer claims `_HaRGB` is calibrated.** It said all composites were "calibrated and linear" while a second tab correctly said HaRGB is excluded from photometric calibration. Wrong on both counts for that one file; the exception is now named where the files are listed.
+- **The `MIN_STACK_FRAMES` floor applies to the combination of quality filters, not to each one alone.** Siril keeps the frames that pass *every* filter, so the survivors are an intersection — four 60 % cuts on 20 frames each cleared a per-filter check while projecting to **2** survivors against a floor of 4. The running estimate multiplies the shares; that assumes an independence the metrics do not have, so it errs towards keeping frames, which is the right direction for this floor. Ordinary settings are untouched: three 90 % cuts on 30 frames still all apply. k-sigma cannot be projected at all, so that mode instead caps how many cuts combine (two).
+- **A mixed-exposure channel's integration time is marked as an estimate.** Scaling by the frame ratio assumes every frame is the same length, and nothing records *which* frames were dropped — on 20×300 s + 10×120 s that can be eight minutes out. The figure carries a **~** and the report says why.
+- **Checked and deliberately not changed:** the quality medians drop zeros with a truthiness test. That looks like a statistical bug and is not — sirilpy documents roundness as "0 when uninit, ]0, 1] when set", an FWHM of zero does not exist, and a frame with no stars cannot be registered so it never reaches the sample. The obvious repair would make the number worse. The reasoning now sits in the code.
+
+## What was new in 1.7.9
 
 - **The log readers stop depending on a diagnosis.** 1.7.8 repaired one way the star-pair counts go missing; the very next run failed the same reader for the *other* reason — the log came back fine, the anchor simply was not in it. Siril's log is not the clean append-only stream both snapshot paths assume: stderr from other processes lands in it too, and on that run a relaunched multiprocessing resource tracker wrote a `PermissionError` traceback into the middle of the step being measured. So the readers now fall back to a **marker the step itself logs**: alignment anchors on the directory `register` announces, colour calibration on `Running command: <cmd>` — taken from the command list, not split out of a display label that is free to be reworded. Replayed against the real log, tracebacks included, both recover 1376 and 1392 star pairs with OIII as the reference: the numbers that sat two lines above the failure message. A log Siril hands back empty still reports nothing, which is the one honest answer left.
 - **The warn-once flag is per diagnostic, not per run.** One shared boolean meant the first reader to fail silenced the second one's message too — on that run it swallowed an SPCC fit with σ 5.5 and 6.7 against a limit of 1.0, which is exactly the number worth seeing.
