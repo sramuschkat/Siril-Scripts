@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.7.8
+Script Version: 1.7.9
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.7.8
+# Script Version: 1.7.9
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -95,6 +95,39 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   observing-night key, the per-group disk cleanup, the INSTRUME check,
 #   the wider set of CCD-temperature keywords, the closest-exposure dark
 #   fallback and the content-based IMAGETYP inference.  Thank you.
+
+CHANGELOG:
+1.7.9 - The log readers stop depending on a diagnosis
+      - 1.7.8 repaired one way the star-pair counts go missing: a refused
+        transfer laundered into an empty string.  The very next run failed
+        the SAME reader for the OTHER reason -- the log came back fine,
+        the anchor simply was not in it.
+      - Siril's log is not the clean append-only stream both snapshot
+        paths assume.  stderr from other processes lands in it too, and
+        on that run a relaunched multiprocessing resource tracker wrote a
+        PermissionError traceback into the middle of the step being
+        measured.  Rather than keep diagnosing the buffer, `_log_delta`
+        now takes a `scope`: a line the STEP ITSELF logs before anything
+        worth reading, tried last and depending on neither snapshot.
+        Alignment anchors on the directory `register` announces; colour
+        calibration on `Running command: <cmd>`, taken from the command
+        list rather than split out of a display label that is free to be
+        reworded
+      - Replayed against the real log, tracebacks included, both recover
+        1376 and 1392 star pairs with OIII as the reference -- the numbers
+        that sat two lines above the failure message.  The case where
+        Siril hands back nothing at all still reports nothing, which is
+        the one honest answer left
+      - The warn-once flag is now per diagnostic instead of per run.  One
+        shared boolean meant the first reader to fail silenced the second
+        one's message too: on that run it swallowed an SPCC fit with
+        sigma 5.5 and 6.7 against a limit of 1.0
+      - The calibration-rejection change from 1.7.7 is confirmed on real
+        data.  It needed `output/calib` cleared first -- the runs before
+        it reused every cached master and never exercised it.  With the
+        cache cleared Siril echoes all four bands: linear fit 5/4 for the
+        442-frame darkflat set, sigma 3/3 for the five- and ten-frame
+        per-night flats, winsorized 3/3 for the twenty-frame pooled one
 
 CHANGELOG:
 1.7.8 - A weighting taken back out, and the log reader fixed at its root
@@ -1334,7 +1367,7 @@ from PyQt6.QtGui import QColor, QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.7.8"
+VERSION = "1.7.9"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -2642,7 +2675,7 @@ class StackWorker(QThread):
         # output could not be parsed -- the report then stays silent.
         self._spcc_fit: dict = {}
         # Said once per run, not once per reader.
-        self._log_read_warned = False
+        self._log_read_warned: set = set()
         # Filters left unstacked because the palette does not read them.
         self._skipped_by_palette: list = []
         # filter -> registration options that could not be honoured.
@@ -6500,7 +6533,7 @@ class StackWorker(QThread):
             self._finish_steps.append(f"Colour calibration: {label}.")
             self._emit(f"  Finish: colour calibration done — {label}.",
                        LogColor.GREEN)
-            self._read_spcc_fit(before, label)
+            self._read_spcc_fit(before, label, cmd[0])
             return
 
         if not attempts:
@@ -6726,7 +6759,7 @@ class StackWorker(QThread):
                 return text
         return None
 
-    def _log_delta_or_warn(self, log_before, what: str):
+    def _log_delta_or_warn(self, log_before, what: str, scope: str = ""):
         """The step's own log output, or None -- and never in silence.
 
         Both readers used to give up without a word when the delta could
@@ -6740,11 +6773,16 @@ class StackWorker(QThread):
         wrong one: the log had not scrolled, it had not been handed over.
         """
         after = self._log_snapshot()
-        delta = _log_delta(log_before, after)
+        delta = _log_delta(log_before, after, scope)
         if delta is not None:
             return delta
-        if not self._log_read_warned:
-            self._log_read_warned = True
+        # Per diagnostic, not per run.  One shared flag meant the first
+        # reader to fail silenced the second one's message as well --
+        # and on one run that swallowed an SPCC fit with sigma 5.5/6.7
+        # against a limit of 1.0, which is exactly what the user needed
+        # to see.
+        if what not in self._log_read_warned:
+            self._log_read_warned.add(what)
             if after is None:
                 why = ("Siril handed back no log at all — the transfer "
                        "was refused, not the log emptied")
@@ -6764,7 +6802,8 @@ class StackWorker(QThread):
                 LogColor.SALMON)
         return None
 
-    def _read_spcc_fit(self, log_before, label: str) -> None:
+    def _read_spcc_fit(self, log_before, label: str,
+                       command: str = "") -> None:
         """Record how well the colour solution fitted, and say it out loud.
 
         Siril prints the fit and the script used to drop it: the report
@@ -6776,7 +6815,14 @@ class StackWorker(QThread):
 
         Diagnostic only; nothing downstream reads it.
         """
-        delta = self._log_delta_or_warn(log_before, "the colour fit")
+        # Siril echoes every command it runs, and this one is the first
+        # thing the step logs.  The marker comes from the COMMAND that
+        # was issued, not from the human label beside it -- the label is
+        # free to be reworded, and a marker that quietly stops matching
+        # is the failure mode being repaired here.
+        delta = self._log_delta_or_warn(
+            log_before, "the colour fit",
+            scope=f"Running command: {command}" if command else "")
         if delta is None:
             return
         fit = _parse_spcc_fit(delta)
@@ -6800,7 +6846,8 @@ class StackWorker(QThread):
                 "still applied — treat it as a starting point, not a "
                 "measurement.", LogColor.SALMON)
 
-    def _read_align_pairs(self, log_before, index_to_filter: dict) -> None:
+    def _read_align_pairs(self, log_before, index_to_filter: dict,
+                          scope: str = "") -> None:
         """Record how many star pairs each channel aligned on.
 
         Diagnostic only -- it changes nothing about the image.  It makes
@@ -6808,7 +6855,11 @@ class StackWorker(QThread):
         and that the script used to throw away: the user had to find it in
         Siril's own log, among several hundred lines.
         """
-        delta = self._log_delta_or_warn(log_before, "the star-pair counts")
+        # `register` announces the directory it is working in, and the
+        # cross-filter alignment is the only step that uses this one --
+        # the per-filter registrations run under sequences/<FILTER>.
+        delta = self._log_delta_or_warn(
+            log_before, "the star-pair counts", scope=scope)
         if delta is None:
             return
         pairs, ref = _parse_align_pairs(delta, index_to_filter)
@@ -6898,7 +6949,10 @@ class StackWorker(QThread):
             except (CommandError, DataError, SirilError):
                 # Fall back to single-pass global registration.
                 self._cmd("register", "masters")
-            self._read_align_pairs(log_before, index_to_filter)
+            self._read_align_pairs(
+                log_before, index_to_filter,
+                scope="Checking sequences in the directory: "
+                      + os.path.join(work, "process"))
 
             aligned: dict[str, str] = {}
             for idx, filt in index_to_filter.items():
@@ -7027,7 +7081,7 @@ ALIGN_PAIRS_FLOOR = 30
 ALIGN_PAIRS_FRACTION = 0.25
 
 
-def _log_delta(before, after):
+def _log_delta(before, after, scope: str = ""):
     """What was logged between two snapshots, or None if it cannot be told.
 
     The obvious test -- ``after.startswith(before)`` -- assumes Siril's log
@@ -7050,18 +7104,37 @@ def _log_delta(before, after):
     fails the anchor search for a reason that has nothing to do with the
     buffer.  That is exactly how one run reported a scrolled log while the
     numbers it wanted sat two lines above in Siril's console.
+
+    `scope` is the last resort, and the only path that does not depend on
+    the earlier snapshot at all: a line the STEP ITSELF logs before
+    anything worth reading.  Everything after its last occurrence is that
+    step's output by construction.
+
+    That matters because the two snapshot-based paths have now failed for
+    two DIFFERENT reasons on two consecutive runs of the same data -- once
+    with an unreadable `after`, once with an `after` that simply did not
+    contain the anchor.  Siril's log is not the clean append-only stream
+    both paths assume: stderr from other processes lands in it too (a
+    relaunched multiprocessing resource tracker wrote a traceback into the
+    middle of the very step being measured).  Rather than keep diagnosing
+    the buffer, anchor on something this script can point at.
     """
-    if before is None or after is None:
+    if after is None:
         return None
-    if not before:
-        return after                    # nothing preceded; it is all delta
-    if after.startswith(before):
-        return after[len(before):]      # the ordinary, cheap case
-    anchor = before[-LOG_ANCHOR_CHARS:]
-    cut = after.rfind(anchor)
-    if cut < 0:
-        return None
-    return after[cut + len(anchor):]
+    if before is not None:
+        if not before:
+            return after                # nothing preceded; it is all delta
+        if after.startswith(before):
+            return after[len(before):]  # the ordinary, cheap case
+        anchor = before[-LOG_ANCHOR_CHARS:]
+        cut = after.rfind(anchor)
+        if cut >= 0:
+            return after[cut + len(anchor):]
+    if scope:
+        cut = after.rfind(scope)
+        if cut >= 0:
+            return after[cut + len(scope):]
+    return None
 
 
 def _parse_spcc_fit(delta: str) -> dict:

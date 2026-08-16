@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.7.8** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.7.9** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.7.8](#17-neu-in-178)
+17. [Neu in 1.7.9](#17-neu-in-179)
 
 ---
 
@@ -904,7 +904,13 @@ Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.7.8
+## 17. Neu in 1.7.9
+
+- **Die Log-Auswertungen hängen nicht mehr an einer Diagnose.** 1.7.8 hat eine Art repariert, auf die die Sternpaar-Zahlen verschwinden; der nächste Lauf ließ denselben Leser aus dem *anderen* Grund scheitern — das Log kam sauber zurück, der Anker war nur nicht darin. Sirils Log ist nicht der reine Anhänge-Strom, den beide Schnappschuss-Wege unterstellen: stderr anderer Prozesse landet ebenfalls darin, und bei diesem Lauf schrieb ein neu gestarteter Multiprocessing-Resource-Tracker einen `PermissionError`-Traceback mitten in den gemessenen Schritt. Die Leser fallen jetzt auf eine **Marke zurück, die der Schritt selbst schreibt**: die Ausrichtung auf das Verzeichnis, das `register` nennt, die Farbkalibrierung auf `Running command: <cmd>` — aus der Kommandoliste genommen, nicht aus einem Anzeigetext geschnitten, der jederzeit umformuliert werden darf. Gegen das echte Log nachgespielt, Tracebacks inklusive, holen beide 1376 und 1392 Sternpaare mit OIII als Referenz zurück: genau die Zahlen, die zwei Zeilen über der Fehlermeldung standen. Gibt Siril gar nichts heraus, wird weiterhin nichts gemeldet — die einzige ehrliche Antwort, die dann bleibt.
+- **Die Einmal-Warnung gilt pro Diagnose, nicht pro Lauf.** Ein gemeinsames Flag hieß, dass der erste scheiternde Leser auch die Meldung des zweiten verschluckte — bei diesem Lauf einen SPCC-Fit mit σ 5,5 und 6,7 gegen eine Grenze von 1,0, also genau die Zahl, die man sehen will.
+- **Die Rejection-Änderung für Kalibriermaster aus 1.7.7 ist an echten Daten bestätigt.** Dafür musste `output/calib` erst gelöscht werden: die Läufe davor haben jeden gecachten Master wiederverwendet und sie nie ausgeführt. Mit geleertem Cache echot Siril alle vier Stufen — Linear Fit 5/4 für den 442-Frame-Darkflat-Satz, Sigma 3/3 für die Fünf- und Zehn-Frame-Nacht-Flats, Winsorized 3/3 für das gepoolte 20-Frame-Master.
+
+## Was in 1.7.8 neu war
 
 - **Die gewichtete synthetische Luminanz aus 1.7.7 ist zurückgenommen.** Sie lief nie: `get_image_stats` liefert für ein frisch geladenes Bild nichts, wenn Siril dafür keine Statistik gecacht hat — die Messung las ein Rauschen von null, lehnte es ab, und jeder Lauf fiel auf das ungewichtete Mittel zurück. Die Messung zu reparieren hätte nicht geholfen, denn die Formel ist für diese Eingaben falsch: w ∝ Signal/Rauschen² ist **nicht invariant gegen eine kanalweise Skalierung**, und an dieser Stelle ist jeder Master durch `-output_norm` gegangen (affin, pro Kanal, nach seinen *eigenen* Extremen) und ggf. durch `linear_match`. Die Gewichte würden diesen willkürlichen Faktoren folgen statt dem Himmel. Gemessen statt argumentiert: ein hier berechnetes Hintergrund-Sigma wich von Sirils eigenem `bgnoise` um das 1,1- bis 4,0-fache ab, am stärksten genau dort, wo Nebel den Frame füllt — quadriert ergab das Ha mit 3,7 % einer SHO-Luminanz. Ha ist in M 16 die stärkste Linie.
 - **Das Mittel ist zurück und wird jetzt beschrieben, statt als optimal ausgegeben zu werden.** Tooltip, Log-Zeile, `output.md` und §9 sagen *ungewichtetes Mittel*, sagen, dass ein deutlich schwächerer Kanal das Ergebnis herunterzieht, und sagen, es vor dem Weiterarbeiten gegen den stärksten Kanal zu halten. Eine skaleninvariante Regel (w ∝ Signal/Rauschen) mit Sirils eigenem `bgnoise` wäre vertretbar; sie ist nicht gebaut, und der Code hält fest, was sie bräuchte.

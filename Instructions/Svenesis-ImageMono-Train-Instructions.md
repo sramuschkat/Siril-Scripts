@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.7.8** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.7.9** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.7.8](#17-whats-new-in-178)
+17. [What's New in 1.7.9](#17-whats-new-in-179)
 
 ---
 
@@ -904,7 +904,13 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.7.8
+## 17. What's New in 1.7.9
+
+- **The log readers stop depending on a diagnosis.** 1.7.8 repaired one way the star-pair counts go missing; the very next run failed the same reader for the *other* reason — the log came back fine, the anchor simply was not in it. Siril's log is not the clean append-only stream both snapshot paths assume: stderr from other processes lands in it too, and on that run a relaunched multiprocessing resource tracker wrote a `PermissionError` traceback into the middle of the step being measured. So the readers now fall back to a **marker the step itself logs**: alignment anchors on the directory `register` announces, colour calibration on `Running command: <cmd>` — taken from the command list, not split out of a display label that is free to be reworded. Replayed against the real log, tracebacks included, both recover 1376 and 1392 star pairs with OIII as the reference: the numbers that sat two lines above the failure message. A log Siril hands back empty still reports nothing, which is the one honest answer left.
+- **The warn-once flag is per diagnostic, not per run.** One shared boolean meant the first reader to fail silenced the second one's message too — on that run it swallowed an SPCC fit with σ 5.5 and 6.7 against a limit of 1.0, which is exactly the number worth seeing.
+- **The calibration-rejection change from 1.7.7 is confirmed on real data.** It needed `output/calib` cleared first: the runs before that reused every cached master and never exercised it. With the cache cleared Siril echoes all four bands — linear fit 5/4 for the 442-frame darkflat set, sigma 3/3 for the five- and ten-frame per-night flats, winsorized 3/3 for the twenty-frame pooled one.
+
+## What was new in 1.7.8
 
 - **The weighted synthetic luminance from 1.7.7 is taken back out.** It never actually ran: `get_image_stats` returns nothing for a freshly loaded image when Siril has no statistics cached for it, so the measurement read a noise of zero, refused it, and every run fell back to the equal-weight average. Repairing that would not have helped, because the formula is wrong for these inputs — w ∝ signal/noise² is **not invariant under a per-channel rescale**, and by that point every master has been through `-output_norm` (affine, per channel, from its *own* extremes) and possibly `linear_match`. The weights would follow those arbitrary factors instead of the sky. Measured rather than argued: a background sigma computed here disagreed with Siril's own `bgnoise` by 1.1× to 4.0× across three masters of one M 16 run, worst exactly where nebulosity fills the frame, and squaring that error put Ha at 3.7 % of an SHO luminance — Ha being the strongest line in M 16.
 - **The average is back, and now it is described instead of implied to be optimal.** The tooltip, the log line, `output.md` and §9 all say *equal-weight average*, say that a much fainter channel pulls the result down, and say to hold it against your strongest channel before building on it. A scale-invariant rule (w ∝ signal/noise) fed by Siril's own `bgnoise` would be defensible; it is not built, and the code records what it would take.

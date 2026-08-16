@@ -435,11 +435,12 @@ print("\n6b) the colour solution's quality survives into the report")
 cc = body("_colour_calibrate")
 check(cc.index("before = self._log_snapshot()") < cc.index("self._cmd(*cmd)"),
       "the log is snapshotted before the command, not after")
-check("self._read_spcc_fit(before, label)" in cc,
-      "and read back only once the command succeeded")
+check("self._read_spcc_fit(before, label, cmd[0])" in cc
+      and cc.index("self._cmd(*cmd)") < cc.index("self._read_spcc_fit("),
+      "and read back only once the command succeeded, with that command")
 rd = body("_read_spcc_fit")
-check("_log_delta_or_warn(log_before" in rd
-      and "_log_delta_or_warn(log_before" in body("_read_align_pairs"),
+asks = re.compile(r"_log_delta_or_warn\(\s*log_before")
+check(asks.search(rd) and asks.search(body("_read_align_pairs")),
       "both readers ask the same helper for their step's own output")
 warn = body("_log_delta_or_warn")
 check("_log_read_warned" in warn and "self._emit(" in warn,
@@ -598,28 +599,40 @@ class _LogW:
 
     def __init__(self, answers):
         self.siril, self.msgs = _Siril(answers), []
-        self._log_read_warned = False
+        self._log_read_warned = set()
 
     def _emit(self, m, c=0):
         self.msgs.append(m)
 
 
-_before = "x\n" * 300 + "Setting CWD to '/x/align/process'\n"
-_after = _before + "Initial pair matches: 1393\n"
+PROC = "/tmp/out/_work/align/process"
+SCOPE = "Checking sequences in the directory: " + PROC
+# Verbatim shape of the step, tracebacks included: stderr from OTHER
+# processes lands in Siril's log too, which is why neither snapshot-based
+# path can be relied on alone.
+STEP = (f"Running command: register\nChecking sequences in the directory: "
+        f"{PROC}.\nTraceback (most recent call last):\n"
+        "PermissionError: [Errno 1] Operation not permitted\n"
+        "Trial #1: After sequence analysis, we are choosing image 2 as new "
+        "reference for registration\n"
+        "Matching stars in image 1: done\nInitial pair matches: 1376\n"
+        "Matching stars in image 3: done\nInitial pair matches: 1392\n")
+_before = "x\n" * 300 + f"Setting CWD to '{PROC}'\n"
+_after = _before + STEP
 
 
-def _drive(answers):
+def _drive(answers, scope=""):
     w = _LogW(answers)
-    delta = w._log_delta_or_warn(w._log_snapshot(), "the star-pair counts")
+    delta = w._log_delta_or_warn(w._log_snapshot(), "the star-pair counts",
+                                 scope=scope)
     return delta, " ".join(w.msgs)
 
 
 d, msg = _drive([_before, _after])
-check(d is not None and "1393" in d, "the healthy path still reads the delta")
-# The run that prompted this: the SECOND call was declined.  One retry
-# recovers it, which is the whole point of retrying.
+check(d is not None and "1376" in d, "the healthy path still reads the delta")
+# The run that prompted the retry: the SECOND call was declined.
 d, msg = _drive([_before, None, _after])
-check(d is not None and "1393" in d,
+check(d is not None and "1376" in d,
       "a single refused transfer is retried, not reported as a failure")
 d, msg = _drive([_before, None, None])
 check(d is None and "transfer was refused" in msg,
@@ -630,6 +643,38 @@ d, msg = _drive([_before, "unrelated tail\n" * 50])
 check(d is None and "scrolled past" in msg,
       "a genuinely scrolled buffer still gets the buffer explanation")
 check("transfer was refused" not in msg, "and only that one")
+
+print("\n9f) the readers anchor on a marker the step itself writes")
+# Two consecutive runs of the same data failed the snapshot paths for two
+# DIFFERENT reasons.  The scope marker does not depend on either snapshot.
+pairs_of = {1: "HA", 2: "OIII", 3: "SII"}
+parse = {}
+exec(ast.get_source_segment(src, next(
+    n for n in tree.body if isinstance(n, ast.FunctionDef)
+    and n.name == "_parse_align_pairs")), {"re": re}, parse)
+for label, answers in (("anchor lost mid-step", [_before, "junk\n" * 200 + STEP]),
+                       ("first snapshot refused", [None, None, _after])):
+    d, _msg = _drive(answers, scope=SCOPE)
+    got, ref = parse["_parse_align_pairs"](d, pairs_of) if d else ({}, None)
+    check(got == {"HA": 1376, "SII": 1392} and ref == "OIII",
+          f"{label}: the counts are recovered anyway", str(got))
+d, msg = _drive([_before, None, None], scope=SCOPE)
+check(d is None, "but an unreadable log is still unreadable — no invention")
+
+am = body("_read_align_pairs")
+check("scope=scope" in am, "the alignment reader passes its marker through")
+sf = body("_read_spcc_fit")
+check("Running command: {command}" in sf,
+      "and the colour reader anchors on the COMMAND it issued")
+check("cmd[0]" in body("_colour_calibrate"),
+      "taken from the command list, not split out of a display label")
+# One shared flag meant the first failing reader silenced the second's
+# message -- on one run that swallowed an SPCC sigma of 5.5 against a
+# limit of 1.0.
+warn = body("_log_delta_or_warn")
+check("what not in self._log_read_warned" in warn
+      and "self._log_read_warned.add(what)" in warn,
+      "the warn-once flag is per diagnostic, not per run")
 
 print("\n10) the capability report names what is missing")
 oapi = src[src.index("OPTIONAL_API = ("):src.index("def _missing_capabilities")]
