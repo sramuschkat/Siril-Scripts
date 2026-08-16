@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.7.7
+Script Version: 1.7.8
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.7.7
+# Script Version: 1.7.8
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -95,6 +95,58 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   observing-night key, the per-group disk cleanup, the INSTRUME check,
 #   the wider set of CCD-temperature keywords, the closest-exposure dark
 #   fallback and the content-based IMAGETYP inference.  Thank you.
+
+CHANGELOG:
+1.7.8 - A weighting taken back out, and the log reader fixed at its root
+      - It never ran.  `get_image_stats` returns None for a freshly
+        loaded image when Siril has no statistics cached for it, so
+        `_master_snr` read a noise of 0, refused it, and every run fell
+        back to the equal-weight average.  The fallback did its job --
+        the log said so on the first real run -- but the feature was dead
+      - Repairing the measurement would not have helped, because the
+        formula is wrong for these inputs.  w ~ s/n**2 is NOT invariant
+        under a per-channel rescale (scale a channel by `a` and its
+        weight is divided by `a`), and by the time this runs every master
+        has been through `-output_norm`, which rescales each one affinely
+        by its OWN extremes, and possibly `linear_match` on top.  Those
+        factors are arbitrary, so the weights follow them, not the sky
+      - Measured on one M 16 run rather than argued: a k-sigma-clipped
+        background sigma computed here disagreed with Siril's own
+        `bgnoise` by 1.1x to 4.0x across the three masters -- worst
+        exactly where nebulosity fills the frame -- and squaring that
+        error put Ha at 3.7% of an SHO luminance.  Ha is the strongest
+        line in M 16
+      - So the average is back, and this time it is DESCRIBED rather than
+        implied to be optimal.  Tooltip, log line, report and both
+        manuals now say "equal-weight average", say that a much fainter
+        channel pulls the result down, and say to hold it against the
+        strongest channel before building on it
+      - A scale-invariant rule (w ~ s/n) fed by Siril's own `bgnoise`
+        would be defensible.  It is not built, and the docstring records
+        what it would take, so the next attempt starts from the reason
+        rather than from the idea
+      - And the log reader was fixed at its root.  `get_siril_log()`
+        returns None WITHOUT raising on two paths inside sirilpy -- a
+        NONE status, and a response too short to carry the shared-memory
+        handle -- both meaning "Siril declined the transfer".  Three
+        call sites turned that into "" with an `or ""`, which reads
+        downstream as a log fetched successfully that happens to be
+        empty.  `_log_delta` then anchored on an empty string, found
+        nothing, and the run announced that the log had scrolled past its
+        buffer.  It had not: on the M 16 run the two star-pair counts
+        (1393 and 1377) sat two lines above that message in Siril's own
+        console.  Nothing had been read at all
+      - Falsy now means unreadable, everywhere, and the snapshot retries
+        once -- the refusal is momentary, and the previous call in the
+        same step had succeeded.  The warning names WHICH of the three
+        things went wrong (transfer refused / earlier snapshot missing /
+        buffer really did scroll) instead of printing one guess for all
+        of them, which is how a wrong explanation survived two releases
+
+      - The calibration-rejection change from 1.7.7 is untouched.  Note
+        that cached masters are reused, so an existing `output/calib` has
+        to be cleared before the new bands take effect -- the first run
+        after 1.7.7 reused every master and never exercised them
 
 CHANGELOG:
 1.7.7 - Two places where the arithmetic did not match the reasoning
@@ -1282,7 +1334,7 @@ from PyQt6.QtGui import QColor, QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.7.7"
+VERSION = "1.7.8"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -1925,10 +1977,6 @@ OPTIONAL_API = (
     ("Finding Siril's data directory",
      ("get_siril_userdatadir",),
      "the SPCC database is looked for in the usual places instead"),
-    ("Per-master statistics",
-     ("get_image_stats",),
-     "the synthetic luminance falls back to an equal-weight average, "
-     "which a faint channel can drag below the best single one"),
 )
 
 
@@ -2541,10 +2589,6 @@ class StackWorker(QThread):
         self._night_notes: dict = {}
         # Written by _synthetic_luminance; the report and todo.md name it.
         self._synth_lum: str = ""
-        # {filter: share} of the synthetic luminance, so the
-        # report can print the weighting instead of implying
-        # an average.
-        self._synth_lum_weights: dict = {}
         # How the composite was actually assembled -- in memory or through
         # rgbcomp.  The report states the route that ran, not the usual one.
         self._compose_how: str = ""
@@ -5069,19 +5113,15 @@ class StackWorker(QThread):
                  "*quick* mode)." if baked else
                  f"{self._compose_how or 'with `rgbcomp`'}."))
             if self._synth_lum:
-                w = self._synth_lum_weights
                 A(f"- **Synthetic luminance** → "
                   f"`{MASTERS_DIRNAME}/"
-                  f"{os.path.basename(self._synth_lum)}`, "
-                  + (", ".join(f"{f} {w[f] * 100:.0f}%"
-                               for f in sorted(w)) if w else
-                     "the average of the emission-line masters")
-                  + ".  The shares are the matched-filter weights "
-                    "(signal/noise² of each master, measured on the master "
-                    "itself), so a faint channel cannot drag the result "
-                    "below the best single one.  It was **not** combined "
-                    "into the colour image: that belongs after the stretch "
-                    "(see `todo.md`).")
+                  f"{os.path.basename(self._synth_lum)}`, the **equal-weight "
+                  "average** of the emission-line masters.  That is not the "
+                  "SNR-optimal combination when the lines differ in strength "
+                  "— a much fainter channel pulls the result down, so hold "
+                  "it against your strongest channel before building on it. "
+                  " It was **not** combined into the colour image: that "
+                  "belongs after the stretch (see `todo.md`).")
             if baked and any(s.startswith("Colour calibration: SPCC")
                              or s.startswith("Colour calibration: PCC")
                              for s in self._finish_steps):
@@ -5997,56 +6037,39 @@ class StackWorker(QThread):
             out[ch] = dst + self._ext
         return out
 
-    def _master_snr(self, path: str):
-        """``(signal, background noise)`` of one linear master, or None.
-
-        Both come from Siril's own statistics.  `bgnoise` is the RMS of
-        the background; the image's total standard deviation holds signal
-        and noise together.  Variances add, so removing the noise part in
-        quadrature leaves the RMS of the STRUCTURE -- how much this master
-        actually carries, which is what a weight has to follow.
-
-        Returns None whenever the numbers are missing or do not make sense
-        (no noise, or a total below it), so the caller falls back to equal
-        weights rather than weighting on a guess.
-        """
-        try:
-            self._cmd("load", f'"{path}"')
-            st = self.siril.get_image_stats(0)
-            noise = float(getattr(st, "bgnoise", 0.0) or 0.0)
-            total = float(getattr(st, "sigma", 0.0) or 0.0)
-        except Exception as exc:
-            _log_swallowed(exc)
-            return None
-        if not (math.isfinite(noise) and math.isfinite(total)):
-            return None
-        if noise <= 0 or total <= noise:
-            return None
-        return math.sqrt(total * total - noise * noise), noise
-
     def _synthetic_luminance(self, palette: str, paths: dict,
                              helpers: str) -> None:
-        """Combine the emission-line masters into a luminance master.
+        """Average the emission-line masters into a luminance master.
 
         A narrowband night has no L filter, and the detail is spread over
-        two or three channels.  Combining them gives a master with the
+        two or three channels.  Averaging them gives a master with the
         combined signal-to-noise, which is what a luminance layer is for.
 
-        The combination is WEIGHTED, and that is the whole difficulty.  An
-        equal-weight average is only SNR-optimal when the channels carry
-        comparable signal, and in SHO they do not: SII regularly runs an
-        order of magnitude below Ha.  Averaging a channel with signal 20
-        and two with 2 and 1 (equal noise) gives 23/sqrt(3) = 13.3 where
-        Ha alone gives 20 -- the "luminance" comes out WORSE than the best
-        single channel it was built from.  Narrowband normalisation makes
-        it worse still, because `linear_match` scales the weak channel's
-        noise up along with its signal before this ever runs.
+        The average is UNWEIGHTED, and that is a limitation, not an
+        oversight.  An equal-weight mean is only SNR-optimal when the
+        channels carry comparable signal, and in SHO they do not: with
+        signals 20 / 2 / 1 at equal noise the mean gives SNR 13.3 where
+        the strongest channel alone gives 20.  A weighted combination
+        would be better -- and was tried here, and taken back out:
 
-        The weights are therefore the matched-filter ones, w ~ s/n**2
-        (measured by `_master_snr`), normalised to sum to 1 so the result
-        keeps the scale of an average.  Equal weights remain the fallback
-        when the statistics cannot be read, and the log says which was
-        used -- a weighting nobody can see is a weighting nobody can check.
+          * the weights that maximise SNR, w ~ s/n**2, are NOT invariant
+            under a per-channel rescale (scaling a channel by `a` divides
+            its weight by `a`), and by the time this runs every master
+            has been through `-output_norm`, which rescales each one
+            affinely by its OWN extremes, and possibly `linear_match` on
+            top.  Those scale factors are arbitrary, so the weights would
+            follow them rather than the sky;
+          * measuring the noise well enough is its own problem.  A
+            k-sigma-clipped background sigma computed here disagreed with
+            Siril's own `bgnoise` by 1.1x to 4.0x across three masters of
+            one M 16 run -- worst exactly where nebulosity fills the
+            frame -- and w ~ s/n**2 squares that error.  It put Ha at
+            3.7% of an M 16 SHO luminance.
+
+        A scale-invariant rule (w ~ s/n) fed by Siril's own `bgnoise`
+        would be defensible; it needs a measurement this file does not
+        have yet.  Until then the average is what is offered, and the
+        report says what it is rather than implying it is optimal.
 
         It is deliberately NOT combined into the colour image here.  A
         luminance combine done on linear data lifts the bright end before
@@ -6064,44 +6087,9 @@ class StackWorker(QThread):
                 "  Synthetic luminance needs at least two distinct "
                 "channels; skipped.", LogColor.SALMON)
             return
-
-        # Measure BEFORE staging: `_master_snr` loads each master, and the
-        # PixelMath expression below is built from the staged copies.
-        measured: dict = {}
-        for filt, path in srcs.items():
-            sn = self._master_snr(path)
-            if sn is None:
-                measured = {}
-                break
-            measured[filt] = sn
-        weights = _matched_weights(measured) if measured else {}
-        if weights:
-            self._emit(
-                "  Synthetic luminance weights (signal/noise² of each "
-                "master): "
-                + ", ".join(
-                    f"{f} {weights[f] * 100:.0f}% (S/N "
-                    f"{measured[f][0] / measured[f][1]:.1f})"
-                    for f in sorted(weights)), LogColor.BLUE)
-            top = max(weights, key=lambda f: weights[f])
-            if weights[top] >= 0.8:
-                self._emit(
-                    f"  {top} carries {weights[top] * 100:.0f}% of it — the "
-                    "other channel(s) are too faint to add much, so this "
-                    f"luminance is close to {top} alone.", LogColor.SALMON)
-        else:
-            weights = {f: 1.0 / len(srcs) for f in srcs}
-            self._emit(
-                "  Synthetic luminance: per-master statistics unavailable, "
-                "falling back to an equal-weight average.  A channel much "
-                "fainter than the others will drag the result down.",
-                LogColor.SALMON)
-
-        terms = []
-        for i, (filt, path) in enumerate(srcs.items()):
-            var = self._pm_stage(path, helpers, f"L{i}")
-            terms.append(f"{weights[filt]:.6g}*${var}$")
-        expr = "+".join(terms)
+        terms = [f"${self._pm_stage(path, helpers, f'L{i}')}$"
+                 for i, path in enumerate(srcs.values())]
+        expr = f"({'+'.join(terms)})/{len(terms)}"
         out = os.path.join(self._out_dir, MASTERS_DIRNAME,
                            f"{_safe(self._target)}_SynthL")
         try:
@@ -6113,13 +6101,13 @@ class StackWorker(QThread):
                        LogColor.SALMON)
             return
         self._synth_lum = out + self._ext
-        self._synth_lum_weights = dict(weights)
         self._emit(
-            "  Synthetic luminance "
-            + " + ".join(f"{weights[f]:.2f}·{f}" for f in sorted(weights))
-            + f" -> {os.path.basename(self._synth_lum)}. It is "
-            "not combined into the colour image: that belongs after the "
-            "stretch (see todo.md).", LogColor.GREEN)
+            f"  Synthetic luminance ({' + '.join(sorted(srcs))}) / "
+            f"{len(terms)} -> {os.path.basename(self._synth_lum)}. An equal"
+            "-weight average: a channel much fainter than the others pulls "
+            "it down, so check it against the strongest channel before you "
+            "build on it. It is not combined into the colour image: that "
+            "belongs after the stretch (see todo.md).", LogColor.GREEN)
 
     def _push_composite(self, chan: dict, out_path: str) -> str | None:
         """Assemble the three channels in memory and hand them to Siril.
@@ -6710,12 +6698,33 @@ class StackWorker(QThread):
         `get_siril_log()` returns everything, so a step's own output is
         the DELTA against a snapshot taken just before it.  Optional API:
         an older sirilpy simply yields None and the readers stay quiet.
+
+        It also yields None WITHOUT raising, on two paths inside sirilpy:
+        a NONE status, and a response too short to carry the shared-memory
+        handle.  Both mean "Siril declined the transfer this time", and
+        this used to be laundered into "" by an `or ""` -- which reads
+        downstream as a log that was fetched successfully and happens to
+        be empty.  `_log_delta` then anchored on an empty string, could
+        not find anything in it, and the run reported that the log had
+        scrolled past its buffer.  It had not; nothing had been read at
+        all.  Siril's log is never empty while a run is in progress, so
+        falsy means unreadable, full stop.
+
+        One retry, because a refused transfer is a momentary condition
+        rather than a property of the session -- the previous call in the
+        same step usually succeeded.  Whether that is enough is not
+        something this code can know; what it must not do is guess in the
+        message it prints.
         """
-        try:
-            return self.siril.get_siril_log() or ""
-        except Exception as exc:                     # noqa: BLE001
-            _log_swallowed(exc)
-            return None
+        for _attempt in (1, 2):
+            try:
+                text = self.siril.get_siril_log()
+            except Exception as exc:                 # noqa: BLE001
+                _log_swallowed(exc)
+                return None
+            if text:
+                return text
+        return None
 
     def _log_delta_or_warn(self, log_before, what: str):
         """The step's own log output, or None -- and never in silence.
@@ -6723,9 +6732,12 @@ class StackWorker(QThread):
         Both readers used to give up without a word when the delta could
         not be established, so a diagnostic that had quietly stopped
         working was indistinguishable from one that had nothing to say.
-        On a full three-filter run that was not hypothetical: Siril's log
-        buffer fills, its oldest lines drop off, and no snapshot is a
-        prefix of a later one any more.
+
+        The message names WHICH of the two things went wrong, because
+        they have different causes and only one of them was ever true.
+        A single guess ("the log has scrolled past its buffer") was
+        printed for both, and on the run that prompted this it was the
+        wrong one: the log had not scrolled, it had not been handed over.
         """
         after = self._log_snapshot()
         delta = _log_delta(log_before, after)
@@ -6733,11 +6745,23 @@ class StackWorker(QThread):
             return delta
         if not self._log_read_warned:
             self._log_read_warned = True
+            if after is None:
+                why = ("Siril handed back no log at all — the transfer "
+                       "was refused, not the log emptied")
+            elif log_before is None:
+                why = ("the log before this step could not be read, so "
+                       "there is nothing to measure this step against")
+            else:
+                why = ("the log was read, but this step's own lines could "
+                       "no longer be isolated in it — it has scrolled past "
+                       "what its buffer holds")
             self._emit(
-                f"  Siril's log could not be read back, so {what} are not "
-                "reported. Nothing about the image changes — these are "
-                "diagnostics. It happens when the log has scrolled past "
-                "what its buffer holds.", LogColor.SALMON)
+                f"  {what.capitalize()} are not reported: {why}."
+                # One phrase, one line: a test asserts this sentence is
+                # here, and splitting it across string literals hides it
+                # from the only reader that checks the note still reassures.
+                " Nothing about the image changes — these are diagnostics.",
+                LogColor.SALMON)
         return None
 
     def _read_spcc_fit(self, log_before, label: str) -> None:
@@ -7018,6 +7042,14 @@ def _log_delta(before, after):
     of its head.  That survives a trimmed front, and fails only when the
     step logged more than the whole buffer holds -- in which case the
     honest answer is None and the caller says so out loud.
+
+    ``None`` on either side means "that snapshot could not be read", and
+    it propagates: no delta can be derived from a log nobody has.  Callers
+    must pass the reader's answer through UNCHANGED -- an `or ""` here
+    turns an unreadable log into an empty one, and an empty `after` then
+    fails the anchor search for a reason that has nothing to do with the
+    buffer.  That is exactly how one run reported a scrolled log while the
+    numbers it wanted sat two lines above in Siril's console.
     """
     if before is None or after is None:
         return None
@@ -7155,9 +7187,9 @@ def _spcc_names_via_command(siril, what: str) -> set:
     never "the name is invalid".
     """
     try:
-        before = siril.get_siril_log() or ""
+        before = siril.get_siril_log()
         siril.cmd("spcc_list", what)
-        after = siril.get_siril_log() or ""
+        after = siril.get_siril_log()
     except Exception as exc:
         _log_swallowed(exc)
         return set()
@@ -7166,6 +7198,12 @@ def _spcc_names_via_command(siril, what: str) -> set:
     # Its buffer is bounded, and once the front has been trimmed no
     # earlier snapshot is a prefix again, after which the name check
     # silently reported "database not found" for the rest of the session.
+    #
+    # And NOT `or ""` on either snapshot.  get_siril_log() returns None
+    # without raising when Siril declines the transfer; turning that into
+    # "" claims a successful read of an empty log, and an empty log is
+    # something this function can never legitimately see while it is the
+    # thing writing to it.  `_log_delta` refuses a None outright.
     delta = _log_delta(before, after)
     if delta is None:
         return set()
@@ -7257,39 +7295,6 @@ def _weight_token(opts: dict) -> str:
     wFWHM rather than emitting an argument Siril would reject.
     """
     return WEIGHT_TOKENS.get(opts.get("weight_method", ""), "wfwhm")
-
-
-def _matched_weights(measured: dict) -> dict:
-    """Normalised matched-filter weights from ``{key: (signal, noise)}``.
-
-    For a weighted sum of images with independent noise, the combination
-    that maximises the signal-to-noise of the result is w ~ s/n**2 -- the
-    weights a matched filter uses.  Equal weights are the special case
-    where every input carries the same signal AND the same noise, which
-    narrowband masters emphatically do not.
-
-    Normalised to sum to 1, so the result keeps the scale of an average
-    rather than the scale of a sum.
-
-    Returns ``{}`` -- never a partial answer -- when any input is missing
-    or nonsensical.  That is the caller's signal to fall back to equal
-    shares and say so, rather than to weight on numbers it does not have.
-    """
-    raw: dict = {}
-    for key, pair in measured.items():
-        try:
-            signal, noise = float(pair[0]), float(pair[1])
-        except (TypeError, ValueError, IndexError, KeyError):
-            return {}
-        if not (math.isfinite(signal) and math.isfinite(noise)):
-            return {}
-        if noise <= 0 or signal < 0:
-            return {}
-        raw[key] = signal / (noise * noise)
-    total = sum(raw.values())
-    if not raw or total <= 0 or not math.isfinite(total):
-        return {}
-    return {k: v / total for k, v in raw.items()}
 
 
 def _rejection_fallback(tokens: list) -> tuple[list[str], str] | None:
@@ -8285,11 +8290,11 @@ class ImageMonoTrainWindow(QMainWindow):
         self.chk_synth_lum.setChecked(False)
         self.chk_synth_lum.setToolTip(
             "Narrowband only, and only when there is no Luminance filter: "
-            "combines the emission-line masters into "
+            "averages the emission-line masters into "
             "masters/TARGET_SynthL.fit.\n"
-            "Weighted by each master's own signal/noise², not averaged: "
-            "a plain average of a strong Ha with a faint SII comes out "
-            "worse than the Ha alone.  The log names the shares.\n"
+            "The average is UNWEIGHTED: a strong Ha averaged with a much "
+            "fainter SII can come out worse than the Ha alone.  Compare "
+            "it against your strongest channel before building on it.\n"
             "It is NOT combined into the colour image here. A luminance "
             "combine belongs after the stretch — todo.md walks you "
             "through it — and doing it linearly is the same mistake as "

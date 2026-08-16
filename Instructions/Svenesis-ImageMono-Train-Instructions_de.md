@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.7.7** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.7.8** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.7.7](#17-neu-in-177)
+17. [Neu in 1.7.8](#17-neu-in-178)
 
 ---
 
@@ -555,13 +555,11 @@ Cyril Richards PalettePicker zieht dieselbe Grenze von der anderen Seite: er hat
 
 ### Synthetische Luminanz
 
-Eine Schmalbandnacht hat keinen Luminanzfilter, und das Detail verteilt sich auf zwei oder drei Kanäle. **Build a synthetic luminance master** kombiniert die Emissionslinien-Master zu `masters/TARGET_SynthL.fit`, das ihr gemeinsames Signal-Rausch-Verhältnis trägt.
+Eine Schmalbandnacht hat keinen Luminanzfilter, und das Detail verteilt sich auf zwei oder drei Kanäle. **Build a synthetic luminance master** mittelt die Emissionslinien-Master zu `masters/TARGET_SynthL.fit`, das ihr gemeinsames Signal-Rausch-Verhältnis trägt.
 
-**Kombiniert, nicht gemittelt** — und dieser Unterschied entscheidet, ob die Datei etwas taugt. Ein ungewichtetes Mittel ist nur dann optimal, wenn alle Kanäle vergleichbares Signal tragen, und in SHO tun sie das nicht: SII liegt regelmäßig eine Größenordnung unter Ha. Signale von 20, 2 und 1 bei gleichem Rauschen gemittelt ergeben SNR 13,3 — Ha *allein* ergibt 20. Die „Luminanz" wäre schlechter als der beste Kanal in ihr. Die Schmalband-Normalisierung verschärft das noch, weil `linear_match` das Rauschen des schwachen Kanals zusammen mit seinem Signal hochskaliert, bevor das hier überhaupt läuft.
+**Das Mittel ist ungewichtet, und das ist eine Einschränkung.** Ein ungewichteter Mittelwert ist nur dann SNR-optimal, wenn alle Kanäle vergleichbares Signal tragen, und in SHO tun sie das nicht: SII liegt regelmäßig eine Größenordnung unter Ha. Bei Signalen 20, 2 und 1 mit gleichem Rauschen ergibt das Mittel SNR 13,3, der stärkste Kanal allein 20. Halte `SynthL` also gegen deinen besten Einzelkanal, bevor du darauf aufbaust — dominiert eine Linie das Feld, ist dieser Kanal womöglich die bessere Luminanz.
 
-Jedes Master wird deshalb danach gewichtet, was es tatsächlich beiträgt — die Matched-Filter-Gewichte w ∝ Signal / Rauschen², am Master selbst über Sirils Statistik gemessen (`bgnoise` ist das Rauschen; die Struktur ist das, was von der Gesamtstandardabweichung übrig bleibt, wenn man das Rauschen quadratisch abzieht). Dieselben drei Kanäle kommen auf 87 % / 9 % / 4 % und SNR 20,1. Log und `output.md` nennen die Anteile, und ein Kanal über 80 % wird ausdrücklich genannt — dann ist die Luminanz im Wesentlichen dieser eine Kanal, und das sollte man wissen, bevor man darauf aufbaut.
-
-Sind die Master-Statistiken nicht lesbar, fällt der Lauf auf ein ungewichtetes Mittel zurück **und sagt es**.
+Eine gewichtete Fassung wurde geschrieben und in 1.7.8 wieder entfernt; die Gründe sind es wert, sie zu kennen, bevor man es selbst versucht. Die SNR-maximierenden Gewichte w ∝ Signal / Rauschen² sind **nicht invariant gegen eine kanalweise Skalierung** — und an dieser Stelle ist jeder Master durch `-output_norm` gegangen, das jeden einzeln affin nach seinen *eigenen* Extremen skaliert, ggf. gefolgt von `linear_match`. Die Gewichte würden diesen willkürlichen Faktoren folgen statt dem Himmel. Dazu kommt, dass die Rauschmessung ein eigenes Problem ist: ein außerhalb von Siril berechnetes Hintergrund-Sigma wich von Sirils eigenem `bgnoise` um das 1,1- bis 4,0-fache ab, am stärksten genau dort, wo Nebel den Frame füllt. Quadriert ergab das Ha mit 3,7 % einer M-16-SHO-Luminanz. Eine skaleninvariante Regel (w ∝ Signal / Rauschen) mit Sirils eigenem `bgnoise` wäre vertretbar; sie ist nicht gebaut.
 
 Es wird bewusst **nicht** ins Farbbild kombiniert. Eine Luminanz-Kombination auf linearen Daten hebt das helle Ende vor der Farbkalibrierung an — derselbe Fehler, den *Quick linear LRGB* macht, an echten Daten gemessen mit 531 geclippten Sternen gegen 68. `todo.md` nimmt die Datei als Teil B auf und kombiniert sie nach dem Strecken, wo sie hingehört.
 
@@ -906,7 +904,14 @@ Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.7.7
+## 17. Neu in 1.7.8
+
+- **Die gewichtete synthetische Luminanz aus 1.7.7 ist zurückgenommen.** Sie lief nie: `get_image_stats` liefert für ein frisch geladenes Bild nichts, wenn Siril dafür keine Statistik gecacht hat — die Messung las ein Rauschen von null, lehnte es ab, und jeder Lauf fiel auf das ungewichtete Mittel zurück. Die Messung zu reparieren hätte nicht geholfen, denn die Formel ist für diese Eingaben falsch: w ∝ Signal/Rauschen² ist **nicht invariant gegen eine kanalweise Skalierung**, und an dieser Stelle ist jeder Master durch `-output_norm` gegangen (affin, pro Kanal, nach seinen *eigenen* Extremen) und ggf. durch `linear_match`. Die Gewichte würden diesen willkürlichen Faktoren folgen statt dem Himmel. Gemessen statt argumentiert: ein hier berechnetes Hintergrund-Sigma wich von Sirils eigenem `bgnoise` um das 1,1- bis 4,0-fache ab, am stärksten genau dort, wo Nebel den Frame füllt — quadriert ergab das Ha mit 3,7 % einer SHO-Luminanz. Ha ist in M 16 die stärkste Linie.
+- **Das Mittel ist zurück und wird jetzt beschrieben, statt als optimal ausgegeben zu werden.** Tooltip, Log-Zeile, `output.md` und §9 sagen *ungewichtetes Mittel*, sagen, dass ein deutlich schwächerer Kanal das Ergebnis herunterzieht, und sagen, es vor dem Weiterarbeiten gegen den stärksten Kanal zu halten. Eine skaleninvariante Regel (w ∝ Signal/Rauschen) mit Sirils eigenem `bgnoise` wäre vertretbar; sie ist nicht gebaut, und der Code hält fest, was sie bräuchte.
+- **Der Log-Leser ist an der Wurzel repariert, nicht erneut geflickt.** `get_siril_log()` liefert auf zwei Pfaden in sirilpy nichts zurück, *ohne zu werfen* — ein NONE-Status und eine Antwort, die zu kurz ist, um den Shared-Memory-Handle zu tragen; beides heißt, Siril hat den Transfer verweigert. Drei Aufrufstellen machten daraus einen leeren String, was weiter unten wie ein erfolgreich geholtes, zufällig leeres Log aussieht; die Delta-Suche fand dann nichts, und der Lauf meldete einen übergelaufenen Puffer. Der war nicht übergelaufen: beim M-16-Lauf standen die beiden Sternpaar-Zahlen, 1393 und 1377, zwei Zeilen über genau dieser Meldung in Sirils eigener Konsole. Es war überhaupt nichts gelesen worden. „Leer" heißt jetzt überall „unlesbar", der Schnappschuss versucht es einmal erneut (die Verweigerung ist momentan — der vorige Aufruf im selben Schritt war erfolgreich), und die Warnung benennt, welches der drei Dinge schiefging, statt für alle dieselbe Vermutung zu drucken.
+- **Die Rejection-Änderung für Kalibriermaster aus 1.7.7 bleibt unangetastet** — aber gecachte Master werden wiederverwendet, ein vorhandenes `output/calib` muss also gelöscht werden, damit die neuen Stufen greifen. Der erste Lauf nach 1.7.7 hat jeden Master wiederverwendet und sie nie ausgeführt.
+
+## Was in 1.7.7 neu war
 
 - **Kalibriermaster laufen jetzt durch dieselbe Rejection-Tabelle wie die Light-Stacks.** Sie wurden mit einem nackten `rej 3 3` gestapelt, und ein nacktes `rej` wählt Sirils Vorgabe — winsorized, die Stufe für 11–30 Frames. Sie traf beide Enden des Bereichs gleichzeitig: ein Nacht-Master-Flat aus fünf Frames, wo Winsorizing Sigma aus fünf Punkten schätzt und Ausreißer durch ihre eigenen Nachbarn ersetzt, und ein Bibliotheks-Dark aus vierhundert, wo ein Linear Fit den Trend über den Stack modelliert, den Winsorizing nicht sieht. Beim M-16-Lauf gehen die Fünf- und Zehn-Frame-Flats auf Sigma 3/3, der 442-Frame-Darkflat-Satz auf Linear Fit 5/4. Für Kalibriermaster bleibt die Rejection an, unabhängig davon, was den Light-Stacks gesagt wurde — der Schalter betrifft das Integrieren deiner eigenen Frames, und ein kosmischer Treffer in einem Master-Flat erreicht jedes Light, das dadurch geteilt wird. Details in §8.
 - **Die synthetische Luminanz wird gewichtet, nicht gemittelt.** Sie versprach „das gemeinsame Signal-Rausch-Verhältnis" und bildete dabei ein ungewichtetes Mittel — optimal nur, wenn die Kanäle vergleichbares Signal tragen, was in SHO nicht der Fall ist. Bei Signalen 20 / 2 / 1 mit gleichem Rauschen ergibt das Mittel SNR 13,3, Ha *allein* aber 20: die Luminanz kam schlechter heraus als der beste Kanal in ihr, und die Schmalband-Normalisierung verschärfte das noch, weil sie das Rauschen des schwachen Kanals vorher mit seinem Signal hochskaliert. Jetzt gelten die Matched-Filter-Gewichte w ∝ Signal / Rauschen², an jedem Master über Sirils eigene Statistik gemessen. Dieselben drei Kanäle: 87 % / 9 % / 4 %, SNR 20,1. Log und Report nennen die Anteile, ein Kanal über 80 % wird ausdrücklich genannt, und das ungewichtete Mittel bleibt als benannter Rückfall, wenn die Statistik nicht lesbar ist. Details in §9.

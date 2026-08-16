@@ -540,25 +540,96 @@ check("_rejection_args(staged, self._opts" not in scg
 check("rej_label" in scg and "Built master" in scg,
       "and the log names the algorithm that ran")
 
-print("\n9d) the synthetic luminance is weighted by what each line carries")
+print("\n9d) the synthetic luminance says what it is")
 sl = body("_synthetic_luminance")
-check("/{len(terms)}" not in sl and "len(terms)}" not in sl,
-      "the plain division by the channel count is gone")
-check("_matched_weights(measured)" in sl,
-      "the shares come from the matched-filter weights")
-check("weights[filt]:.6g}*$" in sl,
-      "and the PixelMath expression is a weighted sum")
-check("1.0 / len(srcs)" in sl and "equal-weight average" in sl,
-      "equal weights survive as the stated fallback")
-ms = body("_master_snr")
-check("bgnoise" in ms and "sigma" in ms,
-      "signal and noise both come from Siril's own statistics")
-check("total * total - noise * noise" in ms,
-      "and the signal is the structure left after removing noise in "
-      "quadrature")
-check("total <= noise" in ms, "a total below the noise floor is refused")
-check('"get_image_stats"' in oapi_src,
-      "get_image_stats is declared optional, so a missing one is announced")
+# It IS an equal-weight average.  A weighted version was tried and taken
+# back out: w ~ s/n**2 is not scale-invariant, and every master arriving
+# here has been rescaled by -output_norm (and maybe linear_match).  The
+# docstring has to carry that reason, or the next reader re-adds the bug.
+check("/{len(terms)}" in sl, "the combination is a plain average")
+for phrase, why in (
+        ("UNWEIGHTED", "the docstring calls the average what it is"),
+        ("output_norm", "and names the rescale that breaks a weighting"),
+        ("invariant", "and why scale-dependence is the disqualifier"),
+        ("bgnoise", "and what a defensible version would need")):
+    check(phrase in sl, why)
+check("combined signal-to-noise" in sl and "only SNR-optimal" in sl,
+      "the old claim is qualified where it is made, not just removed")
+# And the user-facing text must not promise optimality either.
+wd_lum = wd[wd.index("Synthetic luminance"):][:600]
+check("equal-weight" in wd_lum and "pulls the result down" in wd_lum,
+      "output.md states the limitation instead of implying optimality")
+# The DEFINITIONS must be gone; the CHANGELOG names both helpers on
+# purpose, so a bare substring test would fail on its own explanation.
+check("def _matched_weights" not in src and "def _master_snr" not in src,
+      "no half-reverted weighting helper is left behind")
+
+print("\n9e) an unreadable log is not mistaken for an empty one")
+# get_siril_log() returns None WITHOUT raising when Siril declines the
+# shared-memory transfer.  An `or ""` there claims a successful read of an
+# empty log; _log_delta then fails its anchor search and the run blamed a
+# scrolled buffer while the numbers sat two lines up in Siril's console.
+check('get_siril_log() or ""' not in src,
+      "no snapshot launders a failed read into an empty string")
+
+log_ns = {"LOG_ANCHOR_CHARS": 400, "_log_swallowed": lambda e: None,
+          "LogColor": types.SimpleNamespace(SALMON=2)}
+exec(ast.get_source_segment(src, next(
+    n for n in tree.body if isinstance(n, ast.FunctionDef)
+    and n.name == "_log_delta")), log_ns)
+exec("from __future__ import annotations\n" + "\n".join(
+    textwrap.dedent(body(n)) for n in ("_log_snapshot",
+                                       "_log_delta_or_warn")), log_ns)
+
+
+class _Siril:
+    def __init__(self, answers):
+        self.answers, self.calls = answers, 0
+
+    def get_siril_log(self):
+        v = self.answers[min(self.calls, len(self.answers) - 1)]
+        self.calls += 1
+        return v
+
+
+class _LogW:
+    _log_snapshot = log_ns["_log_snapshot"]
+    _log_delta_or_warn = log_ns["_log_delta_or_warn"]
+
+    def __init__(self, answers):
+        self.siril, self.msgs = _Siril(answers), []
+        self._log_read_warned = False
+
+    def _emit(self, m, c=0):
+        self.msgs.append(m)
+
+
+_before = "x\n" * 300 + "Setting CWD to '/x/align/process'\n"
+_after = _before + "Initial pair matches: 1393\n"
+
+
+def _drive(answers):
+    w = _LogW(answers)
+    delta = w._log_delta_or_warn(w._log_snapshot(), "the star-pair counts")
+    return delta, " ".join(w.msgs)
+
+
+d, msg = _drive([_before, _after])
+check(d is not None and "1393" in d, "the healthy path still reads the delta")
+# The run that prompted this: the SECOND call was declined.  One retry
+# recovers it, which is the whole point of retrying.
+d, msg = _drive([_before, None, _after])
+check(d is not None and "1393" in d,
+      "a single refused transfer is retried, not reported as a failure")
+d, msg = _drive([_before, None, None])
+check(d is None and "transfer was refused" in msg,
+      "a persistently refused transfer is named as such")
+check("scrolled past" not in msg,
+      "and is NOT blamed on the buffer, which was the wrong explanation")
+d, msg = _drive([_before, "unrelated tail\n" * 50])
+check(d is None and "scrolled past" in msg,
+      "a genuinely scrolled buffer still gets the buffer explanation")
+check("transfer was refused" not in msg, "and only that one")
 
 print("\n10) the capability report names what is missing")
 oapi = src[src.index("OPTIONAL_API = ("):src.index("def _missing_capabilities")]

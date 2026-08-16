@@ -343,52 +343,6 @@ for _ in range(5):
 check(spread(five_a, noisy_moved / 5) > limit,
       "a moved vignette is still caught through the noise")
 
-print("\n11) the synthetic luminance is weighted, not averaged")
-mw_ns = {"math": math}
-mw_start = src.index("def _matched_weights")
-exec(src[mw_start:src.index("\n\n\n", mw_start)], mw_ns)
-matched = mw_ns["_matched_weights"]
-
-
-def snr_of(weights, sig_noise):
-    """SNR of the weighted sum: sum(w*s) / sqrt(sum((w*n)**2))."""
-    num = sum(weights[k] * s for k, (s, _n) in sig_noise.items())
-    den = math.sqrt(sum((weights[k] * n) ** 2
-                        for k, (_s, n) in sig_noise.items()))
-    return num / den
-
-
-# The SHO case the weighting exists for: Ha strong, SII an order down.
-sho = {"Ha": (20.0, 1.0), "OIII": (2.0, 1.0), "SII": (1.0, 1.0)}
-w = matched(sho)
-equal = {k: 1 / 3 for k in sho}
-best = {"Ha": 1.0, "OIII": 0.0, "SII": 0.0}
-print(f"   weights      : " + ", ".join(f"{k} {w[k]:.3f}" for k in sorted(w)))
-print(f"   SNR equal    : {snr_of(equal, sho):.2f}")
-print(f"   SNR Ha alone : {snr_of(best, sho):.2f}")
-print(f"   SNR matched  : {snr_of(w, sho):.2f}")
-check(abs(sum(w.values()) - 1.0) < 1e-12, "the weights sum to 1")
-check(snr_of(equal, sho) < snr_of(best, sho),
-      "the equal-weight average really is worse than the best channel alone")
-check(snr_of(w, sho) > snr_of(best, sho),
-      "and the matched weights beat even that")
-check(w["Ha"] > w["OIII"] > w["SII"], "ordered by what each channel carries")
-
-# Equal signal AND equal noise is the one case where averaging is right.
-same = {"a": (5.0, 2.0), "b": (5.0, 2.0)}
-check(all(abs(v - 0.5) < 1e-12 for v in matched(same).values()),
-      "identical channels still get identical shares")
-
-# Never a partial answer: one bad input drops the whole set to the fallback.
-for bad, why in ((("x", (1.0, 0.0)), "zero noise"),
-                 (("x", (float("nan"), 1.0)), "a NaN signal"),
-                 (("x", (float("inf"), 1.0)), "an infinite signal"),
-                 (("x", (-1.0, 1.0)), "a negative signal"),
-                 (("x", None), "a missing pair")):
-    probe = dict(same)
-    probe[bad[0]] = bad[1]
-    check(matched(probe) == {}, f"{why} yields no weights at all")
-
 print()
 if fails:
     print(f"{len(fails)} FAILURE(S)")

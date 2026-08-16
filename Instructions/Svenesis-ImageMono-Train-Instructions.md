@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.7.7** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.7.8** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.7.7](#17-whats-new-in-177)
+17. [What's New in 1.7.8](#17-whats-new-in-178)
 
 ---
 
@@ -557,11 +557,9 @@ Cyril Richard's PalettePicker states the same boundary from the other side: it d
 
 A narrowband night has no Luminance filter, and the detail sits spread across two or three channels. **Build a synthetic luminance master** combines the emission-line masters into `masters/TARGET_SynthL.fit`, which carries their combined signal-to-noise.
 
-**Combines, not averages** — and the difference decides whether the file is worth having. An equal-weight mean is only optimal when the channels carry comparable signal, and in SHO they do not: SII regularly runs an order of magnitude below Ha. Averaging signals of 20, 2 and 1 at equal noise gives SNR 13.3, where Ha *alone* gives 20. The "luminance" would be worse than the best channel inside it. Narrowband normalisation makes it worse again, because `linear_match` scales the weak channel's noise up along with its signal before this ever runs.
+**The average is unweighted, and that is a limitation.** An equal-weight mean is only SNR-optimal when the channels carry comparable signal, and in SHO they do not: SII regularly runs an order of magnitude below Ha. With signals 20, 2 and 1 at equal noise the mean gives SNR 13.3 where the strongest channel alone gives 20. So hold `SynthL` against your best single channel before you build on it — if one line dominates the field, that channel may simply be the better luminance.
 
-So each master is weighted by what it actually carries — the matched-filter weights, w ∝ signal / noise², measured on the master itself through Siril's statistics (`bgnoise` is the noise; the structure is what is left of the total standard deviation once the noise is removed in quadrature). The same three channels come out at 87 % / 9 % / 4 %, SNR 20.1. The log and `output.md` name the shares, and a channel carrying more than 80 % is called out — at that point the luminance is essentially that one channel, which is worth knowing before you build on it.
-
-If the per-master statistics cannot be read, the run falls back to an equal-weight average **and says so**.
+A weighted version was written and taken back out in 1.7.8, for reasons worth knowing before you try it yourself. The weights that maximise SNR, w ∝ signal/noise², are **not invariant under a per-channel rescale** — and by this point every master has been through `-output_norm`, which rescales each one affinely by its *own* extremes, and possibly `linear_match` on top. The weights would follow those arbitrary factors rather than the sky. On top of that, measuring the noise well enough is its own problem: a background sigma computed outside Siril disagreed with Siril's own `bgnoise` by 1.1× to 4.0× across three masters of one M 16 run, worst exactly where nebulosity fills the frame. Squaring that error put Ha at 3.7 % of an M 16 SHO luminance. A scale-invariant rule (w ∝ signal/noise) fed by Siril's own `bgnoise` would be defensible; it is not built.
 
 It is deliberately **not** combined into the colour image. A luminance combine on linear data lifts the bright end before colour calibration — the same mistake *Quick linear LRGB* makes, measured on real data at 531 clipped stars against 68. `todo.md` picks the file up as Part B and combines it after the stretch, where it belongs.
 
@@ -906,7 +904,14 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.7.7
+## 17. What's New in 1.7.8
+
+- **The weighted synthetic luminance from 1.7.7 is taken back out.** It never actually ran: `get_image_stats` returns nothing for a freshly loaded image when Siril has no statistics cached for it, so the measurement read a noise of zero, refused it, and every run fell back to the equal-weight average. Repairing that would not have helped, because the formula is wrong for these inputs — w ∝ signal/noise² is **not invariant under a per-channel rescale**, and by that point every master has been through `-output_norm` (affine, per channel, from its *own* extremes) and possibly `linear_match`. The weights would follow those arbitrary factors instead of the sky. Measured rather than argued: a background sigma computed here disagreed with Siril's own `bgnoise` by 1.1× to 4.0× across three masters of one M 16 run, worst exactly where nebulosity fills the frame, and squaring that error put Ha at 3.7 % of an SHO luminance — Ha being the strongest line in M 16.
+- **The average is back, and now it is described instead of implied to be optimal.** The tooltip, the log line, `output.md` and §9 all say *equal-weight average*, say that a much fainter channel pulls the result down, and say to hold it against your strongest channel before building on it. A scale-invariant rule (w ∝ signal/noise) fed by Siril's own `bgnoise` would be defensible; it is not built, and the code records what it would take.
+- **The log reader is fixed at its root, not patched again.** `get_siril_log()` returns nothing *without raising* on two paths inside sirilpy — a NONE status, and a response too short to carry the shared-memory handle — both meaning Siril declined the transfer. Three call sites turned that into an empty string, which reads downstream as a log fetched successfully that happens to be empty; the delta search then found nothing and the run announced a scrolled buffer. It had not scrolled: on the M 16 run the two star-pair counts, 1393 and 1377, sat two lines above that very message in Siril's own console. Nothing had been read at all. Falsy now means unreadable everywhere, the snapshot retries once (the refusal is momentary — the previous call in the same step had succeeded), and the warning names which of the three things went wrong instead of printing one guess for all of them.
+- **The calibration-rejection change from 1.7.7 is untouched** — but note that cached masters are reused, so an existing `output/calib` has to be cleared before the new bands take effect. The first run after 1.7.7 reused every master and never exercised them.
+
+## What was new in 1.7.7
 
 - **Calibration masters now use the same rejection table as the light stacks.** They were stacked with a bare `rej 3 3`, and a bare `rej` selects Siril's default — winsorized, the band reserved for 11–30 frames. It was going to both ends of the range at once: a per-night master flat of five frames, where winsorizing estimates sigma from five points and replaces outliers with their own neighbours, and a library dark of four hundred, where a linear fit models the trend across the stack that winsorizing cannot see. On the M 16 run the five- and ten-frame flats move to sigma 3/3 and the 442-frame darkflat set to linear fit 5/4. Rejection stays on for calibration masters whatever the light stacks were told — that switch is about integrating your own frames, and one cosmic left in a master flat reaches every light it divides. §8 has the detail.
 - **The synthetic luminance is weighted, not averaged.** It claimed "the combined signal-to-noise" while taking an equal-weight mean, which is optimal only when the channels carry comparable signal — and in SHO they do not. With signals 20 / 2 / 1 at equal noise the average gives SNR 13.3 where Ha *alone* gives 20: the luminance was coming out worse than the best channel inside it, and narrowband normalisation made it worse again by scaling the weak channel's noise up with its signal first. It now uses the matched-filter weights, w ∝ signal / noise², measured on each master through Siril's own statistics. Same three channels: 87 % / 9 % / 4 %, SNR 20.1. The log and the report name the shares, a channel over 80 % is called out, and an equal-weight average survives as a stated fallback when the statistics cannot be read. §9 has the detail.
