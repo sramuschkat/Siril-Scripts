@@ -29,6 +29,7 @@ GPL-3.0-or-later
 | [Svenesis Blink Comparator](#svenesis-blink-comparator) | Animate a folder of FITS frames for rapid visual inspection and data-driven frame selection — statistics table, scatter plot, batch reject, file-based rejection workflow. | [Guide](Instructions/Svenesis-BlinkComparator-Instructions.md) · [DE](Instructions/Svenesis-BlinkComparator-Instructions_de.md) | ✨ |
 | [Svenesis CosmicDepth 3D](#svenesis-cosmicdepth-3d) | Render catalogued objects from a plate-solved image as a rotatable 3D scene — image plane with push-pin depth sticks, SIMBAD distances, stretched-log/linear/hybrid scaling, HTML/PNG/CSV export. | [Guide](Instructions/Svenesis-CosmicDepth3D-Instructions.md) · [DE](Instructions/Svenesis-CosmicDepth3D-Instructions_de.md) | ✨ |
 | [Svenesis CosmicView 3D](#svenesis-cosmicview-3d) | See where your astrophoto points in the universe — interactive 3D scene with the photo along its true line of sight, an auto-generated story card, a cinematic Journey flight from Earth to the target, and Story / Explorer view styles. Automatic Galactic / Cosmic mode, Planck18 cosmology. | [Guide](Instructions/Svenesis-CosmicView3D-Instructions.md) · [DE](Instructions/Svenesis-CosmicView3D-Instructions_de.md) | — |
+| [Svenesis LightCurve](#svenesis-lightcurve) | Measure an exoplanet transit light curve from a folder of sub-exposures: Siril's own `light_curve` aperture photometry driven over a registered-but-not-resampled sequence, comparison stars filtered on SNR / saturation / separation, airmass detrending anchored on the out-of-transit baseline, a deterministic trapezoid fit, and a two-sided significance test that refuses to report a monotonic trend as a transit. CSV, PNG and plain-text report. | [Guide](Instructions/Svenesis-LightCurve-Instructions.md) · [DE](Instructions/Svenesis-LightCurve-Instructions_de.md) | — |
 | [Svenesis Gradient Analyzer](#svenesis-gradient-analyzer) | Analyze background gradients with heatmaps, diagnostics, and tool recommendations. | [Guide](Instructions/Svenesis-GradientAnalyzer-Instructions.md) · [DE](Instructions/Svenesis-GradientAnalyzer-Instructions_de.md) | ✨ |
 | [Svenesis ImageMono Train](#svenesis-imagemono-train) | Point it at one N.I.N.A. target folder and get finished colour: discovers the light frames per optical filter, calibrates them with whatever darks, flats and bias it finds, stacks a master for each (optionally only the ones the palette reads), aligns those channels onto a common grid, and combines them (LRGB · RGB · HaRGB · nine narrowband assignments · two weighted mixes) with background extraction and sensor-aware colour calibration (SPCC, including narrowband, with the sensor and filter names checked against Siril's own database). Writes a processing report and a step-by-step post-processing guide. | [Guide](Instructions/Svenesis-ImageMono-Train-Instructions.md) · [DE](Instructions/Svenesis-ImageMono-Train-Instructions_de.md) | — |
 | [Svenesis Multiple Histogram Viewer](#svenesis-multiple-histogram-viewer) | View linear and stretched images with RGB histograms, 3D surface plots, and detailed statistics. | [Guide](Instructions/Svenesis-MultipleHistogramViewer-Instructions.md) · [DE](Instructions/Svenesis-MultipleHistogramViewer-Instructions_de.md) | ✨ |
@@ -491,6 +492,36 @@ Reads the current plate-solved image from Siril, identifies the main astronomica
 ### Development
 
 - `tests/test_cosmicview.py` (pure-function tests) and `tests/js_harness.mjs` (embedded-JS camera/overlay tests) run with plain `python3` / `node` — no Siril required.
+
+---
+
+## Svenesis LightCurve
+
+**File:** `Svenesis-LightCurve.py` (v1.0.0) — **[Detailed Instructions](Instructions/Svenesis-LightCurve-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-LightCurve-Instructions_de.md)**
+
+Point it at the folder holding one night's sub-exposures of an exoplanet host star. It measures how that star's brightness changed relative to other stars in the same field, removes the systematic trends it can account for, fits a transit — and tells you whether the dip is real.
+
+### Who does what
+
+**Siril does the pixel work.** `light_curve` is Siril's own aperture photometry — the same code behind its Photometry tool — and it already handles the sky annulus, the FWHM-scaled ring radii, saturation and per-frame star matching. Re-implementing that in a script would give you a second, worse photometry engine that has to be kept in step with the first.
+
+**The script does the parts Siril has no opinion about:** which star is the target, which stars are worth calibrating against, how to remove the airmass ramp without eating the transit depth — and whether to claim anything at all.
+
+### Three decisions worth knowing about
+
+**Registration without resampling.** `register -2pass` computes registration data and stops. `seqapplyreg` would interpolate every pixel, and interpolation correlates neighbouring noise and moves flux inside the aperture. Siril's photometry follows the stars through the registration data instead, so the aperture lands on the star while the pixels stay exactly as the sensor recorded them.
+
+**The airmass detrend does not eat the depth.** A plain fit through every point absorbs part of the transit whenever the dip correlates with the ramp — the standard evening-target case. The baseline is fitted with a one-sided least-trimmed pass, then re-fitted directly on the points outside the transit window. Measured on synthetic runs with a known 30 mmag/airmass ramp: a plain fit recovers the slope 6–11 % low; this lands within 1 % up to 50 % duty cycle, and within 3 % at 75 % where the blind pass alone is no better than the plain fit.
+
+**The significance test is two-sided.** A real transit returns to the baseline it left; a trend does not. Pooling both sides into one out-of-transit mean loses that: on a monotonic ramp with no transit in it — uncorrected extinction, a drifting cloud, focus creep — the pooled contrast reaches **+25σ**. Comparing each side separately and taking the weaker returns **−10σ** on the same data. Below 3σ nothing is claimed; a transit clipped by the start or end of the run returns zero, because without baseline on both sides the question cannot be answered.
+
+### Output
+
+`lightcurve/lightcurve.csv` (JD, raw, centred, detrended, error, airmass), the plot as PNG, and a plain-text report with the comparison stars, every rejection and its reason, the method, and the result.
+
+### Tests
+
+`tests/test_lightcurve_helpers.py` runs with plain `python3` — no Siril required. It checks the numeric core against input with a known answer: the J2000 epoch, sec z, a synthetic transit of a stated depth, twelve pure-noise runs that must not be claimed, and the monotonic ramp that the two-sided test exists for.
 
 ---
 
