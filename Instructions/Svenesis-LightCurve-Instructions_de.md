@@ -11,6 +11,7 @@
 1. [Was ist Svenesis LightCurve?](#1-was-ist-svenesis-lightcurve)
 2. [Grundlagen für Einsteiger](#2-grundlagen-für-einsteiger)
 3. [Voraussetzungen & Installation](#3-voraussetzungen--installation)
+3a. [Kalibrierung](#3a-kalibrierung)
 4. [Erste Schritte](#4-erste-schritte)
 5. [Die Oberfläche](#5-die-oberfläche)
 6. [Den Zielstern wählen](#6-den-zielstern-wählen)
@@ -44,6 +45,7 @@ Die Arbeitsteilung ist bewusst gewählt und erklärt den größten Teil des Desi
 |---|---|---|
 | **Bereitstellen** | Subs werden nach `_lightcurve/` verlinkt | Kostet nichts; der Originalordner wird nie beschrieben |
 | **Link** | Siril baut eine Sequenz | |
+| **Kalibrieren** | Kalibrierframes werden gefunden, zu Mastern gestapelt und über Sirils `calibrate` angewandt | Optional und *delegiert* — in diesem Skript steckt keine Bias-/Dark-/Flat-Arithmetik, aus demselben Grund, aus dem keine Photometrie darin steckt. Reine Pixelrechnung, das Versprechen „kein Resampling" bleibt also unberührt; es wird allerdings eine zweite Kopie jedes Frames geschrieben |
 | **Registrieren** | `register -2pass` — nur Daten, **kein Resampling** | Interpolation korreliert Nachbarrauschen und verschiebt Fluss innerhalb der Apertur. Die Apertur folgt dem Stern über die Registrierungsdaten, die Pixel bleiben, wie der Sensor sie aufgezeichnet hat |
 | **Erkennen** | Siril findet die Sterne, das Skript wählt Ziel + Vergleiche | |
 | **Photometrie** | Sirils `light_curve` | |
@@ -70,9 +72,57 @@ Die Arbeitsteilung ist bewusst gewählt und erklärt den größten Teil des Desi
 
 Lege `Svenesis-LightCurve.py` in einen Ordner namens **Utility** in einem von Sirils Skript-Verzeichnissen (*Einstellungen → Skripte*) und starte es über **Bildverarbeitung → Skripte**.
 
-**Kalibriere die Subs vorher.** Vor allem Flats: ein Stern, der über einen Staubschatten wandert, erzeugt einen langsamen Trend, der genau wie ein flacher Transit aussieht.
+**Kalibrieren.** Vor allem Flats: ein Stern, der über einen Staubschatten wandert, erzeugt einen langsamen Trend in genau der Form eines flachen Transits. Entweder du zeigst **2 · Calibration** auf deine Master (siehe [3a](#3a-kalibrierung)) oder du kalibrierst vorher wie gewohnt — auslassen ist keine Option.
 
 ---
+
+## 3a. Kalibrierung
+
+**Nichts muss vorbereitet werden, und du musst dich nicht durchklicken.** Zeig auf deine Subs — oder auf irgendeinen Ordner darüber — und einmalig auf den Ordner mit deinen wiederverwendbaren Darks. Alles Weitere wird gefunden.
+
+### Wo gesucht wird
+
+Der Scan ist **rekursiv**. Jedes FITS unter dem gewählten Ordner wird einmal gelesen und anhand seines Headers in Lights und Kalibrierframes einsortiert — du kannst also auf die Projektwurzel zeigen:
+
+```
+WASP-75b/                       ← hierauf zeigen…
+├── LIGHT/2026-08-14/LUMINOS/   ← …die Subs liegen drei Ebenen tiefer
+└── FLAT/2026-08-14/LUMINOS/    ← diese auch
+_CALIB/DARK/60.00s_G125/        ← dein Library-Ordner, einmal gesetzt
+```
+
+Oder direkt auf `LIGHT/2026-08-14/LUMINOS/` — dann werden die Flats trotzdem gefunden, weil das Skript zusätzlich **nach oben** geht und dort jedes Kind eines Vorfahren nimmt, das ein `FLAT`- / `DARK`- / `BIAS`- / `DARKFLAT`-Ordner ist. Nach oben werden nur Kalibrierordner durchsucht, nie ein ganzer Vorfahre: vier Ebenen über einem Sub-Ordner kann ein Verzeichnis mit sämtlichen Projekten der Platte liegen.
+
+### Drei Dinge, die die Rekursion nötig gemacht hat
+
+| Absicherung | Warum |
+|---|---|
+| **Eigene Ordner ausgespart** | In `_lightcurve/` und `lightcurve/` wird nie hineingegangen — ein zweiter Lauf würde sonst die gestagten Symlinks und konvertierten Frames des ersten wieder als Subs einlesen |
+| **Doppelte Aufnahmen verworfen** | Ein wiederholtes `DATE-OBS` ist eine Kopie, keine Aufnahme. Auf die harte Tour gefunden: ein liegengebliebener Arbeitsordner machte aus 178 Subs 534 — jede Dublette wäre als eigenständiger Punkt in die Kurve eingegangen und hätte jeden Fehlerbalken grundlos um √3 geschrumpft. Wird mit Anzahl gemeldet, nie stillschweigend |
+| **Ein Filter, eine Belichtungszeit** | Ein Filter- oder Belichtungswechsel mitten im Lauf sind *zwei* Serien, keine längere. Die größte Menge wird behalten, der Rest benannt |
+
+**Flats gehören zur Session**, werden also innerhalb deiner Auswahl und neben den Lights gesucht und auf deren Filter eingeschränkt. **Darks und Bias sind wiederverwendbar** und kommen aus dem Library-Ordner, der zwischen Läufen gemerkt wird. Rohframes oder fertige Master, beides geht: eine Gruppe aus genau einer Datei wird als fertiger Master übernommen statt gestapelt.
+
+### Was übereinstimmen muss
+
+Frames teilen sich einen Master nur, wenn **Belichtungszeit, Gain, Temperatur, Binning, Bildgröße und Kamera** übereinstimmen. Master werden in `lightcurve/calib/` unter Namen gecacht, die all das tragen — könnten zwei verschiedene Master denselben Namen haben, gäbe der Cache beim zweiten Lauf stillschweigend den falschen zurück.
+
+Was abgelehnt wird, wird ausgesprochen. Ein Master, der gefunden und dann verworfen wurde, hinterlässt einen Lauf, der *genau* so aussieht wie einer ohne jeden Master:
+
+| Abgelehnt | Warum |
+|---|---|
+| **Falsche Belichtungszeit** (Dark) | Ein 3-s-Dark auf 60-s-Lights entfernt 5 % des Dunkelstroms, lässt den Rest stehen und legt sein eigenes Ausleserauschen auf jeden Frame. Wird mit beiden Zahlen gemeldet — und damit, was es angerichtet hätte |
+| **Falsche Temperatur** | Darks werden nach Temperatur gruppiert: ein −10 °C und ein −20 °C zusammengemittelt ist für keines von beiden richtig. Bias wird *nicht* getrennt — es ist reines Ausleserauschen, eine Trennung machte jeden Master nur verrauschter |
+| **Falsche Kamera oder Größe** | Zwei Gehäuse mit demselben Sensorformat würden sich sonst gegenseitig kalibrieren |
+| **Bias zusammen mit einem Dark** | Nie beides auf den Lights: das Dark enthält den Offset bereits, beides abzuziehen entfernt ihn doppelt. Das Bias korrigiert weiterhin die Flats — Lc = (L − D) / (F − O) |
+
+Ein Flat muss die Belichtungszeit der Lights **nicht** treffen. Ein Flat ist ein Verhältnis; seine eigene Belichtungszeit sagt nichts über die Lights.
+
+### Was es nicht tut
+
+Die Pixelarbeit macht Sirils `calibrate`. In diesem Skript steckt keine Bias-/Dark-/Flat-Arithmetik, aus demselben Grund, aus dem keine Photometrie darin steckt. Und es **resampelt nicht** — Bias, Dark und Flat sind reine Pixelrechnung, das Versprechen der Registrierung bleibt unberührt. Es wird allerdings eine zweite Kopie jedes Frames geschrieben, der Arbeitsordner verdoppelt sich also.
+
+**One-shot-colour sensor (CFA)** ankreuzen bei Bayer-Kameras. Ohne das wird der Frame über sein eigenes Mosaik geflatfieldet, was das CFA-Muster in die Korrektur schreibt.
 
 ## 4. Erste Schritte
 
@@ -210,11 +260,25 @@ Der Preis ist eine etwas kleinere Zahl bei echter Detektion: jede Seite trägt e
 
 Ein Transit, der **vom Anfang oder Ende des Laufs abgeschnitten** ist, liefert Signifikanz null — nicht einfach weniger. Ohne Baseline auf beiden Seiten lässt sich die Frage mit keiner Methode beantworten.
 
-### Die 3σ-Schwelle
+### Die Nachweisschwelle ist kalibriert, nicht gewählt
 
-Darunter wird nichts behauptet. Der Report druckt trotzdem, was der Fitter wollte, klar als Nicht-Messung markiert — denn „keine Detektion" und „das Werkzeug ist abgestürzt" sollen nicht gleich aussehen.
+Die Signifikanz ist die beste aus rund **40 000** Gitterpunkten — 121 Mittelzeiten × 41 Dauern × 8 Ingress-Anteile. Die Formel weiß davon nichts, also **ist es kein gaußsches σ**: eine derart große Suche findet auf reinem Rauschen einen Kontrast, den ein einzelner vorab festgelegter Test nie fände.
 
-Drei Sigma ist die Lehrbuchgrenze für eine Detektionsbehauptung. ExoClock und AAVSO wollen fünf oder mehr — das ist aber eine Entscheidung der Einreichung, nicht des Fits.
+Deshalb wurde die Schwelle gemessen. 1200 transitfreie Weißrausch-Läufe (150 Punkte, 5 h, 4 mmag pro Punkt) durch dieselbe Suche, daneben die Nachweisraten für eingespielte Transits:
+
+| Schwelle | Falschalarm | 4 mmag | 5 mmag | 6 mmag | 8 mmag | 12 mmag |
+|---|---|---|---|---|---|---|
+| 3,0 σ | **4,42 %** | 91 % | 94 % | 100 % | 100 % | 100 % |
+| 3,5 σ | 0,83 % | 79 % | 89 % | 98 % | 100 % | 100 % |
+| **4,0 σ** | **0,17 %** | 53 % | 81 % | **98 %** | **100 %** | **100 %** |
+| 4,5 σ | 0,08 % | 33 % | 70 % | 96 % | 100 % | 100 % |
+| 5,0 σ | 0,00 % | 19 % | 53 % | 86 % | 99 % | 100 % |
+
+Die alte 3σ-Schwelle ließ **einen von 23** reinen Rauschläufen durch — das 33-fache der 0,13 %, die „3σ" allgemein bedeutet. Bei **4,0σ** erreicht die gemessene Rate genau diese 0,13 %, und oberhalb von 6 mmag kostet das nichts. Es kostet den Fall 4–5 mmag: eine Delle in der Größe der Punktstreuung, die aus einer einzelnen Nacht ohnehin nie belastbar war.
+
+Die gemessene Rate steht neben jedem Ergebnis, damit man die Zahl abwägen kann statt ihr glauben zu müssen. ExoClock und AAVSO wollen noch mehr — das ist aber eine Entscheidung der Einreichung, nicht des Fits.
+
+Unterhalb der Schwelle wird nichts behauptet. Der Report zeigt weiterhin, was der Fitter wollte, deutlich als Nicht-Messung markiert — „kein Nachweis" und „das Werkzeug ist abgestürzt" dürfen nicht gleich aussehen.
 
 ---
 
@@ -259,7 +323,7 @@ Alles landet in einem Ordner `lightcurve/` neben deinen Subs:
 
 **„light_curve produced no light_curve.dat"** — Siril verwirft den ganzen Lauf, wenn ein Vergleichsstern in zu wenigen Frames messbar ist. Weniger Vergleiche oder höhere SNR-Grenze.
 
-**Kein Transit gemeldet, obwohl erwartet** — Signifikanz im Reiter *Result* ansehen. Nahe 3σ fehlt schlicht die Präzision; ist sie negativ, hat der Fit eine Aufhellung gefunden, meist ein vom Detrend nicht entfernter Trend.
+**Kein Transit gemeldet, obwohl erwartet** — Signifikanz im Reiter *Result* ansehen. Nahe der 4,0σ-Schwelle fehlt schlicht die Präzision; ist sie negativ, hat der Fit eine Aufhellung gefunden, meist ein vom Detrend nicht entfernter Trend.
 
 ---
 

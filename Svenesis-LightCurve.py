@@ -23,7 +23,14 @@ The division of labour is deliberate:
     whether the dip is real.
 
 Features:
-- Folder of subs in, light curve out: link -> register -> light_curve -> fit
+- Folder of subs in, light curve out: link -> calibrate -> register ->
+  light_curve -> fit
+- Point at any folder above the subs: the scan is recursive, sorts lights
+  from calibration frames by header, and drops duplicate exposures
+- Calibration finds its own frames: inside your selection, beside the
+  lights in the N.I.N.A. LIGHT/FLAT layout, and in a library folder you set
+  once.  Masters are stacked and cached automatically; a dark that does not
+  match the lights is reported and skipped rather than applied
 - Comparison-star ensemble chosen from Siril's own star detection, filtered
   by SNR, saturation, distance from the target, and isolation -- a neighbour
   inside the sky annulus is a seeing-driven trend, not a comparison star
@@ -40,8 +47,11 @@ Features:
   stuck, no random seed, the same answer every run
 - Stacked detection significance with the correct standard error, checked
   against the baseline on BOTH sides of the event so a monotonic trend
-  cannot be reported as a transit, and a refusal to claim anything below
-  3 sigma
+  cannot be reported as a transit, and a refusal to claim anything below a
+  CALIBRATED floor: the grid search spans ~40 000 nodes, so the number is
+  not a Gaussian sigma.  Measured over 1200 transit-free noise runs, 4.0
+  gives 0.17% false alarms -- what "3 sigma" was always read to mean -- and
+  the measured rate is printed next to every result
 - Binned overlay, residual panel, per-point scatter and the measured RMS
 - CSV export of the full series, PNG export of the plot, plain-text report
 - Every number that is an estimate is marked as one
@@ -67,6 +77,104 @@ CHANGELOG:
         reported for it instead.  The not-used tally now accounts for every
         detection, including the ones that passed every filter and were
         merely surplus.
+      - Calibration, driven through Siril's `calibrate` rather than
+        reimplemented -- the same division of labour as `light_curve`.  The
+        user-facing shape is Svenesis ImageMono-Train's, because asking for
+        three ready-made masters was the wrong question: it demanded work
+        the script is better placed to do.  Point at the lights and, once,
+        at wherever your reusable darks live; flats belong to the session
+        and are found beside the lights by walking up to the N.I.N.A.
+        LIGHT/FLAT layout.  Frames are grouped by signature (exposure,
+        gain, temperature, binning, size, camera), masters are stacked and
+        cached under header-derived names and reused on later runs, and a
+        group of exactly one file is adopted as a ready-made master
+      - What the matching refuses is said out loud, because a master that
+        was found and rejected leaves a run that looks identical to one
+        where no master existed.  Darks are split by temperature (a -10 C
+        and a -20 C average is correct for neither) and bias is not (it is
+        temperature-independent).  A dark at the wrong exposure is named
+        with what the mismatch would have done, not just that two numbers
+        differ.  Bias is never applied together with a dark -- the dark
+        already carries the offset -- but it still corrects the flats:
+        Lc = (L - D) / (F - O)
+      - Discovery is recursive and classifies rather than assumes.  Only
+        the files directly inside the chosen folder were read before, which
+        meant navigating to the exact leaf folder AND left calibration
+        frames filed anywhere inside your own selection invisible -- the
+        thing Svenesis ImageMono-Train had right and this did not.  Every
+        FITS under the folder is now inspected once and sorted by kind;
+        lights become the sequence, calibration frames join the groups
+      - Three guards came with the recursion, because a recursive scan
+        picks up what a flat one could not reach:
+        * this script's own working and output folders are pruned,
+          including the names it used before it was renamed -- a run that
+          walks its own previous output re-ingests staged symlinks and
+          converted frames as subs
+        * a repeated DATE-OBS is a copy, not an exposure, and is dropped
+          with a count.  Found the hard way: a leftover working folder
+          turned 178 subs into 534, and every duplicate would have entered
+          the curve as an independent point, shrinking every error bar by
+          root-3 for nothing
+        * lights are reduced to one filter and one exposure.  A filter or
+          exposure change mid-run is two series, not a longer one; the
+          largest set wins and the rest is named
+      - Audit of the arithmetic, every finding measured rather than read:
+        * the detection floor was a Gaussian-looking 3 sigma on a number
+          that is the best of ~40 000 grid nodes.  Measured over 1200
+          transit-free white-noise runs through that same search: 4.42%
+          false alarms, 33x the 0.13% the label implies.  The floor is now
+          4.0, where the measured rate is 0.17%, and the rate itself is
+          printed next to every result.  Detection above 6 mmag is
+          unchanged at 98-100%; the 4-5 mmag case is what it costs, and a
+          dip at the per-point scatter was never safe from one night
+        * the red-noise beta used `np.std` for the unbinned scatter -- the
+          one non-robust scatter in the file.  Three 50 mmag outliers on a
+          4 mmag curve inflate it 2.1x, which DIVIDES beta by 2.1 and
+          switches the correction off exactly when the data need it.  Now
+          `_mad_std`, while the binned scatter stays a plain std on
+          purpose: an outlier then raises beta instead of lowering it
+        * the expected bin-mean scatter used sigma/sqrt(mean(k)) where the
+          variance of bin i is sigma^2/k_i, so the right form is
+          sigma*sqrt(mean(1/k)).  Identical on equal bins -- which is why
+          it hid -- and 55% out on [2,4,8,16,32], 86% on [2,2,2,30]
+        * the depth uncertainty was NOT scaled by beta while the
+          significance next to it in the report was.  At beta 2.56 one fit
+          read "1.6 sigma" and "depth/error 9.5" three lines apart.  Both
+          carry the same noise model now, and the report says which of the
+          two to quote and why they still differ
+        * binned error bars used numpy's default ddof=0: 29% too small at
+          two points per bin, 11% at five
+        * `fit_transit` carried a `weights` argument no caller passed, and
+          the path was inconsistent -- chi-square weighted, sigma and the
+          depth error not.  Removed rather than fixed: Siril's formal error
+          describes photon and sky noise, not the scintillation and
+          transparency that actually limit the curve
+        * `_mid_exposure_jd` was defined and never called.  Removed, and
+          the reason recorded where the times are read: Siril already
+          writes mid-exposure.  Checked against 178 raw headers of a 60 s
+          run -- 0.02 s from DATE-OBS + EXPTIME/2, 30.00 s from DATE-OBS.
+          Calling the helper would have put every mid-transit time 30 s late
+        * the altitude docstring claimed "a few arcminutes" and "the fourth
+          decimal" of airmass.  Measured against astropy: 21 arcminutes and
+          0.044.  The approximation is still right for a detrending basis
+          and the docstring now says so with the numbers
+      - Target saturation is measured in the PIXELS, not read from Siril's
+        `has_saturated`.  The flag is right on raw 16-bit frames and stops
+        firing once calibration turns them into 32-bit float: same
+        saturation, no warning, and a run reporting a 4% yield with no
+        cause attached.  Measured on the real pair -- raw peak 65532 of
+        65535 inside the box, calibrated peak 1.000 of 1.0, flag set only
+        in the first case.  The threshold is 98% of full scale because this
+        camera clips at 65532, not 65535; the flag is still consulted, so a
+        frame that cannot be read is not silently called clean
+      - Whether the frames were already calibrated is a three-state answer,
+        since N.I.N.A. writes neither CALSTAT nor a HISTORY card and "no
+        evidence" is not "not calibrated"
+      - `_log_swallowed` was called from three exception handlers and
+        defined nowhere.  All three are fallbacks for cases that had not
+        come up; the first one to fire would have raised NameError over the
+        top of the error it existed to absorb.  Defined, and the suite now
+        checks statically that every name in every method resolves
       - NOT taken, and recorded so it is not re-derived: Siril's
         "Photometry for star at X, Y in image 0" disagreed with the
         `-refat=` that produced it by 16, 33 and 63 px on three comps.  A
@@ -274,6 +382,14 @@ FITS_EXTS = (".fit", ".fits", ".fts", ".fit.fz", ".fits.fz", ".fts.fz")
 # lives here so the source frames are never written to.
 WORK_DIRNAME = "_lightcurve"
 OUT_DIRNAME = "lightcurve"
+# Never descended into by the recursive scan.  "_flux"/"flux" are this
+# script's own folder names from before it was renamed: a run that walks
+# its own previous output re-ingests staged symlinks and converted frames
+# as if they were subs.  The name list is the cheap half of the guard --
+# the half that catches folders nobody thought to name is the duplicate
+# check in `split_frames`, which works off DATE-OBS and does not care
+# where a copy came from.
+PRUNED_DIRNAMES = (WORK_DIRNAME, OUT_DIRNAME, "_flux", "flux")
 
 # --- photometry defaults ---------------------------------------------------
 # Comparison stars below this signal-to-noise contribute more scatter than
@@ -318,6 +434,59 @@ COMP_ISOLATION_OUTER = 2.0
 # different convention) rather than a mismeasurement.  Until that is
 # settled, no filter is built on it.
 
+# --- calibration -----------------------------------------------------------
+# Siril's `calibrate` does the pixel arithmetic, for the same reason
+# `light_curve` does the photometry: a second implementation of bias/dark/
+# flat here would be one more thing to keep in step with the first, and it
+# would be worse.  This script decides WHICH frames belong together, builds
+# the masters through Siril, and says what it used.
+#
+# The shape of the user-facing part is Svenesis ImageMono-Train's, because
+# asking for three ready-made masters was the wrong question: it demanded
+# work -- stacking flats by hand in Siril -- that the script is better
+# placed to do.  Here you point at the lights and, once, at wherever your
+# reusable darks live.  Flats belong to the session and are found beside
+# the lights.
+CALIB_PREFIX = "pp_"
+KIND_LIGHT, KIND_DARK, KIND_FLAT = "light", "dark", "flat"
+KIND_DARKFLAT, KIND_BIAS = "darkflat", "bias"
+# A cooled setpoint is an integer and CCD-TEMP is a measurement that wobbles
+# by tenths, so a session lands inside this window while two genuinely
+# different setpoints do not.
+CALIB_TEMP_TOLERANCE_C = 2.0
+# How far up from the lights folder to look for sibling FLAT / DARK / BIAS
+# folders.  N.I.N.A. writes <target>/LIGHT/<date>/<filter>/, so the flats
+# sit three levels up beside the LIGHT folder; four gives one to spare
+# without wandering into an unrelated part of the disk.
+CALIB_SEARCH_LEVELS = 4
+# Below this a "stack" is not a stack.  One frame is adopted as a
+# ready-made master instead; two is the fewest that can reject anything.
+CALIB_MIN_STACK = 2
+# What `CALSTAT` means where a camera or capture program writes it.  Absent
+# in raw N.I.N.A. output, which is why its absence is evidence but not
+# proof -- hence the three-state answer in `frames_are_calibrated`.
+CALSTAT_LETTERS = {"B": "bias", "D": "dark", "F": "flat"}
+# HISTORY is free text, so the scan is deliberately narrow: these words in
+# a HISTORY card mean somebody calibrated the frame.
+CALIB_HISTORY_WORDS = ("calibrat", "bias subtract", "offset subtract",
+                       "dark subtract", "flat field", "flat-field",
+                       "flat divi")
+# A dark taken at a different exposure than the lights removes the wrong
+# amount of dark current -- proportionally wrong, and the shot noise it
+# adds is not removed at all.  Siril subtracts it anyway without comment,
+# so the mismatch is checked here.  2% covers rounding in the header.
+DARK_EXPTIME_TOLERANCE = 0.02
+
+# A pixel this close to full scale is clipped for photometric purposes:
+# the sensor stopped responding linearly well before the ADC ran out.  The
+# Ares-M PRO clips at 65532 of 65535, so the test cannot ask for the exact
+# maximum.
+SATURATION_FRACTION = 0.98
+# Half-width of the box searched around the target for its peak.  Wide
+# enough to hold the core wherever the centroid landed, narrow enough not
+# to catch a neighbour: at FWHM 2 px this is seven times the core.
+SATURATION_BOX_PX = 15
+
 # A target match is called ambiguous when the runner-up sits within this
 # multiple of the nearest star's distance.  On a field with hundreds of
 # stars the nearest neighbour to an arbitrary point is normally many times
@@ -355,7 +524,32 @@ FLIP_ROTATION_DEG = 10.0
 # transit.  Three sigma is the textbook lower bound for claiming a detection;
 # ExoClock and AAVSO submissions want five or more, but that is a decision
 # for the submission, not for the fit.
-MIN_DETECTION_SIGMA = 3.0
+# CALIBRATED, not chosen.  The significance is the best of ~40 000 grid
+# nodes (121 T0 x 41 durations x 8 ingress fractions), and nothing in the
+# formula knows that.  A search that large finds a contrast on pure noise
+# that a single a-priori test never would, so the number is not a Gaussian
+# sigma and a threshold picked to look like one is 30x weaker than it reads.
+#
+# Measured over 1200 transit-free white-noise runs (150 points, 5 h, 4 mmag
+# per point), with detection rates on injected transits beside it:
+#
+#     threshold   false alarm | 4mmag  5mmag  6mmag  8mmag  12mmag
+#           3.0         4.42% |  91%    94%   100%   100%    100%
+#           3.5         0.83% |  79%    89%    98%   100%    100%
+#           4.0         0.17% |  53%    81%    98%   100%    100%
+#           4.5         0.08% |  33%    70%    96%   100%    100%
+#           5.0         0.00% |  19%    53%    86%    99%    100%
+#
+# 4.0 is where the false-alarm rate reaches the 0.13% that "3 sigma" was
+# always taken to mean, and it costs nothing above 6 mmag.  What it costs
+# is the 4-5 mmag case -- a dip at or just above the per-point scatter --
+# and those were never safe to claim from a single night anyway.
+MIN_DETECTION_SIGMA = 4.0
+# The false-alarm rate measured AT that threshold, reported next to every
+# claim.  A threshold without its own calibration is a number the reader
+# has to trust; with it, they can weigh it.
+MEASURED_FALSE_ALARM = 0.0017
+MEASURED_FALSE_ALARM_RUNS = 1200
 # Grid resolution of the trapezoid fit.  The parameters are strongly
 # correlated, so a dense grid beats a local optimiser that can walk into a
 # noise minimum -- and it is deterministic.
@@ -479,18 +673,63 @@ def _is_fits(name: str) -> bool:
 
 
 def _fits_files(folder: str) -> list:
-    """Every FITS file directly inside ``folder``, sorted by name.
+    """Every FITS file under ``folder``, recursively, sorted by full path.
 
-    Sorted, not globbed in directory order: the sequence order decides which
-    frame is the reference, and a run that picks a different reference every
-    time cannot be compared with the previous one.
+    Recursive, because that is how a night is actually filed: point at
+    ``WASP-75b`` and the subs are three levels down under
+    ``LIGHT/<date>/<filter>/`` while the flats sit under ``FLAT/``.  Only
+    reading the top level meant you had to navigate to the exact leaf
+    folder, and calibration frames anywhere inside your own selection were
+    invisible.
+
+    What comes back is every FITS, of every KIND -- sorting them into lights
+    and calibration frames is `split_frames`'s job, and it needs the headers
+    to do it.  Two directories are pruned: this script's own working and
+    output folders, or a second run would ingest the first run's staged
+    symlinks and built masters as if they were subs.
+
+    Sorted by full path, not in directory order: the sequence order decides
+    which frame becomes the reference, and a run that picks a different
+    reference each time cannot be compared with the previous one.
     """
+    out = []
     try:
-        names = sorted(os.listdir(folder))
+        for base, dirs, names in os.walk(folder):
+            dirs[:] = sorted(d for d in dirs
+                             if not d.startswith(".")
+                             and d not in PRUNED_DIRNAMES)
+            for n in sorted(names):
+                if n.startswith(".") or not _is_fits(n):
+                    continue
+                path = os.path.join(base, n)
+                if os.path.isfile(path):
+                    out.append(path)
     except OSError:
         return []
-    return [os.path.join(folder, n) for n in names
-            if _is_fits(n) and os.path.isfile(os.path.join(folder, n))]
+    return sorted(out)
+
+
+def _log_swallowed(exc: BaseException) -> None:
+    """One-line stderr trace for an intentionally-swallowed exception.
+
+    Siril surfaces stderr in its console, so a fallback that fires leaves a
+    breadcrumb instead of a silent ``pass``.
+
+    This was CALLED from three handlers before it existed.  Nothing noticed,
+    because every one of them is a fallback for a case that had not come up
+    yet -- and when one finally did, the handler would have raised NameError
+    over the top of the error it was there to absorb.  A static check that
+    every name resolves now runs in the suite.
+    """
+    try:
+        tb, lineno = exc.__traceback__, -1
+        while tb is not None:
+            lineno = tb.tb_lineno
+            tb = tb.tb_next
+        sys.stderr.write(f"[LightCurve] swallowed {type(exc).__name__} "
+                         f"(line {lineno}): {exc}\n")
+    except Exception:
+        pass
 
 
 def _read_header(path: str):
@@ -539,25 +778,6 @@ def _jd_from_dateobs(date_obs: str) -> float:
     return float(jdn) - 0.5 + day_frac
 
 
-def _mid_exposure_jd(header) -> float:
-    """Mid-exposure JD (UTC) from ``DATE-OBS`` and ``EXPTIME``.
-
-    The MIDDLE of the exposure, not its start: a 300 s sub timed at its
-    start carries a systematic 2.5 minute lead, and transit timing is the
-    whole point of the exercise.  ExoClock and ETD both expect mid-exposure.
-    """
-    if header is None:
-        return float("nan")
-    jd = _jd_from_dateobs(str(header.get("DATE-OBS", "")))
-    if not np.isfinite(jd):
-        return float("nan")
-    try:
-        exp = float(header.get("EXPTIME", header.get("EXPOSURE", 0.0)) or 0.0)
-    except (ValueError, TypeError):
-        exp = 0.0
-    return jd + (exp / 2.0) / 86400.0
-
-
 def _sexagesimal(text: str) -> float:
     """Degrees from ``12:34:56.7``, ``12 34 56.7`` or a plain decimal.
 
@@ -595,10 +815,17 @@ def _altitude_deg(jd_ut: float, ra_deg: float, dec_deg: float,
                   lat_deg: float, lon_deg_east: float) -> float:
     """Apparent altitude of a fixed target, in degrees.
 
-    Plain spherical trigonometry, no refraction and no nutation: the airmass
-    it feeds is a DETRENDING BASIS, not an ephemeris.  An error of a few
-    arcminutes moves the airmass in the fourth decimal, which is far below
-    the scatter of the photometry it corrects.
+    Plain spherical trigonometry: no refraction, and the catalogue J2000
+    position is used as if it were apparent, so precession, nutation and
+    aberration are all absent.  Measured against astropy for WASP-75 from
+    central Texas across one night: the altitude is out by up to 21
+    arcminutes and the airmass by up to 0.044.
+
+    That is fine HERE and nowhere else, because the airmass is a DETRENDING
+    BASIS, not an ephemeris.  The fit removes a linear ramp in it; an error
+    that is itself a smooth function of time is absorbed almost entirely by
+    the same linear term, and what survives is far below the per-point
+    scatter.  Do not reuse this to point a telescope.
     """
     for v in (jd_ut, ra_deg, dec_deg, lat_deg, lon_deg_east):
         if v is None or not np.isfinite(v):
@@ -632,6 +859,15 @@ def _airmass(alt_deg: float) -> float:
 # ---------------------------------------------------------------------------
 def _parse_light_curve_dat(path: str):
     """``(jd, diff_mag, err, n_unmeasured)`` from Siril's ``light_curve.dat``.
+
+    The JD column is already the MIDDLE of the exposure -- verified against
+    178 raw headers of a 60 s run: Siril's times sit 0.02 s from
+    ``DATE-OBS + EXPTIME/2`` and 30.00 s from ``DATE-OBS``.  This file used
+    to carry a `_mid_exposure_jd` helper to add that half-exposure itself;
+    nothing called it, and calling it would have shifted every mid-transit
+    time 30 s late.  Recorded here because "should I add EXPTIME/2?" is the
+    obvious question and the answer is no.
+
 
     The file is three columns -- ``JD_UT``, ``V-C``, ``err`` -- under a
     comment header.  Two traps, both found on real data:
@@ -890,7 +1126,7 @@ def stacked_significance(t, mag, t0: float, duration: float,
     return float(min(sides))
 
 
-def fit_transit(t, mag, weights=None):
+def fit_transit(t, mag):
     """Fit a trapezoid to a differential light curve in MAGNITUDES.
 
     Returns a dict, or ``None`` when there is not enough data to try.
@@ -909,6 +1145,17 @@ def fit_transit(t, mag, weights=None):
 
     Depth is constrained to be POSITIVE -- the star gets fainter -- so the
     fit cannot "detect" a brightening and call it a transit.
+
+    UNWEIGHTED, deliberately.  This carried a `weights` argument that no
+    caller ever passed, and the path was inconsistent: chi-square would
+    have been weighted while `sigma` and `depth_sigma` stayed unweighted,
+    so switching it on would have produced quietly wrong error bars.  Siril
+    writes a per-point error into `light_curve.dat` and this script keeps
+    it in the CSV, but does not fit against it -- a formal error from
+    aperture photometry describes photon and sky noise only, and the
+    scatter that actually limits a ground-based light curve is scintillation
+    and transparency, which it does not see.  The post-fit residual scatter
+    is measured instead, and that one does include everything.
     """
     t = np.asarray(t, dtype=float)
     mag = np.asarray(mag, dtype=float)
@@ -917,11 +1164,6 @@ def fit_transit(t, mag, weights=None):
         return None
     t = t[good]
     mag = mag[good]
-    w = None
-    if weights is not None:
-        w = np.asarray(weights, dtype=float)[good]
-        if not np.all(np.isfinite(w)) or np.all(w <= 0):
-            w = None
 
     span = float(t.max() - t.min())
     if span <= 0:
@@ -940,7 +1182,7 @@ def fit_transit(t, mag, weights=None):
                            FIT_DURATION_STEPS)
 
     ones = np.ones_like(t)
-    sw = w if w is not None else ones
+    sw = ones
     best = None
     for dur in dur_grid:
         for ing in FIT_INGRESS_FRACTIONS:
@@ -997,11 +1239,17 @@ def fit_transit(t, mag, weights=None):
     # one direction that has a closed form.  The other three are correlated
     # with it and with each other; quoting a covariance matrix from a grid
     # search would be a number with no error bar of its own.
+    #
+    # SCALED BY THE SAME beta as the significance.  It was not, and the two
+    # numbers sit three lines apart in the report: at beta 2.56 the
+    # significance read 1.6 sigma while depth/depth_sigma read 9.5, so the
+    # report said "not detected" and "detected at 9 sigma" about one fit.
+    # Measured ratios across a dozen correlated-noise runs: 2.3x to 6.0x.
     inside = shape > 0.5
     n_in = int(np.count_nonzero(inside))
     n_out = int(np.count_nonzero(~inside))
     if n_in > 0 and n_out > 0 and sigma > 0:
-        depth_sigma = sigma * math.sqrt(1.0 / n_in + 1.0 / n_out)
+        depth_sigma = beta * sigma * math.sqrt(1.0 / n_in + 1.0 / n_out)
     else:
         depth_sigma = float("nan")
 
@@ -1054,7 +1302,12 @@ def bin_series(t, y, n_bins: int):
             continue
         ct.append(float(np.mean(t[sel])))
         cm.append(float(np.mean(y[sel])))
-        ce.append(float(np.std(y[sel]) / math.sqrt(n)) if n > 1 else float("nan"))
+        # ddof=1: the standard error of a mean needs the SAMPLE deviation.
+        # With numpy's default ddof=0 the bars come out 29% too small at
+        # two points per bin, 11% at five -- and a light curve whose error
+        # bars are systematically small looks more convincing than it is.
+        ce.append(float(np.std(y[sel], ddof=1) / math.sqrt(n))
+                  if n > 1 else float("nan"))
         cn.append(n)
     return (np.asarray(ct), np.asarray(cm), np.asarray(ce), np.asarray(cn))
 
@@ -1255,7 +1508,14 @@ def red_noise_beta(t, resid, duration_days):
     if r.size < RED_NOISE_MIN_POINTS or not math.isfinite(duration_days) \
             or duration_days <= 0:
         return 1.0, []
-    sigma1 = float(np.std(r, ddof=1))
+    # Robust, like every other scatter in this file.  `np.std` was used
+    # here and nowhere else, and it defeats the whole point: three
+    # satellite trails inflate sigma1 by 2.1x, which DIVIDES beta by the
+    # same factor and switches the red-noise correction off exactly when
+    # the data are bad enough to need it.  Measured on 150 points at 4
+    # mmag: std 3.75 -> 8.16 mmag with three 50 mmag outliers, MAD 3.80 ->
+    # 3.84.
+    sigma1 = _mad_std(r)
     if not math.isfinite(sigma1) or sigma1 <= 0:
         return 1.0, []
     span = float(tt.max() - tt.min())
@@ -1276,12 +1536,27 @@ def red_noise_beta(t, resid, duration_days):
         if n_bins < RED_NOISE_MIN_BINS:
             continue
         n_mean = float(np.mean(counts))
+        # `observed` stays a plain standard deviation while sigma1 is
+        # robust, and the asymmetry is deliberate.  On clean data the two
+        # agree, so beta is unbiased.  On data with an outlier, the outlier
+        # raises the bin mean it lands in -- so it enters `observed` -- but
+        # not the robust sigma1, and beta goes UP.  That is the direction a
+        # safety net should fail in.  A MAD over four to eight bin means
+        # would be too noisy to use.
         observed = float(np.std(means, ddof=1))
+        # The expected scatter of the SET of bin means, not of a typical
+        # bin mean.  Bin i has variance sigma1^2 / k_i, so the mean variance
+        # across bins is sigma1^2 * mean(1/k) -- NOT sigma1^2 / mean(k),
+        # which is what this used to compute.  Jensen's inequality makes
+        # the two differ whenever the bins are unequally filled, and always
+        # in the same direction: measured 0% apart on equal bins, 55% on
+        # [2,4,8,16,32] and 86% on [2,2,2,30].
+        #
         # sqrt(M/(M-1)) is the small-sample correction for estimating the
         # scatter of M bin means; without it every short ladder rung reads
         # low and beta is biased toward "the noise is fine".
-        expected = sigma1 / math.sqrt(n_mean) * math.sqrt(
-            n_bins / float(n_bins - 1))
+        expected = sigma1 * math.sqrt(float(np.mean(1.0 / np.asarray(
+            counts, dtype=float)))) * math.sqrt(n_bins / float(n_bins - 1))
         if expected > 0:
             rows.append((width, observed / expected, n_bins, n_mean))
     if not rows:
@@ -1290,6 +1565,56 @@ def red_noise_beta(t, resid, duration_days):
     # few bins should not set the correction for the whole run.
     beta = float(np.median([b for _w, b, _n, _k in rows]))
     return max(1.0, beta), rows
+
+
+def full_scale_of(data) -> float:
+    """The value that counts as "clipped" for this array's type.
+
+    Siril hands back integers in their native range and floats normalised
+    to [0, 1].  A float array whose peak is far above 1 is neither, so its
+    own maximum is used and the answer becomes relative -- worse than
+    knowing the ADC range, better than declaring an arbitrary threshold.
+    """
+    dtype = getattr(data, "dtype", None)
+    if dtype is not None and dtype.kind in "ui":
+        return float(np.iinfo(dtype).max)
+    peak = float(np.nanmax(data)) if getattr(data, "size", 0) else 1.0
+    return 1.0 if peak <= 1.5 else peak
+
+
+def saturation_verdict(data, x: float, y: float,
+                       half: int = SATURATION_BOX_PX):
+    """Is the star at ``(x, y)`` clipped?  ``(saturated, evidence)``.
+
+    Read from the PIXELS, not from Siril's ``has_saturated`` flag.  The
+    flag is right on the raw 16-bit frames and stops firing once the frames
+    have been calibrated to 32-bit float -- the saturation is unchanged,
+    the warning simply disappears, and the run then reports a 4% yield with
+    no cause attached.  Measured on a real pair: raw peak 65532 of 65535
+    inside the box, calibrated peak 1.000 of 1.0, flag set in the first
+    case and not in the second.
+
+    Returns ``(None, reason)`` when the data cannot be read at all.
+    """
+    if data is None or not getattr(data, "size", 0):
+        return None, "no pixel data"
+    arr = np.asarray(data)
+    if arr.ndim > 2:
+        arr = arr[0]
+    h, w = arr.shape[-2], arr.shape[-1]
+    xi, yi = int(round(float(x))), int(round(float(y)))
+    if not (0 <= xi < w and 0 <= yi < h):
+        return None, f"target ({xi}, {yi}) lies outside the {w}x{h} frame"
+    box = arr[max(0, yi - half):yi + half + 1,
+              max(0, xi - half):xi + half + 1]
+    if not box.size:
+        return None, "empty box around the target"
+    peak = float(np.nanmax(box))
+    full = full_scale_of(arr)
+    frac = peak / full if full else 0.0
+    return (frac >= SATURATION_FRACTION,
+            f"peak {peak:.6g} of {full:.6g} ({100.0 * frac:.1f}% of full "
+            f"scale) within {half} px of the target")
 
 
 def photometry_yield_note(n_points: int, n_frames: int,
@@ -1375,6 +1700,570 @@ def _any_solved(stars) -> bool:
                 or abs(float(getattr(st, "dec", 0.0) or 0.0)) > 1e-9):
             return True
     return False
+
+
+def classify_kind(imagetyp: str):
+    """A frame kind from an ``IMAGETYP`` value, or ``None``.
+
+    Substring matching, because the keyword is a type name: "Light Frame",
+    "Flat Field" and "Dark Frame" must all be recognised.  Order matters --
+    "DARKFLAT" and "Dark Flat" contain both words, so the combined form is
+    tested first or a dark-flat becomes a plain dark and gets subtracted
+    from the lights.
+    """
+    h = (imagetyp or "").strip().lower()
+    if not h:
+        return None
+    has_dark, has_flat = "dark" in h, "flat" in h
+    if has_dark and has_flat:
+        return KIND_DARKFLAT
+    if has_flat:
+        return KIND_FLAT
+    if has_dark:
+        return KIND_DARK
+    if "bias" in h or "offset" in h:
+        return KIND_BIAS
+    if "light" in h or "object" in h or "science" in h:
+        return KIND_LIGHT
+    return None
+
+
+def classify_path(path: str):
+    """A frame kind from the folder names, for files with no ``IMAGETYP``.
+
+    WHOLE path segments, never substrings: a target called "Dark-Nebula" or
+    "Flaming Star" must not have its lights read as calibration frames.
+    N.I.N.A. writes the type as its own folder, in capitals, so the
+    comparison is case-folded -- a case-sensitive one would never match.
+    """
+    seg = {p.strip().lower().replace(" ", "").replace("-", "").replace("_", "")
+           for p in os.path.normpath(path).split(os.sep)}
+    if seg & {"darkflat", "flatdark", "darkflats", "flatdarks"}:
+        return KIND_DARKFLAT
+    if seg & {"flat", "flats"}:
+        return KIND_FLAT
+    if seg & {"dark", "darks"}:
+        return KIND_DARK
+    if seg & {"bias", "biases", "offset", "offsets"}:
+        return KIND_BIAS
+    if seg & {"light", "lights"}:
+        return KIND_LIGHT
+    return None
+
+
+def inspect_frame(path: str, header=None) -> dict:
+    """One header read, everything discovery and matching need.
+
+    ``IMAGETYP`` is authoritative and the folder layout is the fallback --
+    that order and not the reverse, because a keyword written by the
+    capture program knows what the frame is and a folder only says where
+    somebody filed it.
+    """
+    out = {"path": path, "kind": None, "exp_s": None, "gain_v": None,
+           "temp_v": None, "binning": 1, "dims": None, "instrument": None,
+           "filter": "", "date_obs": ""}
+    h = header if header is not None else _read_header(path)
+    if h is None:
+        out["kind"] = classify_path(path)
+        return out
+    out["kind"] = (classify_kind(str(h.get("IMAGETYP", "") or ""))
+                   or classify_path(path))
+    out["filter"] = str(h.get("FILTER", "") or "").strip()
+    out["date_obs"] = str(h.get("DATE-OBS", h.get("DATE_OBS", "")) or "").strip()
+    out["instrument"] = str(h.get("INSTRUME", "") or "").strip() or None
+    for key in ("EXPTIME", "EXPOSURE"):
+        if key in h:
+            try:
+                out["exp_s"] = float(h[key])
+            except (TypeError, ValueError):
+                pass
+            break
+    for key in ("GAIN", "EGAIN"):
+        if key in h:
+            try:
+                out["gain_v"] = float(h[key])
+            except (TypeError, ValueError):
+                pass
+            break
+    for key in ("CCD-TEMP", "CCDTEMP", "SET-TEMP"):
+        if key in h:
+            try:
+                out["temp_v"] = float(h[key])
+            except (TypeError, ValueError):
+                pass
+            break
+    for key in ("XBINNING", "BINNING", "XBIN"):
+        if key in h:
+            try:
+                out["binning"] = int(float(h[key]))
+            except (TypeError, ValueError):
+                pass
+            break
+    try:
+        out["dims"] = (int(h.get("NAXIS1", 0)), int(h.get("NAXIS2", 0)))
+    except (TypeError, ValueError):
+        pass
+    return out
+
+
+def calib_signature(info: dict, with_temp: bool = False) -> tuple:
+    """Grouping key: what must agree before two frames share a master.
+
+    ``with_temp`` is required for DARKS -- dark current is a function of
+    temperature, so averaging a -10 C and a -20 C frame gives a master that
+    is correct for neither.  BIAS is read noise only and essentially
+    temperature-independent, so splitting it would just make every master
+    noisier for nothing.
+
+    The camera is part of the key.  Without it two bodies of the same model
+    -- same size, same gain, same binning -- land in one group and get
+    averaged together before anything checks whether they belong.
+    """
+    temp = info.get("temp_v")
+    return (round(float(info.get("exp_s") or 0.0), 3),
+            info.get("gain_v"),
+            info.get("binning", 1),
+            info.get("dims"),
+            (round(float(temp)) if with_temp and temp is not None else None),
+            info.get("instrument") or None)
+
+
+def signature_matches(master: dict, target: dict, check_exposure=True):
+    """``(ok, why)`` -- may ``master`` calibrate frames like ``target``?
+
+    A missing gain, temperature or size is "unknown, don't block": refusing
+    a usable master because a keyword is absent would be worse than the
+    mismatch it guards against.  Exposure is the exception for darks, where
+    3 s against 60 s is exactly the mismatch that must not slip through.
+
+    Returns the reason as well as the verdict, because a master that was
+    found and then rejected is the case where silence hurts most -- the run
+    would look identical to one where no master existed at all.
+    """
+    mi, ti = master.get("instrument"), target.get("instrument")
+    if mi and ti and mi != ti:
+        return False, f"different camera ({mi} vs {ti})"
+    md, td = master.get("dims"), target.get("dims")
+    if md and td and md != td:
+        return False, f"different image size ({md} vs {td})"
+    if master.get("binning", 1) != target.get("binning", 1):
+        return False, (f"different binning ({master.get('binning')} vs "
+                       f"{target.get('binning')})")
+    mg, tg = master.get("gain_v"), target.get("gain_v")
+    if mg is not None and tg is not None and mg != tg:
+        return False, f"different gain ({mg:g} vs {tg:g})"
+    mt, tt = master.get("temp_v"), target.get("temp_v")
+    if mt is not None and tt is not None \
+            and abs(mt - tt) > CALIB_TEMP_TOLERANCE_C:
+        return False, f"different temperature ({mt:g} C vs {tt:g} C)"
+    if check_exposure:
+        me, te = master.get("exp_s"), target.get("exp_s")
+        if me is None or te is None:
+            return False, "exposure time unknown on one side"
+        if abs(float(me) - float(te)) > 0.01:
+            return False, f"different exposure ({me:g} s vs {te:g} s)"
+    return True, "matches"
+
+
+def calibration_roots(lights_dir: str, library: str = "",
+                      levels: int = CALIB_SEARCH_LEVELS) -> list:
+    """Folders worth scanning for calibration frames, nearest first.
+
+    N.I.N.A. files a session as ``<target>/LIGHT/<date>/<filter>/``, which
+    puts the flats three levels up beside the LIGHT folder rather than
+    anywhere near the lights themselves.  So this walks UP from the lights
+    and, at each ancestor, takes any immediate child that classifies as a
+    calibration folder.
+
+    Only calibration folders are returned, never a whole ancestor: walking
+    up four levels from a subs folder can reach a directory holding every
+    project on the disk, and scanning that would read thousands of headers
+    to find nothing.
+    """
+    roots, seen = [], set()
+
+    def _add(path):
+        real = os.path.realpath(path)
+        if real not in seen and os.path.isdir(real):
+            seen.add(real)
+            roots.append(path)
+
+    node = os.path.abspath(lights_dir)
+    for _ in range(max(0, int(levels)) + 1):
+        try:
+            children = sorted(os.listdir(node))
+        except OSError:
+            children = []
+        for name in children:
+            child = os.path.join(node, name)
+            if not os.path.isdir(child):
+                continue
+            if classify_path(name) in (KIND_FLAT, KIND_DARK, KIND_BIAS,
+                                       KIND_DARKFLAT):
+                _add(child)
+        parent = os.path.dirname(node)
+        if parent == node:
+            break
+        node = parent
+    if library:
+        _add(library)
+    return roots
+
+
+def group_calibration(infos, want_filter: str = "") -> dict:
+    """``{kind: [group, ...]}`` from frames whose headers were already read.
+
+    A group is ``{"kind", "key", "files", "info"}`` -- every frame that may
+    share one master, with the header of the first as the group's metadata.
+    Darks and dark-flats are split by temperature, bias is not; see
+    `calib_signature`.
+
+    ``want_filter`` restricts FLATS to the filter the lights were taken
+    through.  Flats are filter-specific and nothing else here is: a dark
+    taken with the wheel in any position is still a dark.  A flat whose
+    header names no filter is kept rather than dropped -- older capture
+    programs omit the keyword, and refusing those would leave a rig with
+    one filter unable to find its own flats.
+    """
+    groups: dict = {}
+    for info in infos or []:
+        kind = info.get("kind")
+        if kind not in (KIND_FLAT, KIND_DARK, KIND_BIAS, KIND_DARKFLAT):
+            continue
+        if kind == KIND_FLAT and want_filter:
+            got = (info.get("filter") or "").strip()
+            if got and got.lower() != want_filter.strip().lower():
+                continue
+        key = (kind, calib_signature(
+            info, with_temp=kind in (KIND_DARK, KIND_DARKFLAT)))
+        grp = groups.get(key)
+        if grp is None:
+            grp = {"kind": kind, "key": key, "files": [], "info": info}
+            groups[key] = grp
+        grp["files"].append(info["path"])
+    out: dict = {}
+    for grp in groups.values():
+        out.setdefault(grp["kind"], []).append(grp)
+    for kind in out:
+        out[kind].sort(key=lambda g: len(g["files"]), reverse=True)
+    return out
+
+
+def merge_calibration(*group_dicts) -> dict:
+    """Fold several ``{kind: [group]}`` maps into one, joining equal keys.
+
+    Frames of the same signature found in two places -- inside your
+    selection and in the library -- are one group, not two competing ones.
+    """
+    merged: dict = {}
+    for gd in group_dicts:
+        for kind, groups in (gd or {}).items():
+            for grp in groups:
+                hit = None
+                for have in merged.setdefault(kind, []):
+                    if have["key"] == grp["key"]:
+                        hit = have
+                        break
+                if hit is None:
+                    merged[kind].append(dict(grp, files=list(grp["files"])))
+                else:
+                    for f in grp["files"]:
+                        if f not in hit["files"]:
+                            hit["files"].append(f)
+    for kind in merged:
+        for grp in merged[kind]:
+            grp["files"].sort()
+        merged[kind].sort(key=lambda g: len(g["files"]), reverse=True)
+    return merged
+
+
+def split_frames(infos, inside: bool = True) -> tuple:
+    """``(lights, calibration, note)`` from a batch of inspected frames.
+
+    A frame with no recognisable kind is a LIGHT when it came from the
+    folder you selected -- you pointed at it, and older capture programs
+    write no IMAGETYP -- and is DISCARDED when it came from a sibling or
+    library folder, where an unlabelled frame is not something to guess
+    about.
+
+    Lights are then reduced to one coherent set: same filter, same
+    exposure.  A light curve compares a star against itself over time, so a
+    filter change or an exposure change mid-run is not a longer series, it
+    is two series that must not be concatenated.  The largest set wins and
+    the note names what was set aside.
+    """
+    lights, calib, unlabelled = [], [], 0
+    for info in infos or []:
+        kind = info.get("kind")
+        if kind == KIND_LIGHT:
+            lights.append(info)
+        elif kind in (KIND_FLAT, KIND_DARK, KIND_BIAS, KIND_DARKFLAT):
+            calib.append(info)
+        elif kind is None:
+            unlabelled += 1
+            if inside:
+                lights.append(info)
+    if not lights:
+        return [], calib, ("no light frames" if not unlabelled else "")
+
+    # The same exposure cannot legitimately appear twice in one series, so
+    # a repeated DATE-OBS is a copy: a stale working folder, a backup, a
+    # second convert.  Found the hard way -- a leftover working folder from
+    # an earlier run of this very script turned 178 subs into 534, and
+    # every duplicate would have entered the light curve as an independent
+    # point, shrinking every error bar by root-3 for nothing.
+    #
+    # Sorted-first wins, which is deterministic and, because a working
+    # folder is normally named to sort after the frames it copied, usually
+    # keeps the original.
+    seen, unique, dupes = set(), [], 0
+    for info in sorted(lights, key=lambda i: i["path"]):
+        stamp = (info.get("date_obs") or "").strip()
+        if stamp:
+            if stamp in seen:
+                dupes += 1
+                continue
+            seen.add(stamp)
+        unique.append(info)
+    lights = unique
+    dupe_note = (f"{dupes} duplicate frame(s) dropped — same DATE-OBS as a "
+                 f"frame already found, so a copy rather than an exposure. "
+                 if dupes else "")
+
+    buckets: dict = {}
+    for info in lights:
+        key = ((info.get("filter") or "").strip().upper(),
+               round(float(info.get("exp_s") or 0.0), 3))
+        buckets.setdefault(key, []).append(info)
+    if len(buckets) == 1:
+        note = dupe_note
+        if unlabelled and inside:
+            note += (f"{unlabelled} frame(s) carry no IMAGETYP and were "
+                     f"taken as lights.")
+        return lights, calib, note.strip()
+
+    best = max(buckets.items(), key=lambda kv: len(kv[1]))
+    dropped = sorted(((k, len(v)) for k, v in buckets.items() if k != best[0]),
+                     key=lambda kv: -kv[1])
+    def _name(key):
+        filt, exp = key
+        return f"{filt or 'no filter'} @ {exp:g}s"
+    note = (dupe_note
+            + f"{len(best[1])} frame(s) at {_name(best[0])} kept; set aside: "
+            + ", ".join(f"{n} at {_name(k)}" for k, n in dropped)
+            + ". A filter or exposure change mid-run is two series, not a "
+              "longer one.")
+    return best[1], calib, note
+
+
+def scan_calibration(roots, want_filter: str = "", read=None) -> dict:
+    """``{kind: [group, ...]}`` from the folders in ``roots``.
+
+    A group is ``{"kind", "key", "files", "info"}`` -- every frame that may
+    share one master, with the header of the first as the group's own
+    metadata.  Darks and dark-flats are split by temperature, bias is not;
+    see `calib_signature`.
+
+    ``want_filter`` restricts FLATS to the filter the lights were taken
+    through.  Flats are filter-specific and nothing else here is: a dark
+    taken with the wheel in any position is still a dark.  A flat whose
+    header names no filter is kept rather than dropped -- older capture
+    programs omit the keyword, and refusing those would leave a rig with
+    one filter unable to find its own flats.
+
+    ``read`` is the header reader, injectable so the grouping can be
+    tested without a disk full of FITS files.
+    """
+    reader = read or (lambda path: inspect_frame(path))
+    infos = []
+    for root in roots or []:
+        for base, dirs, names in os.walk(root):
+            dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+            for name in sorted(names):
+                if _is_fits(name) and not name.startswith("."):
+                    infos.append(reader(os.path.join(base, name)))
+    return group_calibration(infos, want_filter)
+
+
+def choose_masters(groups: dict, light_info: dict) -> tuple:
+    """``(chosen, notes)`` -- which group to use for each kind, and why.
+
+    ``chosen`` maps ``dark`` / ``flat`` / ``offset`` to a group.  ``notes``
+    is one line per kind, including the ones that found nothing and the
+    ones that found something and rejected it -- a master that was there
+    and did not match is exactly the case where silence misleads, because
+    the run then looks identical to one where no master existed.
+
+    Two rules that are not obvious:
+
+    * **Bias is never applied together with a dark.**  The dark already
+      contains the offset, so subtracting both removes it twice.  The bias
+      is still used, but for the FLATS: Lc = (L - D) / (F - O).
+    * **The flat does not have to match the lights' exposure.**  A flat is
+      a ratio; its own exposure says nothing about the lights.  Only its
+      camera, size, binning and filter matter.
+    """
+    chosen, notes = {}, []
+
+    dark = None
+    for grp in groups.get(KIND_DARK, []):
+        ok, why = signature_matches(grp["info"], light_info)
+        if ok:
+            dark = grp
+            notes.append(f"dark: {len(grp['files'])} frame(s), {why}")
+            break
+        if "exposure" in why:
+            # The terse signature reason is right but says nothing about the
+            # consequence, and the consequence is the whole point.
+            _ok, why = dark_exposure_note({"EXPTIME": grp["info"].get("exp_s")},
+                                          {"EXPTIME": light_info.get("exp_s")})
+        notes.append(f"dark REJECTED ({len(grp['files'])} frame(s)): {why}")
+    if dark is None and not groups.get(KIND_DARK):
+        notes.append("dark: none found")
+    if dark is not None:
+        chosen["dark"] = dark
+
+    flat = None
+    for grp in groups.get(KIND_FLAT, []):
+        ok, why = signature_matches(grp["info"], light_info,
+                                    check_exposure=False)
+        if ok:
+            flat = grp
+            notes.append(f"flat: {len(grp['files'])} frame(s), {why}")
+            break
+        notes.append(f"flat REJECTED ({len(grp['files'])} frame(s)): {why}")
+    if flat is None and not groups.get(KIND_FLAT):
+        notes.append("flat: none found")
+    if flat is not None:
+        chosen["flat"] = flat
+
+    # The flats' own offset: a dark-flat at the flats' exposure first, a
+    # plain bias second.  Neither is applied to the lights.
+    offset = None
+    if flat is not None:
+        for kind in (KIND_DARKFLAT, KIND_BIAS):
+            for grp in groups.get(kind, []):
+                ok, _why = signature_matches(
+                    grp["info"], flat["info"],
+                    check_exposure=(kind == KIND_DARKFLAT))
+                if ok:
+                    offset = grp
+                    notes.append(f"flat offset: {kind}, "
+                                 f"{len(grp['files'])} frame(s)")
+                    break
+            if offset is not None:
+                break
+        if offset is None:
+            notes.append("flat offset: none found — Siril's synthetic "
+                         "offset will be used")
+        else:
+            chosen["offset"] = offset
+    if groups.get(KIND_BIAS) and dark is not None:
+        notes.append("bias found but NOT applied to the lights: the dark "
+                     "already contains the offset, subtracting both would "
+                     "remove it twice")
+    return chosen, notes
+
+
+def calibration_args(seq: str, bias=None, dark=None, flat=None,
+                     cfa: bool = False, prefix: str = CALIB_PREFIX):
+    """Siril's ``calibrate`` command line, or ``None`` when there is none.
+
+    Returns ``(args, used)`` where ``used`` is the list of
+    ``(kind, path)`` actually passed, so the caller can report what it did
+    rather than claiming a calibration it did not perform.  With no master
+    at all this returns ``(None, [])`` -- an empty ``calibrate`` call would
+    still rewrite every frame, cost the disk, and change nothing.
+
+    ``cfa`` adds ``-cfa -debayer`` for a one-shot-colour sensor.  Without
+    it a Bayer frame would be flat-fielded across its own mosaic, which
+    puts the CFA pattern into the flat correction.
+    """
+    used = []
+    args = ["calibrate", seq]
+    for kind, path in (("bias", bias), ("dark", dark), ("flat", flat)):
+        if path:
+            # The WHOLE token is quoted, not just the path: Siril's parser
+            # keeps quotes that start after the "=" as part of the file
+            # name and then reports `"...fit".[any_allowed_extension] not
+            # found`, which reads like a missing file rather than a
+            # quoting bug.
+            args.append(f'"-{kind}={path}"')
+            used.append((kind, path))
+    if not used:
+        return None, []
+    if cfa:
+        args += ["-cfa", "-debayer"]
+    args.append(f"-prefix={prefix}")
+    return args, used
+
+
+def frames_are_calibrated(header):
+    """``(state, evidence)`` -- ``True``, ``False`` or ``None`` for unknown.
+
+    Three states rather than two because the honest answer is often "no
+    idea".  ``CALSTAT`` is written by several capture programs and settles
+    it; a HISTORY card mentioning the step settles it; N.I.N.A. writes
+    neither, so a raw N.I.N.A. light and a calibrated one that lost its
+    provenance look the same.  Saying ``False`` there would be a claim the
+    header does not support, and a warning that cries wolf is one the user
+    learns to skip past.
+    """
+    if header is None:
+        return None, "no readable header"
+    stat = str(header.get("CALSTAT", "") or "").strip().upper()
+    if stat:
+        done = [CALSTAT_LETTERS[c] for c in stat if c in CALSTAT_LETTERS]
+        if done:
+            return True, "CALSTAT=" + stat + " (" + ", ".join(done) + ")"
+        return None, "CALSTAT=" + stat + ", which this does not recognise"
+    try:
+        history = [str(h).lower() for h in header.get("HISTORY", [])]
+    except Exception:                       # noqa: BLE001 -- odd header card
+        history = []
+    for line in history:
+        for word in CALIB_HISTORY_WORDS:
+            if word in line:
+                return True, "HISTORY: " + line.strip()
+    if str(header.get("IMAGETYP", "") or "").strip().upper().startswith("LIGHT"):
+        return False, "IMAGETYP=LIGHT with no CALSTAT and no HISTORY"
+    return None, "nothing in the header either way"
+
+
+def dark_exposure_note(dark_header, light_header):
+    """Whether a dark matches the lights, as ``(ok, message)``.
+
+    ``ok`` is ``None`` when either exposure is missing -- unknown is not
+    the same as fine.  Takes anything with ``.get``, so `choose_masters`
+    can hand it the numbers it already read rather than the file again.
+
+    `signature_matches` also rejects on exposure, and correctly, but its
+    reason is one clause long.  This is the version that says what the
+    mismatch DOES, which is the part that changes what you go and shoot.
+    """
+    def _exp(h):
+        if h is None:
+            return None
+        for key in ("EXPTIME", "EXPOSURE"):
+            if key in h:
+                try:
+                    return float(h[key])
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    d, l = _exp(dark_header), _exp(light_header)
+    if d is None or l is None:
+        return None, ("Could not read the exposure time of the master dark "
+                      "or of the lights, so the two were not compared.")
+    if l > 0 and abs(d - l) / l <= DARK_EXPTIME_TOLERANCE:
+        return True, f"Master dark matches the lights at {l:.1f} s."
+    return False, (
+        f"The master dark is {d:.1f} s but the lights are {l:.1f} s. Siril "
+        f"subtracts it as it is: that removes {d / l * 100:.0f}% of the dark "
+        f"current if it scales linearly, leaves the rest in, and adds the "
+        f"dark's own read noise to every frame. Shoot darks at the light "
+        f"exposure, or leave the dark out and let the flat do the work.")
 
 
 def choose_comparison_stars(stars, target_xy, n_wanted: int,
@@ -1681,6 +2570,282 @@ class LightCurveWorker(QThread):
                            LogColor.SALMON)
         return n
 
+    def _target_saturation(self, ref_path: str, x: float, y: float):
+        """``(saturated, evidence)`` for the star at ``(x, y)``.
+
+        Reads the reference frame's pixels.  Verified against this data set:
+        the box lands on the target with plain ``[y, x]`` indexing -- the
+        plate solve's "Flipping image" leaves the coordinates `findstar`
+        reports consistent with the file on disk, which is also why
+        `light_curve` finds the comparison stars where they were asked for.
+        """
+        try:
+            from astropy.io import fits
+            with fits.open(ref_path, memmap=True) as hdul:
+                data = None
+                for hdu in hdul:
+                    if getattr(hdu, "data", None) is not None:
+                        data = hdu.data
+                        break
+                return saturation_verdict(data, x, y)
+        except Exception as exc:            # noqa: BLE001 -- never abort
+            _log_swallowed(exc)
+            return None, f"could not read {os.path.basename(ref_path)}"
+
+    # -- calibration ------------------------------------------------------
+    def _master_name(self, kind: str, grp: dict) -> str:
+        """A cache name that carries everything the grouping distinguishes.
+
+        If two different masters could ever share a name the cache hands
+        back the wrong one, silently, on the second run -- so every field
+        that splits a group appears here.
+        """
+        i = grp["info"]
+        bits = [f"master_{kind}"]
+        if i.get("exp_s") is not None:
+            bits.append(f"{float(i['exp_s']):g}s")
+        if i.get("gain_v") is not None:
+            bits.append(f"g{float(i['gain_v']):g}")
+        if i.get("temp_v") is not None and kind in (KIND_DARK, KIND_DARKFLAT):
+            bits.append(f"{round(float(i['temp_v'])):+d}C")
+        bits.append(f"bin{i.get('binning', 1)}")
+        if i.get("dims"):
+            bits.append(f"{i['dims'][0]}x{i['dims'][1]}")
+        return re.sub(r"[^A-Za-z0-9_.+-]", "_", "_".join(bits))
+
+    def _find_produced(self, folder: str, stem: str):
+        for ext in FITS_EXTS:
+            cand = os.path.join(folder, stem + ext)
+            if os.path.exists(cand):
+                return cand
+        return None
+
+    def _build_master(self, kind: str, grp: dict, cache: str, work: str,
+                      offset_master: str = ""):
+        """Build (or reuse) one master; return its path or ``None``.
+
+        A group of exactly one file is ADOPTED, not stacked -- a single
+        frame either already is a master or is the only one there is, and
+        stacking it would just copy it through Siril.
+
+        Nothing here may abort the run.  Calibration that fails leaves the
+        frames uncalibrated and says so; that is worse than calibrating and
+        better than a traceback halfway through a night's photometry.
+        """
+        name = self._master_name(kind, grp)
+        files = grp.get("files") or []
+        dest = self._find_produced(cache, name)
+        if dest:
+            self._emit(f"    reusing {os.path.basename(dest)}",
+                       LogColor.GREEN)
+            return dest
+
+        if len(files) == 1:
+            dest = os.path.join(cache, name + os.path.splitext(files[0])[1])
+            try:
+                shutil.copy2(files[0], dest)
+                self._emit(f"    {kind}: one frame, adopted as a ready-made "
+                           f"master ({os.path.basename(files[0])})",
+                           LogColor.BLUE)
+                return dest
+            except OSError as exc:
+                self._emit(f"    {kind}: could not adopt it ({exc})",
+                           LogColor.SALMON)
+                return None
+        if len(files) < CALIB_MIN_STACK:
+            self._emit(f"    {kind}: no usable frames", LogColor.SALMON)
+            return None
+
+        stage = os.path.join(work, "calib", name, "src")
+        shutil.rmtree(os.path.dirname(stage), ignore_errors=True)
+        os.makedirs(stage, exist_ok=True)
+        staged = 0
+        for i, src in enumerate(files):
+            dst = os.path.join(stage, f"{i:04d}_{os.path.basename(src)}")
+            try:
+                os.symlink(os.path.abspath(src), dst)
+            except (OSError, NotImplementedError):
+                try:
+                    shutil.copy2(src, dst)
+                except OSError:
+                    continue
+            staged += 1
+        if staged < CALIB_MIN_STACK:
+            self._emit(f"    {kind}: only {staged} frame(s) could be staged",
+                       LogColor.SALMON)
+            return None
+
+        proc = os.path.join(os.path.dirname(stage), "process")
+        try:
+            self._cmd("cd", self._q(stage))
+            self._cmd("link", kind, "-out=../process")
+            self._cmd("cd", self._q(proc))
+            seq = kind
+            if kind == KIND_FLAT:
+                # Flats carry the sensor pedestal, and dividing by an
+                # uncorrected flat drags that pedestal into every light.
+                if offset_master:
+                    self._cmd("calibrate", kind,
+                              f'"-bias={offset_master}"')
+                    seq = CALIB_PREFIX + kind
+                    self._emit("    flats offset-corrected with "
+                               f"{os.path.basename(offset_master)}",
+                               LogColor.BLUE)
+                else:
+                    try:
+                        self._cmd("calibrate", kind, '-bias="=64*$OFFSET"')
+                        seq = CALIB_PREFIX + kind
+                        self._emit("    flats offset-corrected with Siril's "
+                                   "synthetic offset (=64*$OFFSET)",
+                                   LogColor.BLUE)
+                    except Exception:       # noqa: BLE001 -- Siril refused it
+                        self._emit("    no offset available — flats stacked "
+                                   "uncorrected", LogColor.SALMON)
+                norm = "-norm=mul"
+            else:
+                norm = "-nonorm"
+            # Rejection is always on for a master, whatever the run does
+            # elsewhere: a cosmic ray left in a master flat reaches every
+            # single light that master calibrates.
+            self._cmd("stack", seq, "rej", "w", "3", "3", norm,
+                      "-out=" + name)
+            produced = self._find_produced(proc, name)
+            if not produced:
+                self._emit(f"    {kind}: stacking produced no master",
+                           LogColor.RED)
+                return None
+            dest = os.path.join(cache, os.path.basename(produced))
+            shutil.copy2(produced, dest)
+            self._emit(f"    built {kind} master from {staged} frames "
+                       f"-> {os.path.basename(dest)}", LogColor.GREEN)
+            return dest
+        except Exception as exc:            # noqa: BLE001 -- never abort
+            self._emit(f"    {kind}: master build failed ({exc})",
+                       LogColor.RED)
+            return None
+
+    def _calibrate(self, seq: str, files, folder: str, out_dir: str,
+                   work: str) -> str:
+        """Find calibration frames, build the masters, calibrate the lights.
+
+        Returns the sequence to carry on with -- the calibrated one when
+        anything was applied, the original otherwise.  Every path out says
+        what happened, because a calibration that silently did nothing is
+        indistinguishable in the final plot from one that worked.
+
+        This does NOT resample.  Bias, dark and flat are per-pixel
+        arithmetic, so the promise the registration keeps is not broken
+        here.  It does write a second copy of every frame.
+        """
+        light_header = _read_header(files[0]) if files else None
+        light_info = inspect_frame(files[0], light_header) if files else {}
+        state, evidence = frames_are_calibrated(light_header)
+
+        if not self.opts.get("calibrate", True):
+            self._calib_note = "switched off"
+            self._emit("  Calibration is switched off.", LogColor.BLUE)
+            return seq
+
+        want = light_info.get("filter", "")
+        # Calibration frames come from three places, and all three are
+        # folded into one set of groups: inside the folder you selected
+        # (already inspected, so no second header read), beside it in the
+        # N.I.N.A. layout, and in your library.
+        inside = group_calibration(getattr(self, "_inside_calib", []), want)
+        if inside:
+            self._emit("  Calibration frames found inside your selection: "
+                       + ", ".join(f"{len(g['files'])} {k}"
+                                   for k, gs in sorted(inside.items())
+                                   for g in gs), LogColor.BLUE)
+        lights_dir = os.path.dirname(files[0]) if files else folder
+        library = self.opts.get("calib_library", "") or ""
+        # Named apart, because "Also looking in: FLAT, LUMINOS" gave no way
+        # to tell a folder the script found from one the user pointed at --
+        # and the second is the one worth double-checking.
+        siblings = calibration_roots(lights_dir, "")
+        if siblings:
+            self._emit("  Calibration folders found beside the lights: "
+                       + ", ".join(os.path.relpath(r, os.path.dirname(
+                           os.path.dirname(lights_dir))) for r in siblings),
+                       LogColor.BLUE)
+        if library:
+            self._emit(f"  Library folder: {library}", LogColor.BLUE)
+        roots = calibration_roots(lights_dir, library)
+        outside = scan_calibration(roots, want) if roots else {}
+        groups = merge_calibration(inside, outside)
+        if not groups:
+            self._calib_note = "no calibration frames found"
+            self._no_calib_note(state, evidence)
+            return seq
+        chosen, notes = choose_masters(groups, light_info)
+        for line in notes:
+            self._emit("    " + line,
+                       LogColor.SALMON if "REJECT" in line or "none" in line
+                       else LogColor.BLUE)
+        if not chosen:
+            self._calib_note = "frames found but none matched"
+            self._no_calib_note(state, evidence)
+            return seq
+
+        cache = os.path.join(out_dir, "calib")
+        os.makedirs(cache, exist_ok=True)
+        offset_path = ""
+        if chosen.get("offset"):
+            offset_path = self._build_master(
+                chosen["offset"]["kind"], chosen["offset"], cache, work) or ""
+        masters = {}
+        if chosen.get("dark"):
+            masters["dark"] = self._build_master(
+                KIND_DARK, chosen["dark"], cache, work)
+        if chosen.get("flat"):
+            masters["flat"] = self._build_master(
+                KIND_FLAT, chosen["flat"], cache, work, offset_path)
+        masters = {k: v for k, v in masters.items() if v}
+
+        # Back to the light sequence before calibrating it: the master
+        # builds moved the working directory.
+        self._cmd("cd", self._q(os.path.join(work, "process")))
+        args, used = calibration_args(
+            seq, dark=masters.get("dark"), flat=masters.get("flat"),
+            cfa=bool(self.opts.get("cfa", False)))
+        if args is None:
+            self._calib_note = "masters could not be built"
+            self._emit("  No master could be built — the frames stay "
+                       "uncalibrated.", LogColor.SALMON)
+            return seq
+        if state is True:
+            self._emit(f"  These frames already carry a calibration "
+                       f"({evidence}) and are about to be calibrated a "
+                       f"SECOND time. Check that this is what you want.",
+                       LogColor.SALMON)
+        self._cmd(*args)
+        self._calib_note = ", ".join(
+            f"{kind}={os.path.basename(path)}" for kind, path in used)
+        self._emit("  Calibrated with " + self._calib_note
+                   + ". Siril's own `calibrate` — no second implementation "
+                     "here, and no resampling: per-pixel arithmetic.",
+                   LogColor.GREEN)
+        return CALIB_PREFIX + seq
+
+    def _no_calib_note(self, state, evidence: str) -> None:
+        """Say what an uncalibrated run means, once, in the right words."""
+        if state is True:
+            self._emit(f"  Nothing to calibrate with, and the frames already "
+                       f"carry a calibration ({evidence}).", LogColor.GREEN)
+        elif state is False:
+            self._emit(
+                "  These frames are RAW and no calibration frames were "
+                "found, so nothing is being corrected. The flat is the one "
+                "that matters most here: a star drifting across a dust "
+                "shadow is a slow trend shaped exactly like a shallow "
+                "transit, and after a meridian flip the target lands on a "
+                "different patch of sensor entirely — that is a STEP in the "
+                f"light curve, not a wobble. ({evidence})", LogColor.SALMON)
+        else:
+            self._emit(f"  No calibration frames found; whether these were "
+                       f"already calibrated cannot be told from the header "
+                       f"({evidence}).", LogColor.BLUE)
+
     def _register(self, seq: str) -> None:
         """Compute registration WITHOUT resampling the frames.
 
@@ -1920,13 +3085,32 @@ class LightCurveWorker(QThread):
 
     def _run(self) -> None:
         folder = self.folder
-        files = _fits_files(folder)
+        self.progress.emit(2, "Reading headers…")
+        found = _fits_files(folder)
+        if not found:
+            self._fail(f"No FITS files under {folder}.")
+            return
+        # One header read per file, here, and everything downstream works
+        # from the result: which frames are lights, which are calibration,
+        # and what the lights were taken with.
+        infos = [inspect_frame(p) for p in found]
+        files_info, inside_calib, split_note = split_frames(infos, inside=True)
+        files = [i["path"] for i in files_info]
+        if split_note:
+            self._emit(split_note, LogColor.SALMON)
+        n_cal = len(inside_calib)
+        if n_cal:
+            self._emit(f"{len(found)} FITS found: {len(files)} light(s), "
+                       f"{n_cal} calibration frame(s) inside your selection.",
+                       LogColor.BLUE)
         if len(files) < 10:
             self._fail(
-                f"Only {len(files)} FITS file(s) in that folder. A light "
-                "curve needs a time series — ten frames is the bare minimum "
-                "and a real transit run is hundreds.")
+                f"Only {len(files)} light frame(s) under that folder "
+                f"({len(found)} FITS in total). A light curve needs a time "
+                "series — ten frames is the bare minimum and a real transit "
+                "run is hundreds.")
             return
+        self._inside_calib = inside_calib
 
         work = os.path.join(folder, WORK_DIRNAME)
         out_dir = os.path.join(folder, OUT_DIRNAME)
@@ -1946,6 +3130,9 @@ class LightCurveWorker(QThread):
         self._cmd("cd", self._q(os.path.join(work, "lights")))
         self._cmd("link", seq, "-out=../process")
         self._cmd("cd", self._q(proc))
+
+        self.progress.emit(15, "Calibrating…")
+        seq = self._calibrate(seq, files, folder, out_dir, work)
 
         self.progress.emit(20, "Registering…")
         self._register(seq)
@@ -1995,17 +3182,30 @@ class LightCurveWorker(QThread):
         # The target needs the same check for a blunter reason: a saturated
         # core carries no flux information at all, and Siril will simply
         # refuse most of the frames.
-        target_saturated = False
-        for st in stars:
-            if (abs(float(getattr(st, "xpos", 0.0) or 0.0) - tx) < 1e-6
-                    and abs(float(getattr(st, "ypos", 0.0) or 0.0) - ty) < 1e-6):
-                target_saturated = bool(getattr(st, "has_saturated", False))
-                break
+        #
+        # Measured in the PIXELS rather than read from Siril's
+        # `has_saturated`.  The flag is right on raw 16-bit frames and stops
+        # firing once they have been calibrated to 32-bit float: same
+        # saturation, no warning, and a 4% yield reported with no cause
+        # attached.  The flag is still consulted as a second opinion, so a
+        # frame this cannot read is not silently called clean.
+        target_saturated, sat_why = self._target_saturation(ref_path, tx, ty)
+        flagged = any(
+            bool(getattr(st, "has_saturated", False))
+            for st in stars
+            if abs(float(getattr(st, "xpos", 0.0) or 0.0) - tx) < 1e-6
+            and abs(float(getattr(st, "ypos", 0.0) or 0.0) - ty) < 1e-6)
+        if target_saturated is None:
+            target_saturated = flagged
+            sat_why += f"; fell back to Siril's flag ({flagged})"
+        elif flagged and not target_saturated:
+            target_saturated = True
+            sat_why += "; below the pixel threshold but Siril flagged it"
         if target_saturated:
             self._emit(
-                "  The target is SATURATED in the reference frame. Its core "
-                "no longer scales with flux, so the depth measured below is "
-                "not trustworthy — shorten the sub-exposure and re-shoot.",
+                "  The target is SATURATED — " + sat_why + ". Its core no "
+                "longer scales with flux, so the depth measured below is "
+                "not trustworthy; shorten the sub-exposure and re-shoot.",
                 LogColor.SALMON)
 
         crowd = crowding_note(stars, tx, ty, fwhm)
@@ -2138,6 +3338,7 @@ class LightCurveWorker(QThread):
 
         self.progress.emit(88, "Writing results…")
         result = {
+            "calib_note": getattr(self, "_calib_note", ""),
             "folder": folder,
             "out_dir": out_dir,
             "n_files": len(files),
@@ -2376,6 +3577,7 @@ class SvenesisLightCurveWindow(QMainWindow):
         layout.addWidget(sub)
 
         self._build_source_group(layout)
+        self._build_calibration_group(layout)
         self._build_target_group(layout)
         self._build_photometry_group(layout)
         self._build_analysis_group(layout)
@@ -2407,8 +3609,104 @@ class SvenesisLightCurveWindow(QMainWindow):
         lay.addWidget(self.chk_copy)
         parent.addWidget(box)
 
+    def _build_calibration_group(self, parent: QVBoxLayout) -> None:
+        box = QGroupBox("2 · Calibration")
+        lay = QVBoxLayout(box)
+
+        self.chk_calibrate = QCheckBox("Apply calibration when frames exist")
+        self.chk_calibrate.setChecked(True)
+        self.chk_calibrate.setToolTip(
+            "Lc = (L − D) / (F − O).\n\n"
+            "Nothing has to be prepared: flats are found beside your lights "
+            "(the N.I.N.A. LIGHT / FLAT layout), masters are stacked and "
+            "cached automatically, and whatever is missing is simply "
+            "skipped and named in the log.")
+        lay.addWidget(self.chk_calibrate)
+
+        row = QHBoxLayout()
+        self.btn_library = QPushButton("📁  Library…")
+        self.btn_library.setToolTip(
+            "Folder holding your reusable DARK and BIAS frames — raw frames "
+            "(they get stacked) or ready-made masters, either way.\n\n"
+            "Flats are NOT taken from here: they belong to the session and "
+            "are found next to your lights.\n\n"
+            "Remembered between runs.")
+        self.btn_library.clicked.connect(self._on_pick_library)
+        row.addWidget(self.btn_library)
+        self.btn_library_clear = QPushButton("✕")
+        self.btn_library_clear.setFixedWidth(30)
+        self.btn_library_clear.setToolTip("Forget the library folder.")
+        self.btn_library_clear.clicked.connect(self._on_clear_library)
+        row.addWidget(self.btn_library_clear)
+        lay.addLayout(row)
+
+        self._library = ""
+        self.lbl_library = QLabel("No library folder set.")
+        self.lbl_library.setStyleSheet("color:#888888;font-size:9pt;")
+        self.lbl_library.setWordWrap(True)
+        lay.addWidget(self.lbl_library)
+
+        self.chk_cfa = QCheckBox("One-shot-colour sensor (CFA)")
+        self.chk_cfa.setToolTip(
+            "Adds -cfa -debayer. Without it a Bayer frame is flat-fielded "
+            "across its own mosaic, which writes the CFA pattern into the "
+            "correction. Leave off for a mono camera.")
+        lay.addWidget(self.chk_cfa)
+
+        self.lbl_calib_found = QLabel(
+            "Choose a folder to see what calibration frames are found.")
+        self.lbl_calib_found.setStyleSheet("color:#88aaff;font-size:9pt;")
+        self.lbl_calib_found.setWordWrap(True)
+        lay.addWidget(self.lbl_calib_found)
+        parent.addWidget(box)
+
+    def _on_pick_library(self) -> None:
+        path = QFileDialog.getExistingDirectory(
+            self, "Reusable DARK / BIAS library", self._library or "")
+        if path:
+            self._library = path
+            self.lbl_library.setText(path)
+            self._refresh_calib_preview()
+
+    def _on_clear_library(self) -> None:
+        self._library = ""
+        self.lbl_library.setText("No library folder set.")
+        self._refresh_calib_preview()
+
+    def _refresh_calib_preview(self) -> None:
+        """Say what WOULD be used, before the run rather than after it.
+
+        The preview reads headers, so it is capped: the point is to tell
+        you whether the flats were found at all, not to be the run.
+        """
+        if not self._folder:
+            self.lbl_calib_found.setText(
+                "Choose a folder to see what calibration frames are found.")
+            return
+        try:
+            roots = calibration_roots(self._folder, self._library)
+            names = sorted({os.path.basename(r.rstrip(os.sep)) or r
+                            for r in roots})
+            # Anything filed inside your own selection is picked up by the
+            # recursive scan, so a FLAT folder in there needs no mention
+            # here -- but saying only "nothing found" would read as "there
+            # is nothing", which is a different claim.
+            if names:
+                self.lbl_calib_found.setText(
+                    "Found beside your subs: " + ", ".join(names)
+                    + ". Calibration frames inside the folder you chose are "
+                      "picked up as well, and everything is matched against "
+                      "the lights when you run.")
+            else:
+                self.lbl_calib_found.setText(
+                    "No FLAT / DARK / BIAS folder beside these subs. Any "
+                    "calibration frames INSIDE the folder you chose are "
+                    "still found; otherwise set a library folder.")
+        except Exception as exc:            # noqa: BLE001 -- preview only
+            self.lbl_calib_found.setText(f"Could not scan: {exc}")
+
     def _build_target_group(self, parent: QVBoxLayout) -> None:
-        box = QGroupBox("2 · Target star")
+        box = QGroupBox("3 · Target star")
         lay = QVBoxLayout(box)
         self.cmb_target = QComboBox()
         self.cmb_target.addItems([
@@ -2458,7 +3756,7 @@ class SvenesisLightCurveWindow(QMainWindow):
         parent.addWidget(box)
 
     def _build_photometry_group(self, parent: QVBoxLayout) -> None:
-        box = QGroupBox("3 · Photometry")
+        box = QGroupBox("4 · Photometry")
         lay = QVBoxLayout(box)
 
         row = QHBoxLayout()
@@ -2519,7 +3817,7 @@ class SvenesisLightCurveWindow(QMainWindow):
         parent.addWidget(box)
 
     def _build_analysis_group(self, parent: QVBoxLayout) -> None:
-        box = QGroupBox("4 · Analysis")
+        box = QGroupBox("5 · Analysis")
         lay = QVBoxLayout(box)
 
         self.chk_detrend = QCheckBox("Remove the airmass ramp")
@@ -2655,7 +3953,15 @@ class SvenesisLightCurveWindow(QMainWindow):
             return
         self._folder = folder
         files = _fits_files(folder)
-        self.lbl_folder.setText(f"{folder}\n{len(files)} FITS file(s) found.")
+        # The scan is recursive, so this count includes any calibration
+        # frames filed under the same folder.  Which frames are lights is
+        # decided from the headers when you run -- reading several hundred
+        # of them here would freeze the window on every folder click.
+        self.lbl_folder.setText(
+            f"{folder}\n{len(files)} FITS file(s) found, including "
+            f"sub-folders. Lights are sorted from calibration frames when "
+            f"you run.")
+        self._refresh_calib_preview()
         self.btn_run.setEnabled(len(files) >= 10)
         if len(files) < 10:
             self.lbl_status.setText(
@@ -2691,6 +3997,9 @@ class SvenesisLightCurveWindow(QMainWindow):
             xy = None
         return {
             "copy_frames": self.chk_copy.isChecked(),
+            "calibrate": self.chk_calibrate.isChecked(),
+            "calib_library": self._library,
+            "cfa": self.chk_cfa.isChecked(),
             "target_mode": self._target_mode(),
             "target_xy": xy,
             "target_radec": (ra, dec) if np.isfinite(ra) and np.isfinite(dec) else None,
@@ -2823,7 +4132,7 @@ class SvenesisLightCurveWindow(QMainWindow):
             p.append(f"&nbsp;<span style='color:#dd8866'>No transit claimed."
                      f"</span> The best trapezoid reaches only "
                      f"{fit['significance']:.1f}σ against a "
-                     f"{MIN_DETECTION_SIGMA:.0f}σ floor.<br>")
+                     f"{MIN_DETECTION_SIGMA:.1f}σ floor.<br>")
             p.append(f"&nbsp;(For the curious: it wanted "
                      f"{fit['depth_mmag']:.1f} mmag over "
                      f"{fit['duration_h']:.2f} h. Do not quote that.)<br>")
@@ -2833,6 +4142,12 @@ class SvenesisLightCurveWindow(QMainWindow):
             p.append(f"&nbsp;red-noise β {fit['red_noise_beta']:.2f} "
                      f"({fit['significance_white']:.1f}σ before the "
                      "correlated-noise correction)<br>")
+            p.append("<span style='color:#888888'>&nbsp;false alarm "
+                     f"{100 * MEASURED_FALSE_ALARM:.2f} % at the "
+                     f"{MIN_DETECTION_SIGMA:.1f}σ floor — measured over "
+                     f"{MEASURED_FALSE_ALARM_RUNS} transit-free noise runs "
+                     "through this same ~40 000-node search, NOT the "
+                     "Gaussian value for that σ.</span><br>")
             p.append(f"&nbsp;T0 &nbsp;&nbsp; {fit['t0']:.5f} "
                      f"{r['time_system']}, mid-exposure<br>")
             if r["time_system"] != "BJD_TDB":
@@ -2843,6 +4158,13 @@ class SvenesisLightCurveWindow(QMainWindow):
             p.append(f"&nbsp;depth&nbsp; {fit['depth_mmag']:.1f} ± "
                      f"{fit['depth_sigma_mmag']:.1f} mmag "
                      f"({fit['depth_pct']:.3f} % of the flux)<br>")
+            p.append("<span style='color:#888888'>&nbsp;that ± carries the "
+                     "same red-noise scaling as the significance, but "
+                     "depth/error is NOT the significance: it uses the "
+                     "fitted depth against one baseline, while the "
+                     "significance uses the measured contrast against the "
+                     "weaker of the two sides. Quote the "
+                     "significance.</span><br>")
             p.append(f"&nbsp;length {fit['duration_h']:.2f} h, ingress "
                      f"{fit['ingress_frac'] * 100:.0f} % of it<br>")
             p.append(f"&nbsp;{fit['n_in']} points inside, {fit['n_out']} "
@@ -2876,6 +4198,7 @@ class SvenesisLightCurveWindow(QMainWindow):
         A(f"Generated {datetime.datetime.now().isoformat(timespec='seconds')}")
         A("")
         A(f"Folder            {r['folder']}")
+        A(f"Calibration       {r.get('calib_note') or 'not recorded'}")
         A(f"Frames            {r['n_points']} measured of {r['n_files']} found")
         A(f"Target            ({r['target_xy'][0]:.2f}, {r['target_xy'][1]:.2f})"
           f"  [{r['target_how']}]")
@@ -2906,7 +4229,7 @@ class SvenesisLightCurveWindow(QMainWindow):
         elif not fit["detected"]:
             A(f"Transit fit       NOT CLAIMED — best trapezoid reaches only "
               f"{fit['significance']:.2f} sigma")
-            A(f"                  (floor is {MIN_DETECTION_SIGMA:.0f} sigma; "
+            A(f"                  (floor is {MIN_DETECTION_SIGMA:.1f} sigma; "
               "the fitted numbers below are not a measurement)")
             A(f"   depth          {fit['depth_mmag']:.2f} mmag")
             A(f"   duration       {fit['duration_h']:.3f} h")
@@ -2915,6 +4238,12 @@ class SvenesisLightCurveWindow(QMainWindow):
             A(f"   Significance   {fit['significance']:.1f} sigma "
           f"(white-noise value {fit['significance_white']:.1f}, "
           f"red-noise beta {fit['red_noise_beta']:.2f})")
+        A(f"   False alarm    {100 * MEASURED_FALSE_ALARM:.2f} % at the "
+          f"{MIN_DETECTION_SIGMA:.1f} sigma floor")
+        A(f"                  (measured, {MEASURED_FALSE_ALARM_RUNS} "
+          "transit-free noise runs through this same grid search;")
+        A("                  the search is over ~40 000 nodes, so this is "
+          "NOT the Gaussian value for that sigma)")
         for w, b, nb, k in fit.get("red_noise_rows", []):
             A(f"      bin {w * 24 * 60:5.1f} min  beta {b:4.2f}  "
               f"{nb} bins of ~{k:.1f} points")
@@ -2927,6 +4256,13 @@ class SvenesisLightCurveWindow(QMainWindow):
             A(f"   depth          {fit['depth_mmag']:.2f} +/- "
               f"{fit['depth_sigma_mmag']:.2f} mmag "
               f"({fit['depth_pct']:.4f} % of flux)")
+            A("                  the +/- carries the same red-noise scaling "
+              "as the significance above, but")
+            A("                  depth/error is NOT that significance — it "
+              "uses the fitted depth against")
+            A("                  one baseline, the significance the "
+              "measured contrast against the weaker")
+            A("                  of both sides. Quote the significance.")
             A(f"   duration       {fit['duration_h']:.3f} h")
             A(f"   ingress        {fit['ingress_frac'] * 100:.0f} % of the duration")
             A(f"   points         {fit['n_in']} in, {fit['n_out']} out")
@@ -2987,6 +4323,13 @@ class SvenesisLightCurveWindow(QMainWindow):
             self.spin_channel.setValue(int(st.value("channel", 0)))
         except (TypeError, ValueError):
             pass
+        lib = str(st.value("calib_library", "") or "")
+        if lib and os.path.isdir(lib):
+            self._library = lib
+            self.lbl_library.setText(lib)
+        self.chk_calibrate.setChecked(
+            str(st.value("calibrate", "true")) == "true")
+        self.chk_cfa.setChecked(str(st.value("cfa", "false")) == "true")
         self.chk_autoring.setChecked(str(st.value("autoring", "true")) == "true")
         self.chk_detrend.setChecked(str(st.value("detrend", "true")) == "true")
 
@@ -2999,6 +4342,10 @@ class SvenesisLightCurveWindow(QMainWindow):
         st.setValue("n_comps", self.spin_comps.value())
         st.setValue("min_snr", self.spin_snr.value())
         st.setValue("channel", self.spin_channel.value())
+        st.setValue("calib_library", self._library)
+        st.setValue("calibrate",
+                    "true" if self.chk_calibrate.isChecked() else "false")
+        st.setValue("cfa", "true" if self.chk_cfa.isChecked() else "false")
         st.setValue("autoring", "true" if self.chk_autoring.isChecked() else "false")
         st.setValue("detrend", "true" if self.chk_detrend.isChecked() else "false")
 
@@ -3073,6 +4420,58 @@ host is usually the reason the field was framed the way it was.</li>
 than using your number directly. A position two pixels off the centroid
 puts the aperture off-centre for the whole run, and the flux it loses
 changes with the seeing — which is exactly the shape of a fake trend.</p>
+
+<h2 style='color:#88aaff'>Calibration</h2>
+<p><b>Nothing has to be prepared, and you need not navigate.</b> Point at
+your subs — or at any folder above them — and, once, at the folder where
+your reusable darks live. The scan is recursive: every FITS underneath is
+read once and sorted into lights and calibration frames by its header, so
+calibration frames filed anywhere inside your selection are found too.
+N.I.N.A. files a night as
+<tt>&lt;target&gt;/LIGHT/&lt;date&gt;/&lt;filter&gt;/</tt>, so the script
+also walks UP and takes the <tt>FLAT</tt> folder sitting next to
+<tt>LIGHT</tt>.</p>
+<p>Three things the recursion made necessary: this script's own working and
+output folders are never descended into; a repeated <tt>DATE-OBS</tt> is a
+copy rather than an exposure and is dropped with a count; and the lights are
+reduced to one filter and one exposure, because a change mid-run is two
+series and not a longer one.</p>
+<p>Frames are grouped by what must agree before they can share a master —
+exposure, gain, temperature, binning, image size, camera — then stacked and
+cached under names carrying all of it, and reused on the next run. A group
+of exactly one file is adopted as a ready-made master rather than stacked.
+The pixel work is Siril's <tt>calibrate</tt>; there is no bias/dark/flat
+arithmetic in this script, for the same reason there is no photometry in
+it.</p>
+<p>This does <b>not</b> break the no-resampling promise: bias, dark and
+flat are per-pixel arithmetic. It does write a second copy of every frame,
+so the working folder doubles.</p>
+<p>What it refuses is said out loud — a master that was found and rejected
+leaves a run that looks exactly like one where no master existed:</p>
+<table cellpadding='5'>
+<tr><td style='color:#88aaff'><b>Wrong exposure</b></td>
+<td>A 3 s dark on 60 s lights removes 5% of the dark current, leaves the
+rest in, and adds its own read noise to every frame. Named with both
+numbers and with what it would have done.</td></tr>
+<tr><td style='color:#88aaff'><b>Wrong temperature</b></td>
+<td>Darks are grouped by temperature: a −10 °C and a −20 °C frame averaged
+into one master is correct for neither. Bias is <i>not</i> split — it is
+read noise only, and splitting it would just make each master
+noisier.</td></tr>
+<tr><td style='color:#88aaff'><b>Wrong camera or size</b></td>
+<td>Two bodies of the same sensor format would otherwise calibrate each
+other.</td></tr>
+<tr><td style='color:#88aaff'><b>Bias next to a dark</b></td>
+<td>Never both on the lights — the dark already contains the offset, and
+subtracting both removes it twice. The bias still corrects the flats:
+Lc = (L − D) / (F − O).</td></tr>
+<tr><td style='color:#88aaff'><b>Already calibrated?</b></td>
+<td>Read from <tt>CALSTAT</tt> or a HISTORY card, with three answers, not
+two. N.I.N.A. writes neither, so a raw light and a calibrated one that lost
+its provenance look the same; "no evidence" is reported as unknown rather
+than as raw. A warning that cries wolf is one you learn to skip
+past.</td></tr>
+</table>
 
 <h2 style='color:#88aaff'>The comparison ensemble</h2>
 <p>Differential photometry works by dividing the target by other stars in
@@ -3162,6 +4561,30 @@ finish later.</p>
 """)
 
         _tab("The fit", """
+<h2 style='color:#88aaff'>What the sigma is, and what it is not</h2>
+<p>The significance is the best of about <b>40 000</b> grid nodes — 121
+mid-times x 41 durations x 8 ingress fractions. Nothing in the formula
+knows that, so it is <b>not</b> a Gaussian sigma: a search that large finds
+a contrast on pure noise that a single a-priori test never would.</p>
+<p>So the floor is calibrated rather than chosen. Over 1200 transit-free
+white-noise runs (150 points, 5 h, 4 mmag per point) through this same
+search:</p>
+<table cellpadding='5'>
+<tr><td style='color:#88aaff'><b>floor</b></td>
+<td style='color:#88aaff'><b>false alarm</b></td>
+<td style='color:#88aaff'><b>4 mmag</b></td><td style='color:#88aaff'>
+<b>6 mmag</b></td><td style='color:#88aaff'><b>8 mmag</b></td></tr>
+<tr><td>3.0 σ</td><td>4.42 %</td><td>91 %</td><td>100 %</td><td>100 %</td></tr>
+<tr><td><b>4.0 σ</b></td><td><b>0.17 %</b></td><td>53 %</td><td>98 %</td>
+<td>100 %</td></tr>
+<tr><td>5.0 σ</td><td>0.00 %</td><td>19 %</td><td>86 %</td><td>99 %</td></tr>
+</table>
+<p>4.0 is where the false-alarm rate reaches the 0.13 % that "3 sigma" was
+always read to mean. It costs nothing above 6 mmag; what it costs is the
+4-5 mmag case, a dip at about the per-point scatter, which was never safe
+to claim from one night. The measured rate is printed next to every
+result.</p>
+
 <h2 style='color:#88aaff'>A trapezoid, not a limb-darkened model</h2>
 <p>At amateur precision the two are indistinguishable — a 10 mmag dip
 measured at 3 mmag per point does not constrain a limb-darkening
@@ -3220,7 +4643,7 @@ overclaim.</p>
 significance</b>, not a smaller one. Without baseline on both sides the
 question cannot be answered by any method, and saying so is more use than
 a number that looks like a measurement.</p>
-<p><b>Below 3σ nothing is claimed.</b> The report still prints what the
+<p><b>Below the calibrated floor nothing is claimed.</b> The report still prints what the
 fitter wanted, clearly marked as not a measurement, because "no detection"
 and "the tool crashed" should not look the same.</p>
 <p>Three sigma is the textbook floor for claiming a detection. ExoClock and
@@ -3250,8 +4673,10 @@ different pixels with different responses, which is noise you do not need
 when the star never moves anyway.</td></tr>
 <tr><td style='color:#88aaff'><b>Calibrate</b></td>
 <td>Flats above all: a star drifting across a dust shadow is a slow trend
-that looks exactly like a shallow transit. Run the frames through your
-usual calibration <i>before</i> pointing this script at them.</td></tr>
+that looks exactly like a shallow transit, and after a meridian flip the
+target lands on a different patch of sensor — that is a step, not a wobble.
+Point <b>2 · Calibration</b> at your masters, or calibrate the frames
+before pointing this script at them; either way, do it.</td></tr>
 <tr><td style='color:#88aaff'><b>Same exposure throughout</b></td>
 <td>Changing exposure mid-run changes the saturation margin and the
 scintillation statistics at the same time.</td></tr>

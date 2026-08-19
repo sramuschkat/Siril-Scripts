@@ -11,6 +11,7 @@
 1. [What Is Svenesis LightCurve?](#1-what-is-svenesis-lightcurve)
 2. [Background for Beginners](#2-background-for-beginners)
 3. [Prerequisites & Installation](#3-prerequisites--installation)
+3a. [Calibration](#3a-calibration)
 4. [Getting Started](#4-getting-started)
 5. [The User Interface](#5-the-user-interface)
 6. [Choosing the Target](#6-choosing-the-target)
@@ -44,6 +45,7 @@ The division of labour is deliberate and worth understanding, because it explain
 |---|---|---|
 | **Stage** | Subs are symlinked into `_lightcurve/` | Costs nothing; the original folder is never written to |
 | **Link** | Siril builds a sequence | |
+| **Calibrate** | Calibration frames are found, stacked into masters and applied via Siril's `calibrate` | Optional and *delegated* — there is no bias/dark/flat arithmetic in this script, for the same reason there is no photometry in it. Per-pixel arithmetic, so it does not break the no-resampling promise; it does write a second copy of every frame |
 | **Register** | `register -2pass` — data only, **no resampling** | Interpolation correlates neighbouring pixel noise and moves flux inside the aperture. The aperture follows the star through the registration data while the pixels stay exactly as the sensor recorded them |
 | **Detect** | Siril finds the stars; the script picks target + comps | |
 | **Photometry** | Siril's `light_curve` | |
@@ -70,9 +72,57 @@ The division of labour is deliberate and worth understanding, because it explain
 
 Place `Svenesis-LightCurve.py` in a folder named **Utility** inside one of Siril's Script Storage Directories (*Preferences → Scripts*), then run it from **Processing → Scripts**.
 
-**Calibrate your subs first.** Flats especially: a star drifting across a dust shadow is a slow trend that looks exactly like a shallow transit. Run the frames through your usual calibration before pointing this script at them.
+**Calibrate.** Flats especially: a star drifting across a dust shadow is a slow trend that looks exactly like a shallow transit. Either point **2 · Calibration** at your masters (see [3a](#3a-calibration)) or run the frames through your usual calibration beforehand — but do not skip it.
 
 ---
+
+## 3a. Calibration
+
+**Nothing has to be prepared, and you need not navigate.** Point at your subs — or at any folder above them — and, once, at the folder where your reusable darks live. Everything else is found.
+
+### Where it looks
+
+The scan is **recursive**. Every FITS under the folder you chose is read once and sorted by its header into lights and calibration frames, so you can point at the project root:
+
+```
+WASP-75b/                       ← point here…
+├── LIGHT/2026-08-14/LUMINOS/   ← …and the subs are found three levels down
+└── FLAT/2026-08-14/LUMINOS/    ← so are these
+_CALIB/DARK/60.00s_G125/        ← your Library folder, set once
+```
+
+Or point straight at `LIGHT/2026-08-14/LUMINOS/` — then the flats are still found, because the script also walks **up** and takes any child of an ancestor that is a `FLAT` / `DARK` / `BIAS` / `DARKFLAT` folder. Going up, only calibration folders are scanned, never a whole ancestor: four levels above a subs folder can reach a directory holding every project on the disk.
+
+### Three things the recursion made necessary
+
+| Guard | Why |
+|---|---|
+| **Own folders pruned** | `_lightcurve/` and `lightcurve/` are never descended into — a second run would otherwise re-ingest the first run's staged symlinks and converted frames as if they were subs |
+| **Duplicate exposures dropped** | A repeated `DATE-OBS` is a copy, not an exposure. Found the hard way: a leftover working folder turned 178 subs into 534, and every duplicate would have entered the curve as an independent point, shrinking every error bar by √3 for nothing. Reported with a count, never silent |
+| **One filter, one exposure** | A filter or exposure change mid-run is *two* series, not a longer one. The largest set is kept and what was set aside is named |
+
+**Flats are session frames**, so they are looked for inside your selection and beside the lights, filtered to the lights' filter. **Darks and bias are reusable**, so they come from the Library folder, remembered between runs. Raw frames or ready-made masters, either way: a group of exactly one file is adopted as a master rather than stacked.
+
+### What must agree
+
+Frames share a master only when their **exposure, gain, temperature, binning, image size and camera** agree. Masters are cached in `lightcurve/calib/` under names carrying all of it — if two different masters could share a name, the cache would hand back the wrong one on the second run, silently.
+
+What gets refused is said out loud. A master that was found and then rejected leaves a run that looks *exactly* like one where no master existed:
+
+| Refused | Why |
+|---|---|
+| **Wrong exposure** (dark) | A 3 s dark on 60 s lights removes 5 % of the dark current, leaves the rest in, and adds its own read noise to every frame. Reported with both numbers and with what it would have done |
+| **Wrong temperature** | Darks are grouped by temperature — a −10 °C and a −20 °C frame averaged together is correct for neither. Bias is *not* split: it is read noise only, and splitting it would just make each master noisier |
+| **Wrong camera or size** | Two bodies of the same sensor format would otherwise calibrate each other |
+| **Bias together with a dark** | Never both on the lights: the dark already contains the offset, subtracting both removes it twice. The bias still corrects the flats — Lc = (L − D) / (F − O) |
+
+A flat does **not** have to match the lights' exposure. A flat is a ratio; its own exposure says nothing about the lights.
+
+### What it does not do
+
+The pixel work is Siril's `calibrate`. There is no bias/dark/flat arithmetic in this script, for the same reason there is no photometry in it. And it does **not** resample — bias, dark and flat are per-pixel arithmetic, so the promise the registration keeps is untouched. It does write a second copy of every frame, so the working folder doubles.
+
+Tick **One-shot-colour sensor (CFA)** for a Bayer camera. Without it the frame is flat-fielded across its own mosaic, which writes the CFA pattern into the correction.
 
 ## 4. Getting Started
 
@@ -217,11 +267,25 @@ The price is a slightly smaller number on a real detection: each side carries ab
 
 A transit **clipped by the start or the end of your run returns zero significance**, not a smaller one. Without baseline on both sides the question cannot be answered by any method.
 
-### The 3σ floor
+### The detection floor is calibrated, not chosen
 
-Below 3σ nothing is claimed. The report still prints what the fitter wanted, clearly marked as not a measurement, because "no detection" and "the tool crashed" should not look the same.
+The significance is the best of about **40 000** grid nodes — 121 mid-times × 41 durations × 8 ingress fractions. Nothing in the formula knows that, so **it is not a Gaussian σ**: a search that large finds a contrast on pure noise that a single a-priori test never would.
 
-Three sigma is the textbook floor for claiming a detection. ExoClock and AAVSO submissions want five or more — but that is a decision for the submission, not for the fit.
+So the floor was measured. 1200 transit-free white-noise runs (150 points, 5 h, 4 mmag per point) through this same search, with detection rates on injected transits beside them:
+
+| Floor | False alarm | 4 mmag | 5 mmag | 6 mmag | 8 mmag | 12 mmag |
+|---|---|---|---|---|---|---|
+| 3.0 σ | **4.42 %** | 91 % | 94 % | 100 % | 100 % | 100 % |
+| 3.5 σ | 0.83 % | 79 % | 89 % | 98 % | 100 % | 100 % |
+| **4.0 σ** | **0.17 %** | 53 % | 81 % | **98 %** | **100 %** | **100 %** |
+| 4.5 σ | 0.08 % | 33 % | 70 % | 96 % | 100 % | 100 % |
+| 5.0 σ | 0.00 % | 19 % | 53 % | 86 % | 99 % | 100 % |
+
+The old 3σ floor let **one run in 23** of pure noise through — 33× the 0.13 % that "3σ" is universally read to mean. **4.0σ** is where the measured rate reaches that 0.13 %, and it costs nothing above 6 mmag. What it costs is the 4–5 mmag case: a dip at about the per-point scatter, which was never safe to claim from a single night.
+
+The measured rate is printed next to every result, so the number can be weighed rather than trusted. ExoClock and AAVSO submissions want more still — but that is a decision for the submission, not for the fit.
+
+Below the floor nothing is claimed. The report still prints what the fitter wanted, clearly marked as not a measurement, because "no detection" and "the tool crashed" should not look the same.
 
 ---
 
@@ -266,7 +330,7 @@ Everything lands in a `lightcurve/` folder next to your subs:
 
 **"light_curve produced no light_curve.dat"** — Siril rejects the whole run when a comparison star cannot be measured in enough frames. Try fewer comps or a higher SNR floor.
 
-**No transit claimed but you expected one** — check the significance in the Result tab. If it is close to 3σ you may simply not have the precision; if it is negative, the fit found a brightening, which usually means a trend the detrend did not remove.
+**No transit claimed but you expected one** — check the significance in the Result tab. If it is close to the 4.0σ floor you may simply not have the precision; if it is negative, the fit found a brightening, which usually means a trend the detrend did not remove.
 
 ---
 

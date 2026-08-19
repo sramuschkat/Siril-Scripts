@@ -82,6 +82,7 @@ check(not np.isfinite(alt(jd("2026-08-12T21:00:00"), 274.7, -13.8, None, 8.0)),
 
 print("\n3) Siril's light_curve.dat, including the JD offset")
 parse = ns["_parse_light_curve_dat"]
+import shutil as _sh
 import tempfile
 tmp = tempfile.mkdtemp()
 plain = os.path.join(tmp, "plain.dat")
@@ -744,6 +745,543 @@ check(crowd([_Star(500, 500, 0.0, mag=-8.0),
       "a brighter star well outside the annulus draws no comment — the "
       "warning that used to fire here rested on a refuted mechanism")
 check(crowd([], 500, 500, 2.0) is None, "an empty field is not a crowd")
+
+print("\n8h) calibration is delegated to Siril, and never claimed falsely")
+cargs = ns["calibration_args"]
+iscal = ns["frames_are_calibrated"]
+darknote = ns["dark_exposure_note"]
+
+args, used = cargs("lights", flat="/m/flat.fit")
+check(args is not None and args[0] == "calibrate" and args[1] == "lights",
+      "a flat alone produces a calibrate command", " ".join(args or []))
+# The WHOLE token is quoted, not just the path. Siril keeps a quote that
+# starts after the "=" as part of the file name and then reports
+# `"....fit".[any_allowed_extension] not found` — which reads like a
+# missing master, not like a quoting bug, and cost a full run to find.
+check('"-flat=/m/flat.fit"' in args and used == [("flat", "/m/flat.fit")],
+      "the whole -flat= token is quoted, path included", " ".join(args))
+check('-flat="/m/flat.fit"' not in args,
+      "and never just the path — Siril would look for a file whose name "
+      "starts with a quote")
+check(any(a.startswith("-prefix=") for a in args),
+      "and a prefix is set, so the calibrated sequence has its own name")
+check("-cfa" not in args, "no debayer for a mono sensor by default")
+check("-cfa" in cargs("lights", flat="/m/f.fit", cfa=True)[0],
+      "-cfa -debayer only when the sensor is one-shot colour")
+none_args, none_used = cargs("lights")
+check(none_args is None and none_used == [],
+      "with no master at all there is NO command — an empty calibrate would "
+      "rewrite every frame and change nothing")
+order = [a for a in cargs("l", bias="/b", dark="/d", flat="/f")[0]
+         if a.startswith('"-bias') or a.startswith('"-dark')
+         or a.startswith('"-flat')]
+check(order == ['"-bias=/b"', '"-dark=/d"', '"-flat=/f"'],
+      "bias, dark, flat are passed in that order", str(order))
+
+# The header question has THREE answers.  N.I.N.A. writes neither CALSTAT
+# nor a HISTORY card, so "no evidence" is not "not calibrated" -- claiming
+# it would be a warning that cries wolf, and those get skipped past.
+state, why = iscal({"IMAGETYP": "LIGHT"})
+check(state is False and "CALSTAT" in why,
+      "a raw light with nothing in the header is called raw", why)
+state, why = iscal({"IMAGETYP": "LIGHT", "CALSTAT": "BDF"})
+check(state is True and "bias" in why and "flat" in why,
+      "CALSTAT=BDF settles it and spells out which steps", why)
+state, why = iscal({"IMAGETYP": "LIGHT",
+                    "HISTORY": ["Flat field correction applied"]})
+check(state is True and "HISTORY" in why,
+      "so does a HISTORY card naming the step", why)
+check(iscal(None)[0] is None, "no header is unknown, not 'raw'")
+check(iscal({"IMAGETYP": "FLAT"})[0] is None,
+      "a frame that is not a light is not judged either way")
+check(iscal({"IMAGETYP": "LIGHT", "CALSTAT": "  "})[0] is False,
+      "a blank CALSTAT is no evidence, so the raw verdict still stands")
+
+# The dark that silently does the wrong thing: right camera, right night,
+# wrong exposure.  Siril subtracts it without comment.
+ok, note = darknote({"EXPTIME": 3.0}, {"EXPTIME": 60.0})
+print(f"   {note}")
+check(ok is False and "3.0 s" in note and "60.0 s" in note,
+      "a 3 s dark on 60 s lights is refused in words, with both numbers")
+check("5%" in note, "and it quantifies what is actually removed", note)
+check(darknote({"EXPTIME": 60.0}, {"EXPTIME": 60.0})[0] is True,
+      "a matching dark passes")
+check(darknote({"EXPTIME": 60.5}, {"EXPTIME": 60.0})[0] is True,
+      "and header rounding does not trip it")
+check(darknote({}, {"EXPTIME": 60.0})[0] is None,
+      "an unreadable exposure is unknown, not fine")
+
+# The wiring, not just the helper.  If `_calibrate` returned the calibrated
+# sequence name and the caller dropped it on the floor, everything below
+# would run on the UNCALIBRATED frames and every number in the report would
+# still look perfectly reasonable.  That is exactly the class of bug a pure
+# helper test cannot see, so it is asserted on the source.
+run_fn = next(f for c in tree.body if isinstance(c, ast.ClassDef)
+              and c.name == "LightCurveWorker"
+              for f in c.body
+              if isinstance(f, ast.FunctionDef) and f.name == "_run")
+flow = ast.dump(run_fn)
+check("_calibrate" in flow, "the run flow calls _calibrate at all")
+assigned = [n for n in ast.walk(run_fn)
+            if isinstance(n, ast.Assign)
+            and isinstance(n.value, ast.Call)
+            and isinstance(n.value.func, ast.Attribute)
+            and n.value.func.attr == "_calibrate"
+            and any(isinstance(t, ast.Name) and t.id == "seq" for t in n.targets)]
+check(len(assigned) == 1,
+      "and assigns its return value back to seq — otherwise registration "
+      "would silently run on the uncalibrated frames",
+      f"{len(assigned)} such assignments")
+body_src = open(SRC).read()
+i_link = body_src.index('"link", seq')
+i_cal = body_src.index("seq = self._calibrate(")
+i_reg = body_src.index("self._register(seq)")
+check(i_link < i_cal < i_reg,
+      "and it sits between link and register, in that order")
+
+print("\n8j) calibration frames are FOUND, not demanded")
+kindof = ns["classify_kind"]
+pathof = ns["classify_path"]
+sig = ns["calib_signature"]
+sigmatch = ns["signature_matches"]
+scan = ns["scan_calibration"]
+pick = ns["choose_masters"]
+roots_of = ns["calibration_roots"]
+
+check(kindof("Dark Flat") == "darkflat" and kindof("DARK") == "dark",
+      "a dark-flat is not read as a dark — it would be subtracted from the "
+      "lights instead of from the flats")
+check(kindof("Flat Field") == "flat" and kindof("BIAS") == "bias",
+      "IMAGETYP is matched on substrings, since it is a type name")
+check(kindof("") is None, "and an empty keyword decides nothing")
+# The folder fallback must match WHOLE segments.
+check(pathof("/data/Dark-Nebula/LIGHT/2026-08-14/L/x.fits") == "light",
+      "a target called Dark-Nebula keeps its lights", 
+      str(pathof("/data/Dark-Nebula/LIGHT/2026-08-14/L/x.fits")))
+check(pathof("/data/WASP-75b/FLAT/2026-08-14/LUMINOS/x.fits") == "flat",
+      "and N.I.N.A.'s upper-case FLAT folder is found")
+
+# The real layout: lights three levels below the target folder, flats
+# beside the LIGHT folder rather than anywhere near the lights.
+import shutil as _sh
+import tempfile
+tmp = tempfile.mkdtemp()
+lights = os.path.join(tmp, "WASP-75b", "LIGHT", "2026-08-14", "LUMINOS")
+flats = os.path.join(tmp, "WASP-75b", "FLAT", "2026-08-14", "LUMINOS")
+lib = os.path.join(tmp, "_CALIB", "DARK", "60.00s_G125")
+for d in (lights, flats, lib):
+    os.makedirs(d, exist_ok=True)
+found = roots_of(lights, lib)
+names = {os.path.basename(r) for r in found}
+print(f"   roots: {sorted(names)}")
+check("FLAT" in names,
+      "the session flats are found from the lights folder alone — three "
+      "levels up, beside the LIGHT folder", str(sorted(names)))
+check(any(os.path.basename(r) == "60.00s_G125" for r in found),
+      "and the library folder is added as given")
+check("LIGHT" not in names,
+      "the LIGHT folder itself is not scanned for calibration frames")
+
+# Grouping and matching, with headers injected so no FITS is needed.
+def _mk(path, kind, exp, gain=125, temp=-10.0, filt="LUMINOS", dims=(3008, 3008)):
+    return {"path": path, "kind": kind, "exp_s": exp, "gain_v": gain,
+            "temp_v": temp, "binning": 1, "dims": dims,
+            "instrument": "Ares-M PRO", "filter": filt}
+
+fake = {}
+def _reader(path):
+    return fake[path]
+
+for i in range(5):
+    fp = os.path.join(flats, f"f{i}.fits")
+    open(fp, "w").close()
+    fake[fp] = _mk(fp, "flat", 3.0)
+for i in range(4):
+    dp = os.path.join(lib, f"d{i}.fits")
+    open(dp, "w").close()
+    fake[dp] = _mk(dp, "dark", 60.0)
+groups = scan(found, "LUMINOS", read=_reader)
+check(len(groups.get("flat", [])) == 1 and len(groups["flat"][0]["files"]) == 5,
+      "five flats of one signature form one group")
+check(len(groups.get("dark", [])) == 1 and len(groups["dark"][0]["files"]) == 4,
+      "and four darks another")
+
+light = _mk("L", "light", 60.0)
+chosen, notes = pick(groups, light)
+for n in notes:
+    print("   " + n)
+check("dark" in chosen and "flat" in chosen,
+      "a matching dark and flat are both selected")
+
+# The case that actually applies to this data set.
+bad = dict(groups)
+bad["dark"] = [{"kind": "dark", "key": None, "files": ["a", "b", "c"],
+                "info": _mk("a", "dark", 3.0)}]
+chosen2, notes2 = pick(bad, light)
+print("   " + [n for n in notes2 if "dark" in n][0])
+check("dark" not in chosen2,
+      "a 3 s dark is NOT applied to 60 s lights")
+check(any("read noise" in n for n in notes2),
+      "and the rejection says what the mismatch would have done, not just "
+      "that two numbers differ")
+
+# Temperature splits darks; it must not split bias.
+warm = _mk("w", "dark", 60.0, temp=-20.0)
+check(sig(_mk("c", "dark", 60.0), with_temp=True) != sig(warm, with_temp=True),
+      "-10 C and -20 C darks never share a master — the average is correct "
+      "for neither")
+check(sig(_mk("c", "bias", 0.0), with_temp=False)
+      == sig(_mk("d", "bias", 0.0, temp=-25.0), with_temp=False),
+      "but bias is temperature-independent, so splitting it would only add "
+      "noise")
+
+ok, why = sigmatch(_mk("m", "dark", 60.0, dims=(3008, 3008)),
+                   _mk("l", "light", 60.0, dims=(2048, 2048)))
+check(ok is False and "size" in why, "a master of the wrong size is refused", why)
+ok, why = sigmatch(_mk("m", "flat", 3.0), _mk("l", "light", 60.0),
+                   check_exposure=False)
+check(ok is True,
+      "but a flat need not match the lights' exposure — a flat is a ratio", why)
+ok, why = sigmatch({"instrument": "Ares-M PRO", "binning": 1},
+                   {"instrument": "ASI2600MM", "binning": 1})
+check(ok is False and "camera" in why,
+      "and two different cameras never calibrate each other", why)
+_sh.rmtree(tmp, ignore_errors=True)
+
+print("\n8k) the scan is recursive, and knows a copy from an exposure")
+split = ns["split_frames"]
+gcal = ns["group_calibration"]
+merge = ns["merge_calibration"]
+fits_files = ns["_fits_files"]
+
+tmp2 = tempfile.mkdtemp()
+deep = os.path.join(tmp2, "WASP-75b", "LIGHT", "2026-08-14", "LUMINOS")
+inflat = os.path.join(tmp2, "WASP-75b", "FLAT", "2026-08-14", "LUMINOS")
+stale = os.path.join(deep, "_lightcurve", "process")
+legacy = os.path.join(deep, "_flux", "lights")
+for d in (deep, inflat, stale, legacy):
+    os.makedirs(d, exist_ok=True)
+for d in (deep, inflat, stale, legacy):
+    for i in range(3):
+        open(os.path.join(d, f"x{i}.fits"), "w").close()
+seen = fits_files(tmp2)
+print(f"   {len(seen)} FITS found under the project root")
+check(len(seen) == 6,
+      "the walk reaches lights three levels down AND the FLAT folder beside "
+      "them — pointing at the project root is enough", f"{len(seen)} files")
+check(not any(os.sep + "_lightcurve" + os.sep in f for f in seen),
+      "this script's own working folder is never descended into")
+check(not any(os.sep + "_flux" + os.sep in f for f in seen),
+      "and neither is the one it used before it was renamed — a stale "
+      "working folder re-ingests its own staged copies as subs")
+
+# Duplicates: the failure this actually hit. A leftover working folder
+# turned 178 subs into 534, and every copy would have entered the curve as
+# an independent point, shrinking every error bar by root-3 for nothing.
+def _lt(path, stamp, exp=60.0, filt="LUMINOS"):
+    return {"path": path, "kind": "light", "exp_s": exp, "gain_v": 125,
+            "temp_v": -10.0, "binning": 1, "dims": (3008, 3008),
+            "instrument": "Ares-M PRO", "filter": filt, "date_obs": stamp}
+
+real = [_lt(f"/L/{i:03d}.fits", f"2026-08-15T02:{i:02d}:00") for i in range(10)]
+copies = [_lt(f"/L/_old/{i:03d}.fits", f"2026-08-15T02:{i:02d}:00")
+          for i in range(10)]
+kept, _c, note = split(real + copies, inside=True)
+print("   " + note)
+check(len(kept) == 10, "ten exposures copied twice stay ten points",
+      f"{len(kept)} kept")
+check(all("_old" not in k["path"] for k in kept),
+      "and the originals are the ones kept, not the copies")
+check("duplicate" in note, "the drop is reported, never silent")
+
+# A frame with no timestamp cannot be deduplicated, and guessing would be
+# worse than keeping it.
+nostamp = [_lt("/L/a.fits", ""), _lt("/L/b.fits", "")]
+check(len(split(nostamp, inside=True)[0]) == 2,
+      "frames without DATE-OBS are kept — unknown is not duplicate")
+
+# A filter or exposure change mid-run is two series, not a longer one.
+mixed = ([_lt(f"/L/l{i}.fits", f"t{i}", filt="LUMINOS") for i in range(8)]
+         + [_lt(f"/L/r{i}.fits", f"u{i}", filt="RED") for i in range(3)])
+kept, _c, note = split(mixed, inside=True)
+print("   " + note)
+check(len(kept) == 8 and all(k["filter"] == "LUMINOS" for k in kept),
+      "the larger set wins")
+check("set aside" in note and "RED" in note,
+      "and what was set aside is named, with its filter", note)
+
+# Kind decides, and where the frame came from decides the default.
+unlabelled = [{"path": "/x.fits", "kind": None, "exp_s": 60.0, "gain_v": None,
+               "temp_v": None, "binning": 1, "dims": None,
+               "instrument": None, "filter": "", "date_obs": "z"}]
+check(len(split(unlabelled, inside=True)[0]) == 1,
+      "an unlabelled frame inside YOUR folder is a light — you pointed at it")
+check(len(split(unlabelled, inside=False)[0]) == 0,
+      "the same frame in a library folder is discarded, not guessed at")
+
+# Calibration found in two places is one group, not two.
+def _cf(path, kind, exp):
+    return {"path": path, "kind": kind, "exp_s": exp, "gain_v": 125,
+            "temp_v": -10.0, "binning": 1, "dims": (3008, 3008),
+            "instrument": "Ares-M PRO", "filter": "LUMINOS", "date_obs": ""}
+a = gcal([_cf("/in/f1.fits", "flat", 3.0), _cf("/in/f2.fits", "flat", 3.0)])
+b = gcal([_cf("/lib/f3.fits", "flat", 3.0)])
+both = merge(a, b)
+check(len(both["flat"]) == 1 and len(both["flat"][0]["files"]) == 3,
+      "the same signature found inside your folder and in the library is "
+      "ONE group of three, not two groups competing")
+check(len(merge(a, gcal([_cf("/lib/d.fits", "dark", 60.0)]))) == 2,
+      "different kinds stay apart")
+_sh.rmtree(tmp2, ignore_errors=True)
+
+print("\n8l) saturation is read from the pixels, not from a flag")
+# The regression this replaces: calibration turned the frames from 16-bit
+# integers into 32-bit floats, Siril's `has_saturated` stopped firing, and
+# the run reported "Siril kept 8 of 178 frames (4%)" with no cause. The
+# saturation had not changed at all — only the flag had. Measured on the
+# real pair: raw peak 65532 of 65535, calibrated peak 1.000 of 1.0.
+sat = ns["saturation_verdict"]
+fs = ns["full_scale_of"]
+
+check(fs(np.zeros(4, np.uint16)) == 65535.0, "uint16 full scale is 65535")
+check(fs(np.zeros(4, np.uint8)) == 255.0, "and uint8 is 255")
+check(fs(np.array([0.0, 1.0], np.float32)) == 1.0,
+      "a float frame in [0,1] is Siril's normalised convention")
+check(fs(np.array([0.0, 4000.0], np.float32)) == 4000.0,
+      "a float frame that is NOT normalised falls back to its own peak — "
+      "relative is worse than knowing the ADC range, better than inventing "
+      "a threshold")
+
+raw = np.full((200, 200), 1500, np.uint16)
+raw[100, 100] = 65532                       # the real clip level, not 65535
+ok, why = sat(raw, 100, 100)
+print("   " + why)
+check(ok is True, "a 16-bit core clipped at 65532 counts as saturated — "
+      "asking for the exact maximum would have missed this camera", why)
+check(sat(raw, 50, 50)[0] is False, "and empty sky does not")
+
+cal = np.full((200, 200), 0.024, np.float32)
+cal[100, 100] = 1.0
+ok, why = sat(cal, 100, 100)
+print("   " + why)
+check(ok is True, "the SAME star after calibration to float still reads as "
+      "saturated — which is the whole point", why)
+check(sat(cal, 50, 50)[0] is False, "and empty sky still does not")
+
+check(sat(raw, 500, 500)[0] is None,
+      "a target outside the frame is unknown, not clean")
+check(sat(None, 1, 1)[0] is None, "and so is missing data")
+# The box must be wide enough for the centroid to wander and narrow enough
+# not to annex the neighbourhood.
+off = np.full((200, 200), 1500, np.uint16)
+off[100, 112] = 65532                       # 12 px away — still the core
+check(sat(off, 100, 100)[0] is True,
+      "a peak 12 px from the reported centroid is still the target's core")
+far = np.full((200, 200), 1500, np.uint16)
+far[100, 140] = 65532                       # 40 px away — a different star
+check(sat(far, 100, 100)[0] is False,
+      "a saturated star 40 px away is NOT the target — the box does not "
+      "annex the neighbourhood")
+
+print("\n8i) every name a method uses actually resolves")
+# `_log_swallowed` was called from three exception handlers and never
+# defined.  Nothing noticed for weeks: all three are fallbacks for cases
+# that had not come up, and when one finally did, the handler would have
+# raised NameError over the top of the error it existed to absorb.
+_builtin = set(dir(__builtins__)) | set(dir(__builtins__.__dict__ if hasattr(
+    __builtins__, "__dict__") else {}))
+try:
+    import builtins as _b
+    _builtin |= set(dir(_b))
+except ImportError:
+    pass
+_defined = set(_builtin)
+for node in ast.walk(tree):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        _defined.add(node.name)
+    elif isinstance(node, (ast.Import, ast.ImportFrom)):
+        for a in node.names:
+            _defined.add((a.asname or a.name).split(".")[0])
+    elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for t in targets:
+            for sub in ast.walk(t):
+                if isinstance(sub, ast.Name):
+                    _defined.add(sub.id)
+
+def _unresolved(fn):
+    """Free names in one function that nothing defines anywhere."""
+    local = {a.arg for a in fn.args.args + fn.args.kwonlyargs}
+    if fn.args.vararg:
+        local.add(fn.args.vararg.arg)
+    if fn.args.kwarg:
+        local.add(fn.args.kwarg.arg)
+    used = set()
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Name):
+            (local.add(n.id) if isinstance(n.ctx, ast.Store) else used.add(n.id))
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            local.add(n.name)
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n is not fn:
+            local.add(n.name)
+            local |= {a.arg for a in n.args.args}
+        elif isinstance(n, (ast.Lambda,)):
+            local |= {a.arg for a in n.args.args}
+        elif isinstance(n, ast.comprehension):
+            for sub in ast.walk(n.target):
+                if isinstance(sub, ast.Name):
+                    local.add(sub.id)
+    return sorted(used - local - _defined)
+
+# Top-level functions and methods only. A NESTED function is already
+# covered by scanning its parent -- and scanning it on its own would flag
+# every closure variable, which is exactly what a closure is for.
+_scan = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
+for _c in tree.body:
+    if isinstance(_c, ast.ClassDef):
+        _scan += [n for n in _c.body if isinstance(n, ast.FunctionDef)]
+missing = []
+for node in _scan:
+    bad = _unresolved(node)
+    if bad:
+        missing.append((node.name, bad))
+print(f"   scanned {len(_scan)} functions and methods")
+check(not missing,
+      "no function calls a name that is defined nowhere in the module",
+      "; ".join(f"{fn}: {', '.join(names)}" for fn, names in missing))
+check("_log_swallowed" in _defined,
+      "and _log_swallowed in particular exists, since three handlers call it")
+
+print("\n8n) the detection floor is calibrated, not chosen")
+# The significance is the best of 121 x 41 x 8 = 39 688 grid nodes and the
+# formula does not know it. Measured over 1200 transit-free white-noise
+# runs (150 points, 5 h, 4 mmag) through this same search:
+#
+#     floor   false alarm | 4mmag 5mmag 6mmag 8mmag 12mmag
+#       3.0         4.42% |  91%   94%  100%  100%   100%
+#       4.0         0.17% |  53%   81%   98%  100%   100%
+#       5.0         0.00% |  19%   53%   86%   99%   100%
+#
+# Running that here would take twenty minutes, so what is pinned is the
+# arithmetic that made the old floor wrong and the shape of the fix.
+nodes = (ns["FIT_T0_STEPS"] * ns["FIT_DURATION_STEPS"]
+         * len(ns["FIT_INGRESS_FRACTIONS"]))
+print(f"   grid: {ns['FIT_T0_STEPS']} x {ns['FIT_DURATION_STEPS']} x "
+      f"{len(ns['FIT_INGRESS_FRACTIONS'])} = {nodes} nodes")
+check(nodes > 10000,
+      "the search really is large enough for the look-elsewhere effect to "
+      "dominate — that is WHY the floor needs calibrating", str(nodes))
+check(abs(ns["MIN_DETECTION_SIGMA"] - 4.0) < 1e-9,
+      "the floor is the calibrated 4.0, not the Gaussian-looking 3.0",
+      str(ns["MIN_DETECTION_SIGMA"]))
+check(ns["MEASURED_FALSE_ALARM"] < 0.002,
+      "and the measured rate at that floor is under 0.2%",
+      f"{100*ns['MEASURED_FALSE_ALARM']:.2f}%")
+# The point of the whole exercise: the floor must be justified by its
+# MEASURED rate, so the constant carrying that rate has to exist and be
+# reported. A floor without one is a number the reader has to trust.
+check(ns["MEASURED_FALSE_ALARM_RUNS"] >= 1000,
+      "measured over enough runs to resolve a rate that small",
+      str(ns["MEASURED_FALSE_ALARM_RUNS"]))
+src_txt = open(SRC).read()
+check(src_txt.count("MEASURED_FALSE_ALARM") >= 4,
+      "and it reaches the reports, not just the constant block",
+      f"{src_txt.count('MEASURED_FALSE_ALARM')} uses")
+
+print("\n8m) the noise model is one model, applied everywhere")
+rnb2 = ns["red_noise_beta"]
+binner2 = ns["bin_series"]
+fitt = ns["fit_transit"]
+shape_of = ns["trapezoid_shape"]
+
+# (a) The binned error bar is a SAMPLE standard error. numpy's default
+# ddof=0 makes it 29% too small at two points per bin, 11% at five -- and
+# a curve with small error bars looks more convincing than it is.
+rng = np.random.default_rng(7)
+for n, tol in ((2, 0.29), (5, 0.10)):
+    got, want = [], []
+    for _ in range(4000):
+        y = rng.normal(0.0, 1.0, n)
+        got.append(np.std(y, ddof=1) / math.sqrt(n))
+        want.append(np.std(y) / math.sqrt(n))
+    ratio = float(np.mean(want) / np.mean(got))
+    tb, mb, eb, nb = binner2(np.arange(n, dtype=float),
+                            np.array([0.0, 1.0] + [0.5] * (n - 2)), 1)
+    ref = float(np.std(np.array([0.0, 1.0] + [0.5] * (n - 2)), ddof=1)
+                / math.sqrt(n))
+    check(abs(float(eb[0]) - ref) < 1e-12,
+          f"the error bar at {n} points per bin uses ddof=1",
+          f"{eb[0]:.6f} vs {ref:.6f}")
+print("   (numpy's default ddof=0 is 29% low at n=2, 11% at n=5)")
+
+# (b) sigma1 inside beta must be robust. It was np.std -- the one place in
+# this file that was not -- and an inflated sigma1 DIVIDES beta, switching
+# the red-noise correction off exactly when the data are bad enough to
+# need it.
+rng = np.random.default_rng(11)
+t_lin = np.linspace(0.0, 0.25, 150)
+clean = rng.normal(0.0, 0.004, 150)
+dirty = clean.copy()
+dirty[rng.choice(150, 3, replace=False)] += 0.05      # three satellite trails
+b_clean, _ = rnb2(t_lin, clean, 0.06)
+b_dirty, _ = rnb2(t_lin, dirty, 0.06)
+print(f"   beta clean {b_clean:.2f}, with three 50 mmag outliers {b_dirty:.2f}")
+check(b_dirty >= b_clean * 0.85,
+      "three outliers no longer halve beta — with np.std they cut it to "
+      "0.47x, which is the correction disabling itself when it is needed",
+      f"{b_clean:.2f} -> {b_dirty:.2f}")
+
+# (c) The expected scatter of the SET of bin means is sigma*sqrt(mean(1/k)),
+# not sigma/sqrt(mean(k)). Equal bins hide the difference; unequal ones do
+# not -- 55% apart on [2,4,8,16,32], 86% on [2,2,2,30].
+for counts in ([2, 4, 8, 16, 32], [2, 2, 2, 30]):
+    k = np.array(counts, dtype=float)
+    old_way = 1.0 / math.sqrt(k.mean())
+    new_way = math.sqrt(float(np.mean(1.0 / k)))
+    check(new_way > old_way,
+          f"unequal bins {counts}: the correct expected scatter is larger, "
+          f"so the old form over-stated beta by {100*(new_way/old_way-1):.0f}%")
+check(abs(math.sqrt(float(np.mean(1.0 / np.array([10.0]*8))))
+          - 1.0/math.sqrt(10.0)) < 1e-12,
+      "and on equal bins the two agree exactly, which is why this hid")
+
+# (d) One noise model. The significance is divided by beta; the depth error
+# must be multiplied by it, or the same report says "1.6 sigma" and
+# "depth/error = 9.5" about one fit.
+def _red(n, rho=0.85, s=0.004, gen=None):
+    g = gen or np.random.default_rng(3)
+    e = g.normal(0.0, s, n)
+    out = np.empty(n)
+    out[0] = e[0]
+    for i in range(1, n):
+        out[i] = rho * out[i - 1] + math.sqrt(1 - rho ** 2) * e[i]
+    return out
+
+gen = np.random.default_rng(3)
+tt = np.linspace(0.0, 5 / 24, 150)
+worst = 0.0
+seen = 0
+for _ in range(10):
+    y = 0.012 * shape_of(tt, 0.5 * 5 / 24, 0.3 * 5 / 24, 0.15) + _red(150, gen=gen)
+    f = fitt(tt, y)
+    if not f or f["red_noise_beta"] <= 1.05:
+        continue
+    seen += 1
+    implied = f["depth_mmag"] / f["depth_sigma_mmag"]
+    worst = max(worst, implied / max(f["significance"], 1e-9))
+print(f"   {seen} correlated-noise fits; worst depth/error over significance "
+      f"= {worst:.1f}x")
+check(seen >= 3, "the probe actually produced correlated fits", str(seen))
+# They are still not the same number, and should not be: the significance
+# uses the MEASURED contrast against the WEAKER of two baselines and counts
+# diluted ingress points as "inside", while depth is the FITTED amplitude
+# against one baseline. What the fix removed is the part that was pure
+# inconsistency -- one number scaled by beta and the other not. The report
+# now says which of the two to quote.
+check(worst < 4.0,
+      "the beta inconsistency is gone; the residual gap is structural, and "
+      "was 6.0x when only one of the two carried the red-noise scaling",
+      f"{worst:.1f}x")
 
 print("\n9) the target snaps to a detected star, never to a typed number")
 pick = ns["pick_target"]
