@@ -42,16 +42,25 @@ Features:
 - Airmass detrending anchored on the out-of-transit baseline, with a
   one-sided least-trimmed fit so a setting target's ramp is not mistaken
   for -- or absorbed into -- the transit depth
-- Trapezoid transit fit: grid over (T0, duration, ingress fraction) with
-  depth and baseline solved analytically at each node.  No optimiser to get
-  stuck, no random seed, the same answer every run
+- Quality detrending against Siril's own per-frame FWHM, sky level and star
+  count, anchored on the same out-of-transit rows
+- Aperture chosen by scanning six radii and measuring, not by formula
+- Comparison stars screened by photometering each against the others
+- Model-free spike rejection: one satellite used to cost the detection
+- AAVSO Exoplanet Watch submission file
+- Mid-transit time with a calibrated error bar, and chi2/nu against a
+  model-independent noise floor
+- Limb-darkened transit fit, solved SIMULTANEOUSLY with the systematics:
+  a grid over (T0, duration, shape) with the depth, the baseline and every
+  systematic coefficient solved analytically at each node.  No optimiser to
+  get stuck, no random seed, the same answer every run
 - Stacked detection significance with the correct standard error, checked
   against the baseline on BOTH sides of the event so a monotonic trend
   cannot be reported as a transit, and a refusal to claim anything below a
   CALIBRATED floor: the grid search spans ~40 000 nodes, so the number is
-  not a Gaussian sigma.  Measured over 1200 transit-free noise runs, 4.0
-  gives 0.17% false alarms -- what "3 sigma" was always read to mean -- and
-  the measured rate is printed next to every result
+  not a Gaussian sigma.  Measured over 1200 transit-free noise runs, 4.5
+  gives 0.25% false alarms where 3.0 gives 7.67%, and the measured rate is
+  printed next to every result
 - Binned overlay, residual panel, per-point scatter and the measured RMS
 - CSV export of the full series, PNG export of the plot, plain-text report
 - Every number that is an estimate is marked as one
@@ -118,15 +127,507 @@ CHANGELOG:
         * lights are reduced to one filter and one exposure.  A filter or
           exposure change mid-run is two series, not a longer one; the
           largest set wins and the rest is named
+      - LIMB-DARKENED TRANSIT MODEL, fitted SIMULTANEOUSLY with the
+        systematics.  Two changes that had to happen together, because
+        either one alone invalidates the calibration table.
+        * The trapezoid was 5-6% too SHALLOW against a real transit --
+          measured across rp/Rs 0.08 to 0.15 -- and chi2/nu stayed at 1.0,
+          so nothing in the output would ever have said so.  The shapes
+          searched are now real geometries: four planet-to-star radius
+          ratios crossed with two impact parameters, exactly the eight
+          variants the eight ingress fractions used to provide.  Each is a
+          TEMPLATE on normalised phase, built once and interpolated per
+          node, so the model stays LINEAR in depth: the closed-form solve,
+          the determinism and the no-optimiser guarantee all survive.  A
+          physically free rp/Rs would couple depth and shape and cost all
+          three.  Measured over 15 realisations per depth, the bias comes
+          to +0.6 / -0.0 / -0.2 / +0.1 percent
+        * The occultation is integrated RADIALLY -- the arc a planet covers
+          at radius r has a closed form -- so no elliptic integrals and no
+          scipy, and it is verified against an independent two-dimensional
+          integration
+        * rp/Rs is REPORTED AS A SHAPE INDEX, not a planet radius.  With
+          the duration free, a smaller template stretched fits nearly as
+          well, so the fitted value sits systematically below the truth.
+          The depth is the measurement, and both reports say so
+        * The three-pass detrend-fit-redetrend-refit sequence is GONE.
+          Airmass, seeing, sky and star count now sit in the same design
+          matrix as the transit, solved together at every grid node.  The
+          transit cannot be absorbed into a correlated basis -- which is
+          what the out-of-transit anchoring existed to prevent -- and the
+          baseline's uncertainty ends up in the depth and the mid-time
+          instead of being discarded between passes.  Verified against a
+          basis deliberately SHAPED like the transit: the depth survives at
+          11.2 mmag of 12.0, where a sequential detrend would have eaten it
+        * It is also FASTER.  Only the transit column changes from node to
+          node, so the Gram matrix of everything else is computed once:
+          11.1 us per node against the old 13.8, and a whole fit in 0.56 s
+          against 1.0
+        * `trapezoid_shape`, `_solve_depth_baseline` and
+          `multi_basis_detrend` are gone with it, and the suite now
+          synthesises transits with the SAME limb-darkened model the fit
+          searches -- injecting trapezoids into a trapezoid fitter had been
+          flattering it
+      - A FULL AUDIT PASS (logic, maths, statistics, dead code), every
+        finding measured before it was fixed:
+        * ENSEMBLE ERROR WAS EQUAL-SPLIT WHILE THE REFERENCE IS
+          FLUX-WEIGHTED.  Each comp's variance was divided by N^2; the
+          weighted reference barely feels a faint comp.  Monte Carlo on
+          comps of 100k/10k/2k ADU: empirical 8.1 mmag, old formula 11.8,
+          weighted formula 8.3.  Error bars were 45% too wide on unequal
+          ensembles -- conservative, but wrong, and a chi-square built on
+          them would have read 0.5.
+        * THE YIELD NOTE SAID "Siril kept..." ON THE NATIVE PATH.  The
+          first full native run printed "83 points measured by this
+          script" followed by "Siril kept 83 of 178" -- two sentences
+          attributing the same numbers to different programs.  The note
+          now names the engine, and quotes Siril's reason codes only when
+          Siril measured.
+        * THE GAIN LINE CLAIMED "from the header" even when no card was
+          usable and 1.0 was an assumption; it now states its source.
+          GAIN (the camera SETTING, 0-500 arbitrary units) is only
+          believed below 10 -- read as e-/ADU, a GAIN of 100 would
+          multiply every error bar tenfold.
+        * NATIVE MAGNITUDES ARE CENTRED ON THEIR MEDIAN.  The raw zero
+          point is -2.5*log10(flux/[reference ~1]) ~ -10, meaningless and
+          alarming in every plot and CSV.
+        * Dead code out: a no-op loop in fit_transit, an unreachable
+          guard in the native frame loop, two write-only locals.
+        * VERIFIED AND LEFT ALONE, with the measurements in the suite:
+          the LD template's radial quadrature, the closed-form
+          simultaneous solve, the T0 curvature bar, the Pont beta ladder,
+          the two-sided significance, the BJD_TDB conversion.  A new
+          end-to-end regression fits a synthetic 20 mmag transit on a
+          quadratic airmass ramp: depth recovered to 0.6 mmag, T0 within
+          one error bar, the transit-free night refused.
+      - THE NATIVE ENGINE'S FIRST COMPLETE RUN DIED ONE LINE BEFORE ITS
+        RESULTS.  83 points measured, comps ranked, aperture chosen, the
+        transit FITTED -- then UnboundLocalError on `aperture`, a name
+        born only inside the Siril fallback branch; `dat` had the same
+        flaw and was next in line.  Both are initialised before the
+        branch now, the native path fills the chosen radius in, and the
+        suite walks the AST of `_run` to assert the general rule: no name
+        may be assigned only in the fallback branch and read after the
+        two paths merge.
+      - THE NATIVE ENGINE'S FIRST LIVE RUN EXPOSED ITS OWN SILENT EXIT.
+        On WASP-75b it measured 83 good magnitudes, printed its comp and
+        aperture tables -- and then fell back to Siril without a word,
+        because sirilpy's ImgData.date_obs came back EMPTY on that
+        N.I.N.A. set and not one point could be time-stamped.  Two fixes:
+        the stamp now comes from the frame's OWN header (DATE-OBS +
+        EXPTIME/2, read from the file that is already open; the parser
+        has survived every timestamp this project has met), and every
+        bail-out after measuring starts now says which ingredient is
+        missing.  A fallback that runs without announcing itself is the
+        same disease as a guard that quietly does nothing.
+      - THE MEASUREMENT ITSELF IS NO LONGER DELEGATED TO `light_curve`.
+        Five sessions of fighting that command produced a list of measured
+        defects -- it refuses above 160 px of drift, its `-autoring` flag
+        aborts on valid coordinates, it loses half of a drifting run
+        because its boxes follow only the registration ("not in area" /
+        "PSF fit failed": 67 of 140 points), a dynamic aperture adds
+        "inner radius too small", one bad comp fails the whole command,
+        and its forced-aperture setting leaks into the user's saved
+        preferences.  Siril's own `seqpsf -followstar` measures the same
+        star with ZERO failures out of 142, but its numbers are reachable
+        neither from a file nor from sirilpy, and `light_curve` does not
+        reuse them (measured: it re-ran six PSF passes right after six
+        seqpsf runs).
+        So the frames are measured HERE, the way EXOTIC and HOPS do it,
+        with Siril keeping everything it is good at (staging, calibration,
+        registration, star detection, plate solve, frame quality):
+        * every star RE-CENTROIDED per frame from the homography seed --
+          the follow-star idea; a centroid that walks more than 6 px has
+          locked onto a neighbour and is discarded, because a wrong star
+          measured confidently is worse than a missing frame;
+        * subpixel-weighted circular apertures, several radii in ONE pass
+          over the pixels, sky from a twice-MAD-clipped annulus, errors
+          from the CCD equation with every term measured;
+        * comps normalised each to its own median so a star that misses a
+          frame cannot step the ensemble (measured: 0.8 mmag against the
+          ~440 a raw sum would step, which is the shape of an ingress);
+        * comps kept or dropped by TOTAL robust scatter against their
+          peers (a slow 30 mmag wobbler is caught; point-to-point would
+          be blind to exactly the slow structure that fakes transits);
+        * the aperture chosen by POINT-TO-POINT noise of the finished
+          curve, which a 20 mmag transit barely moves while a plain
+          standard deviation triples.
+        Measured on EXOTIC's HAT-P-32 demo set against the same frames:
+        140 of 142 points at 7.2 mmag point-to-point where `light_curve`
+        managed 67, and the transit reads ~25 mmag deep against the
+        archive's 22.  The whole Siril path remains as the FALLBACK: if
+        the engine measures under 30% of the frames it says so and hands
+        over.
+      - THE HOMOGRAPHY CONVENTION WAS MEASURED, because two plausible
+        readings both failed on real data: the stored H maps FRAME onto
+        REFERENCE in Siril's BOTTOM-UP row order -- upside down relative
+        to what astropy reads from the same file.  In FITS coordinates a
+        stored (h02, h12) moves a star by (-h02, +h12).  Anchored by
+        cross-correlating whole frames and confirmed on the target star:
+        frame 1 stores (-52.0, -37.4) and the star sits at ref+(+52,-37).
+        The first reading applied H forwards and seeded half the
+        centroids onto the wrong stars: 900 mmag of scatter.  The drift
+        filter shared the sign error and had judged every star by the
+        MIRROR of its true excursion -- it kept (222, 73), which in truth
+        walks to x = 4 and was the first star light_curve failed on.
+        Also measured: `setref` does NOT rebase the homographies (after
+        `setref 70` the .seq keeps the identity at image 35), so star
+        positions detected on the moved reference ride through the
+        detection frame's own H before any seeding.
+      - A MERIDIAN FLIP IS NOT DRIFT, and reading the homography's
+        translation column said it was.  180 degrees about the centre
+        leaves every star on the same piece of sky, but the translation
+        column becomes the frame's own width and height: on a real
+        3008x3008 run, 4253 px by the column against 13.7 px by the
+        centre.  Reported as drift that declared a perfectly measurable
+        run unmeasurable.  The centre now goes through the full 3x3, which
+        returns exactly the translation for a pure shift and the truth for
+        a flip.  The pass/fail boundary was re-bracketed in the new
+        measure on the same frames: 160.9 px runs, 162.1 px aborts, so the
+        160 px limit stands and is the conservative side of it.
+      - TWO READS THAT FAILED SILENTLY ON THE SAME RUN, both fixed at
+        the source rather than papered over:
+        * the frame size came from a FITS read that raised
+          "BZERO/BSCALE/BLANK header keywords present. Set memmap=False"
+          on Siril's compressed frames -- and a missing frame size takes
+          the whole drift filter with it.  It now comes from the SEQUENCE
+          (`rx`/`ry`), which always has it and needs no file read at all.
+        * the saturation check read pixels with memmap=True and hit the
+          same refusal, so the verdict fell back to Siril's flag with no
+          numbers behind it.  memmap=False reads them.
+      - A FAILED APERTURE SCAN NOW HANDS THE APERTURE BACK.  `setphot
+        -aperture=` FORCES the value and nothing unforces it, so a scan
+        that probed down to 4.7 px and rejected every step left the final
+        photometry running at 4.7 anyway.  `setphot -dyn_ratio=4.0`
+        restores Siril's dynamic aperture; verified against 1.4.4, which
+        then reports "dynamic aperture: 4.0 (times the half-FWHM)".
+      - THE TWO REASONS `light_curve` REFUSED THIS DATA SET, both found
+        by bisection against Siril 1.4.4 rather than by reasoning:
+        * DRIFT ABOVE 160 px FROM THE REFERENCE.  Siril prints a line it
+          calls a "Warning" and then returns a generic error -- the
+          warning IS the abort.  159.6 px runs, 160.7 px does not; the
+          limit is a fixed pixel count, not a fraction of the frame, and
+          the number Siril tests is hypot(dx, dy) ("163 pixels for image
+          103" where the shift is 162.5).  Siril picks its registration
+          reference on image QUALITY, which is right for stacking and
+          wrong here: image 35 of 142 left the whole drift on one side,
+          218.9 px, and no set of comparison stars could rescue it.  The
+          reference now moves with `setref`, AFTER `register`, which
+          picks its own reference and overrides an earlier `setref`.
+          CHOOSING ON DRIFT ALONE WAS THE FIRST ATTEMPT AND IT WAS WRONG,
+          in the way that is worse than refusing: the exact middle of the
+          drift is image 72, and image 72 is the worst frame of the night
+          -- weighted FWHM 8.50 against 2.42 for its neighbour, 110 stars
+          against 262.  The command RAN.  The sky annulus came out at 24.7
+          px instead of 11.3, the target was matched 200 arcsec from its
+          catalogue position, and 6 of 142 frames survived photometry.
+          So the choice is now: take every frame Siril will accept (worst
+          drift under 95% of the limit), and among those take the best on
+          Siril's own weighted FWHM.  That gives image 70 -- 149.1 px, 261
+          stars, wFWHM 2.41 -- and 67 measured points with 5 comparison
+          stars.  With no limit to satisfy the same function reproduces
+          Siril's own pick, image 35, which is the check that the quality
+          ranking is the right one.
+        * `-autoring` ITSELF.  With the flag, light_curve aborts with "The
+          given coordinates are not in the image" on coordinates that are
+          demonstrably inside it; without it, the same command on the same
+          sequence and the same stars produces the curve.  The radii are
+          now set with `setphot` beforehand using Siril's own factors,
+          which reproduce its arithmetic exactly (it logs "7.5 and 11.3"
+          for FWHM 1.797542; 4.2x and 6.3x give 7.55 and 11.32).
+        The drift filter below is still right and still needed -- 60 of
+        142 points come back as invalid photometry because their boxes
+        leave the sensor -- but it was never what made the COMMAND fail.
+      - THE DRIFT FILTER FAILED TWICE BEFORE IT RAN, and both failures
+        were the same shape: a guard that does nothing looks exactly like
+        a guard that found nothing.
+        * First a missing local `import fits` -- caught, logged as
+          "swallowed NameError", frame size None, filter off.
+        * Then `drift_envelope` read the homography as a numpy array.
+          sirilpy hands back an OBJECT with h00..h22 attributes; the
+          rotation check next door already read h00/h10 that way.  The
+          array form returned None on every real run.  THE TEST HAD USED A
+          NUMPY 3x3 -- a shape the running code never sees -- so it passed
+          throughout.  Both forms are covered now, and the object one is
+          the one that matters.
+        The suite also checks statically that every function using a
+        locally-imported name imports it, and the run says out loud when
+        the frame size could not be read and the filter is therefore off.
+      - REPEATED PHOTOMETRY FAILURES NOW STOP THE PROBES.  The same run
+        called `light_curve` twelve times -- five screening comparisons,
+        six scanning apertures, one final -- and every call failed for the
+        SAME reason.  Siril's process then died, and the only thing this
+        script could say was "[Errno 32] Broken pipe", which reads as
+        somebody else's bug.  After MAX_PHOTOMETRY_FAILURES in a row the
+        probes stop and name the pattern; a success resets the count, so a
+        single bad frame mid-scan costs nothing.  And a broken pipe is now
+        reported as what it is -- Siril's process is gone, so the command
+        in flight is the one thing that cannot be at fault.  The geometry
+        filter below removes the trigger; this removes the twelve chances
+        to hit it.
+      - A COMPARISON STAR MUST STAY ON THE SENSOR FOR THE WHOLE RUN.
+        Siril moves each measurement box by the registration data, so a
+        star comfortably inside the reference frame can leave the chip
+        later in the night -- and when a COMPARISON does, the whole
+        `light_curve` command fails with "generic error" after a warning
+        that names one FRAME and never says which star.  Measured on
+        EXOTIC's demo set: dx runs +52 to -218 px on a 650 px frame, and
+        three of the five comparisons chosen from the reference frame
+        spend part of the run outside it, one reaching x = -167 and
+        another x = 697.  The target happened to survive, which is why the
+        failure read as a photometry bug rather than a geometry one.  The
+        drift envelope now comes out of the homographies the flip check
+        already reads -- no extra pass over a pixel -- and a star whose
+        APERTURE would hang over the edge is dropped with that reason.  An
+        unregistered sequence yields no envelope and switches the filter
+        off rather than rejecting everything.  If the TARGET is the one
+        that leaves, the run stops and says so: no aperture follows a star
+        off the sensor.
+      - THE PLATE SCALE IS HANDED TO SIRIL RATHER THAN LEFT TO ITS
+        MEMORY.  Siril takes it from FOCALLEN and XPIXSZ; with neither it
+        uses whatever it last SAVED as a default, which is the previous
+        target's telescope.  Measured: on a 5.21 arcsec/px MicroObservatory
+        frame it used 3.76 um / 380.33 mm left over from a 2.03 arcsec/px
+        rig, looked for a 0.46 degree field where the truth is 0.94,
+        fetched 373 000 catalogue stars and returned "Generic error".
+        Nothing in that message says "wrong scale".  IM_SCALE, SECPIX and
+        friends are now read directly when present and derived from the
+        optics when not, and -focal= / -pixelsize= go on the command line.
+        With neither available the run says so instead of letting Siril
+        guess.
+      - TWO MORE THINGS EXOTIC's DEMO SET BROKE, both of which stopped
+        the run outright.
+        * THE NAME DID NOT RESOLVE.  OBJECT reads 'HATP-32'; the archive
+          holds 'HAT-P-32 b'.  Hyphens and spaces are now stripped from
+          BOTH sides -- the TAP service supports REPLACE -- so every
+          spelling in between works without a table of survey prefixes,
+          and HOSTNAME is searched as well as pl_name, because a name with
+          no planet letter (which is what a header usually carries) exists
+          only in that column.  A multi-planet system is a REFUSAL that
+          lists the choices: picking one silently would attach the wrong
+          ephemeris to the O-C.
+        * ONE COMPARISON STAR SURVIVED, of 262.  At 5.2 arcsec/px the
+          stars sit closer together than one sky annulus, so 164 fell to
+          the isolation cut and there was no ensemble left to run with.
+          The cut is now a LADDER: strict first, then loosened one step at
+          a time until MIN_COMPS is reached, with the radius and the
+          reason printed.  The target is the MINIMUM, not the requested
+          count -- relaxing to fill a wish would trade isolation away in
+          any field that simply has fewer good stars than asked for.  The
+          floor is the APERTURE: inside that a neighbour is blended
+          photometry rather than a background error, and no report
+          rescues it.
+      - CHOOSING THE FOLDER NOW READS THE HEADERS.  The run did this
+        anyway, but only after staging and registration -- so the target
+        appeared in the log five minutes in, as something to accept rather
+        than something to check.  The first PROBE_HEADERS light headers are
+        read on the spot and OBJECT and OBJCTRA/OBJCTDEC land in the
+        fields, where they can be corrected before starting.  Only EMPTY
+        fields are filled; a filled one is COMPARED and the gap reported.
+        Calibration frames are split off first, so a folder of flats
+        cannot prefill the target from a parked mount.  Capped because it
+        runs on the UI thread: 30 compressed N.I.N.A. subs measured 153 ms.
+      - THE TARGET CONTROLS MOVED TO WHERE THE TARGET IS CHOSEN.  The
+        name box and the archive lookup were in the SUBMISSION group,
+        which made no sense: they decide the target's POSITION, and the
+        one control that spares you typing coordinates was sitting in a
+        group about filing the result.  Group 3 now carries all of it, and
+        gains a first mode -- "From the frames" -- that is what a fresh
+        install starts on: OBJCTRA/OBJCTDEC for the position, OBJECT for
+        the lookup, brightest as an ANNOUNCED fallback when the frames say
+        nothing.  The name still labels the AAVSO file: one field, both
+        jobs.
+      - FOUR DEFECTS EXOTIC's OWN DEMO DATA EXPOSED, on a 142-frame
+        MicroObservatory run of HAT-P-32 b.  Every one of them was silent.
+        * DATE-OBS did not parse, in TWO ways.  N.I.N.A. writes seven
+          fractional digits and MicroObservatory writes local time with a
+          -0700 offset; `fromisoformat` refuses both on Python 3.10 and
+          earlier, and the helper returned NaN without saying so.  The
+          N.I.N.A. one is the worse: every frame of the 178-sub WASP-75 run
+          parsed to NaN, so the seeing, sky and star-count bases could never
+          be paired with a light-curve row and the simultaneous fit quietly
+          ran on airmass alone.  The offset one is a SEVEN-HOUR error in a
+          quantity measured in minutes
+        * The LONGITUDE SIGN is now decided by measurement.  FITS never
+          settled east- vs west-positive; this header is west-positive, so
+          the run put the observatory on the wrong side of the planet and
+          detrended the airmass for it.  An altitude in the header, with
+          the pointing and the time, says where the telescope actually was:
+          -110.88 reproduces TELALT=+62.592 to 0.01 deg, while +110.88 puts
+          the target 10 deg BELOW the horizon.  A correct N.I.N.A. header
+          is CONFIRMED to 0.13 deg rather than flipped, and with no
+          altitude nothing is changed and the assumption is stated
+        * A frame with NO IMAGETYP is a light.  Requiring kind=='light'
+          made the target resolution invisible on data that carries OBJECT
+          but no IMAGETYP -- most archive and school-telescope data,
+          including this set, where OBJECT reads 'HATP-32' and was never
+          looked at.  Unknown is not the same as known-to-be-something-else
+        * SIRIL'S SATURATION FLAG no longer beats an unambiguous pixel
+          measurement.  It fired on a star peaking at 2.6% of full scale,
+          38x under the limit, and that false positive is not harmless: it
+          blocks the AAVSO file and tells the observer to re-shoot a good
+          night.  Within half the threshold the flag still wins -- it knows
+          things about the sensor a peak value does not
+      - NO MORE TYPING COORDINATES, and the first attempt at this got
+        the sources the wrong way round -- worth recording, because the
+        mistake is the instructive part.
+        * The headers already know.  N.I.N.A. writes OBJCTRA/OBJCTDEC --
+          the OBJECT's position, not the telescope's -- and on this run
+          all 178 lights carry it identically, 5.7" x 0.2" from the
+          archive.  Under three pixels at 2 arcsec/px, well inside
+          Siril's own +/-19 px search box.  No network, nothing to type
+        * I first read ONE file picked by `find | head -1` and got
+          OBJCTRA '00 00 00' with RA/DEC 359.10/+89.85 -- the celestial
+          pole -- and concluded the rig writes junk.  It was a FLAT, shot
+          with the mount parked.  Two guards now: only LIGHT frames are
+          read, and the 0/0 sentinel is discarded
+        * RA/DEC is the TELESCOPE POINTING, 342.24/-10.30 here, a quarter
+          of a degree off because the target is not the field centre.
+          Close enough to look right, wrong enough to matter, so it is
+          never substituted
+        * Frames that disagree about the position are a refusal with the
+          reason: that is more than one target in a folder, not one
+          position
+        * A REAL RUN then exposed the remaining gap: the operator had
+          RA/Dec stored from an earlier session, so the manual entry won --
+          correctly -- and nothing said the headers had been read and
+          agreed.  Every path now names its source, and a manual entry
+          that disagrees with the frames is called out in red, because a
+          coordinate left over from the previous target looks exactly like
+          a deliberate one
+      - THE NAME LOOKUP ADDS WHAT THE HEADER CANNOT CARRY: the published
+        ephemeris, from the NASA Exoplanet Archive over plain HTTPS -- NOT
+        via astroquery, which ships in some Siril installs and not others.
+        * O-C, which is what a single night is worth contributing and what
+          ExoClock and ETD collect.  Until now the fit measured T0 with a
+          calibrated error bar and had NOTHING to compare it against.
+          Refused unless the times are BJD_TDB -- the archive's epoch is
+          BJD_TDB, and subtracting a JD_UTC would put 8 minutes into a
+          number measured in minutes.  The epoch prints beside the drift,
+          because a stale period eventually mislabels which transit it was
+        * It cross-checks the position and REPORTS a disagreement rather
+          than silently preferring one.  The headers win -- they arrived
+          with the frames -- but a gap at arcminute scale means the name
+          and the pointing describe different things
+        * Cached after the first success, so a re-run or an offline
+          machine still has the ephemeris.  With no connection the O-C is
+          lost and nothing else: the position came from the files
+        * Whatever the source, `pick_target` still reports the separation
+          to a real DETECTED star, so nothing here can mis-point quietly
+      - CAUGHT BY A REAL RUN      - CAUGHT BY A REAL RUN, and both were the tool doing what it exists
+        to refuse.  On WASP-75, 11 of 178 frames survived photometry and
+        the target was flagged SATURATED:
+        * The AAVSO submission file was written anyway.  A local report may
+          say "here is what the data allow"; a file other people fit
+          ephemerides from may not.  It is now refused for a saturated
+          target and for a run whose yield is judged bad -- both facts the
+          run already knew and neither of which reached the gate
+        * The aperture scan crowned 11 points at 347 mmag over 12 points at
+          1145.  Least-scatter alone REWARDS an aperture that drops the
+          hard frames: measured over a 3x seeing swing on identical noise,
+          a candidate surviving 7% of frames reads 3.81 mmag where the full
+          sample reads 8.08 -- a factor 2.1 bought purely by selection.
+          Candidates are now compared only against the best YIELD, and the
+          ones excluded are named with the reason
+      - Taken from EXOTIC (NASA/Exoplanet Watch), measured before and
+        after in every case:
+        * THE APERTURE IS NOW CHOSEN.  It was whatever `-autoring` derived
+          from the FWHM, which is the single most influential number in
+          aperture photometry left unexamined.  Six radii from 0.75 to 2.5
+          FWHM are each photometered through Siril's own `setphot` +
+          `light_curve`, and the one with the least robust scatter wins,
+          with the measured-frame count as the tie-breaker -- an aperture
+          that scores well by measuring fewer frames has not won anything
+        * COMPARISON STARS ARE MEASURED, not just filtered.  Each candidate
+          is photometered against the OTHERS and judged on its own scatter;
+          one that wobbles against its peers writes that wobble, inverted,
+          into the target and nothing else here would notice.  The
+          threshold is a ratio to the ensemble median, not an absolute
+          millimagnitude: a good night and a poor one differ by a factor.
+          No catalogue and no network -- a VSX flag would be better where
+          it exists, but the stars that ruin an amateur curve usually are
+          not in it
+        * SPIKE REJECTION, and it was worth more than it looks.  One 100
+          mmag outlier on a real 12 mmag transit took the significance from
+          12.1 to 3.2 sigma -- under the detection floor, so a measured
+          transit read as "not claimed".  The parameters barely moved
+          (depth within 4%); it was the divisor.  The reference is a
+          running median over nine points, so a smooth multi-point dip
+          passes untouched -- verified at 12, 30 and 60 mmag -- while a
+          one-frame spike stands out.  Refuses to remove more than 5% of a
+          run, with the reason: deleting a third of a light curve to make
+          it look better is the opposite of the job
+        * The post-fit scatter behind the significance is now the MAD, like
+          every other scatter in this file.  It was the plain RMS, and that
+          alone accounted for 12.1 -> 6.9 of the 12.1 -> 3.2 above; the
+          clip is the rest.  On clean data the two agree to 1%
+        * AAVSO Exoplanet Watch submission file, refused unless the times
+          are BJD_TDB -- the format declares that, and JD_UTC under that
+          header is an eight-minute error nobody could see.  Written
+          locally; nothing is sent anywhere
+      - NOT taken from EXOTIC, and why: it fits a limb-darkened
+        pylightcurve model with nested sampling and fits the systematics
+        SIMULTANEOUSLY with the transit, which is better than this
+        script's sequential detrend-then-fit and is a different piece of
+        work.  It has no red-noise treatment and no detection threshold at
+        all -- it fits and reports -- so the beta correction and the
+        calibrated floor here have no counterpart there
+      - T0 now carries an error bar, which is the number ExoClock and ETD
+        exist for and was printed to six decimals -- 0.09 s -- with nothing
+        beside it.  From the CURVATURE of the chi-square surface along T0,
+        with depth and baseline re-solved and the duration re-minimised at
+        every step, scaled by the red-noise beta.
+        * Two designs were measured and rejected on the way.  Walking
+          outward to delta-chi2 = 1 plateaued at 86 s for every depth below
+          12 mmag -- 0.7 of one cadence -- because a trapezoid on sampled
+          data has a bumpy surface and the walk measures the local dell,
+          not the envelope.  Widening the parabola window to 0.3 durations
+          over-stated the bar by 1.5x to 1.75x.  Five cadences tracks the
+          true run-to-run scatter: 53/91/134/173 s reported against
+          47/90/136/191 s recovered, over 20 to 6 mmag.
+        * That measurement exposed a second problem: the coarse T0 grid
+          quantised the answer to (0.7 * span) / 120 = 105 s on a 5 h run.
+          Over 60 runs of a 20 mmag transit EVERY fit returned the same T0,
+          and the MAD of the recovered times at every lower depth was
+          exactly 1.4826 x one grid step -- the data were being rounded to
+          the search.  The winning node now gets a local pass at 1/20th the
+          T0 step and 1/10th the duration step
+      - chi2/nu against a model-independent noise floor: the MAD of the
+        out-of-transit residuals, else the MAD of first differences over
+        sqrt(2).  A fit's own residual scatter cannot judge that fit -- the
+        answer would be 1 by construction.  Measured 1.0 on pure noise and
+        3.1 with an unmodelled 20 mmag lump
+      - Quality detrend against Siril's OWN per-frame registration
+        measurements -- FWHM, background level, star count -- which this
+        script was already reading and discarding in the meridian-flip
+        pass.  Seeing moves flux across the aperture edge, sky brightness
+        biases the annulus subtraction, and a falling star count is what a
+        passing cloud looks like from here.  A seeing plus sky trend of
+        20.8 mmag comes down to 3.9 against a 4.0 noise floor with the
+        depth untouched at the flat bottom.
+        * ANCHORED on the out-of-transit rows, and it refuses to run
+          without them.  A plain least-squares fit over every point absorbs
+          the transit into whichever basis correlates with it, and all
+          three of these drift monotonically through a night, so one
+          usually does.  This is the same P1-7 trap the airmass detrend
+          already guards
+        * light_curve.dat carries no frame number, so rows are paired with
+          frames by mid-exposure time.  Matching on order would be wrong:
+          the frames Siril drops are scattered through the run
       - Audit of the arithmetic, every finding measured rather than read:
         * the detection floor was a Gaussian-looking 3 sigma on a number
           that is the best of ~40 000 grid nodes.  Measured over 1200
           transit-free white-noise runs through that same search: 4.42%
           false alarms, 33x the 0.13% the label implies.  The floor is now
-          4.0, where the measured rate is 0.17%, and the rate itself is
-          printed next to every result.  Detection above 6 mmag is
-          unchanged at 98-100%; the 4-5 mmag case is what it costs, and a
-          dip at the per-point scatter was never safe from one night
+          4.0 and the measured rate is printed next to every result.
+          Detection above 6 mmag is unchanged at 98-100%; the 4-5 mmag case
+          is what it costs, and a dip at the per-point scatter was never
+          safe from one night.  Re-measured twice since: the T0 refinement
+          pass (~2700 more nodes per fit) roughly doubled every rate, and
+          the robust post-fit scatter raised them again.  The floor is now
+          4.5 at a measured 0.25%, where 3.0 would deliver 10.58%.  A
+          calibration table is only valid for the search AND the statistic
+          it was measured on
         * the red-noise beta used `np.std` for the unbinned scatter -- the
           one non-robust scatter in the file.  Three 50 mmag outliers on a
           4 mmag curve inflate it 2.1x, which DIVIDES beta by 2.1 and
@@ -323,6 +824,10 @@ import os
 import re
 import sys
 import csv
+import json
+import io
+import urllib.parse
+import urllib.request
 import math
 import shutil
 import datetime
@@ -373,6 +878,33 @@ VERSION = "1.0.0"
 
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "LightCurve"
+# The NASA Exoplanet Archive's TAP service.  Reached with urllib rather
+# than astroquery: astroquery ships in some Siril installs and not others,
+# and a lookup that works on one machine and not the next is worse than
+# none.  The whole call is one URL and the csv module.
+ARCHIVE_TAP = "https://exoplanetarchive.ipac.caltech.edu/TAP/sync"
+ARCHIVE_TIMEOUT_S = 20.0
+# How far the per-frame OBJCTRA/OBJCTDEC may scatter before the folder is
+# treated as holding more than one target.  Generous: these come from the
+# sequence plan, so they are usually bit-identical.
+# How many headers the folder picker reads to prefill the target fields.
+# It runs on the UI thread: 30 compressed N.I.N.A. subs measured 153 ms,
+# which is a click; several hundred would be a freeze.
+PROBE_HEADERS = 30
+HEADER_RADEC_SPREAD_ARCSEC = 300.0
+# How close a computed altitude must come to the one the header records
+# before the longitude sign counts as settled.  Generous: the header
+# altitude is usually rounded and may be the commanded rather than the
+# achieved position, while the WRONG sign is off by tens of degrees.
+LON_SIGN_TOLERANCE_DEG = 5.0
+# How far the header target and the archive may disagree before the run
+# says so.  The measured agreement on this rig is 5.7 arcsec; anything at
+# arcminute scale means the name and the pointing describe different
+# things, and that is worth a line rather than a silent preference.
+TARGET_DISAGREE_ARCSEC = 120.0
+# Pre-filled AAVSO observer code.  Saved settings still win: this is only
+# what a fresh install starts with.
+DEFAULT_OBSCODE = "V57"
 
 LEFT_PANEL_WIDTH = 400
 
@@ -417,11 +949,38 @@ COMP_MAG_WINDOW = 2.0
 # inner 4.2 x FWHM, outer 6.3 x FWHM.  Read off a real run -- "inner and
 # outer photometry ring radii to 8.2 and 12.3 (FWHM is 1.954648)".
 AUTORING_OUTER_FWHM = 6.3
+AUTORING_INNER_FWHM = 4.2
+# Siril's default "radius / half-FWHM" for a DYNAMIC aperture.  Setting it
+# is the only way to un-force an aperture that `setphot -aperture=` fixed.
+DYNAMIC_APERTURE_RATIO = 4.0
+# Siril REFUSES `light_curve` outright when any frame's registration shift
+# exceeds this, printing a line it calls a "Warning" and then returning a
+# generic error.  Measured against Siril 1.4.4 on EXOTIC's demo set by
+# bisection: hypot(dx, dy) = 159.6 px runs, 160.7 px aborts.  The value is
+# a fixed number of pixels, not a fraction of the frame.
+SIRIL_DRIFT_LIMIT_PX = 160.0
+# How far under that limit a re-centred reference must land before it is
+# worth switching.  A run that only just squeaks under would abort again
+# on the next frame the mount nudges.
+DRIFT_LIMIT_MARGIN = 0.95
 # Two stars whose outer annuli touch share sky.  A neighbour inside this
 # multiple of the outer radius contaminates the aperture AND the sky
 # estimate, and the contamination breathes with the seeing -- which reads
 # as a slow trend, the same shape a transit has.
 COMP_ISOLATION_OUTER = 2.0
+# The floor the isolation cut may relax to, in FWHM.  Below this a
+# neighbour is inside the APERTURE, which is blended photometry rather
+# than a background error -- no report rescues that, so it is never
+# traded away for a larger comparison ensemble.
+COMP_APERTURE_FLOOR_FWHM = 2.0
+# How far the field may drift before the run says so.  Below this the
+# geometry filter still runs silently; above it the number is worth
+# knowing, because it is what limits which stars can be used at all.
+DRIFT_REPORT_PX = 20.0
+# How many light_curve calls may fail in a row before the probes stop.
+# Three is enough to tell an unlucky aperture from a broken geometry, and
+# every further call is another chance to take Siril's process with it.
+MAX_PHOTOMETRY_FAILURES = 3
 # UNEXPLAINED, and left here so the next reader does not have to rediscover
 # it: Siril's "Photometry for star at X, Y in image 0" does not always agree
 # with the `-refat=` that produced it.  Three of six comps came back 16, 33
@@ -534,28 +1093,112 @@ FLIP_ROTATION_DEG = 10.0
 # per point), with detection rates on injected transits beside it:
 #
 #     threshold   false alarm | 4mmag  5mmag  6mmag  8mmag  12mmag
-#           3.0         4.42% |  91%    94%   100%   100%    100%
-#           3.5         0.83% |  79%    89%    98%   100%    100%
-#           4.0         0.17% |  53%    81%    98%   100%    100%
-#           4.5         0.08% |  33%    70%    96%   100%    100%
-#           5.0         0.00% |  19%    53%    86%    99%    100%
+#           3.0         7.67% |  88%    95%   100%   100%    100%
+#           3.5         1.92% |  70%    91%    97%   100%    100%
+#           4.0         0.50% |  45%    77%    93%   100%    100%
+#           4.5         0.25% |  29%    57%    89%   100%    100%
+#           5.0         0.00% |  15%    40%    78%   100%    100%
 #
-# 4.0 is where the false-alarm rate reaches the 0.13% that "3 sigma" was
-# always taken to mean, and it costs nothing above 6 mmag.  What it costs
-# is the 4-5 mmag case -- a dip at or just above the per-point scatter --
-# and those were never safe to claim from a single night anyway.
-MIN_DETECTION_SIGMA = 4.0
+# 4.5 halves the false-alarm rate against 4.0 for four points of detection
+# at 6 mmag and none at 8, which is the right trade for a test whose only
+# job is to refuse to overclaim.  What it costs is the 4-5 mmag case -- a
+# dip at or just above the per-point scatter -- and those were never safe
+# to claim from one night.
+#
+# The table has been re-measured three times, and every move is worth
+# knowing: the T0 refinement pass (~2700 more nodes per fit) roughly
+# doubled every rate, because more search finds a deeper minimum in pure
+# noise; making the post-fit scatter robust raised them again, because a
+# MAD is a smaller divisor than an RMS outliers have inflated; and the
+# move to a limb-darkened model fitted simultaneously with the systematics
+# brought them back down, because a rounded shape matches noise less well
+# than a shape with a free corner did.
+#
+# The rate at 4.5 came out at 0.25% before and after that last change --
+# coincidence, not stability.  A calibration table is only valid for the
+# search AND the statistic AND the model it was measured on, which is why
+# it is re-run rather than assumed every time one of the three moves.
+#
+# Measured WITHOUT the spike clip, which is the conservative direction: on
+# pure Gaussian noise the clip removes about 0.2 points per run, trimming
+# exactly the tail this table is about.
+MIN_DETECTION_SIGMA = 4.5
 # The false-alarm rate measured AT that threshold, reported next to every
 # claim.  A threshold without its own calibration is a number the reader
-# has to trust; with it, they can weigh it.
-MEASURED_FALSE_ALARM = 0.0017
+# has to trust; with it, they can weigh it.  0.25% is about twice the
+# Gaussian value for 4.5 sigma -- and 42x better than the 10.58% a 3.0
+# floor would now deliver.
+MEASURED_FALSE_ALARM = 0.0025
 MEASURED_FALSE_ALARM_RUNS = 1200
-# Grid resolution of the trapezoid fit.  The parameters are strongly
+# Grid resolution of the transit fit.  The parameters are strongly
 # correlated, so a dense grid beats a local optimiser that can walk into a
 # noise minimum -- and it is deterministic.
+# How far the T0 error bar may walk before giving up.  The chi-square
+# surface is a parabola near the minimum; if delta-chi2 = 1 is not reached
+# within a quarter of the run the fit is unconstrained and NaN is the
+# honest answer.
+# The half-width of the window the T0 parabola is fitted over, in sampling
+# intervals.  Five is measured: the bar tracks the true scatter within
+# +/-25% across a 20-to-6 mmag range, while 0.15 and 0.3 of the duration
+# over-state it by up to 1.85x.
+# Below this many out-of-transit rows the multi-basis solve is fitting more
+# coefficients than it has independent information for.
+# Spike rejection.  The window is a running median, in POINTS: long enough
+# that a single frame cannot define its own reference, short enough that a
+# transit is flat across it.  Nine points at a one-minute cadence is nine
+# minutes against a transit measured in hours.
+# A comparison star scattering this many times the ensemble median is
+# doing something the others are not, and differential photometry has no
+# way to tell that apart from the target varying.  Three is loose enough
+# that ordinary Poisson spread between a bright and a faint comp does not
+# trip it.
+COMP_VARIABILITY_RATIO = 3.0
+# Aperture radii to try, in FWHM.  EXOTIC scans 1.5-6 PSF sigma, which is
+# 0.64-2.55 FWHM; this is the same span at a coarser step, because every
+# rung costs one full pass of Siril's photometry.
+APERTURE_SCAN_FWHM = (0.75, 1.0, 1.3, 1.6, 2.0, 2.5)
+# An aperture is only comparable with the best-yielding one if it measured
+# a similar number of frames.  Least-scatter alone REWARDS an aperture that
+# drops the hard frames: measured on a night with a 3x seeing swing and
+# identical underlying noise, a candidate surviving on 7% of frames shows
+# 3.81 mmag where the full sample shows 8.08 -- a factor 2.1, bought purely
+# by selection.  At 80% the bias is 8.08 -> 7.49, which is small enough to
+# live with.
+APERTURE_MIN_YIELD_RATIO = 0.8
+APERTURE_INNER_RATIO = 2.0
+APERTURE_OUTER_RATIO = 3.0
+CLIP_WINDOW = 9
+CLIP_KAPPA = 4.0
+# Past this share the outliers are the data.  Removing a tenth of a light
+# curve to make it look better is the opposite of the job.
+CLIP_MAX_FRACTION = 0.05
+MULTI_DETREND_MIN_ANCHOR = 12
+T0_ERROR_CADENCES = 5.0
+T0_ERROR_SAMPLES = 21
+# The local pass around the winning node.  The coarse T0 step is 105 s on a
+# 5 h run, which quantised the answer visibly; 1/20th of that is 5 s, below
+# anything the photometry can resolve.
+FIT_REFINE_T0_STEPS = 61
+FIT_REFINE_DUR_STEPS = 21
+# Below this many out-of-transit points the MAD of that subset is too noisy
+# to be a noise floor, and chi2/nu falls back to first differences.
+CHI2_MIN_OOT = 8
 FIT_T0_STEPS = 121
 FIT_DURATION_STEPS = 41
 FIT_INGRESS_FRACTIONS = (0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50)
+# Quadratic limb darkening.  These are a property of the STAR and the
+# FILTER, not of this code: 0.35/0.23 is a reasonable pair for a Sun-like
+# host in a broad visual band, and the report names whatever was used
+# because the fitted depth depends on it.
+LD_U1 = 0.35
+LD_U2 = 0.23
+# The shape family the fit searches, in place of the trapezoid's eight
+# ingress fractions -- same count, but each one is a real transit
+# geometry rather than a shape with a free corner.
+LD_RP_GRID = (0.06, 0.10, 0.14, 0.18)
+LD_B_GRID = (0.0, 0.5)
+LD_PHASE_STEPS = 1201
+LD_RADIAL_STEPS = 400
 # A transit shorter than this fraction of the run cannot be told from a
 # handful of bad frames; longer than this and there is no baseline left to
 # measure it against.
@@ -764,6 +1407,23 @@ def _jd_from_dateobs(date_obs: str) -> float:
     txt = (date_obs or "").strip().replace("Z", "")
     if not txt:
         return float("nan")
+    # Two forms `fromisoformat` refuses on Python 3.10 and earlier, both
+    # met on real data and both previously silent NaN:
+    #   N.I.N.A.  2026-08-15T07:26:29.1714366   -- SEVEN fractional digits
+    #   MicroObs  2017-12-19T18:33:43.317-0700  -- a UTC offset
+    # The N.I.N.A. one mattered most: every frame of a 178-sub run parsed
+    # to NaN, so the seeing, sky and star-count bases could never be paired
+    # with a light-curve row and the fit quietly ran on airmass alone.
+    txt = re.sub(r"(\.\d{6})\d+", r"\1", txt)
+    m = re.match(r"^(.*?)([+-]\d{2}):?(\d{2})$", txt)
+    off_h = 0.0
+    if m and "T" in m.group(1):
+        # An offset means the stamp is NOT UTC.  Subtracting it is the
+        # whole point: taking a -0700 local time as UTC is a seven-hour
+        # error in a quantity measured in minutes.
+        txt = m.group(1)
+        off_h = float(m.group(2)) + math.copysign(float(m.group(3)) / 60.0,
+                                                  float(m.group(2)))
     try:
         dt = datetime.datetime.fromisoformat(txt)
     except (ValueError, TypeError):
@@ -775,7 +1435,7 @@ def _jd_from_dateobs(date_obs: str) -> float:
            + y // 400 - 32045)
     day_frac = (dt.hour + dt.minute / 60.0
                 + (dt.second + dt.microsecond / 1e6) / 3600.0) / 24.0
-    return float(jdn) - 0.5 + day_frac
+    return float(jdn) - 0.5 + day_frac - off_h / 24.0
 
 
 def _sexagesimal(text: str) -> float:
@@ -1033,34 +1693,381 @@ def airmass_detrend(diff_mag, airmass, oot_mask=None):
     return out, float(a), float(b)
 
 
+def sigma_clip_series(t, y, kappa: float = CLIP_KAPPA,
+                      window: int = CLIP_WINDOW):
+    """``(keep_mask, n_clipped, note)`` -- drop spikes, keep the transit.
+
+    MODEL-FREE, and that is the point.  Clipping against a fitted transit
+    is circular: the fit has already been pulled by the outlier, so the
+    residual that should be largest is the one that has been made smallest.
+    Here the reference is a RUNNING MEDIAN over a window far shorter than
+    any transit, so a smooth multi-point dip passes through untouched while
+    a one-frame spike -- a satellite, a cosmic ray, a cloud edge -- stands
+    out against its own neighbours.
+
+    Why it is worth doing at all: on a 12 mmag transit measured at 4 mmag
+    per point, ONE 100 mmag outlier took the significance from 12.1 to 3.2
+    sigma.  A robust post-fit scatter recovers most of that (6.9), but the
+    in/out contrast is still computed from means, and a mean has no
+    defence.  Removing the point is the rest of the fix.
+
+    Never clips more than ``CLIP_MAX_FRACTION`` of the run: past that the
+    thing being removed is not an outlier population, and quietly deleting
+    a tenth of a light curve to make it look better is the opposite of what
+    this script is for.
+    """
+    t = np.asarray(t, dtype=float)
+    y = np.asarray(y, dtype=float)
+    keep = np.isfinite(t) & np.isfinite(y)
+    n = int(keep.sum())
+    if n < max(8, window):
+        return keep, 0, "too few points to clip"
+    order = np.argsort(t)
+    ys = y[order]
+    half = max(1, int(window) // 2)
+    # Running median with edge padding, so the first and last points are
+    # judged against real neighbours rather than against nothing.
+    padded = np.concatenate([ys[:half][::-1], ys, ys[-half:][::-1]])
+    smooth = np.array([np.median(padded[i:i + 2 * half + 1])
+                       for i in range(ys.size)])
+    resid = ys - smooth
+    scale = _mad_std(resid)
+    if not (np.isfinite(scale) and scale > 0):
+        return keep, 0, "scatter is zero; nothing to clip against"
+    bad_sorted = np.abs(resid) > kappa * scale
+    n_bad = int(bad_sorted.sum())
+    if n_bad == 0:
+        return keep, 0, ""
+    if n_bad > CLIP_MAX_FRACTION * ys.size:
+        return keep, 0, (f"{n_bad} point(s) exceed {kappa:g} sigma, more than "
+                         f"{100 * CLIP_MAX_FRACTION:.0f}% of the run — that is "
+                         "a noisy night, not an outlier population, and "
+                         "nothing was removed")
+    bad = np.zeros(y.size, dtype=bool)
+    bad[order[bad_sorted]] = True
+    keep = keep & ~bad
+    return keep, n_bad, (f"{n_bad} point(s) beyond {kappa:g} x the "
+                         f"point-to-point scatter removed")
+
+
+def _fill_gaps(xs):
+    """Linear interpolation over NaNs against index, nearest-fill at the ends.
+
+    Leaving a NaN row out of the fit while detrending every other row puts a
+    discontinuity exactly at the missing sample: its neighbours get the
+    trend subtracted and it does not.  Seeing, sky and airmass all vary
+    smoothly frame to frame, so interpolating lets the same trend apply
+    everywhere.  A gap at the very start or end has no two bracketing
+    points, so it nearest-fills rather than extrapolating a wild slope.
+    """
+    xs = np.asarray(xs, dtype=float).copy()
+    finite = np.isfinite(xs)
+    n = int(finite.sum())
+    if n == 0 or n == xs.size:
+        return xs
+    idx = np.arange(xs.size, dtype=float)
+    xs[~finite] = np.interp(idx[~finite], idx[finite], xs[finite])
+    return xs
+
+
+def match_frames_to_curve(jd_curve, jd_frames, tol_s: float = 5.0):
+    """Index into ``jd_frames`` for every row of ``jd_curve``, or -1.
+
+    Siril measures a SUBSET of the frames, and its light_curve.dat carries
+    only a time -- no frame number.  Matching on that time is exact rather
+    than approximate: Siril's JD is the mid-exposure, verified against 178
+    raw headers to 0.02 s, so a tolerance of a few seconds pairs each row
+    with its frame or with nothing at all.
+
+    Matching on ORDER would be wrong: the dropped frames are scattered
+    through the run, so the k-th measured row is not the k-th frame.
+    """
+    jc = np.asarray(jd_curve, dtype=float)
+    jf = np.asarray(jd_frames, dtype=float)
+    out = np.full(jc.size, -1, dtype=int)
+    if jf.size == 0:
+        return out
+    tol = tol_s / 86400.0
+    for i, j in enumerate(jc):
+        if not np.isfinite(j):
+            continue
+        d = np.abs(jf - j)
+        k = int(np.argmin(d))
+        if d[k] <= tol:
+            out[i] = k
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Transit fit
 # ---------------------------------------------------------------------------
-def trapezoid_shape(t, t0: float, duration: float, ingress_frac: float):
-    """Normalised trapezoid: 0 outside the event, 1 at the flat bottom.
+def header_target_radec(infos):
+    """``(ra_deg, dec_deg, note)`` from OBJCTRA/OBJCTDEC, or ``(None, None, why)``.
 
-    A trapezoid rather than a limb-darkened Mandel-Agol curve because the
-    two are indistinguishable at amateur precision -- a 10 mmag dip measured
-    at 3 mmag per point does not constrain a limb-darkening coefficient --
-    and because the trapezoid has no external dependency, no optimiser and
-    no failure mode.  What it recovers is depth, mid-time and duration,
-    which is exactly what ExoClock and ETD consume.
+    N.I.N.A. writes the POSITION OF THE OBJECT here, not the telescope
+    pointing, and on the run this was written for all 178 lights carry it
+    identically and land 5.7" x 0.2" from the archive -- under three
+    pixels at 2 arcsec/px, comfortably inside Siril's own +/-19 px search
+    box.  That makes the header the better source than any lookup: it is
+    already on disk, it needs no network, and it cannot be wrong about
+    which target this folder holds.
 
-    ``ingress_frac`` is the share of the total duration spent in ingress
-    (and, symmetrically, in egress).  At 0.5 the trapezoid degenerates to a
-    triangle -- the correct shape for a grazing transit.
+    Two things it must not do.
+
+    **Only LIGHT frames.**  A flat is shot with the mount parked, and this
+    rig then writes OBJCTRA '00 00 00' with RA/DEC 359.10/+89.85 -- the
+    celestial pole.  Reading one flat instead of a light is exactly the
+    mistake that made these fields look untrustworthy in the first place.
+
+    **Never the RA/DEC pair.**  Those are the telescope pointing: 342.24 /
+    -10.30 here, a quarter of a degree from the target, because the target
+    is not the field centre.  Close enough to look right, wrong enough to
+    matter.
     """
-    t = np.asarray(t, dtype=float)
-    half = 0.5 * duration
-    ing = max(1e-9, ingress_frac * duration)
-    dt = np.abs(t - t0)
-    shape = np.zeros_like(t)
-    flat = dt <= max(0.0, half - ing)
-    shape[flat] = 1.0
-    ramp = (~flat) & (dt < half)
-    if np.any(ramp):
-        shape[ramp] = (half - dt[ramp]) / ing
-    return np.clip(shape, 0.0, 1.0)
+    seen = []
+    for info in infos or ():
+        # Only frames KNOWN to be something else are skipped.  A flat says
+        # so in IMAGETYP; a frame with no IMAGETYP at all is one the caller
+        # already decided to treat as a light, and dropping it here made
+        # this whole path invisible on data whose headers carry OBJECT but
+        # no IMAGETYP -- which is most archive and school-telescope data.
+        kind = (info.get("kind") or "").strip().lower()
+        if kind and kind != KIND_LIGHT.lower():
+            continue
+        ra = _sexagesimal(info.get("objctra") or "")
+        dec = _sexagesimal(info.get("objctdec") or "")
+        if not (np.isfinite(ra) and np.isfinite(dec)):
+            continue
+        ra *= 15.0                       # OBJCTRA is H M S
+        # '00 00 00' / '+00 00 00' is this rig's "I do not know", not a
+        # position on the sky.  A real target there would be a coincidence
+        # nobody has ever had.
+        if abs(ra) < 1e-6 and abs(dec) < 1e-6:
+            continue
+        seen.append((ra, dec))
+    if not seen:
+        return None, None, ("no usable OBJCTRA/OBJCTDEC in the light frames")
+    ras = np.asarray([v[0] for v in seen])
+    decs = np.asarray([v[1] for v in seen])
+    ra_m, dec_m = float(np.median(ras)), float(np.median(decs))
+    spread = float(np.max(np.hypot(
+        (ras - ra_m) * np.cos(np.radians(dec_m)), decs - dec_m))) * 3600.0
+    if spread > HEADER_RADEC_SPREAD_ARCSEC:
+        return None, None, (
+            f"OBJCTRA/OBJCTDEC disagree by {spread:.0f}\" across the lights "
+            "— that is more than one target in this folder, not one "
+            "position, so it is not used")
+    return ra_m, dec_m, (f"{len(seen)} light frame(s) agree to "
+                         f"{spread:.1f}\"" if len(seen) > 1 else
+                         "one light frame")
+
+
+def angular_sep_arcsec(ra1, dec1, ra2, dec2) -> float:
+    """Separation of two sky positions, in arcseconds."""
+    d = math.radians(dec1 + dec2) / 2.0
+    return math.hypot((ra1 - ra2) * math.cos(d), dec1 - dec2) * 3600.0
+
+
+def normalise_planet_name(raw) -> str:
+    """A header's OBJECT into the form the NASA archive indexes.
+
+    N.I.N.A. writes what you typed into the sequence, and what people type
+    is ``WASP-75b``; the archive holds ``WASP-75 b``.  One missing space is
+    the whole difference between a hit and a silent miss, so it is fixed
+    here rather than left to the user to discover.
+    """
+    txt = re.sub(r"\s+", " ", str(raw or "")).strip()
+    if not txt:
+        return ""
+    # A trailing planet letter, glued on or separated: WASP-75b, HAT-P-32B.
+    m = re.match(r"^(.*?[0-9])\s*([b-i])$", txt, re.IGNORECASE)
+    if m:
+        return f"{m.group(1)} {m.group(2).lower()}"
+    return txt
+
+
+def archive_lookup(name: str, timeout: float = ARCHIVE_TIMEOUT_S,
+                   opener=None):
+    """Ask the NASA Exoplanet Archive about one planet.  ``(dict, note)``.
+
+    A plain HTTPS call to the archive's TAP service, deliberately NOT via
+    astroquery: astroquery is present in some Siril installs and absent in
+    others, and a lookup that works on one machine and not the next is
+    worse than no lookup.  Everything needed is one URL and the csv module.
+
+    The dict carries what this script can actually use -- sky position, and
+    the ephemeris the measured mid-time gets compared against.  Anything
+    the archive does not have for a given planet comes back as None rather
+    than as a plausible-looking zero.
+    """
+    planet = normalise_planet_name(name)
+    if not planet:
+        return None, "no target name to look up"
+    cols = ("pl_name,hostname,ra,dec,pl_orbper,pl_tranmid,pl_trandur,"
+            "pl_trandep,st_teff,st_logg,sy_vmag")
+    # Compare with hyphens and spaces stripped from BOTH sides.  People
+    # type what their capture software wrote -- OBJECT read 'HATP-32' on
+    # EXOTIC's own demo set -- while the archive holds 'HAT-P-32 b'.  Every
+    # spelling in between then works without a table of survey prefixes.
+    key = re.sub(r"[-\s]", "", planet).upper().replace("'", "''")
+    strip = "REPLACE(REPLACE(UPPER({0}),'-',''),' ','')"
+    # hostname as well as pl_name: a name with no planet letter -- which is
+    # what a header usually carries -- exists only in the hostname column.
+    query = (f"select {cols} from pscomppars where "
+             f"{strip.format('pl_name')} = '{key}' or "
+             f"{strip.format('hostname')} = '{key}'")
+    url = (ARCHIVE_TAP + "?"
+           + urllib.parse.urlencode({"query": query, "format": "csv"}))
+    try:
+        fetch = opener or urllib.request.urlopen
+        with fetch(url, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", "replace")
+    except Exception as exc:                       # noqa: BLE001
+        _log_swallowed(exc)
+        return None, f"the archive could not be reached ({type(exc).__name__})"
+    rows = list(csv.DictReader(io.StringIO(body)))
+    if not rows:
+        return None, (f"the archive has no planet or host called {planet!r} "
+                      "— check the spelling, or enter RA/Dec by hand")
+    if len(rows) > 1:
+        names = ", ".join(sorted(r.get("pl_name", "?") for r in rows))
+        return None, (f"{planet!r} is a system with {len(rows)} known "
+                      f"planets ({names}) — name the one you observed, "
+                      "because their ephemerides differ")
+
+    def _num(key_):
+        try:
+            v = float(rows[0].get(key_, "") or "nan")
+        except (TypeError, ValueError):
+            return None
+        return v if math.isfinite(v) else None
+
+    ra, dec = _num("ra"), _num("dec")
+    if ra is None or dec is None:
+        return None, f"the archive knows {planet!r} but has no position for it"
+    return {
+        "name": rows[0].get("pl_name", planet) or planet,
+        "ra_deg": ra, "dec_deg": dec,
+        "period_d": _num("pl_orbper"),
+        "t0_bjd": _num("pl_tranmid"),
+        "duration_h": _num("pl_trandur"),
+        "depth_pct": _num("pl_trandep"),
+        "teff_k": _num("st_teff"),
+        "logg": _num("st_logg"),
+        "vmag": _num("sy_vmag"),
+    }, ""
+
+
+def o_minus_c(measured_bjd: float, t0_bjd: float, period_d: float):
+    """``(minutes, epoch)`` -- how late the measured mid-transit ran.
+
+    The number ExoClock and ETD exist to collect.  A light curve on its own
+    says a transit happened; O-C says the ephemeris is drifting, and that
+    is what accumulates into a detection of anything interesting.
+
+    The epoch is ROUNDED to the nearest integer, which is only meaningful
+    while the ephemeris is good enough to predict which transit this was.
+    Over thousands of epochs a stale period eventually mislabels one, and
+    then O-C jumps by a whole period -- so the caller is given the epoch
+    and the drift together, never the drift alone.
+    """
+    if not (period_d and math.isfinite(period_d) and period_d > 0):
+        return None, None
+    if not all(math.isfinite(v) for v in (measured_bjd, t0_bjd)):
+        return None, None
+    epoch = int(round((measured_bjd - t0_bjd) / period_d))
+    predicted = t0_bjd + epoch * period_d
+    return (measured_bjd - predicted) * 1440.0, epoch
+
+
+def ld_template(rp: float, b: float = 0.0, u1: float = LD_U1,
+                u2: float = LD_U2, n_phase: int = LD_PHASE_STEPS,
+                n_rad: int = LD_RADIAL_STEPS):
+    """A limb-darkened transit shape on a NORMALISED phase axis.
+
+    Returns ``(phase, shape)`` with phase running -0.5 to +0.5 across the
+    full first-to-fourth-contact duration and shape 0 outside, 1 at the
+    deepest point.  Because the axis is normalised, the SAME template
+    serves every T0 and every duration -- which is what makes this
+    affordable: built once per (rp, b), then interpolated at each grid
+    node for about the cost of the trapezoid it replaces.  Recomputing the
+    occultation per node would take 15 s per fit.
+
+    Why bother at all: a trapezoid fitted to a limb-darkened transit comes
+    out 5-6% too SHALLOW, systematically, across rp/Rs 0.08 to 0.15 -- and
+    chi2/nu stays at 1.0, so the misfit is invisible at amateur precision.
+    A single template at rp 0.10 brings that to +0.6/-0.0/-1.5%.
+
+    The occultation is integrated radially rather than over the disc:
+    at radius r the planet covers an arc whose half-angle follows from the
+    law of cosines, so the blocked flux is a ONE-dimensional integral over
+    r.  That needs no elliptic integrals and therefore no scipy, and it is
+    verified against an independent two-dimensional integration.
+
+    ``u1``/``u2`` are the quadratic limb-darkening coefficients.  They are
+    a property of the STAR and the FILTER, not of this code, and the depth
+    depends on them -- which is why they are settable and why the report
+    names the pair it used.
+    """
+    rp = max(1e-4, float(rp))
+    b = abs(float(b))
+    x_max2 = (1.0 + rp) ** 2 - b * b
+    if x_max2 <= 0:
+        # The planet never reaches the disc at this impact parameter.
+        ph = np.linspace(-0.5, 0.5, n_phase)
+        return ph, np.zeros_like(ph)
+    x_max = math.sqrt(x_max2)
+
+    # Stellar surface brightness, quadratic law, and the total flux it
+    # integrates to -- both on the same radial grid, so the normalisation
+    # is exact for this quadrature rather than analytic-in-principle.
+    edges = np.linspace(0.0, 1.0, n_rad + 1)
+    r = 0.5 * (edges[:-1] + edges[1:])
+    dr = edges[1] - edges[0]
+    mu = np.sqrt(np.clip(1.0 - r * r, 0.0, None))
+    intensity = 1.0 - u1 * (1.0 - mu) - u2 * (1.0 - mu) ** 2
+    ring = intensity * 2.0 * np.pi * r * dr
+    total = float(ring.sum())
+
+    phase = np.linspace(-0.5, 0.5, n_phase)
+    x = phase * 2.0 * x_max
+    z = np.sqrt(x * x + b * b)                       # planet centre distance
+    blocked = np.zeros(phase.size)
+    # Half-angle of the covered arc at radius r, vectorised over phase.
+    zz = z[:, None]
+    rr = r[None, :]
+    lo = np.abs(zz - rp)
+    hi = zz + rp
+    inside = rr <= lo                               # ring fully covered
+    partial = (rr > lo) & (rr < hi)
+    cosang = np.ones_like(rr * zz)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        cosang = (rr * rr + zz * zz - rp * rp) / (2.0 * rr * zz)
+    frac = np.zeros_like(cosang)
+    frac[partial] = np.arccos(np.clip(cosang[partial], -1.0, 1.0)) / np.pi
+    frac[inside & (zz < rp)] = 1.0                  # ring inside the planet
+    blocked = (frac * ring[None, :]).sum(axis=1)
+    shape = blocked / total
+    peak = float(shape.max())
+    if peak <= 0:
+        return phase, np.zeros_like(phase)
+    return phase, shape / peak
+
+
+def ld_shape(t, t0: float, duration: float, template):
+    """A template evaluated at real times.  Same contract as the trapezoid.
+
+    Zero outside the event, 1 at the deepest point, and linear in depth --
+    which is the whole reason for the template form.  A physically free
+    rp/Rs would make depth and shape vary together, the closed-form solve
+    would be gone, and with it the determinism and the no-optimiser
+    guarantee this fit is built on.
+    """
+    phase, shape = template
+    if duration <= 0:
+        return np.zeros_like(np.asarray(t, dtype=float))
+    ph = (np.asarray(t, dtype=float) - t0) / duration
+    return np.interp(ph, phase, shape, left=0.0, right=0.0)
 
 
 def stacked_significance(t, mag, t0: float, duration: float,
@@ -1076,7 +2083,8 @@ def stacked_significance(t, mag, t0: float, duration: float,
     how many points actually fall inside the event.
 
     The EMPIRICAL in/out contrast is used, not the fitted depth.  The
-    trapezoid has no free baseline term, so on transit-free data the fitter
+    model has no free baseline term of its own, so on transit-free data
+    the fitter
     can always absorb a small offset as a wide, shallow "dip" with a nonzero
     depth -- but the data's own in/out contrast on such a run is
     approximately zero, so noise-only runs are rejected where a
@@ -1126,36 +2134,235 @@ def stacked_significance(t, mag, t0: float, duration: float,
     return float(min(sides))
 
 
-def fit_transit(t, mag):
-    """Fit a trapezoid to a differential light curve in MAGNITUDES.
+def chi2_per_dof(resid, n_varys: int, oot_mask=None) -> float:
+    """Reduced chi-square against a MODEL-INDEPENDENT noise floor.
+
+    The residual scatter of a fit cannot judge that same fit -- divide the
+    residuals by their own RMS and the answer is 1 by construction, whether
+    the model is right or nonsense.  So the noise is estimated without the
+    model, two ways, in preference order:
+
+    * the MAD of the OUT-OF-TRANSIT residuals, which are signal-free by
+      construction for a real transit, so nothing leaks either way;
+    * failing that, the MAD of the FIRST DIFFERENCES divided by sqrt(2).
+      Differencing removes any trend slower than the cadence, so what is
+      left is the point-to-point noise -- but a steep ingress does enter
+      it, which inflates the noise and DEFLATES chi2/nu.  Optimistic, and
+      named as such.
+
+    Around 1 means the model describes the data.  Well above 1 means it
+    does not -- systematics, or a transit shape the template family
+    cannot make.
+    Well below 1 means the noise estimate is too large, usually because the
+    out-of-transit window still holds part of the event.
+    """
+    r = np.asarray(resid, dtype=float)
+    r = r[np.isfinite(r)]
+    if r.size <= n_varys:
+        return float("nan")
+    noise = 0.0
+    if oot_mask is not None:
+        m = np.asarray(oot_mask, dtype=bool)
+        if m.size == r.size and int(m.sum()) >= CHI2_MIN_OOT:
+            noise = _mad_std(r[m])
+    if not (noise > 0):
+        d = np.diff(r)
+        noise = _mad_std(d) / math.sqrt(2.0) if d.size else 0.0
+    if not (noise > 0):
+        return float("nan")
+    nfree = max(1, r.size - n_varys)
+    return float(np.sum(r * r) / (noise * noise * nfree))
+
+
+def t0_uncertainty(t, mag, t0: float, duration: float, template,
+                   sigma: float, grid_step: float, beta: float = 1.0,
+                   durations=None, fixed=None, gram=None, rhs=None,
+                   mm=None):
+    """1-sigma on the mid-transit time, in days, or NaN.
+
+    From the CURVATURE of the chi-square surface along T0, measured by
+    fitting a parabola to the profiled sum of squares over a window, rather
+    than by walking outward to delta-chi2 = 1.  Profiled over the SAME
+    design matrix the fit used -- systematics included -- because a bar
+    measured without them describes a fit nobody ran, and comes out too
+    narrow.
+
+    The walk was tried first and is wrong here, for a reason worth keeping:
+    a boxy model on sampled data has a BUMPY surface.  Shifting T0 by less
+    than one cadence changes which points fall inside the window, so the
+    minimum sits in a narrow local dell whose width is a fraction of the
+    sampling, not the width of the envelope the fit actually explores.
+    Measured over 60 runs at 4 mmag per point on a 120 s cadence, the walk
+    returned 86 s at every depth below 12 mmag -- a plateau at 0.7 cadences
+    -- while the true run-to-run scatter kept growing: 47, 86, 171 s.  The
+    parabola averages over the bumps and tracks it: 52, 91, 133 s against
+    58, 90, 125 s measured.
+
+    The window is five cadences.  Wider was tested and over-states: at 0.3
+    durations the bar came out 1.5x to 1.75x the true scatter at every
+    depth, because the surface stops being a parabola out there.
+
+    At every trial T0 the depth and baseline are re-solved in closed form
+    and the duration is re-minimised over the grid the fit searched, so the
+    interval carries the T0/duration correlation.
+
+    Scaled by the red-noise ``beta``, for the same reason the significance
+    is.  Floored at half the T0 grid step -- the search cannot resolve
+    finer than it samples.  NOT floored at the exposure time: a transit
+    mid-point is constrained by the whole curve and is routinely known to a
+    fraction of one frame.  That floor belongs to an occultation edge,
+    where a single crossing sample sets the answer.
+    """
+    t = np.asarray(t, dtype=float)
+    mag = np.asarray(mag, dtype=float)
+    if not (np.isfinite(sigma) and sigma > 0) or t.size < 6:
+        return float("nan")
+    durs = (np.asarray(durations, dtype=float)
+            if durations is not None and len(durations)
+            else np.asarray([duration], dtype=float))
+    # The SAME design matrix the fit walked.  Profiling a different surface
+    # than the one that was minimised gives a bar for a fit nobody ran --
+    # and with the systematics in the model, "different" means "without
+    # them", which comes out too narrow.
+    if fixed is None:
+        fixed = np.ones((t.size, 1))
+        gram = fixed.T @ fixed
+        rhs = fixed.T @ mag
+        mm = float(mag @ mag)
+    order = np.sort(t)
+    cadence = float(np.median(np.diff(order))) if order.size > 1 else 0.0
+    window = max(T0_ERROR_CADENCES * cadence, 3.0 * abs(grid_step))
+    if not (window > 0):
+        return float("nan")
+
+    offsets = np.linspace(-window, window, T0_ERROR_SAMPLES)
+    ssr = np.full(offsets.size, np.nan)
+    for i, off in enumerate(offsets):
+        best = np.inf
+        for d in durs:
+            got = _solve_simultaneous(mag, ld_shape(t, t0 + off, d, template),
+                                      fixed, gram, rhs, mm)
+            if got is not None and got[2] < best:
+                best = got[2]
+        if math.isfinite(best):
+            ssr[i] = best
+    ok = np.isfinite(ssr)
+    if int(ok.sum()) < 5:
+        return float("nan")
+    curv = np.polyfit(offsets[ok], ssr[ok], 2)[0]
+    if not (curv > 0):
+        # A surface with no upward curvature over the window means T0 is
+        # unconstrained here; a number would be an invention.
+        return float("nan")
+    sigma_t0 = (sigma / math.sqrt(curv)) * max(1.0, float(beta))
+    return max(sigma_t0, 0.5 * abs(grid_step))
+
+
+def build_design(n: int, bases=None):
+    """``(fixed, names, note)`` -- the constant column plus usable bases.
+
+    Each basis is centred and scaled to unit spread so the normal
+    equations stay conditioned when airmass (1-3), FWHM (2-5 px) and sky
+    (hundreds of ADU) share one matrix.  A basis with fewer than three
+    finite values or no spread is dropped and named; NaNs inside a usable
+    one are interpolated rather than excluded, or the row it sits in would
+    be the only one that never gets the trend subtracted.
+    """
+    cols = [np.ones(n)]
+    names, dropped, scales, offsets = [], [], [], []
+    for name, vec in (bases or {}).items():
+        if vec is None:
+            continue
+        xs = np.asarray(vec, dtype=float)
+        if xs.size != n:
+            dropped.append(f"{name} (wrong length)")
+            continue
+        if int(np.isfinite(xs).sum()) < 3:
+            dropped.append(f"{name} (too few values)")
+            continue
+        xs = _fill_gaps(xs)
+        mu = float(np.mean(xs))
+        sd = float(np.std(xs))
+        if sd < 1e-12:
+            dropped.append(f"{name} (no spread)")
+            continue
+        cols.append((xs - mu) / sd)
+        names.append(name)
+        offsets.append(mu)
+        scales.append(sd)
+    note = "+".join(names) if names else "none"
+    if dropped:
+        note += " (dropped: " + ", ".join(dropped) + ")"
+    return (np.column_stack(cols), names, note, np.asarray(offsets),
+            np.asarray(scales))
+
+
+def _solve_simultaneous(mag, shape, fixed, gram, rhs, mm):
+    """One node of the simultaneous fit: ``(coeffs, depth, ssr)`` or None.
+
+    ``fixed`` holds the constant column and the systematics; only the
+    ``shape`` column changes from node to node, so the expensive part --
+    the Gram matrix of everything else -- is computed once by the caller
+    and pasted in here.  Measured against the plain 2x2 solve this
+    replaces: 11.1 us per node against 13.8, i.e. fitting the systematics
+    at the same time is FASTER than not doing it, because the old version
+    recomputed sums it did not have to.
+    """
+    k = fixed.shape[1]
+    fs = fixed.T @ shape
+    ss = float(shape @ shape)
+    bs = float(shape @ mag)
+    G = np.empty((k + 1, k + 1))
+    G[:k, :k] = gram
+    G[:k, k] = fs
+    G[k, :k] = fs
+    G[k, k] = ss
+    b = np.empty(k + 1)
+    b[:k] = rhs
+    b[k] = bs
+    try:
+        c = np.linalg.solve(G, b)
+    except np.linalg.LinAlgError:
+        return None
+    ssr = float(mm - c @ b)
+    if not math.isfinite(ssr):
+        return None
+    return c[:k], float(c[k]), max(0.0, ssr)
+
+
+def fit_transit(t, mag, bases=None, u1: float = LD_U1, u2: float = LD_U2):
+    """Fit a limb-darkened transit AND the systematics, together.
 
     Returns a dict, or ``None`` when there is not enough data to try.
 
-    The search is a grid over ``(T0, duration, ingress fraction)`` with the
-    depth and the baseline solved ANALYTICALLY at every node: for a fixed
-    shape the model is ``baseline + depth * shape(t)``, which is linear in
-    both free parameters and therefore has a closed-form least-squares
-    solution.  Three nested loops and one 2x2 solve replace an optimiser.
+    Two things changed here at once, and both were measured first.
 
-    That is a deliberate trade.  A local optimiser on four strongly
-    correlated parameters walks into noise minima and gives a different
-    answer depending on where it started; this grid gives the same answer
-    every run, cannot fail to converge, and its resolution is a stated
-    number rather than a tolerance nobody reads.
+    **The shape is a limb-darkened transit, not a trapezoid.**  A trapezoid
+    fitted to a real transit comes out 5-6% too SHALLOW across rp/Rs 0.08
+    to 0.15, systematically -- and chi2/nu stays at 1.0, so nothing in the
+    output would ever say so.  The shapes searched are now real geometries:
+    four planet-to-star radius ratios crossed with two impact parameters,
+    the same eight variants the eight ingress fractions used to provide.
+    Each is a TEMPLATE on normalised phase, so the model stays LINEAR in
+    depth and the closed-form solve survives -- a physically free rp/Rs
+    would couple depth and shape, and with them would go the determinism
+    and the no-optimiser guarantee.  Measured: the template family brings
+    the depth bias to about 1%.
 
-    Depth is constrained to be POSITIVE -- the star gets fainter -- so the
-    fit cannot "detect" a brightening and call it a transit.
+    **The systematics are fitted WITH the transit, not before it.**  The
+    old sequence was detrend, fit, re-detrend on the fitted window, re-fit
+    -- three passes that each treated the previous baseline as exactly
+    known.  It is not: the baseline has an uncertainty, and a sequential
+    fit throws it away instead of propagating it into the depth and the
+    mid-time.  Here the airmass, seeing, sky and star-count columns sit in
+    the same design matrix as the transit, so the transit CANNOT be
+    absorbed into a correlated basis -- which is what the out-of-transit
+    anchoring existed to prevent -- and the covariance is carried rather
+    than discarded.
 
-    UNWEIGHTED, deliberately.  This carried a `weights` argument that no
-    caller ever passed, and the path was inconsistent: chi-square would
-    have been weighted while `sigma` and `depth_sigma` stayed unweighted,
-    so switching it on would have produced quietly wrong error bars.  Siril
-    writes a per-point error into `light_curve.dat` and this script keeps
-    it in the CSV, but does not fit against it -- a formal error from
-    aperture photometry describes photon and sky noise only, and the
-    scatter that actually limits a ground-based light curve is scintillation
-    and transparency, which it does not see.  The post-fit residual scatter
-    is measured instead, and that one does include everything.
+    The search is still a grid over ``(T0, duration, shape)`` with
+    everything linear solved in closed form at every node.  Same answer
+    every run, no optimiser, no convergence to fail.
     """
     t = np.asarray(t, dtype=float)
     mag = np.asarray(mag, dtype=float)
@@ -1164,10 +2371,21 @@ def fit_transit(t, mag):
         return None
     t = t[good]
     mag = mag[good]
+    sub = {k: np.asarray(v, dtype=float)[good]
+           for k, v in (bases or {}).items()
+           if v is not None and np.asarray(v).size == good.size}
+    fixed, base_names, base_note, offsets, scales = build_design(t.size, sub)
 
     span = float(t.max() - t.min())
     if span <= 0:
         return None
+
+    gram = fixed.T @ fixed
+    rhs = fixed.T @ mag
+    mm = float(mag @ mag)
+
+    templates = [((rp, b), ld_template(rp, b, u1, u2))
+                 for rp in LD_RP_GRID for b in LD_B_GRID]
 
     # T0 is searched over the middle of the run only.  A "transit" whose
     # centre sits outside the observed window is an extrapolation, and its
@@ -1181,70 +2399,82 @@ def fit_transit(t, mag):
                            FIT_MAX_DURATION_FRAC * span,
                            FIT_DURATION_STEPS)
 
-    ones = np.ones_like(t)
-    sw = ones
     best = None
     for dur in dur_grid:
-        for ing in FIT_INGRESS_FRACTIONS:
+        for (rp, bimp), tmpl in templates:
             for t0 in t0_grid:
-                shape = trapezoid_shape(t, t0, dur, ing)
-                n_in = float(np.count_nonzero(shape > 0.5))
-                if n_in < 3:
+                shape = ld_shape(t, t0, dur, tmpl)
+                if np.count_nonzero(shape > 0.5) < 3:
                     continue
-                # Weighted normal equations for  mag ~ base * 1 + depth * shape
-                s11 = float(np.sum(sw * ones * ones))
-                s12 = float(np.sum(sw * ones * shape))
-                s22 = float(np.sum(sw * shape * shape))
-                b1 = float(np.sum(sw * ones * mag))
-                b2 = float(np.sum(sw * shape * mag))
-                det = s11 * s22 - s12 * s12
-                if abs(det) < 1e-30:
+                got = _solve_simultaneous(mag, shape, fixed, gram, rhs, mm)
+                if got is None:
                     continue
-                base = (b1 * s22 - b2 * s12) / det
-                depth = (s11 * b2 - s12 * b1) / det
+                coeffs, depth, ssr = got
                 if depth <= 0:
-                    # Brightening, not a transit.  Skip rather than clamp:
-                    # a clamped zero-depth node would win the chi-square
+                    # Brightening, not a transit.  Skipped rather than
+                    # clamped: a zero-depth node would win the chi-square
                     # race on noise and mask a real shallow dip elsewhere.
                     continue
-                resid = mag - (base + depth * shape)
-                chi2 = float(np.sum(sw * resid * resid))
-                if best is None or chi2 < best["chi2"]:
-                    best = {"chi2": chi2, "t0": float(t0), "duration": float(dur),
-                            "ingress_frac": float(ing), "depth": float(depth),
-                            "baseline": float(base)}
+                if best is None or ssr < best["ssr"]:
+                    best = {"ssr": ssr, "t0": float(t0), "duration": float(dur),
+                            "rp": float(rp), "b": float(bimp),
+                            "depth": depth, "coeffs": coeffs}
     if best is None:
         return None
 
-    shape = trapezoid_shape(t, best["t0"], best["duration"], best["ingress_frac"])
-    model = best["baseline"] + best["depth"] * shape
+    # Refine around the winning node.  The coarse grid quantises T0 to
+    # (0.7 * span) / 120 -- 105 s on a 5 h run -- and that showed up as a
+    # measurement artefact: over 60 runs of a 20 mmag transit every fit
+    # returned the SAME T0.  The data were being rounded to the search.
+    coarse_t0 = float(t0_grid[1] - t0_grid[0]) if t0_grid.size > 1 else 0.0
+    coarse_dur = float(dur_grid[1] - dur_grid[0]) if dur_grid.size > 1 else 0.0
+    if coarse_t0 > 0:
+        fine_t0 = np.linspace(best["t0"] - 1.5 * coarse_t0,
+                              best["t0"] + 1.5 * coarse_t0, FIT_REFINE_T0_STEPS)
+        fine_dur = (np.linspace(max(1e-9, best["duration"] - 1.5 * coarse_dur),
+                                best["duration"] + 1.5 * coarse_dur,
+                                FIT_REFINE_DUR_STEPS)
+                    if coarse_dur > 0 else np.asarray([best["duration"]]))
+        for dur in fine_dur:
+            for (rp, bimp), tmpl in templates:
+                for t0 in fine_t0:
+                    shape = ld_shape(t, t0, dur, tmpl)
+                    if np.count_nonzero(shape > 0.5) < 3:
+                        continue
+                    got = _solve_simultaneous(mag, shape, fixed, gram, rhs, mm)
+                    if got is None or got[1] <= 0:
+                        continue
+                    if got[2] < best["ssr"]:
+                        best = {"ssr": got[2], "t0": float(t0),
+                                "duration": float(dur), "rp": float(rp),
+                                "b": float(bimp), "depth": got[1],
+                                "coeffs": got[0]}
+        coarse_t0 = (float(fine_t0[1] - fine_t0[0])
+                     if fine_t0.size > 1 else coarse_t0)
+        dur_grid = np.unique(np.concatenate([dur_grid, fine_dur]))
+
+    tmpl = dict(templates)[(best["rp"], best["b"])]
+    shape = ld_shape(t, best["t0"], best["duration"], tmpl)
+    coeffs = best["coeffs"]
+    trend = fixed[:, 1:] @ coeffs[1:] if fixed.shape[1] > 1 else np.zeros(t.size)
+    model = fixed @ coeffs + best["depth"] * shape
     resid = mag - model
-    n_free = 4                      # t0, duration, ingress, depth (+baseline)
-    dof = max(1, t.size - n_free - 1)
-    sigma = float(np.sqrt(np.sum(resid * resid) / dof))
+    # The systematics-free curve everything downstream reads.
+    detrended = mag - trend
+
+    n_free = 3 + len(base_names)    # t0, duration, shape variant + bases
+    dof = max(1, t.size - n_free - 2)          # + depth + baseline
     rms_resid = _mad_std(resid)
+    sigma = float(rms_resid * math.sqrt(t.size / float(dof)))
+    if not (np.isfinite(sigma) and sigma > 0):
+        sigma = float(np.sqrt(np.sum(resid * resid) / dof))
 
-    sig = stacked_significance(t, mag, best["t0"], best["duration"], sigma)
-
-    # Correct that significance for correlated noise before anyone reads
-    # it.  sig assumes independent points; ground-based photometry rarely
-    # delivers them, and the excess is measured directly from the fit
-    # residuals rather than assumed.
-    resid = mag - (best["baseline"] + best["depth"] * shape)
+    sig = stacked_significance(t, detrended, best["t0"], best["duration"],
+                               sigma)
     beta, beta_rows = red_noise_beta(t, resid, best["duration"])
     sig_white = sig
     sig = sig / beta
 
-    # Depth uncertainty from the curvature of the chi-square surface in the
-    # one direction that has a closed form.  The other three are correlated
-    # with it and with each other; quoting a covariance matrix from a grid
-    # search would be a number with no error bar of its own.
-    #
-    # SCALED BY THE SAME beta as the significance.  It was not, and the two
-    # numbers sit three lines apart in the report: at beta 2.56 the
-    # significance read 1.6 sigma while depth/depth_sigma read 9.5, so the
-    # report said "not detected" and "detected at 9 sigma" about one fit.
-    # Measured ratios across a dozen correlated-noise runs: 2.3x to 6.0x.
     inside = shape > 0.5
     n_in = int(np.count_nonzero(inside))
     n_out = int(np.count_nonzero(~inside))
@@ -1253,16 +2483,42 @@ def fit_transit(t, mag):
     else:
         depth_sigma = float("nan")
 
+    t0_sigma = t0_uncertainty(t, mag, best["t0"], best["duration"],
+                              tmpl, sigma, coarse_t0, beta,
+                              durations=dur_grid, fixed=fixed, gram=gram,
+                              rhs=rhs, mm=mm)
+    chi2_nu = chi2_per_dof(resid, n_free + 2, ~inside)
+
+    # The airmass coefficient, back in the unit anyone can read.  The
+    # column was centred and scaled to keep the solve conditioned.
+    slope = None
+    if "airmass" in base_names:
+        i = base_names.index("airmass")
+        sd = float(scales[i])
+        slope = float(coeffs[1 + i] / sd) if sd > 0 else None
+
     return {
         "t0": best["t0"],
         "duration_d": best["duration"],
         "duration_h": best["duration"] * 24.0,
-        "ingress_frac": best["ingress_frac"],
+        "rp_over_rs": best["rp"],
+        "impact_b": best["b"],
+        "ld_u1": float(u1),
+        "ld_u2": float(u2),
         "depth_mag": best["depth"],
         "depth_mmag": best["depth"] * 1000.0,
         "depth_pct": (1.0 - 10.0 ** (-0.4 * best["depth"])) * 100.0,
         "depth_sigma_mmag": depth_sigma * 1000.0,
-        "baseline": best["baseline"],
+        "t0_sigma_d": t0_sigma,
+        "t0_sigma_s": t0_sigma * 86400.0,
+        "chi2_nu": chi2_nu,
+        "baseline": float(coeffs[0]),
+        "bases": base_names,
+        "base_note": base_note,
+        "airmass_slope": slope,
+        "trend": trend,
+        "detrended": detrended,
+        "good_mask": good,
         "sigma_postfit_mmag": sigma * 1000.0,
         "rms_resid_mmag": rms_resid * 1000.0,
         "significance": sig,
@@ -1357,6 +2613,168 @@ def rotation_spread_deg(homographies):
 # ---------------------------------------------------------------------------
 # Comparison-star selection
 # ---------------------------------------------------------------------------
+def _header_ra_deg(header):
+    """Telescope pointing RA in degrees, or None.
+
+    Only used to CHECK the longitude sign, and that makes the unit
+    ambiguity harmless: if a header stated RA in hours and this read it as
+    degrees, the computed altitude would miss by far more than the
+    tolerance and the check would come back "not conclusive" — never a
+    wrong flip.  A guess that can only fail safe does not need to be
+    perfect.
+    """
+    for key in ("RA", "OBJCTRA", "CRVAL1", "RA_OBJ"):
+        raw = header.get(key, None)
+        if raw is None or str(raw).strip() == "":
+            continue
+        txt = str(raw).strip()
+        try:
+            return float(txt) % 360.0          # already degrees
+        except ValueError:
+            v = _sexagesimal(txt)              # H M S
+            if np.isfinite(v):
+                return (v * 15.0) % 360.0
+    return None
+
+
+def _header_dec_deg(header):
+    """Telescope pointing Dec in degrees, or None."""
+    for key in ("DEC", "OBJCTDEC", "CRVAL2", "DEC_OBJ"):
+        raw = header.get(key, None)
+        if raw is None or str(raw).strip() == "":
+            continue
+        txt = str(raw).strip()
+        try:
+            v = float(txt)
+        except ValueError:
+            v = _sexagesimal(txt)
+        if np.isfinite(v) and -90.0 <= v <= 90.0:
+            return v
+    return None
+
+
+def longitude_sign_check(header, lat, lon):
+    """``(lon, note)`` -- the longitude, with its SIGN decided by measurement.
+
+    FITS never settled this.  N.I.N.A. writes east-positive; older systems,
+    MicroObservatory among them, write WEST-positive, and the two are
+    indistinguishable from the number alone.  Getting it wrong mirrors the
+    site across the globe, which does not fail loudly: it silently
+    computes the airmass for the wrong place and detrends against it.
+
+    But the frames usually carry the answer.  An altitude in the header,
+    together with the pointing and the time, is a measurement of where the
+    telescope was -- so both signs are tried and the one that reproduces
+    it wins.  Measured on this data: -110.88 gives +62.60 deg against the
+    header's +62.592, while +110.88 puts the target 10 deg BELOW the
+    horizon.  No ambiguity left to warn about.
+    """
+    if lon is None or not math.isfinite(float(lon)) or abs(float(lon)) < 1e-9:
+        return lon, ""
+    alt_obs = None
+    for key in ("TELALT", "CENTALT", "OBJCTALT", "ALTITUDE", "ALT-OBJ"):
+        try:
+            v = float(str(header.get(key, "")).strip() or "nan")
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v) and -90.0 <= v <= 90.0:
+            alt_obs, alt_key = v, key
+            break
+    if alt_obs is None:
+        return lon, ("longitude is taken as EAST positive — no altitude in "
+                     "the header to check the sign against")
+    ra = _header_ra_deg(header)
+    dec = _header_dec_deg(header)
+    jd = _jd_from_dateobs(str(header.get("DATE-OBS", "")
+                              or header.get("UT-OBS", "")))
+    if ra is None or dec is None or not np.isfinite(jd):
+        return lon, ("longitude is taken as EAST positive — no pointing or "
+                     "time to check the sign against")
+    best, gaps = None, {}
+    for cand in (float(lon), -float(lon)):
+        alt = _altitude_deg(jd, ra, dec, float(lat), cand)
+        gaps[cand] = abs(alt - alt_obs) if np.isfinite(alt) else float("inf")
+        if best is None or gaps[cand] < gaps[best]:
+            best = cand
+    if not math.isfinite(gaps[best]) or gaps[best] > LON_SIGN_TOLERANCE_DEG:
+        return lon, (f"longitude is taken as EAST positive — neither sign "
+                     f"reproduces {alt_key}={alt_obs:.2f}deg (closest is "
+                     f"{gaps[best]:.1f}deg off), so the check is not "
+                     "conclusive")
+    if abs(best - float(lon)) < 1e-9:
+        return lon, (f"sign confirmed against {alt_key}={alt_obs:.2f}deg "
+                     f"(agrees to {gaps[best]:.2f}deg)")
+    return best, (f"SIGN FLIPPED to {best:+.4f}: the header value would put "
+                  f"the target {gaps[float(lon)]:.0f}deg from the "
+                  f"{alt_key}={alt_obs:.2f}deg it records, the flipped one "
+                  f"reproduces it to {gaps[best]:.2f}deg. This header is "
+                  "WEST-positive")
+
+
+def image_scale_arcsec(header):
+    """``(arcsec_per_px, where)`` from a header, or ``(None, why)``.
+
+    Siril needs the plate scale to solve, and takes it from FOCALLEN and
+    XPIXSZ.  When those are absent it falls back to whatever it last SAVED
+    as a default -- which is the previous target's telescope.  Measured on
+    EXOTIC's demo set: Siril used 3.76 um / 380.33 mm left over from a
+    different rig, computed a 0.46 degree field where the truth is 0.94,
+    and the solve failed with "Generic error" after fetching 373 000 stars.
+    Nothing in that message says "wrong scale".
+
+    Many headers state the scale outright instead -- IM_SCALE on
+    MicroObservatory, SECPIX on older systems -- so it is read directly
+    when it is there and derived from the optics when it is not.
+    """
+    if header is None:
+        return None, "no header"
+    for key in ("IM_SCALE", "SECPIX", "SECPIX1", "PIXSCALE", "SCALE",
+                "PLTSCALE"):
+        try:
+            v = float(str(header.get(key, "")).strip() or "nan")
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v) and 0.01 < v < 3600.0:
+            return v, key
+    focal = None
+    for key in ("FOCALLEN", "FOCAL"):
+        try:
+            v = float(str(header.get(key, "")).strip() or "nan")
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v) and v > 0:
+            focal = v
+            break
+    pix = None
+    for key in ("XPIXSZ", "PIXSIZE1", "XPIXELSZ"):
+        try:
+            v = float(str(header.get(key, "")).strip() or "nan")
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v) and v > 0:
+            pix = v
+            break
+    if focal and pix:
+        return 206.265 * pix / focal, "FOCALLEN and XPIXSZ"
+    return None, ("no IM_SCALE/SECPIX and no FOCALLEN+XPIXSZ — Siril will "
+                  "fall back to its saved defaults, which belong to "
+                  "whatever telescope it solved last")
+
+
+def scale_to_focal_pixel(arcsec_per_px: float, pixel_um: float = 9.0):
+    """``(focal_mm, pixel_um)`` that reproduce a plate scale.
+
+    Only the RATIO matters to a solver, so the pixel size is fixed at a
+    plausible value and the focal length follows.  Handing Siril a
+    consistent pair is what stops it reaching for the previous target's
+    optics.
+    """
+    if not (arcsec_per_px and math.isfinite(arcsec_per_px)
+            and arcsec_per_px > 0):
+        return None, None
+    return 206.265 * float(pixel_um) / float(arcsec_per_px), float(pixel_um)
+
+
 def site_from_header(header):
     """Observatory position out of the FITS header, or None.
 
@@ -1582,6 +3000,24 @@ def full_scale_of(data) -> float:
     return 1.0 if peak <= 1.5 else peak
 
 
+def _sat_fraction(why: str):
+    """The measured peak as a fraction of full scale, from the verdict text.
+
+    `saturation_verdict` writes "(2.6% of full scale)" and that number is
+    what decides whether Siril's flag gets the benefit of the doubt.  Read
+    back out of the message rather than threaded through a second return
+    value, so the two can never describe different things -- a test pins
+    the round trip.
+    """
+    m = re.search(r"\(([\d.]+)% of full scale\)", str(why or ""))
+    if not m:
+        return None
+    try:
+        return float(m.group(1)) / 100.0
+    except ValueError:
+        return None
+
+
 def saturation_verdict(data, x: float, y: float,
                        half: int = SATURATION_BOX_PX):
     """Is the star at ``(x, y)`` clipped?  ``(saturated, evidence)``.
@@ -1617,8 +3053,53 @@ def saturation_verdict(data, x: float, y: float,
             f"scale) within {half} px of the target")
 
 
+def oc_lines(r, fit):
+    """The O-C block, or an empty list.  ``(plain, html)`` per entry.
+
+    A light curve on its own says a transit happened.  O-C says whether
+    the published ephemeris still predicts it, and that is what a single
+    night is actually worth contributing -- it is the number ExoClock and
+    ETD collect.  Until now this script measured T0 with a calibrated
+    error bar and had nothing to compare it against.
+
+    Refused unless the times are BJD_TDB.  The archive's T0 is BJD_TDB;
+    subtracting a JD_UTC from it would put an 8-minute offset into a
+    quantity whose whole interest is minutes.
+    """
+    eph = (r or {}).get("ephemeris") or {}
+    if not fit or not eph.get("period_d") or not eph.get("t0_bjd"):
+        return []
+    if r.get("time_system") != "BJD_TDB":
+        return [("   O-C            not computed — the times are "
+                 f"{r.get('time_system')}, and the archive ephemeris is "
+                 "BJD_TDB; the difference would be an 8-minute error in a "
+                 "number measured in minutes.", None)]
+    drift, epoch = o_minus_c(float(fit["t0"]), float(eph["t0_bjd"]),
+                             float(eph["period_d"]))
+    if drift is None:
+        return []
+    sig_s = fit.get("t0_sigma_s", float("nan"))
+    sig_min = sig_s / 60.0 if np.isfinite(sig_s) else float("nan")
+    bar = f" +/- {sig_min:.1f} min" if np.isfinite(sig_min) else ""
+    verdict = ""
+    if np.isfinite(sig_min) and sig_min > 0:
+        n_sig = abs(drift) / sig_min
+        verdict = (f"  ({n_sig:.1f} sigma from the prediction)" if n_sig >= 1.0
+                   else "  (consistent with the prediction)")
+    out = [(f"   O-C            {drift:+.2f} min{bar}{verdict}", None),
+           (f"                  epoch {epoch} of {eph.get('name', '?')}, "
+            f"P = {eph['period_d']:.6f} d", None)]
+    if abs(drift) > 60.0:
+        out.append(("                  more than an hour off — over "
+                    f"{epoch} epochs a stale period eventually mislabels "
+                    "which transit this was, so check the epoch before "
+                    "reading anything into the drift", None))
+    return out
+
+
 def photometry_yield_note(n_points: int, n_frames: int,
-                          target_saturated: bool):
+                          target_saturated: bool,
+                          engine: str = "Siril"):
     """Say whether Siril kept enough frames, and name the likely cause.
 
     Returns (severity, message) with severity in {"ok", "warn", "bad"},
@@ -1639,13 +3120,21 @@ def photometry_yield_note(n_points: int, n_frames: int,
     frac = n_points / float(n_frames)
     if frac >= POOR_YIELD_FRACTION and not target_saturated:
         return "ok", None
-    lines = [f"Siril kept {n_points} of {n_frames} frames "
+    # The message names whichever engine actually measured.  It used to
+    # say "Siril kept..." unconditionally, and the first full native run
+    # printed "83 points measured by this script" immediately followed by
+    # "Siril kept 83 of 178" -- two sentences about the same numbers
+    # attributing them to different programs.
+    lines = [f"{engine} kept {n_points} of {n_frames} frames "
              f"({100.0 * frac:.0f}%)."]
     if target_saturated:
+        drop = ("Siril drops a frame whose aperture holds a saturated "
+                "pixel (\"pixel out of range\")"
+                if engine == "Siril" else
+                "This script drops a frame whose target core is clipped")
         lines.append(
-            "The target is SATURATED in the reference frame. Siril drops a "
-            "frame whose aperture holds a saturated pixel (\"pixel out of "
-            "range\"), and a saturated core carries no flux information "
+            f"The target is SATURATED in the reference frame. {drop}, "
+            "and a saturated core carries no flux information "
             "anyway. Worse, the frames that survive are the ones where "
             "seeing spread the star out — so what is left is a "
             "seeing-selected subset, not a fair sample of the night.")
@@ -1656,9 +3145,11 @@ def photometry_yield_note(n_points: int, n_frames: int,
     elif frac < POOR_YIELD_FRACTION:
         lines.append(
             "Below half, the curve samples the night unevenly and the "
-            "detection statistics below are optimistic. Check Siril's own "
-            "reasons above — \"pixel out of range\" means saturation, "
-            "\"not in area\" means the star left the search box.")
+            "detection statistics below are optimistic."
+            + (" Check Siril's own reasons above — \"pixel out of range\" "
+               "means saturation, \"not in area\" means the star left "
+               "the search box." if engine == "Siril" else
+               " The per-frame reasons are counted in the lines above."))
     return ("bad" if frac < 0.33 or target_saturated else "warn",
             " ".join(lines))
 
@@ -1680,7 +3171,15 @@ def light_curve_args(seq: str, channel: int, autoring: bool,
     """
     args = ["light_curve", seq, str(int(channel))]
     if autoring:
-        args.append("-autoring")
+        # NOT `-autoring`.  Measured against Siril 1.4.4: passing the flag
+        # makes `light_curve` abort with "The given coordinates are not in
+        # the image" on coordinates that are demonstrably inside it -- the
+        # same command without the flag, on the same sequence and the same
+        # stars, produces the light curve.  The caller sets the identical
+        # radii with `setphot` beforehand instead; the factors are Siril's
+        # own and reproduce its arithmetic exactly (it logs "ring radii to
+        # 7.5 and 11.3 (FWHM is 1.797542)" -- 4.2x and 6.3x to the digit).
+        pass
     args.append(f"-at={int(round(float(target_xy[0])))},"
                 f"{int(round(float(target_xy[1])))}")
     for comp in comps:
@@ -1761,7 +3260,8 @@ def inspect_frame(path: str, header=None) -> dict:
     """
     out = {"path": path, "kind": None, "exp_s": None, "gain_v": None,
            "temp_v": None, "binning": 1, "dims": None, "instrument": None,
-           "filter": "", "date_obs": ""}
+           "filter": "", "date_obs": "", "object": "",
+           "objctra": "", "objctdec": ""}
     h = header if header is not None else _read_header(path)
     if h is None:
         out["kind"] = classify_path(path)
@@ -1769,6 +3269,9 @@ def inspect_frame(path: str, header=None) -> dict:
     out["kind"] = (classify_kind(str(h.get("IMAGETYP", "") or ""))
                    or classify_path(path))
     out["filter"] = str(h.get("FILTER", "") or "").strip()
+    out["object"] = str(h.get("OBJECT", "") or "").strip()
+    out["objctra"] = str(h.get("OBJCTRA", "") or "").strip()
+    out["objctdec"] = str(h.get("OBJCTDEC", "") or "").strip()
     out["date_obs"] = str(h.get("DATE-OBS", h.get("DATE_OBS", "")) or "").strip()
     out["instrument"] = str(h.get("INSTRUME", "") or "").strip() or None
     for key in ("EXPTIME", "EXPOSURE"):
@@ -2266,8 +3769,572 @@ def dark_exposure_note(dark_header, light_header):
         f"exposure, or leave the dark out and let the flat do the work.")
 
 
+def drift_envelope(homs, ref_shift=(0.0, 0.0), width=0, height=0):
+    """``(dx_min, dx_max, dy_min, dy_max)`` across a run, or ``None``.
+
+    Siril's `light_curve` moves each measurement box by the registration
+    data, so a star that is comfortably inside the reference frame can
+    still leave the sensor later in the night.  When that happens to a
+    COMPARISON star the whole command fails -- "generic error", after a
+    warning about "heavy drifted images" that names one frame and does not
+    say which star.
+
+    Measured on EXOTIC's demo set: dx runs +52 to -218 px on a 650 px
+    frame, and three of the five comparisons chosen from the reference
+    frame spend part of the run outside it.  The target happened to
+    survive, which is why the failure looked like a photometry bug rather
+    than a geometry one.
+    """
+    if width and height:
+        pts = [p for p in shift_list(homs, width, height) if p is not None]
+        if not pts:
+            return None
+        rx, ry = ref_shift
+        return (min(x for x, _ in pts) - rx, max(x for x, _ in pts) - rx,
+                min(y for _, y in pts) - ry, max(y for _, y in pts) - ry)
+    dxs, dys = [], []
+    for h in homs or ():
+        if h is None:
+            continue
+        # sirilpy hands back an OBJECT with h00..h22 attributes, not an
+        # array.  Reading it as an array is what made this return None on
+        # its first outing: the filter then did nothing at all, and the
+        # only symptom was that the drift line never appeared.  The
+        # rotation check next door reads h00/h10, so this reads h02/h12
+        # the same way, with the array form as a fallback for anything
+        # that does hand back a plain 3x3.
+        dx = dy = None
+        if hasattr(h, "h02") and hasattr(h, "h12"):
+            try:
+                dx, dy = float(h.h02), float(h.h12)
+            except (TypeError, ValueError):
+                dx = dy = None
+        if dx is None:
+            try:
+                arr = np.asarray(h, dtype=float).reshape(3, 3)
+                dx, dy = float(arr[0, 2]), float(arr[1, 2])
+            except (ValueError, TypeError):
+                continue
+        if not (math.isfinite(dx) and math.isfinite(dy)):
+            continue
+        # The measured convention (see ref_to_frame): a stored (h02, h12)
+        # moves a star by (-h02, +h12) in FITS coordinates.  The first
+        # version appended the raw values and the filter judged every
+        # star by the MIRROR of its true excursion -- it kept (222, 73),
+        # which walks to x = 4, and light_curve then failed on it.
+        dxs.append(-dx)
+        dys.append(dy)
+    if not dxs:
+        return None
+    # Relative to the reference Siril is ACTUALLY using.  When the
+    # reference is re-centred (see `best_reference`) every stored
+    # homography still points at the old one, so subtracting the new
+    # reference's own shift is what turns them into the offsets the
+    # measurement boxes really travel.
+    rx, ry = ref_shift
+    return (min(dxs) - rx, max(dxs) - rx, min(dys) - ry, max(dys) - ry)
+
+
+def _homography(h):
+    """A homography as nine floats, or ``None``.
+
+    sirilpy hands back an OBJECT with h00..h22 attributes; a plain 3x3 is
+    accepted as well so the maths can be exercised without sirilpy.
+    """
+    if h is None:
+        return None
+    names = ("h00", "h01", "h02", "h10", "h11", "h12", "h20", "h21", "h22")
+    if all(hasattr(h, n) for n in names):
+        try:
+            return [float(getattr(h, n)) for n in names]
+        except (TypeError, ValueError):
+            return None
+    try:
+        arr = np.asarray(h, dtype=float).reshape(3, 3)
+    except (ValueError, TypeError):
+        return None
+    return [float(v) for v in arr.ravel()]
+
+
+def shift_list(homs, width=0, height=0):
+    """Where the IMAGE CENTRE of each frame lands, ``None`` where unset.
+
+    Reading the homography's translation column instead was wrong, and a
+    MERIDIAN FLIP is what exposes it.  A 180-degree rotation about the
+    centre leaves every star on the same piece of sky and moves nothing
+    off the sensor, but its translation column is the width and height of
+    the frame: measured on a real 3008x3008 run, hypot(h02, h12) = 4253 px
+    while the centre moves 13.7 px.  Reported as drift, that number said
+    "no reference can rescue this run" about a run that had no drift
+    problem at all, and the whole photometry was thrown away.
+
+    Sending the centre through the full 3x3 is right in both cases: for a
+    pure shift it returns exactly the translation, and for the flip it
+    returns the truth.  Without a frame size there is no centre, so the
+    translation column is the fallback -- correct whenever the field does
+    not rotate, which is the ordinary case.
+    """
+    cx, cy = float(width) / 2.0, float(height) / 2.0
+    out = []
+    for h in homs or ():
+        m = _homography(h)
+        if m is None:
+            out.append(None)
+            continue
+        if width and height:
+            pos = ref_to_frame(m, cx, cy, width, height)
+            if pos is None:
+                out.append(None)
+                continue
+            x, y = pos
+        else:
+            # No frame size, no flip axis: the translation column with
+            # the measured signs, right whenever the field does not
+            # rotate.
+            x, y = -m[2], m[5]
+        if math.isfinite(x) and math.isfinite(y):
+            out.append((x, y))
+        else:
+            out.append(None)
+    return out
+
+
+def worst_drift(shifts, ref_index):
+    """Largest distance any frame travels from frame ``ref_index``.
+
+    This is the number Siril tests against its own limit -- verified: it
+    reported "163 pixels for image 103" where hypot(dx, dy) is 162.5.
+    """
+    ref = shifts[ref_index] if 0 <= ref_index < len(shifts) else None
+    if ref is None:
+        return None
+    rx, ry = ref
+    d = [math.hypot(x - rx, y - ry) for s in shifts if s
+         for x, y in (s,)]
+    return max(d) if d else None
+
+
+def best_reference(shifts, quality=None, limit=None):
+    """``(index, worst_drift)``: the BEST FRAME that Siril will accept.
+
+    Two constraints, and getting either one alone is wrong.
+
+    Siril picks its registration reference on IMAGE QUALITY, which is the
+    right criterion for stacking and not sufficient here: a reference near
+    one end of a drifting run puts the ENTIRE drift on one side, and
+    `light_curve` refuses above 160 px.  Measured on EXOTIC's demo set,
+    Siril chose image 35 of 142 -- 263 stars, weighted FWHM 1.80, and a
+    worst drift of 218.9 px.  Refused every time.
+
+    Choosing on drift ALONE is just as wrong, and it fails quietly rather
+    than loudly.  The frame at the exact middle of that drift is image 72,
+    and image 72 is the worst frame of the night: weighted FWHM 8.50, 110
+    stars against 262.  The command ran and the result was rubbish -- the
+    sky annulus came out at 24.7 px instead of 11.3, the target was
+    matched 200 arcsec from its catalogue position, and 6 of 142 frames
+    survived photometry.
+
+    So: take every frame Siril will accept, and among those take the best
+    one.  Image 71 -- 147.7 px, 262 stars, weighted FWHM 2.42 -- is within
+    a whisker of Siril's own pick on quality while staying inside the
+    limit.  ``quality`` is one number per frame, lower is better (weighted
+    FWHM); frames without one fall back to drift order.
+    """
+    usable = [i for i, sh in enumerate(shifts) if sh is not None]
+    if not usable:
+        return None, None
+    scored = []
+    for i in usable:
+        d = worst_drift(shifts, i)
+        if d is None:
+            continue
+        scored.append((i, d))
+    if not scored:
+        return None, None
+    if limit is not None:
+        allowed = [(i, d) for i, d in scored if d <= limit]
+        if not allowed:
+            # Nothing qualifies.  Hand back the least-bad so the caller can
+            # report the actual number instead of a bare "no".
+            return min(scored, key=lambda r: r[1])
+        scored = allowed
+    if quality:
+        def rank(item):
+            i, d = item
+            q = quality[i] if i < len(quality) else None
+            if q is None or not math.isfinite(q) or q <= 0.0:
+                return (1, d)            # unmeasured sorts after measured
+            return (0, q)
+        return min(scored, key=rank)
+    return min(scored, key=lambda r: r[1])
+
+
+# -- native photometry --------------------------------------------------
+#
+# Siril's `light_curve` command re-runs its own PSF pass per star, moving
+# each measurement box by the REGISTRATION alone.  On a drifting run that
+# loses half the frames ("not in area", "PSF fit failed") -- measured:
+# 67 of 140 points on EXOTIC's demo set, then 45 with a dynamic aperture,
+# which added "inner radius too small" 83 times.  Siril's own `seqpsf
+# -followstar` measures the SAME star on the SAME sequence with ZERO
+# failures out of 142 -- the engine exists, but `light_curve` does not use
+# it, its results are reachable neither from a file nor from sirilpy, and
+# `light_curve` does not reuse them (measured: it re-ran its own six PSF
+# passes right after six seqpsf runs).
+#
+# So the measurement is done here, the way EXOTIC and HOPS do it: Siril
+# keeps everything it is good at -- staging, calibration, two-pass
+# registration, star detection, plate solve, frame quality -- and this
+# script reads the registered-but-unresampled frames once each,
+# re-centroids every star per frame (that is what "follow star" is), and
+# sums flux in a subpixel-weighted circular aperture against a
+# sigma-clipped annulus sky.  All apertures are measured in the same pass,
+# the ensemble is normalised per comp so a missing frame cannot step the
+# baseline, and comps are kept or dropped by their MEASURED scatter --
+# EXOTIC's criterion, computed here on point-to-point differences so a
+# real transit in the target cannot penalise a comp.
+
+CENTROID_BOX = 10          # half-size of the re-centroid box, px
+CENTROID_ITERS = 2
+CENTROID_MAX_SHIFT = 6.0   # px; a centroid further than this from its
+                           # seed has locked onto a neighbour, and a wrong
+                           # star measured confidently is worse than a
+                           # missing frame
+SUBPIXEL_GRID = 8          # NxN subsamples per pixel for aperture edges
+# EXOTIC scans 1.5-6 sigma (about 0.6-2.5 FWHM); on the demo set the
+# point-to-point noise kept falling to the top of a grid that stopped at
+# 2.0, so the grid reaches 2.5.
+APERTURE_FWHM_GRID = (0.9, 1.1, 1.35, 1.6, 2.0, 2.5)
+COMP_REJECT_FACTOR = 3.0   # a comp this many times noisier than its peers
+                           # writes its wobble, inverted, into the target
+NATIVE_MIN_YIELD = 0.30    # below this fraction of frames measured, the
+                           # native engine distrusts itself and the Siril
+                           # fallback runs instead
+SAT_FRACTION = 0.98        # of full scale: the same clip criterion the
+                           # saturation verdict uses
+
+
+def invert_homography(m):
+    """The inverse of a 3x3 homography given as nine floats, or ``None``."""
+    try:
+        inv = np.linalg.inv(np.asarray(m, dtype=float).reshape(3, 3))
+    except (np.linalg.LinAlgError, ValueError):
+        return None
+    return [float(v) for v in inv.ravel()]
+
+
+def apply_homography(m, x, y):
+    """``(x, y)`` sent through a 3x3 homography given as nine floats."""
+    den = m[6] * x + m[7] * y + m[8]
+    if abs(den) < 1e-12:
+        return None
+    return ((m[0] * x + m[1] * y + m[2]) / den,
+            (m[3] * x + m[4] * y + m[5]) / den)
+
+
+def ref_to_frame(hom, x, y, width, height):
+    """Where a star at reference position ``(x, y)`` sits in this frame.
+
+    The convention was MEASURED, not read from documentation, because two
+    plausible readings both failed on real data: the stored homography
+    maps FRAME onto REFERENCE, in Siril's bottom-up row order -- which is
+    upside down relative to what astropy reads from the same file.  So:
+    flip y, apply the INVERSE, flip back.
+
+    Anchored on EXOTIC's demo set by cross-correlating whole frames
+    against the reference and then confirming on the target star itself:
+    frame 1 stores (h02, h12) = (-52.0, -37.4) and the star sits at
+    ref + (+52, -37); frame 140 stores (+218.2, -17.3) and the star sits
+    at ref + (-218, -17).  Both match frame = flip(inv(H)(flip(ref)));
+    neither matches applying H forwards in either row order -- the first
+    attempt did exactly that, seeded half the centroids onto the wrong
+    stars, and produced a light curve with 900 mmag of scatter.
+    """
+    inv = invert_homography(hom)
+    if inv is None or not (width and height):
+        return None
+    pos = apply_homography(inv, float(x), float(height) - 1.0 - float(y))
+    if pos is None:
+        return None
+    return pos[0], float(height) - 1.0 - pos[1]
+
+
+def frame_to_ref(hom, x, y, width, height):
+    """The inverse trip of `ref_to_frame`: frame position to reference.
+
+    Needed because `setref` moves the frame stars are DETECTED on without
+    rebasing the homographies -- measured: after ``setref 70`` the .seq
+    still holds the identity at image 35.  Star positions read off the
+    new reference are therefore in the wrong system for every stored
+    homography until they are sent through the detection frame's own H.
+    """
+    if not (width and height):
+        return None
+    pos = apply_homography(hom, float(x), float(height) - 1.0 - float(y))
+    if pos is None:
+        return None
+    return pos[0], float(height) - 1.0 - pos[1]
+
+
+def refine_centroid(data, x, y, box=CENTROID_BOX, iters=CENTROID_ITERS):
+    """Centre of light near ``(x, y)``, or ``None`` off-frame or starless.
+
+    This is the "follow star" that `light_curve` lacks: the registration
+    only has to land within ``box`` pixels, the centroid does the rest.
+    Background is taken as the median of the box so sky gradients do not
+    drag the centre; iterating re-centres the box itself, which matters
+    when the seed is several pixels off.
+    """
+    h, w = data.shape[-2], data.shape[-1]
+    cx, cy = float(x), float(y)
+    for _ in range(max(1, int(iters))):
+        x0, x1 = int(round(cx)) - box, int(round(cx)) + box + 1
+        y0, y1 = int(round(cy)) - box, int(round(cy)) + box + 1
+        if x0 < 0 or y0 < 0 or x1 > w or y1 > h:
+            return None
+        cut = np.asarray(data[..., y0:y1, x0:x1], dtype=float)
+        if cut.ndim > 2:
+            cut = cut[0]
+        sub = cut - np.median(cut)
+        sub[sub < 0.0] = 0.0
+        tot = float(sub.sum())
+        if tot <= 0.0:
+            return None
+        ys, xs = np.mgrid[y0:y1, x0:x1]
+        cx = float((sub * xs).sum() / tot)
+        cy = float((sub * ys).sum() / tot)
+    return cx, cy
+
+
+def circle_weights(cut_shape, cx, cy, r, grid=SUBPIXEL_GRID):
+    """Fractional pixel coverage of a circle over a cutout, in [0, 1].
+
+    ``cx, cy`` are in CUTOUT coordinates.  Interior and exterior pixels
+    are decided by their centre distance; only the boundary ring is
+    subsampled ``grid x grid``, which bounds the area error per boundary
+    pixel at 1/grid^2 -- far below the photon noise of any real frame,
+    and orders of magnitude below the half-pixel steps a binary mask
+    would take as the centroid moves between frames.
+    """
+    hgt, wid = cut_shape
+    ys, xs = np.mgrid[0:hgt, 0:wid]
+    d = np.hypot(xs - cx, ys - cy)
+    wgt = (d <= r - 0.71).astype(float)          # wholly inside
+    edge = (d < r + 0.71) & (wgt < 1.0)          # straddles the rim
+    if np.any(edge):
+        off = (np.arange(grid) + 0.5) / grid - 0.5
+        oy, ox = np.meshgrid(off, off, indexing="ij")
+        ex, ey = xs[edge], ys[edge]
+        dd = np.hypot(ex[:, None] + ox.ravel()[None, :] - cx,
+                      ey[:, None] + oy.ravel()[None, :] - cy)
+        wgt[edge] = (dd <= r).mean(axis=1)
+    return wgt
+
+
+def aperture_photometry(data, x, y, radii, r_in, r_out,
+                        gain_e_adu=1.0, sat_adu=None):
+    """Sky-subtracted flux at each radius, with a measured error.
+
+    Returns ``(rows, sky, sky_sigma, peak)`` where ``rows`` maps radius to
+    ``(flux_adu, err_adu, n_pix)``, or ``None`` when the outer annulus
+    leaves the frame or the sky cannot be estimated.
+
+    The error is the CCD equation with every term measured, none assumed:
+    star photons from the flux and the gain, background from the
+    sigma-clipped scatter of the annulus itself -- which already contains
+    read noise, sky photons and flat residuals, so no invented read-noise
+    number can make it optimistic.
+    """
+    h, w = data.shape[-2], data.shape[-1]
+    r_max = max(float(r_out), max(float(r) for r in radii))
+    x0, x1 = int(math.floor(x - r_max - 1)), int(math.ceil(x + r_max + 2))
+    y0, y1 = int(math.floor(y - r_max - 1)), int(math.ceil(y + r_max + 2))
+    if x0 < 0 or y0 < 0 or x1 > w or y1 > h:
+        return None
+    cut = np.asarray(data[..., y0:y1, x0:x1], dtype=float)
+    if cut.ndim > 2:
+        cut = cut[0]
+    cx, cy = x - x0, y - y0
+    ys, xs = np.mgrid[0:cut.shape[0], 0:cut.shape[1]]
+    d = np.hypot(xs - cx, ys - cy)
+    ann = cut[(d >= r_in) & (d <= r_out)]
+    if ann.size < 12:
+        return None
+    # Two MAD clips: one bright star in the annulus must not lift the sky.
+    for _ in range(2):
+        med = np.median(ann)
+        mad = np.median(np.abs(ann - med))
+        if mad <= 0.0:
+            break
+        ann = ann[np.abs(ann - med) < 4.0 * 1.4826 * mad]
+        if ann.size < 12:
+            return None
+    sky = float(np.median(ann))
+    sky_sigma = float(1.4826 * np.median(np.abs(ann - sky)))
+    n_sky = int(ann.size)
+    gain = max(float(gain_e_adu), 1e-6)
+    rows = {}
+    peak = 0.0
+    for r in radii:
+        wgt = circle_weights(cut.shape, cx, cy, float(r))
+        n_ap = float(wgt.sum())
+        flux = float((wgt * (cut - sky)).sum())
+        pk = float(cut[wgt > 0.5].max()) if np.any(wgt > 0.5) else 0.0
+        peak = max(peak, pk)
+        var_e = (max(flux, 0.0) * gain
+                 + (n_ap + n_ap * n_ap / max(n_sky, 1))
+                 * (sky_sigma * gain) ** 2)
+        rows[float(r)] = (flux, math.sqrt(max(var_e, 0.0)) / gain, n_ap)
+    if sat_adu is not None and peak >= float(sat_adu):
+        return rows, sky, sky_sigma, float("inf")
+    return rows, sky, sky_sigma, peak
+
+
+def point_to_point_sigma(mag):
+    """Scatter from successive differences, blind to slow structure.
+
+    A transit is slow; consecutive-point differences straddle it almost
+    everywhere, so this measures NOISE where a plain standard deviation
+    would measure noise plus depth -- and would then prefer whatever
+    aperture washes the transit out.
+    """
+    m = np.asarray(mag, dtype=float)
+    m = m[np.isfinite(m)]
+    if m.size < 3:
+        return float("inf")
+    d = np.diff(m)
+    return float(1.4826 * np.median(np.abs(d - np.median(d)))
+                 / math.sqrt(2.0))
+
+
+def ensemble_relative_mags(target_flux, comp_fluxes,
+                           target_err=None, comp_errs=None):
+    """Target magnitudes against a normalised comparison ensemble.
+
+    Each comp is divided by its own median first, so a comp that misses a
+    frame drops out of that frame's mean WITHOUT stepping the baseline --
+    an ensemble built on raw sums steps by the missing star's whole flux,
+    which is exactly the shape of an ingress.  Weights are median flux
+    (Poisson: SNR^2).  Returns ``(mag, err)`` with NaN where the target
+    or every comp is missing.
+    """
+    t = np.asarray(target_flux, dtype=float)
+    comps = [np.asarray(c, dtype=float) for c in comp_fluxes]
+    if not comps or t.size == 0:
+        return (np.full(t.shape, np.nan), np.full(t.shape, np.nan))
+    norm, wts = [], []
+    for c in comps:
+        good = np.isfinite(c) & (c > 0.0)
+        if good.sum() < 3:
+            continue
+        med = float(np.median(c[good]))
+        if med <= 0.0:
+            continue
+        norm.append(np.where(good, c / med, np.nan))
+        wts.append(med)
+    if not norm:
+        return (np.full(t.shape, np.nan), np.full(t.shape, np.nan))
+    stack = np.vstack(norm)
+    wcol = np.asarray(wts, dtype=float)[:, None]
+    wmask = np.isfinite(stack) * wcol
+    ref = np.nansum(np.where(np.isfinite(stack), stack, 0.0) * wcol,
+                    axis=0) / np.maximum(wmask.sum(axis=0), 1e-12)
+    ref[wmask.sum(axis=0) <= 0.0] = np.nan
+    good_t = np.isfinite(t) & (t > 0.0) & np.isfinite(ref) & (ref > 0.0)
+    mag = np.full(t.shape, np.nan)
+    mag[good_t] = -2.5 * np.log10(t[good_t] / ref[good_t])
+    err = np.full(t.shape, np.nan)
+    if target_err is not None:
+        te = np.asarray(target_err, dtype=float)
+        rel = np.zeros(t.shape)
+        rel[good_t] = (te[good_t] / t[good_t]) ** 2
+        if comp_errs is not None:
+            # The ensemble's own noise, WEIGHTED the way the reference is.
+            # The first version split every comp's variance by N^2 -- equal
+            # weights -- while the reference itself weights by median flux.
+            # Monte Carlo on comps of 100k/10k/2k ADU: empirical 8.1 mmag,
+            # equal-split formula 11.8, this one 8.3.  With w_i = med_i the
+            # reference variance collapses to sum(err_i^2) / (sum med_i)^2
+            # over the members PRESENT in each frame -- the same error a
+            # plain flux sum would carry, which is what Poisson weighting
+            # is optimal for.
+            num = np.zeros(t.shape)
+            den = np.zeros(t.shape)
+            for c, ce in zip(comps, comp_errs):
+                cc = np.asarray(c, dtype=float)
+                cee = np.asarray(ce, dtype=float)
+                g = np.isfinite(cc) & (cc > 0.0) & np.isfinite(cee)
+                if g.sum() < 3:
+                    continue
+                med = float(np.median(cc[g]))
+                if med <= 0.0:
+                    continue
+                num[g] += cee[g] ** 2
+                den[g] += med
+            g_ref = den > 0.0
+            rel[g_ref] += num[g_ref] / den[g_ref] ** 2
+        err[good_t] = 1.0857 * np.sqrt(rel[good_t])
+    return mag, err
+
+
+def rank_comps_by_scatter(comp_fluxes):
+    """Keep-mask over comps, judged against the ensemble of the OTHERS.
+
+    EXOTIC's criterion re-measured here: each comp's light curve against
+    its peers, scored by TOTAL robust scatter -- not point-to-point.  The
+    distinction is the whole point: p2p is deliberately blind to slow
+    structure so a transit cannot be punished, but a SLOWLY variable comp
+    is exactly the danger, because slow structure written inverted into
+    the target is what a fake transit looks like.  A comp curve has no
+    transit to protect, so total scatter is the honest score there.  A
+    comp more than COMP_REJECT_FACTOR times the median score is variable
+    or sick.  At least two always survive -- with one comp there is no
+    ensemble, and zero would silently un-calibrate the run.
+    """
+    n = len(comp_fluxes)
+    if n <= 2:
+        return [True] * n, [float("nan")] * n
+    scores = []
+    for i in range(n):
+        others = [c for j, c in enumerate(comp_fluxes) if j != i]
+        mag, _ = ensemble_relative_mags(comp_fluxes[i], others)
+        m = mag[np.isfinite(mag)]
+        if m.size < 5:
+            scores.append(float("inf"))
+            continue
+        scores.append(float(1.4826 * np.median(np.abs(m - np.median(m)))))
+    finite = [v for v in scores if math.isfinite(v)]
+    if not finite:
+        return [True] * n, scores
+    floor = np.median(finite)
+    keep = [math.isfinite(v) and v <= COMP_REJECT_FACTOR * floor
+            for v in scores]
+    if sum(keep) < 2:                       # keep the two least noisy
+        order = sorted(range(n), key=lambda i: (
+            scores[i] if math.isfinite(scores[i]) else float("inf")))
+        keep = [False] * n
+        for i in order[:2]:
+            keep[i] = True
+    return keep, scores
+
+
+def stays_in_frame(x, y, width, height, envelope, margin):
+    """Whether ``(x, y)`` keeps its whole aperture on the sensor all run.
+
+    ``margin`` is the measurement radius: a star whose CENTRE is still on
+    the chip but whose annulus hangs over the edge measures a background
+    that is half sky and half nothing.
+    """
+    if not envelope or not (width and height):
+        return True
+    dx0, dx1, dy0, dy1 = envelope
+    return (x + dx0 - margin >= 0.0 and x + dx1 + margin < float(width)
+            and y + dy0 - margin >= 0.0 and y + dy1 + margin < float(height))
+
+
 def choose_comparison_stars(stars, target_xy, n_wanted: int,
-                            fwhm_px: float, min_snr: float = MIN_COMP_SNR):
+                            fwhm_px: float, min_snr: float = MIN_COMP_SNR,
+                            frame_wh=None, envelope=None):
     """Pick the comparison ensemble from Siril's detected stars.
 
     ``stars`` is what ``get_image_stars()`` returns.  Returns
@@ -2338,7 +4405,6 @@ def choose_comparison_stars(stars, target_xy, n_wanted: int,
     px = np.array([float(getattr(st, "xpos", 0.0) or 0.0) for st in pool])
     py = np.array([float(getattr(st, "ypos", 0.0) or 0.0) for st in pool])
     outer = AUTORING_OUTER_FWHM * max(1.0, float(fwhm_px))
-    r_iso = COMP_ISOLATION_OUTER * outer
 
     scored = []
     rejected = []
@@ -2348,27 +4414,33 @@ def choose_comparison_stars(stars, target_xy, n_wanted: int,
         if abs(x - tx) < 1e-6 and abs(y - ty) < 1e-6:
             continue                                # the target itself
         sep = math.hypot(x - tx, y - ty)
+        if frame_wh and envelope and not stays_in_frame(
+                x, y, frame_wh[0], frame_wh[1], envelope,
+                AUTORING_OUTER_FWHM * max(1.0, float(fwhm_px))):
+            rejected.append((x, y, "leaves the frame as the field drifts"))
+            continue
         if bool(getattr(st, "has_saturated", False)):
             rejected.append((x, y, "saturated"))
             continue
         if sep < min_sep:
             rejected.append((x, y, f"only {sep:.0f} px from the target"))
             continue
+        nearest = float("inf")
         if px.size > 1:
             d = np.hypot(px - x, py - y)
             d[idx] = np.inf                         # not its own neighbour
             nearest = float(d.min())
-            if nearest < r_iso:
-                rejected.append(
-                    (x, y, f"neighbour {nearest:.0f} px away, inside its own "
-                           f"{outer:.0f} px annulus"))
-                continue
+        # The isolation cut is DEFERRED: how strict it can afford to be
+        # depends on how many stars survive everything else, and that is
+        # not known yet.  A wide field at 5 arcsec/px can have its stars
+        # closer together than one annulus -- 164 of 261 fell here on
+        # EXOTIC's demo set, leaving ONE comparison and no run at all.
         if have_snr:
             snr = _snr(st)
             if snr < min_snr:
                 rejected.append((x, y, f"SNR {snr:.0f} below {min_snr:.0f}"))
                 continue
-            scored.append((x, y, snr))
+            scored.append((x, y, snr, nearest))
         else:
             dm = _mag(st) - tmag
             if dm > COMP_MAG_WINDOW:
@@ -2377,7 +4449,48 @@ def choose_comparison_stars(stars, target_xy, n_wanted: int,
             if dm < -COMP_MAG_WINDOW:
                 rejected.append((x, y, f"{-dm:.1f} mag brighter than the target"))
                 continue
-            scored.append((x, y, -dm))      # brighter first, same as SNR
+            scored.append((x, y, -dm, nearest))  # brighter first, as SNR
+
+    # Now the isolation cut, at the strictest radius that still leaves
+    # enough comparisons.  Strict first: a neighbour inside the sky
+    # annulus corrupts the background, and that error moves with the
+    # seeing -- the shape a transit fit looks for.  But refusing to run at
+    # all is worse than running with a stated compromise, and the floor is
+    # the APERTURE: a neighbour inside that is blended photometry, not a
+    # background error, and no report can rescue it.
+    # The target is the MINIMUM, not the wish.  Relaxing until the user's
+    # requested count is met would trade isolation away in any field that
+    # simply has fewer good stars than asked for -- five in a five-star
+    # field.  Fewer clean comparisons beats more compromised ones; the
+    # relaxation exists only so that a crowded field runs at all.
+    want = MIN_COMPS
+    ladder = [(COMP_ISOLATION_OUTER * outer, "clear of its own sky annulus"),
+              (outer, "clear of the annulus edge"),
+              (0.5 * outer, "clear of the inner annulus"),
+              (COMP_APERTURE_FLOOR_FWHM * max(1.0, float(fwhm_px)),
+               "clear of the aperture only")]
+    chosen_r, chosen_why, survivors = ladder[0][0], ladder[0][1], []
+    for radius, why in ladder:
+        survivors = [c for c in scored if c[3] >= radius]
+        chosen_r, chosen_why = radius, why
+        if len(survivors) >= want:
+            break
+    if chosen_r < ladder[0][0]:
+        note += (f"; isolation relaxed to {chosen_r:.0f} px ({chosen_why}) — "
+                 f"at the full {ladder[0][0]:.0f} px only "
+                 f"{len([c for c in scored if c[3] >= ladder[0][0]])} "
+                 f"comparison(s) survived a field this crowded, and a "
+                 f"neighbour in the sky annulus is a background error that "
+                 f"moves with the seeing")
+    for x, y, _sc, near in scored:
+        if near < chosen_r:
+            rejected.append(
+                (x, y, f"neighbour {near:.0f} px away, inside its own "
+                       f"{outer:.0f} px annulus"
+                 if chosen_r >= ladder[0][0] else
+                 f"neighbour {near:.0f} px away, closer than the "
+                 f"{chosen_r:.0f} px this crowded field could afford"))
+    scored = [(x, y, sc) for x, y, sc, near in survivors]
     scored.sort(key=lambda r: r[2], reverse=True)
     keep = max(0, int(n_wanted))
     # The stars that passed every filter and were simply not needed are
@@ -2502,6 +4615,14 @@ class LightCurveWorker(QThread):
         self.folder = folder
         self.opts = dict(opts)
         self._ext = ".fit"
+        # Consecutive light_curve failures.  Twelve in a row on EXOTIC's
+        # demo set ended with Siril's process gone and a "Broken pipe" the
+        # script could only report as somebody else's crash.
+        self._photometry_failures = 0
+        self._drift = None
+        self._ref_shift = (0.0, 0.0)
+        self._ref_fwhm = 0.0
+        self._frame_wh = None
 
     # -- plumbing ---------------------------------------------------------
     def _emit(self, msg: str, color=None) -> None:
@@ -2581,7 +4702,12 @@ class LightCurveWorker(QThread):
         """
         try:
             from astropy.io import fits
-            with fits.open(ref_path, memmap=True) as hdul:
+            # memmap=False, and not for taste: astropy refuses to
+            # memory-map a file carrying BZERO/BSCALE/BLANK, and Siril's
+            # compressed frames carry them.  With memmap=True the read
+            # raised, the pixel evidence was lost, and the saturation
+            # verdict fell back to Siril's flag with no numbers behind it.
+            with fits.open(ref_path, memmap=False) as hdul:
                 data = None
                 for hdu in hdul:
                     if getattr(hdu, "data", None) is not None:
@@ -2869,6 +4995,109 @@ class LightCurveWorker(QThread):
         self._cmd("register", seq)
         self._emit("  Registration computed (single pass).", LogColor.GREEN)
 
+    def _centre_reference(self, seq: str) -> None:
+        """Move the registration reference to the middle of the DRIFT.
+
+        Siril picks its reference on image quality, which is right for
+        stacking and wrong here.  `light_curve` refuses outright when any
+        frame sits more than 160 px from the reference, so a reference
+        near one end of a drifting run puts the whole drift on one side
+        and the command cannot run at all.
+
+        Measured on EXOTIC's demo set (Siril 1.4.4): Siril chose image 35
+        of 142, worst drift 218.9 px, "generic error" every time.  Moving
+        the reference to image 72 -- the middle of the drift, not of the
+        sequence -- gives 147.1 px and the same command produces a curve
+        from all 142 frames.  `setref` must come AFTER `register`, which
+        picks its own reference and overrides an earlier `setref`.
+
+        Nothing here may abort the run: a reference that cannot be moved
+        leaves the run exactly as it was.
+        """
+        try:
+            self._cmd("load_seq", f'"{seq}_"')
+            data = self.siril.get_seq()
+            n = int(getattr(data, "number", 0) or 0)
+            cur = int(getattr(data, "reference_image", 0) or 0)
+            # From the SEQUENCE, not from a FITS read.  The FITS read is
+            # what failed on a real run ("BZERO/BSCALE/BLANK header
+            # keywords present. Set memmap=False") and the frame size
+            # going missing takes the drift filter down with it.
+            w = int(getattr(data, "rx", 0) or 0)
+            hgt = int(getattr(data, "ry", 0) or 0)
+            self._frame_wh = (w, hgt) if (w and hgt) else None
+            homs, qual = [], []
+            for i in range(n):
+                reg = self.siril.get_seq_regdata(i, 0)
+                homs.append(getattr(reg, "H", None) if reg else None)
+                # Weighted FWHM is Siril's own frame-quality measure and
+                # the one that separates image 71 (2.42) from image 72
+                # (8.50) -- two frames five apart, one usable and one not.
+                q = None
+                for name in ("weighted_fwhm", "wfwhm", "fwhm"):
+                    v = getattr(reg, name, None) if reg else None
+                    try:
+                        v = float(v)
+                    except (TypeError, ValueError):
+                        continue
+                    if math.isfinite(v) and v > 0.0:
+                        q = v
+                        break
+                qual.append(q)
+            shifts = shift_list(homs, w, hgt)
+        except Exception as exc:            # noqa: BLE001
+            _log_swallowed(exc)
+            return
+        if not any(s is not None for s in shifts):
+            return
+        ceiling = SIRIL_DRIFT_LIMIT_PX * DRIFT_LIMIT_MARGIN
+        now = worst_drift(shifts, cur)
+        best_i, best_d = best_reference(shifts, qual, ceiling)
+        if now is None or best_i is None or best_d is None:
+            return
+        if now <= ceiling:
+            # Already inside Siril's limit with room to spare.  Leave the
+            # reference alone -- it is the best-QUALITY frame, and that is
+            # worth keeping when geometry is not forcing the issue.
+            self._ref_shift = shifts[cur] or (0.0, 0.0)
+            return
+        if best_d > ceiling:
+            self._emit(
+                f"  The field drifts {now:.0f} px from Siril's reference "
+                f"frame, and the best any frame can do is {best_d:.0f} px "
+                f"— both over the {SIRIL_DRIFT_LIMIT_PX:.0f} px at which "
+                "light_curve refuses to run. No choice of reference "
+                "rescues this run; the drift itself is too large. Trim "
+                "the run to the stretch where the field holds still, or "
+                "apply the registration first (Siril: `seqapplyreg`) and "
+                "point this script at the resampled sequence.",
+                LogColor.SALMON)
+            self._ref_shift = shifts[cur] or (0.0, 0.0)
+            return
+        try:
+            self._cmd("setref", seq + "_", str(best_i + 1))
+        except (CommandError, DataError, SirilError) as exc:
+            _log_swallowed(exc)
+            self._ref_shift = shifts[cur] or (0.0, 0.0)
+            return
+        self._ref_shift = shifts[best_i] or (0.0, 0.0)
+        q_now = qual[cur] if cur < len(qual) else None
+        q_new = qual[best_i] if best_i < len(qual) else None
+        detail = ""
+        if q_now and q_new:
+            detail = (f" Its weighted FWHM is {q_new:.2f} px against "
+                      f"{q_now:.2f} for the frame Siril chose — the new "
+                      "reference is picked for QUALITY among the frames "
+                      "that fit, not merely for sitting in the middle of "
+                      "the drift.")
+        self._emit(
+            f"  Reference frame moved to image {best_i + 1} of {n}. Siril "
+            f"picked image {cur + 1} on image quality, which left the "
+            f"field drifting {now:.0f} px from it — over the "
+            f"{SIRIL_DRIFT_LIMIT_PX:.0f} px at which light_curve refuses "
+            f"to run at all. The new one drifts {best_d:.0f} px.{detail}",
+            LogColor.GREEN)
+
     def _reference_frame(self, seq: str, proc: str) -> str:
         """Path of the frame Siril chose as its REGISTRATION reference.
 
@@ -2938,10 +5167,20 @@ class LightCurveWorker(QThread):
             # inside the search radius, and enough to turn a blind solve
             # into a targeted one.
             args.append(f"{float(radec[0]):.6f},{float(radec[1]):.6f}")
+        scale, where = image_scale_arcsec(_read_header(ref))
+        scale_note = ""
+        if scale:
+            focal, pix = scale_to_focal_pixel(scale)
+            args.append(f"-focal={focal:.2f}")
+            args.append(f"-pixelsize={pix:.2f}")
+            scale_note = (f" at {scale:.3f}\"/px from {where}")
+        else:
+            scale_note = f" — {where}"
         self._emit("  No astrometric solution in these frames — plate-solving "
                    "the reference frame" + (" around the target position"
-                                            if radec else "") + "…",
-                   LogColor.BLUE)
+                                            if radec else "")
+                   + scale_note + "…",
+                   LogColor.BLUE if scale else LogColor.SALMON)
         try:
             self._cmd(*args)
         except (CommandError, DataError, SirilError) as exc:
@@ -2985,13 +5224,15 @@ class LightCurveWorker(QThread):
             if site is None:
                 continue
             lat, lon, height, where = site
+            lon, sign_note = longitude_sign_check(_read_header(path), lat, lon)
             self.opts["site_lat_deg"] = lat
             self.opts["site_lon_deg"] = lon
             self.opts["site_height_m"] = height
             self._emit(f"  Site read from the {where}: {lat:+.4f}, "
-                       f"{lon:+.4f}, {height:.0f} m. Longitude is EAST "
-                       "positive — check the sign if the airmass looks "
-                       "mirrored.", LogColor.BLUE)
+                       f"{lon:+.4f}, {height:.0f} m."
+                       + (f" {sign_note}." if sign_note else ""),
+                       LogColor.RED if "FLIPPED" in sign_note
+                       else LogColor.BLUE)
             return
         self._emit("  No observatory position in the frames and none given "
                    "— the airmass detrend and the BJD_TDB conversion will "
@@ -3007,6 +5248,12 @@ class LightCurveWorker(QThread):
         silicon before and after the flip, and the light curve therefore
         carries a step at that moment -- the same shape as an ingress.
         """
+        # The same pass collects the per-frame quality Siril already
+        # measured during registration and this script used to discard.
+        # RegData carries fwhm, background_lvl, number_of_stars and
+        # roundness alongside the homography -- four detrending bases for
+        # free, no extra read of a single pixel.
+        quality = {"fwhm": [], "sky": [], "n_stars": [], "roundness": []}
         try:
             self._cmd("load_seq", f'"{seq}_"')
             data = self.siril.get_seq()
@@ -3015,6 +5262,22 @@ class LightCurveWorker(QThread):
             for i in range(n):
                 reg = self.siril.get_seq_regdata(i, 0)
                 homs.append(getattr(reg, "H", None) if reg else None)
+                quality["fwhm"].append(
+                    float(getattr(reg, "fwhm", float("nan")) or float("nan"))
+                    if reg else float("nan"))
+                quality["sky"].append(
+                    float(getattr(reg, "background_lvl", float("nan"))
+                          or float("nan")) if reg else float("nan"))
+                quality["n_stars"].append(
+                    float(getattr(reg, "number_of_stars", float("nan"))
+                          or float("nan")) if reg else float("nan"))
+                quality["roundness"].append(
+                    float(getattr(reg, "roundness", float("nan"))
+                          or float("nan")) if reg else float("nan"))
+            self._frame_quality = {k: np.asarray(v, dtype=float)
+                                   for k, v in quality.items()}
+            wh = getattr(self, "_frame_wh", None) or (0, 0)
+            self._drift = drift_envelope(homs, self._ref_shift, wh[0], wh[1])
         except Exception as exc:
             _log_swallowed(exc)
             return 0.0
@@ -3036,15 +5299,639 @@ class LightCurveWorker(QThread):
                        "no flip.", LogColor.BLUE)
         return spread
 
-    def _run_light_curve(self, seq: str, target_xy, comps) -> None:
+    def _native_photometry(self, seq: str, proc: str, target_xy, comps,
+                           fwhm: float):
+        """Measure the run here, with Siril doing the geometry.
+
+        Returns ``(jd, mag, err, n_unmeasured)`` or ``None``, in which
+        case the caller falls back to Siril's `light_curve` -- the old
+        path stays fully intact behind this one.
+
+        Why this exists (all measured, Siril 1.4.4, EXOTIC's demo set):
+        `light_curve` moves each box by the registration alone and lost
+        half the frames of a drifting run; `seqpsf -followstar` measured
+        the same star with zero failures but its numbers are reachable
+        neither from a file nor from sirilpy, and `light_curve` does not
+        reuse them.  So the frames are read once each and every star is
+        re-centroided per frame -- the same follow-star idea, plus
+        EXOTIC's two judgements: comps kept by measured scatter, aperture
+        chosen by point-to-point noise of the finished curve.
+        """
+        try:
+            from astropy.io import fits
+        except ImportError:
+            return None
+        try:
+            self._cmd("load_seq", f'"{seq}_"')
+            data = self.siril.get_seq()
+            n = int(getattr(data, "number", 0) or 0)
+            exposure = float(getattr(data, "exposure", 0.0) or 0.0)
+            frames = []
+            for i in range(n):
+                reg = self.siril.get_seq_regdata(i, 0)
+                img = self.siril.get_seq_imgdata(i)
+                hom = _homography(getattr(reg, "H", None) if reg else None)
+                if img is None or hom is None or not getattr(img, "incl", True):
+                    continue
+                when = getattr(img, "date_obs", None)
+                fnum = int(getattr(img, "filenum", i + 1) or (i + 1))
+                path = None
+                try:
+                    path = self.siril.get_seq_frame_filename(i)
+                except Exception as exc:        # noqa: BLE001
+                    _log_swallowed(exc)
+                if not path:
+                    # Siril's output extension is configurable; probe the
+                    # usual three rather than hard-coding one.
+                    fixed = int(getattr(data, "fixed", 5) or 5)
+                    stem = os.path.join(proc, f"{seq}_{fnum:0{fixed}d}")
+                    for ext in (".fit", ".fits", ".fts"):
+                        if os.path.exists(stem + ext):
+                            path = stem + ext
+                            break
+                    if not path:
+                        continue
+                elif not os.path.isabs(path):
+                    path = os.path.join(proc, path)
+                frames.append((i, hom, when, path))
+        except Exception as exc:                # noqa: BLE001
+            _log_swallowed(exc)
+            return None
+        if len(frames) < 5:
+            return None
+
+        stars = [tuple(map(float, target_xy))] + \
+                [(float(c[0]), float(c[1])) for c in comps]
+        # The stars were detected on `reference_image` -- which `setref`
+        # may have moved -- while every homography still points at the
+        # ORIGINAL registration reference (measured: after `setref 70`
+        # the .seq keeps the identity at image 35).  Send the positions
+        # through the detection frame's own homography first, or every
+        # seed is off by the full shift between the two frames.
+        try:
+            det = int(getattr(data, "reference_image", 0) or 0)
+            wh = getattr(self, "_frame_wh", None)
+            det_hom = None
+            for i, hom, _w, _p in frames:
+                if i == det:
+                    det_hom = hom
+                    break
+            if det_hom is not None and wh and (
+                    abs(det_hom[2]) > 0.5 or abs(det_hom[5]) > 0.5
+                    or abs(det_hom[0] - 1.0) > 1e-3):
+                moved = []
+                for sx, sy in stars:
+                    pos = frame_to_ref(det_hom, sx, sy, wh[0], wh[1])
+                    if pos is None:
+                        return None
+                    moved.append(pos)
+                stars = moved
+        except Exception as exc:                # noqa: BLE001
+            _log_swallowed(exc)
+            return None
+        radii = sorted({round(max(1.5, float(fwhm) * g), 2)
+                        for g in APERTURE_FWHM_GRID})
+        r_in = AUTORING_INNER_FWHM * max(float(fwhm), 1.0)
+        r_out = AUTORING_OUTER_FWHM * max(float(fwhm), 1.0)
+        gain = 1.0
+        gain_src = "assumed — no usable EGAIN in the header"
+        sat_adu = None
+        try:
+            with fits.open(frames[0][3], memmap=False) as hd:
+                hdr = hd[0].header if hd[0].data is not None else hd[1].header
+                # EGAIN is e-/ADU by convention.  GAIN is usually the
+                # CAMERA SETTING (0-500, arbitrary units) and must not be
+                # mistaken for a conversion factor: a GAIN of 100 read as
+                # e-/ADU would multiply every error bar tenfold.  So GAIN
+                # is only believed in the range real conversion factors
+                # live in.
+                for card, hi in (("EGAIN", 100.0), ("GAIN", 10.0)):
+                    try:
+                        v = float(hdr.get(card))
+                        if 0.0 < v < hi:
+                            gain = v
+                            gain_src = f"from the header ({card})"
+                            break
+                    except (TypeError, ValueError):
+                        pass
+                d0 = None
+                for u in hd:
+                    if getattr(u, "data", None) is not None:
+                        d0 = u.data
+                        break
+            if d0 is not None and np.issubdtype(d0.dtype, np.integer):
+                sat_adu = SAT_FRACTION * float(np.iinfo(d0.dtype).max)
+            elif d0 is not None and float(np.nanmax(d0)) <= 1.05:
+                sat_adu = SAT_FRACTION
+        except Exception as exc:                # noqa: BLE001
+            _log_swallowed(exc)
+            return None
+
+        n_stars = len(stars)
+        n_frames = len(frames)
+        jd = np.full(n_frames, np.nan)
+        flux = {r: np.full((n_stars, n_frames), np.nan) for r in radii}
+        ferr = {r: np.full((n_stars, n_frames), np.nan) for r in radii}
+        sat_dropped = 0
+        unreadable = 0
+        # The homography convention (frame->reference, as the drift filter
+        # established on real data) gives the seed; the centroid does the
+        # rest, and a seed that finds nothing is retried through the
+        # inverse so a convention change in Siril degrades to a second
+        # attempt instead of a silent empty run.
+        for k, (_i, hom, when, path) in enumerate(frames):
+            if self.isInterruptionRequested():
+                return None
+            try:
+                with fits.open(path, memmap=False) as hd:
+                    d = None
+                    hdr = None
+                    for u in hd:
+                        if getattr(u, "data", None) is not None:
+                            d = np.asarray(u.data)
+                            hdr = u.header
+                            break
+            except Exception as exc:            # noqa: BLE001
+                _log_swallowed(exc)
+                unreadable += 1
+                continue
+            if d is None or d.ndim < 2:
+                unreadable += 1
+                continue
+            # The time comes from the frame's OWN header, which is already
+            # open -- not from sirilpy's ImgData.date_obs, which came back
+            # empty on a real N.I.N.A. run: the engine then measured 83
+            # good points, could stamp none of them, and fell back to
+            # Siril without a word.  The header parser has survived every
+            # timestamp this project has met (seven-digit fractions, UTC
+            # offsets); sirilpy is the fallback, not the source.
+            try:
+                exp_s = float(hdr.get("EXPTIME", hdr.get("EXPOSURE", 0.0))
+                              or 0.0) if hdr is not None else 0.0
+            except (TypeError, ValueError):
+                exp_s = 0.0
+            if not exp_s:
+                exp_s = exposure
+            stamp = str(hdr.get("DATE-OBS", "") or "") if hdr is not None \
+                else ""
+            if not stamp and when is not None:
+                try:
+                    stamp = when.isoformat()
+                except Exception:               # noqa: BLE001
+                    stamp = ""
+            if stamp:
+                jd[k] = _jd_from_dateobs(stamp) + exp_s / 172800.0
+            hgt, wid = d.shape[-2], d.shape[-1]
+            target_hit = False
+            for si, (sx, sy) in enumerate(stars):
+                pos = ref_to_frame(hom, sx, sy, wid, hgt)
+                cen = (refine_centroid(d, pos[0], pos[1])
+                       if pos is not None else None)
+                if cen is not None and math.hypot(
+                        cen[0] - pos[0], cen[1] - pos[1]) > CENTROID_MAX_SHIFT:
+                    # The centre of light walked to a NEIGHBOUR.  A wrong
+                    # star measured confidently is worse than a missing
+                    # frame -- it was most of the 900 mmag above.
+                    cen = None
+                if cen is None:
+                    continue
+                got = aperture_photometry(d, cen[0], cen[1], radii,
+                                          r_in, r_out, gain, sat_adu)
+                if got is None:
+                    continue
+                rows, _sky, _ssig, peak = got
+                if math.isinf(peak):            # clipped core this frame
+                    if si == 0:
+                        sat_dropped += 1
+                    continue
+                if si == 0:
+                    target_hit = True
+                for r, (fl, er, _npx) in rows.items():
+                    flux[r][si, k] = fl
+                    ferr[r][si, k] = er
+
+        good_t = np.isfinite(flux[radii[0]][0])
+        yield_frac = float(good_t.sum()) / max(n_frames, 1)
+        if yield_frac < NATIVE_MIN_YIELD:
+            self._emit(
+                f"  This script measured only {int(good_t.sum())} of "
+                f"{n_frames} frame(s) itself"
+                + (f" ({unreadable} unreadable)" if unreadable else "")
+                + (f" ({sat_dropped} with a clipped core)" if sat_dropped
+                   else "")
+                + " — below the bar for trusting its own result, so "
+                "Siril's light_curve takes over.", LogColor.SALMON)
+            return None
+
+        # Comps judged at the middle radius, kept or dropped by measured
+        # scatter; the verdict is then reused for every radius.
+        mid_r = radii[len(radii) // 2]
+        comp_flux_mid = [flux[mid_r][i] for i in range(1, n_stars)]
+        keep, scores = rank_comps_by_scatter(comp_flux_mid)
+        comp_rows = []
+        for i, (kp, sc) in enumerate(zip(keep, scores)):
+            cx, cy = stars[i + 1]
+            rms = 1000.0 * sc if math.isfinite(sc) else float("nan")
+            verdict = ("kept" if kp
+                       else "DROPPED — varies against its peers")
+            comp_rows.append((cx, cy, rms, verdict))
+            label = ("      —" if not math.isfinite(sc)
+                     else f"{rms:6.1f} mmag")
+            self._emit(f"    comp ({cx:7.1f}, {cy:7.1f})  {label}"
+                       + ("" if kp else "  " + verdict),
+                       LogColor.BLUE if kp else LogColor.SALMON)
+        if not any(keep):
+            self._emit("  Every comparison star failed its own scatter "
+                       "check — Siril's light_curve takes over.",
+                       LogColor.SALMON)
+            return None
+
+        best = None
+        aper_rows = []
+        for r in radii:
+            cf = [flux[r][i + 1] for i in range(len(keep)) if keep[i]]
+            ce = [ferr[r][i + 1] for i in range(len(keep)) if keep[i]]
+            mag, err = ensemble_relative_mags(flux[r][0], cf,
+                                             ferr[r][0], ce)
+            p2p = point_to_point_sigma(mag)
+            npts = int(np.isfinite(mag).sum())
+            aper_rows.append((float(r), npts,
+                              1000.0 * p2p if math.isfinite(p2p)
+                              else float("nan")))
+            self._emit(f"    aperture {r:5.2f} px  {npts:4d} point(s)  "
+                       + ("     —" if not math.isfinite(p2p)
+                          else f"{1000.0 * p2p:6.2f} mmag"), LogColor.BLUE)
+            if math.isfinite(p2p) and (best is None or p2p < best[0]):
+                best = (p2p, r, mag, err, npts)
+        if best is None:
+            self._emit("  No aperture produced a finite light curve — "
+                       "Siril's light_curve takes over.", LogColor.SALMON)
+            return None
+        p2p, r_best, mag, err, npts = best
+        self._emit(
+            f"  Aperture {r_best:.2f} px "
+            f"({r_best / max(float(fwhm), 1e-9):.2f} x FWHM) chosen by "
+            f"point-to-point noise; sky annulus {r_in:.1f}-{r_out:.1f} px; "
+            f"gain {gain:g} e-/ADU {gain_src}.", LogColor.GREEN)
+        # Centre the curve on its own median.  The raw value is
+        # -2.5*log10(flux / a reference normalised to ~1) — an arbitrary
+        # zero point near -10 that reads as broken in every plot, CSV and
+        # report.  Subtracting a constant moves the baseline coefficient
+        # and nothing else; depth, scatter and timing are differences.
+        mag = mag - float(np.nanmedian(mag))
+        ok = np.isfinite(jd) & np.isfinite(mag)
+        n_unmeasured = int(n_frames - ok.sum())
+        if int(ok.sum()) < 5:
+            # Say WHICH ingredient is missing.  This exact exit once fired
+            # silently with 83 good magnitudes and zero good time stamps,
+            # and the only visible symptom was Siril's fallback running
+            # after the aperture table had already been printed.
+            n_t = int(np.isfinite(jd).sum())
+            n_m = int(np.isfinite(mag).sum())
+            self._emit(
+                f"  This script measured {n_m} magnitude(s) but has "
+                f"usable time stamps for only {n_t} frame(s) — a curve "
+                "needs both, so Siril's light_curve takes over.",
+                LogColor.SALMON)
+            return None
+        self._emit(
+            f"  {int(ok.sum())} photometric point(s) measured by this "
+            f"script — every star re-centroided per frame, the follow-star "
+            f"idea light_curve lacks"
+            + (f"; {sat_dropped} frame(s) dropped for a clipped target "
+               "core" if sat_dropped else "")
+            + (f"; {unreadable} unreadable" if unreadable else "")
+            + ".", LogColor.GREEN)
+        e = np.where(np.isfinite(err[ok]), err[ok], np.nanmedian(err[ok]))
+        return jd[ok], mag[ok], e, n_unmeasured, comp_rows, aper_rows
+
+    def _run_light_curve(self, seq: str, target_xy, comps,
+                         autoring=None, quiet: bool = False) -> None:
         """Hand the positions to Siril's own aperture photometry."""
+        ring = (bool(self.opts.get("autoring", True))
+                if autoring is None else bool(autoring))
+        if ring and self._ref_fwhm > 0.0:
+            # What `-autoring` would have done, done here instead, because
+            # the flag itself makes light_curve abort (see
+            # `light_curve_args`).  Siril's own factors, its own
+            # arithmetic: it logs "ring radii to 7.5 and 11.3 (FWHM is
+            # 1.797542)" and 1.797542 x 4.2 = 7.55, x 6.3 = 11.32.
+            try:
+                self._cmd("setphot",
+                          f"-inner={AUTORING_INNER_FWHM * self._ref_fwhm:.2f}",
+                          f"-outer={AUTORING_OUTER_FWHM * self._ref_fwhm:.2f}")
+            except (CommandError, DataError, SirilError) as exc:
+                _log_swallowed(exc)
         args = light_curve_args(seq, self.opts.get("channel", 0),
-                                bool(self.opts.get("autoring", True)),
-                                target_xy, comps)
-        self._emit("  " + " ".join(args), LogColor.BLUE)
+                                ring, target_xy, comps)
+        if not quiet:
+            self._emit("  " + " ".join(args), LogColor.BLUE)
         self._cmd(*args)
 
+    def _measure_curve(self, seq: str, target_xy, comps, autoring: bool,
+                       proc: str):
+        """Run Siril's photometry once and return ``(jd, mag, err)``.
+
+        Any failure returns empty arrays rather than raising: this is a
+        PROBE, called a dozen times by the comparison screen and the
+        aperture scan, and one bad geometry should not end the run.
+
+        But repeated identical failures are not independent trials.  A
+        run on EXOTIC's demo set failed all twelve calls -- every one for
+        the same reason, a reference star that drifts off the sensor --
+        and Siril's process then died, leaving a "Broken pipe" the script
+        could only report as somebody else's crash.  After
+        MAX_PHOTOMETRY_FAILURES in a row the probes stop and say why,
+        because the thirteenth call cannot succeed where twelve failed and
+        each one is a chance to take Siril down with it.
+        """
+        if self._photometry_failures >= MAX_PHOTOMETRY_FAILURES:
+            return np.empty(0), np.empty(0), np.empty(0)
+        try:
+            dat = self._run_light_curve(seq, target_xy, comps, autoring, proc)
+            if dat is None:
+                self._photometry_failures += 1
+                self._note_photometry_failure()
+                return np.empty(0), np.empty(0), np.empty(0)
+            jd, mag, err = _parse_light_curve_dat(dat)
+            self._photometry_failures = 0
+            return jd, mag, err
+        except Exception as exc:            # noqa: BLE001 -- probe only
+            _log_swallowed(exc)
+            self._photometry_failures += 1
+            self._note_photometry_failure()
+            return np.empty(0), np.empty(0), np.empty(0)
+
+    def _note_photometry_failure(self) -> None:
+        """Say it once, when the run of failures becomes a diagnosis."""
+        if self._photometry_failures != MAX_PHOTOMETRY_FAILURES:
+            return
+        self._emit(
+            f"  {MAX_PHOTOMETRY_FAILURES} photometry calls in a row failed. "
+            "That is not a bad frame or an unlucky aperture — it is the "
+            "same geometry failing every time, and the remaining probes "
+            "are skipped. The usual cause is a measurement box that leaves "
+            "the sensor as the field drifts; the drift and the stars "
+            "dropped for it are listed above.", LogColor.RED)
+
+    def _screen_comparisons(self, seq: str, comps, proc: str):
+        """Drop comparison stars that are variable, by MEASURING them.
+
+        Each candidate is photometered against the OTHERS -- exactly the
+        differential measurement the target gets -- and judged on the
+        robust scatter of its own curve.  A star that wobbles against its
+        peers writes that wobble, inverted, into the target's curve, and
+        nothing else in this script would ever notice.
+
+        No catalogue and no network: a variability flag from VSX would be
+        better where it exists, but the star has to be IN the catalogue,
+        and the ones that ruin an amateur light curve usually are not.
+        The measurement needs neither.
+
+        Returns ``(kept, rows)``; ``rows`` is ``(x, y, rms_mmag, verdict)``
+        for every candidate, so the report can show the ones that passed
+        as well as the ones that did not.
+        """
+        rows = []
+        if len(comps) < 3:
+            return list(comps), rows
+        scatters = []
+        for i, comp in enumerate(comps):
+            others = [c for j, c in enumerate(comps) if j != i]
+            jd, mag, _e = self._measure_curve(seq, (comp[0], comp[1]), others,
+                                              True, proc)
+            rms = _mad_std(mag) * 1000.0 if jd.size >= 5 else float("nan")
+            scatters.append(rms)
+        finite = [r for r in scatters if np.isfinite(r)]
+        if len(finite) < 3:
+            return list(comps), [(c[0], c[1], scatters[i], "not measured")
+                                 for i, c in enumerate(comps)]
+        # The floor is the ensemble's own median scatter, not an absolute
+        # number of millimagnitudes: a bright night and a poor one differ
+        # by a factor, and a fixed threshold would reject everything on one
+        # and nothing on the other.
+        floor = float(np.median(finite))
+        kept = []
+        for i, comp in enumerate(comps):
+            rms = scatters[i]
+            if not np.isfinite(rms):
+                kept.append(comp)
+                rows.append((comp[0], comp[1], rms, "kept (not measured)"))
+            elif rms > COMP_VARIABILITY_RATIO * floor and len(kept) < len(comps) - 1:
+                rows.append((comp[0], comp[1], rms,
+                             f"DROPPED — {rms / floor:.1f}x the ensemble "
+                             f"median of {floor:.1f} mmag"))
+            else:
+                kept.append(comp)
+                rows.append((comp[0], comp[1], rms, "kept"))
+        if len(kept) < MIN_COMPS:
+            # Refusing to measure at all is worse than measuring with a
+            # suspect comp, as long as the suspicion is on the record.
+            return list(comps), rows + [(0.0, 0.0, float("nan"),
+                                         "all drops reverted: fewer than "
+                                         f"{MIN_COMPS} would have been left")]
+        return kept, rows
+
+    def _scan_aperture(self, seq: str, target_xy, comps, fwhm: float,
+                       proc: str):
+        """Find the aperture radius with the least scatter.
+
+        The single most influential number in aperture photometry, and it
+        was never chosen here: `-autoring` sets one pair of radii from the
+        frame's FWHM and that was that.  Too small loses a
+        seeing-dependent share of the star, which is a systematic that
+        moves with the night; too large collects sky and neighbours.  The
+        optimum sits between and depends on the data.
+
+        The criterion is the robust scatter of the differential curve --
+        but ONLY among candidates that measured a comparable number of
+        frames.  Least-scatter alone rewards an aperture that drops the
+        hard frames: with a 3x seeing swing and identical underlying
+        noise, a candidate surviving on 7% of frames shows 3.81 mmag where
+        the full sample shows 8.08.  The winner would be the one that
+        measured the least, and its "low scatter" would be a selected
+        sample rather than a better aperture.
+
+        Returns ``(aperture_px, inner, outer, rows)`` or ``None`` to leave
+        `-autoring` in charge.
+        """
+        fwhm = max(0.5, float(fwhm))
+        rows = []
+        for mult in APERTURE_SCAN_FWHM:
+            aper = mult * fwhm
+            inner, outer = APERTURE_INNER_RATIO * aper, APERTURE_OUTER_RATIO * aper
+            try:
+                self._cmd("setphot", f"-aperture={aper:.2f}",
+                          f"-inner={inner:.2f}", f"-outer={outer:.2f}")
+            except Exception as exc:        # noqa: BLE001
+                _log_swallowed(exc)
+                return None
+            jd, mag, _e = self._measure_curve(seq, target_xy, comps, False,
+                                              proc)
+            rms = _mad_std(mag) * 1000.0 if jd.size >= 5 else float("nan")
+            rows.append((aper, int(jd.size), rms))
+        # Two passes, because eligibility depends on the best yield and that
+        # is only known once every candidate has been measured.
+        usable = [(a, n, r) for a, n, r in rows if n >= 5 and np.isfinite(r)]
+        if not usable:
+            return None
+        top = max(n for _a, n, _r in usable)
+        floor = APERTURE_MIN_YIELD_RATIO * top
+        eligible = [(a, n, r) for a, n, r in usable if n >= floor]
+        dropped = [(a, n) for a, n, _r in usable if n < floor]
+        if dropped:
+            self._emit(
+                "    " + ", ".join(f"{a:.2f} px ({n} pt)" for a, n in dropped)
+                + f" not compared — under {APERTURE_MIN_YIELD_RATIO:.0%} of "
+                  f"the best yield ({top}). Fewer frames measured is a "
+                  "seeing-selected sample, and its scatter reads low for "
+                  "that reason alone.", LogColor.SALMON)
+        aper, _n, _rms = min(eligible, key=lambda t: (t[2], -t[1]))
+        return (aper, APERTURE_INNER_RATIO * aper,
+                APERTURE_OUTER_RATIO * aper, rows)
+
     # -- analysis ---------------------------------------------------------
+    def _resolve_from_name(self, infos):
+        """Find the target without asking you to type coordinates.
+
+        Two independent sources, and the ORDER matters.
+
+        **The headers first.**  N.I.N.A. writes OBJCTRA/OBJCTDEC — the
+        object's position, not the telescope's — and on this run all 178
+        lights carry it identically, 5.7" x 0.2" from the archive.  Under
+        three pixels, already on the disk, no network, and it cannot be
+        wrong about which target the folder holds.  A lookup that has to
+        reach the internet to learn something the file already says is the
+        wrong default.
+
+        **The archive second**, for the ephemeris the header cannot carry:
+        period and epoch, which is what O-C needs and what makes a single
+        night worth submitting.  It also cross-checks the position, and a
+        disagreement is reported rather than silently resolved — the two
+        describing different things is exactly what a wrong OBJECT looks
+        like.
+
+        Whatever comes out, `pick_target` still reports its separation
+        from a real DETECTED star, so nothing here can mis-point quietly.
+        """
+        hdr_ra, hdr_dec, hdr_note = header_target_radec(infos)
+        typed_radec = self.opts.get("target_radec")
+        if hdr_ra is None:
+            self._emit(f"  Target position not in the headers — {hdr_note}.",
+                       LogColor.BLUE)
+        elif not typed_radec:
+            self.opts["target_radec"] = (hdr_ra, hdr_dec)
+            self.opts["target_mode"] = "radec"
+            self.opts["target_ra_deg"] = hdr_ra
+            self.opts["target_dec_deg"] = hdr_dec
+            self._emit(f"  Target from OBJCTRA/OBJCTDEC in your lights: RA "
+                       f"{hdr_ra:.5f}°, Dec {hdr_dec:+.5f}° ({hdr_note}). "
+                       "No lookup needed for the position.", LogColor.GREEN)
+        else:
+            # Saying nothing here would be the worst of the three: the
+            # headers WERE read, they do carry a position, and the run
+            # quietly used a different one.  A stored RA/Dec left over
+            # from the previous target is exactly how that goes wrong.
+            if self.opts.get("target_mode") == "auto":
+                self.opts["target_mode"] = "radec"
+            gap = angular_sep_arcsec(hdr_ra, hdr_dec,
+                                     float(typed_radec[0]),
+                                     float(typed_radec[1]))
+            if gap > TARGET_DISAGREE_ARCSEC:
+                self._emit(
+                    f"  Using the RA/Dec in the form, but it is {gap:.0f}\" "
+                    f"from what OBJCTRA/OBJCTDEC in your lights say ({hdr_ra:.5f}"
+                    f"°, {hdr_dec:+.5f}°). Clear the fields to use the headers "
+                    "— a coordinate left over from the previous target looks "
+                    "exactly like this.", LogColor.RED)
+            else:
+                self._emit(f"  Using the RA/Dec in the form; your lights agree "
+                           f"to {gap:.1f}\".", LogColor.BLUE)
+
+        if not self.opts.get("resolve_target", True):
+            return None
+        typed = str(self.opts.get("target_name", "") or "").strip()
+        from_hdr = ""
+        for info in infos:
+            kind = (info.get("kind") or "").strip().lower()
+            if (not kind or kind == KIND_LIGHT.lower()) and info.get("object"):
+                from_hdr = str(info["object"]).strip()
+                break
+        name = typed or from_hdr
+        if not name:
+            return None
+        planet = normalise_planet_name(name)
+        source = "the Target box" if typed else "OBJECT in the lights"
+
+        cache = self._target_cache()
+        hit = cache.get(planet.upper())
+        if hit:
+            eph, note = hit, ""
+            self._emit(f"  {planet} — ephemeris from the local cache "
+                       f"(name from {source}).", LogColor.BLUE)
+        else:
+            self._emit(f"  Looking up {planet} at the NASA Exoplanet "
+                       f"Archive for the ephemeris (name from {source})…",
+                       LogColor.BLUE)
+            eph, note = archive_lookup(planet)
+            if eph:
+                cache[planet.upper()] = eph
+                self._store_target_cache(cache)
+        if not eph:
+            self._emit(f"  {note}. The position above still stands; only "
+                       "the O−C against a published ephemeris is lost.",
+                       LogColor.SALMON)
+            return None
+
+        if hdr_ra is not None:
+            sep = angular_sep_arcsec(hdr_ra, hdr_dec,
+                                     eph["ra_deg"], eph["dec_deg"])
+            if sep > TARGET_DISAGREE_ARCSEC:
+                self._emit(
+                    f"  The headers and the archive disagree by {sep:.0f}\" "
+                    f"about where {planet} is. The headers win — they came "
+                    "with these frames — but check the OBJECT name, because "
+                    "that gap means the two are describing different things "
+                    "and the ephemeris below may belong to another planet.",
+                    LogColor.RED)
+            else:
+                self._emit(f"  Archive agrees with the headers to "
+                           f"{sep:.1f}\".", LogColor.BLUE)
+        elif not self.opts.get("target_radec"):
+            self.opts["target_radec"] = (eph["ra_deg"], eph["dec_deg"])
+            self.opts["target_mode"] = "radec"
+            self.opts["target_ra_deg"] = eph["ra_deg"]
+            self.opts["target_dec_deg"] = eph["dec_deg"]
+            self._emit(f"  Target from the archive: RA {eph['ra_deg']:.5f}°, "
+                       f"Dec {eph['dec_deg']:+.5f}° — the next step reports "
+                       "how far that lands from a real detection.",
+                       LogColor.GREEN)
+        if eph.get("period_d") and eph.get("t0_bjd"):
+            self._emit(f"  Ephemeris: P = {eph['period_d']:.6f} d, "
+                       f"T0 = {eph['t0_bjd']:.5f} BJD"
+                       + (f", depth {eph['depth_pct']:.3f} %"
+                          if eph.get("depth_pct") else "") + ".",
+                       LogColor.BLUE)
+        return eph
+
+    def _target_cache(self) -> dict:
+        """Everything looked up so far, keyed by upper-case planet name."""
+        try:
+            raw = QSettings(SETTINGS_ORG, SETTINGS_APP).value(
+                "target_cache", "") or ""
+            got = json.loads(raw) if raw else {}
+            return got if isinstance(got, dict) else {}
+        except Exception as exc:                   # noqa: BLE001
+            _log_swallowed(exc)
+            return {}
+
+    def _store_target_cache(self, cache: dict) -> None:
+        try:
+            QSettings(SETTINGS_ORG, SETTINGS_APP).setValue(
+                "target_cache", json.dumps(cache))
+        except Exception as exc:                   # noqa: BLE001
+            _log_swallowed(exc)
+
     def _airmass_series(self, jd):
         """Airmass per point, or ``(None, reason)`` when it cannot be had.
 
@@ -3078,7 +5965,36 @@ class LightCurveWorker(QThread):
         try:
             self._run()
         except (CommandError, DataError, SirilError) as exc:
-            self._fail(f"Siril refused a command: {exc}")
+            # A broken pipe is not a refusal: Siril's process is GONE.
+            # Reporting the errno verbatim sends the reader looking for a
+            # bug in the command that happened to be in flight, which is
+            # the one thing that cannot be at fault any more.
+            drift = getattr(self, "_drift", None)
+            if "light_curve" in str(exc) and drift:
+                span = max(drift[1] - drift[0], drift[3] - drift[2])
+                self._fail(
+                    f"Siril would not measure this sequence: {exc}\n\n"
+                    f"The field drifts {span:.0f} px across the run. Siril "
+                    "moves every measurement box by the registration and "
+                    "refuses outright when one of them cannot follow — the "
+                    "warning it prints names a FRAME, never the star. Stars "
+                    "that would leave the sensor are already excluded here, "
+                    "so if this persists the drift is too large for "
+                    "photometry on unresampled frames: apply the "
+                    "registration first (Siril: `seqapplyreg`) and point "
+                    "this script at the resampled sequence, or trim the run "
+                    "to the stretch where the field holds still.")
+            elif "broken pipe" in str(exc).lower() or "errno 32" in str(exc).lower():
+                self._fail(
+                    "Siril's process ended while this script was talking to "
+                    "it — that is a crash on Siril's side, not a refused "
+                    "command. Restart Siril and run again. The log above "
+                    "shows how far it got; if the last lines are repeated "
+                    "photometry failures, fix the geometry they name first, "
+                    "because each retry is another chance to bring Siril "
+                    "down.")
+            else:
+                self._fail(f"Siril refused a command: {exc}")
         except Exception as exc:                       # noqa: BLE001
             self._fail(f"{exc.__class__.__name__}: {exc}\n\n"
                              f"{traceback.format_exc()}")
@@ -3111,6 +6027,7 @@ class LightCurveWorker(QThread):
                 "run is hundreds.")
             return
         self._inside_calib = inside_calib
+        self._light_infos = files_info
 
         work = os.path.join(folder, WORK_DIRNAME)
         out_dir = os.path.join(folder, OUT_DIRNAME)
@@ -3136,11 +6053,27 @@ class LightCurveWorker(QThread):
 
         self.progress.emit(20, "Registering…")
         self._register(seq)
+        self._centre_reference(seq)
 
         self.progress.emit(35, "Detecting stars on the reference frame…")
+        eph = self._resolve_from_name(files_info)
+        if self.opts.get("target_mode") == "auto":
+            # "From the frames" found nothing usable.  Falling through to
+            # brightest is the right behaviour, but it has to be SAID:
+            # brightest is a guess, and a guess that looks like a
+            # measurement is the failure this whole tool is against.
+            self.opts["target_mode"] = "brightest"
+            self._emit(
+                "  Nothing in the frames names or places the target, so the "
+                "BRIGHTEST star is used. That is a guess — it is right "
+                "surprisingly often, because a transit host is usually why "
+                "the field was framed that way, but check the position "
+                "below, or type the planet's name in group 3.",
+                LogColor.SALMON)
         stars, ref_path = self._detect_reference_stars(seq, proc)
         self._resolve_site(files)
         fwhm = _median([getattr(st, "fwhmx", 0.0) for st in stars]) or 3.0
+        self._ref_fwhm = float(fwhm)
         self._emit(f"  {len(stars)} star(s) detected, median FWHM "
                    f"{fwhm:.2f} px.", LogColor.BLUE)
         flip = self._check_for_flip(seq)
@@ -3199,8 +6132,21 @@ class LightCurveWorker(QThread):
             target_saturated = flagged
             sat_why += f"; fell back to Siril's flag ({flagged})"
         elif flagged and not target_saturated:
-            target_saturated = True
-            sat_why += "; below the pixel threshold but Siril flagged it"
+            # Siril's flag disagrees with the pixels.  Near the threshold
+            # the flag wins -- it knows things about the sensor that a peak
+            # value does not.  Far below it does NOT: measured on
+            # MicroObservatory data the flag fired on a star peaking at
+            # 2.6% of full scale, 38x under the limit, and that false
+            # positive is not harmless: it now blocks the AAVSO file and
+            # tells the observer to re-shoot a perfectly good night.
+            if _sat_fraction(sat_why) is None or \
+                    _sat_fraction(sat_why) >= 0.5 * SATURATION_FRACTION:
+                target_saturated = True
+                sat_why += "; below the pixel threshold but Siril flagged it"
+            else:
+                sat_why += ("; Siril's saturation flag disagrees, but the "
+                            "measured peak is far enough below the limit "
+                            "that the pixels win")
         if target_saturated:
             self._emit(
                 "  The target is SATURATED — " + sat_why + ". Its core no "
@@ -3212,9 +6158,50 @@ class LightCurveWorker(QThread):
         if crowd:
             self._emit("  " + crowd[1], crowd[0])
 
+        # The frame's own size, read from the reference rather than
+        # assumed: a comparison star is only usable if it stays ON the
+        # sensor for the whole run, and that needs both edges.
+        # Read from the SEQUENCE, which always carries it, rather than
+        # from the reference file.  The file read failed on a real run
+        # ("BZERO/BSCALE/BLANK header keywords present. Set memmap=False")
+        # and silently switched the whole filter off.
+        frame_wh = getattr(self, "_frame_wh", None)
+        envelope = getattr(self, "_drift", None)
+        if envelope and not frame_wh:
+            # Silence here cost a run: the frame size failed to read, the
+            # drift filter did nothing, and the only trace was a swallowed
+            # NameError three lines earlier.  A guard that quietly does not
+            # run is worse than no guard.
+            self._emit(
+                "  The frame size could not be read, so the drift filter is "
+                "OFF for this run. Comparison stars that leave the sensor "
+                "will not be caught, and light_curve fails outright when one "
+                "does.", LogColor.SALMON)
+        if envelope and frame_wh:
+            dx0, dx1, dy0, dy1 = envelope
+            span = max(dx1 - dx0, dy1 - dy0)
+            if span > DRIFT_REPORT_PX:
+                self._emit(
+                    f"  The field drifts {span:.0f} px across the run "
+                    f"(x {dx0:+.0f} to {dx1:+.0f}, y {dy0:+.0f} to "
+                    f"{dy1:+.0f}) on a {frame_wh[0]}x{frame_wh[1]} frame. "
+                    "Comparison stars that would leave the sensor part-way "
+                    "through are dropped: Siril moves each measurement box "
+                    "by the registration, and one box that walks off the "
+                    "edge fails the WHOLE light_curve command, not just "
+                    "that star.", LogColor.SALMON)
+            if not stays_in_frame(tx, ty, frame_wh[0], frame_wh[1], envelope,
+                                  AUTORING_OUTER_FWHM * max(1.0, fwhm)):
+                self._fail(
+                    f"The TARGET at ({tx:.0f}, {ty:.0f}) leaves the frame as "
+                    f"the field drifts {span:.0f} px. No aperture can follow "
+                    "it off the sensor. Trim the run to the frames where it "
+                    "is still on the chip, or re-shoot with better guiding.")
+                return
         comps, rejected, how_ranked = choose_comparison_stars(
             stars, (tx, ty), int(self.opts.get("n_comps", DEFAULT_N_COMPS)),
-            fwhm, float(self.opts.get("min_comp_snr", MIN_COMP_SNR)))
+            fwhm, float(self.opts.get("min_comp_snr", MIN_COMP_SNR)),
+            frame_wh=frame_wh, envelope=envelope)
 
         # Tally the reasons, not the stars.  865 individual rejection lines
         # is not a diagnosis; "865 x SNR 0 below 20" is one, and it is the
@@ -3238,39 +6225,143 @@ class LightCurveWorker(QThread):
         for why, n in summary[:4]:
             self._emit(f"    {n} x {why}", LogColor.SALMON)
 
-        self.progress.emit(45, "Aperture photometry (Siril)…")
-        self._run_light_curve(seq, (tx, ty), comps)
+        # The measurement itself.  This script's own engine first -- it
+        # re-centroids every star per frame (follow star), measures all
+        # apertures in one pass over the pixels, keeps comps by measured
+        # scatter and picks the aperture by point-to-point noise, so the
+        # separate comp screen and aperture scan below become the Siril
+        # FALLBACK, not the main path.
+        native = None
+        comp_rows, aper_rows = [], []
+        # Everything the results dict reads must exist on BOTH paths.  The
+        # native engine's first full run crashed exactly here: `aperture`
+        # and `dat` were born inside the Siril fallback branch, and the
+        # run died one line before writing its results -- after the fit
+        # had already succeeded.
+        aperture = None
+        dat = None
+        if self.opts.get("native_phot", True):
+            self.progress.emit(
+                42, "Aperture photometry (star-following)…")
+            native = self._native_photometry(seq, proc, (tx, ty), comps,
+                                             fwhm)
+        if native is not None:
+            jd, mag, err, unmeasured, comp_rows, aper_rows = native
+            finite_rows = [(r, rms) for r, _n, rms in aper_rows
+                           if np.isfinite(rms)]
+            if finite_rows:
+                aperture = min(finite_rows, key=lambda t: t[1])[0]
+        else:
+            # Screen the ensemble by measuring it.  Each candidate is
+            # photometered against the others; one that wobbles against its
+            # peers would write that wobble, inverted, into the target.
+            comp_rows = []
+            if self.opts.get("screen_comps", True):
+                self.progress.emit(42, "Checking the comparison stars…")
+                kept, comp_rows = self._screen_comparisons(seq, comps, proc)
+                for x, y, rms, verdict in comp_rows:
+                    self._emit(f"    ({x:7.1f}, {y:7.1f})  "
+                               + ("      —" if not np.isfinite(rms)
+                                  else f"{rms:6.1f} mmag")
+                               + f"  {verdict}",
+                               LogColor.SALMON if "DROP" in verdict
+                               else LogColor.BLUE)
+                if len(kept) != len(comps):
+                    self._emit(f"  {len(comps) - len(kept)} comparison star(s) "
+                               "dropped for their own variability.",
+                               LogColor.SALMON)
+                    comps = kept
 
-        dat = os.path.join(proc, "light_curve.dat")
-        if not os.path.exists(dat):
-            self._fail(
-                "Siril's light_curve produced no light_curve.dat. The usual "
-                "cause is that one of the comparison stars could not be "
-                "measured in enough frames — Siril rejects the whole run in "
-                "that case. Try fewer comps or a higher SNR floor.")
-            return
-        jd, mag, err, unmeasured = _parse_light_curve_dat(dat)
-        if jd.size == 0:
-            self._fail(
-                f"light_curve.dat holds {unmeasured} row(s) but not one "
-                "carries a measurement — every V-C is nan. Siril wrote a "
-                "line per frame it attempted and could not photometer any "
-                "of them; with a saturated target that is the expected "
-                f"outcome. ({dat})" if unmeasured else
-                f"light_curve.dat exists but no data rows could be read from "
-                f"it ({dat}). This is a format the parser does not recognise "
-                "— please report it with the file.")
-            return
-        self._emit(f"  {jd.size} photometric point(s) from Siril"
-                   + (f" ({unmeasured} further row(s) carried no measurement "
-                      "and were dropped)." if unmeasured else "."),
-                   LogColor.GREEN)
-        severity, note = photometry_yield_note(int(jd.size), len(files),
-                                               target_saturated)
+            # The aperture is the most influential number in aperture
+            # photometry and used to be whatever -autoring picked.  Try a few.
+            aper_rows = []
+            aperture = None
+            if self.opts.get("scan_aperture", True):
+                self.progress.emit(44, "Choosing the aperture…")
+                got = self._scan_aperture(seq, (tx, ty), comps, fwhm, proc)
+                if got:
+                    aper, inner, outer, aper_rows = got
+                    for a, n, rms in aper_rows:
+                        self._emit(f"    aperture {a:5.2f} px  {n:4d} point(s)  "
+                                   + ("     —" if not np.isfinite(rms)
+                                      else f"{rms:6.2f} mmag")
+                                   + ("   <-- chosen" if abs(a - aper) < 1e-9
+                                      else ""), LogColor.BLUE)
+                    self._cmd("setphot", f"-aperture={aper:.2f}",
+                              f"-inner={inner:.2f}", f"-outer={outer:.2f}")
+                    aperture = aper
+                    self._emit(f"  Aperture {aper:.2f} px "
+                               f"({aper / max(fwhm, 1e-9):.2f} x FWHM), sky "
+                               f"annulus {inner:.2f}-{outer:.2f} px.",
+                               LogColor.GREEN)
+                else:
+                    # Hand the aperture back to Siril.  Without this the run
+                    # measures with the LAST APERTURE THE SCAN TRIED -- one it
+                    # just rejected -- because `setphot -aperture=` forces the
+                    # value and nothing unforces it.  Seen on a real run: the
+                    # scan probed down to 4.7 px, found nothing usable, and the
+                    # final photometry then ran at 4.7 anyway.  `-dyn_ratio`
+                    # restores the dynamic aperture (radius / half-FWHM);
+                    # verified against Siril 1.4.4, which then reports
+                    # "dynamic aperture: 4.0 (times the half-FWHM)" instead of
+                    # "aperture: 4.7 (forced)".
+                    try:
+                        self._cmd("setphot", f"-dyn_ratio={DYNAMIC_APERTURE_RATIO}")
+                    except (CommandError, DataError, SirilError) as exc:
+                        _log_swallowed(exc)
+                    self._emit("  Aperture scan produced nothing usable; the "
+                               "aperture goes back to Siril's dynamic one and "
+                               "the FWHM-derived rings stay in charge.",
+                               LogColor.SALMON)
+
+            self.progress.emit(45, "Aperture photometry (Siril)…")
+            self._run_light_curve(seq, (tx, ty), comps,
+                                  autoring=(aperture is None))
+
+            dat = os.path.join(proc, "light_curve.dat")
+            if not os.path.exists(dat):
+                self._fail(
+                    "Siril's light_curve produced no light_curve.dat. The usual "
+                    "cause is that one of the comparison stars could not be "
+                    "measured in enough frames — Siril rejects the whole run in "
+                    "that case. Try fewer comps or a higher SNR floor.")
+                return
+            jd, mag, err, unmeasured = _parse_light_curve_dat(dat)
+            if jd.size == 0:
+                self._fail(
+                    f"light_curve.dat holds {unmeasured} row(s) but not one "
+                    "carries a measurement — every V-C is nan. Siril wrote a "
+                    "line per frame it attempted and could not photometer any "
+                    "of them; with a saturated target that is the expected "
+                    f"outcome. ({dat})" if unmeasured else
+                    f"light_curve.dat exists but no data rows could be read from "
+                    f"it ({dat}). This is a format the parser does not recognise "
+                    "— please report it with the file.")
+                return
+            self._emit(f"  {jd.size} photometric point(s) from Siril"
+                       + (f" ({unmeasured} further row(s) carried no measurement "
+                          "and were dropped)." if unmeasured else "."),
+                       LogColor.GREEN)
+
+        severity, note = photometry_yield_note(
+            int(jd.size), len(files), target_saturated,
+            engine="This script" if native is not None else "Siril")
         if note:
             self._emit("  " + note,
                        LogColor.RED if severity == "bad" else LogColor.SALMON)
         yield_note = note
+
+        # Spike rejection, model-free, before anything is fitted.  A
+        # satellite through the aperture is one frame; a transit is
+        # hundreds.  Measured: a single 100 mmag point on a real 12 mmag
+        # transit took the significance from 12.1 to 3.2 sigma, and
+        # removing it puts it back at 12.1.
+        keep, n_clipped, clip_note = sigma_clip_series(jd, mag)
+        if n_clipped:
+            jd, mag, err = jd[keep], mag[keep], err[keep]
+            self._emit(f"  {clip_note}.", LogColor.SALMON)
+        elif clip_note:
+            self._emit(f"  No points removed — {clip_note}.", LogColor.SALMON)
 
         # Convert to BJD_TDB before anything is FITTED.  The airmass below
         # deliberately stays on JD_UTC -- it is a question about where the
@@ -3304,41 +6395,88 @@ class LightCurveWorker(QThread):
         raw_rms = _mad_std(mag) * 1000.0
 
         X, airmass_note = self._airmass_series(jd_utc)
-        slope = intercept = None
-        detrended = mag
+
+        # Every basis the fit may use, gathered in one place.  Airmass from
+        # the sky position and the site; seeing, sky level and star count
+        # from Siril's own per-frame registration data, paired to the rows
+        # Siril managed to photometer by mid-exposure time.
+        bases = {}
+        multi_note = ""
         if X is not None and self.opts.get("detrend_airmass", True) \
                 and not airmass_note:
-            detrended, slope, intercept = airmass_detrend(mag, X)
+            bases["airmass"] = X
+        quality = getattr(self, "_frame_quality", None)
+        if quality and self.opts.get("detrend_quality", True):
+            jd_frames = []
+            for info in getattr(self, "_light_infos", []):
+                j = _jd_from_dateobs(info.get("date_obs") or "")
+                exp = info.get("exp_s")
+                if np.isfinite(j) and exp:
+                    j += (float(exp) / 2.0) / 86400.0
+                jd_frames.append(j)
+            idx = match_frames_to_curve(jd_utc, np.asarray(jd_frames,
+                                                           dtype=float))
+            hit = int(np.count_nonzero(idx >= 0))
+            if hit < MULTI_DETREND_MIN_ANCHOR:
+                multi_note = (f"only {hit} of {jd.size} point(s) could be "
+                              "paired with a frame")
+            else:
+                for name in ("fwhm", "sky", "n_stars"):
+                    arr = quality.get(name)
+                    if arr is None or arr.size == 0:
+                        continue
+                    col = np.full(jd.size, np.nan)
+                    ok = idx >= 0
+                    col[ok] = arr[idx[ok]]
+                    bases[name] = col
 
-        fit = fit_transit(jd, detrended)
-        if fit is None:
-            # The fit refuses below ten points, and silence there reads as
-            # "no transit found" rather than "nothing was attempted".  The
-            # trapezoid has four free parameters plus a baseline; four
-            # points cannot constrain five numbers, and the two-sided
-            # significance test needs samples before, inside AND after the
-            # window on top of that.
+        # ONE fit.  The transit and the systematics are solved together, so
+        # the transit cannot be absorbed into a basis that correlates with
+        # it -- which is what the old three-pass detrend-fit-redetrend-refit
+        # sequence had to guard against by anchoring on the out-of-transit
+        # rows.  It also carries the baseline's uncertainty into the depth
+        # and the mid-time instead of treating the baseline as exact.
+        fit = fit_transit(jd, mag, bases=bases,
+                          u1=float(self.opts.get("ld_u1", LD_U1)),
+                          u2=float(self.opts.get("ld_u2", LD_U2)))
+        multi_used = list(fit["bases"]) if fit else []
+        if fit is not None:
+            detrended = fit["detrended"]
+            slope = fit["airmass_slope"]
+            intercept = fit["baseline"]
+            if not multi_note:
+                multi_note = fit["base_note"]
+            self._emit("  Fitted the transit and "
+                       + (f"{len(multi_used)} systematic basis/bases "
+                          f"({'+'.join(multi_used)}) " if multi_used
+                          else "no systematics ")
+                       + "together — the baseline's uncertainty ends up in "
+                         "the depth and the mid-time instead of being "
+                         "thrown away between passes.", LogColor.GREEN)
+        else:
+            # No fit: the plot and the RMS still want a curve, so fall back
+            # to the standalone airmass detrend for DISPLAY only.
+            detrended, slope, intercept = (
+                airmass_detrend(mag, X) if X is not None and not airmass_note
+                else (mag, None, None))
             self._emit(
                 f"  No transit fit attempted: {jd.size} usable point(s) "
-                f"cannot constrain a trapezoid (T0, duration, ingress, "
-                "depth, baseline) plus a baseline on both sides of it. "
-                "This is not 'no transit found' — nothing was tested.",
+                "cannot constrain a transit (T0, duration, shape, depth, "
+                "baseline) plus a baseline on both sides of it. This is "
+                "not 'no transit found' — nothing was tested.",
                 LogColor.SALMON)
-        # Second pass: with a first estimate of the transit window the
-        # airmass baseline can be anchored on the points that are genuinely
-        # out of transit, which is exact where the blind trim is only good.
-        refined = False
-        if (fit is not None and X is not None and slope is not None
-                and self.opts.get("detrend_airmass", True)):
-            d2, s2, i2 = airmass_detrend(mag, X, fit["oot_mask"])
-            f2 = fit_transit(jd, d2)
-            if f2 is not None:
-                detrended, slope, intercept, fit = d2, s2, i2, f2
-                refined = True
+        refined = fit is not None
 
         self.progress.emit(88, "Writing results…")
         result = {
             "calib_note": getattr(self, "_calib_note", ""),
+            "multi_used": multi_used,
+            "multi_note": multi_note,
+            "n_clipped": n_clipped,
+            "clip_note": clip_note,
+            "comp_rows": comp_rows,
+            "aper_rows": aper_rows,
+            "aperture_px": aperture,
             "folder": folder,
             "out_dir": out_dir,
             "n_files": len(files),
@@ -3363,6 +6501,9 @@ class LightCurveWorker(QThread):
             "fit": fit,
             "flip_deg": flip,
             "yield_note": yield_note,
+            "yield_severity": severity,
+            "target_saturated": bool(target_saturated),
+            "ephemeris": eph,
             "jd_utc": jd_utc,
             "time_system": time_system,
             "time_note": time_note,
@@ -3370,9 +6511,118 @@ class LightCurveWorker(QThread):
             "dat_path": dat,
             "ref_path": ref_path,
         }
+        result["site_lat_deg"] = self.opts.get("site_lat_deg")
+        result["site_lon_deg"] = self.opts.get("site_lon_deg")
         self._write_csv(result)
+        if self.opts.get("write_aavso", True):
+            self._write_aavso(result)
         self.progress.emit(100, "Done.")
         self.finished_ok.emit(result)
+
+    def _write_aavso(self, r: dict) -> None:
+        """Write the AAVSO Exoplanet Watch submission file.
+
+        The format is theirs, and every field in it was already being
+        computed here -- the run produced a CSV, a plot and a report, and
+        then stopped one short of the thing the numbers exist for.
+
+        Written locally, and nothing is sent anywhere: submitting is a
+        decision, and it is yours.  Without an observer code the file is
+        still written, with the field marked, because the curve is worth
+        keeping either way and the code can be filled in later.
+
+        Refused outright when the times are not BJD_TDB.  The header
+        declares DATE_TYPE=BJD_TDB, and writing JD_UTC under that label
+        would hand a submission an eight-minute error with a straight face.
+        """
+        # A submission goes into a public database that other people fit
+        # ephemerides from, so the bar is higher than for the local report:
+        # the report may say "here is what the data allow", a submission may
+        # not.  Measured on the run this was written for -- WASP-75, 11 of
+        # 178 frames kept, target saturated -- the old gate checked only the
+        # time system and wrote the file anyway.
+        if r.get("target_saturated"):
+            self._emit(
+                "  No AAVSO file written: the target is SATURATED, so its "
+                "core carries no flux information and the depth is not a "
+                "measurement. The local report still shows what the data "
+                "allow — a submission would not carry that caveat.",
+                LogColor.SALMON)
+            return
+        if r.get("yield_severity") == "bad":
+            self._emit(
+                f"  No AAVSO file written: {r.get('n_points', 0)} of "
+                f"{r.get('n_frames', 0)} frame(s) survived photometry. The "
+                "frames that survive a marginal night are the ones seeing "
+                "happened to favour, which is a selected sample, not a "
+                "measured one.",
+                LogColor.SALMON)
+            return
+        if r.get("time_system") != "BJD_TDB":
+            self._emit("  No AAVSO file written: the times are "
+                       f"{r.get('time_system')}, and that format declares "
+                       "BJD_TDB. Submitting JD_UTC under that header would "
+                       "be an 8 minute error nobody could see.",
+                       LogColor.SALMON)
+            return
+        fit = r.get("fit")
+        obscode = str(self.opts.get("obscode", "") or "").strip().upper()
+        path = os.path.join(r["out_dir"], "AAVSO_exoplanet.txt")
+        partial = path + ".partial"
+        X = r["airmass"]
+        detr = r["detrended"]
+        err = r["err"]
+        jd = r["jd"]
+        try:
+            with open(partial, "w", encoding="utf-8") as fh:
+                fh.write("#TYPE=EXOPLANET\n")
+                fh.write(f"#OBSCODE={obscode or 'PLEASE_FILL_IN'}\n")
+                fh.write(f"#SOFTWARE=Svenesis LightCurve {VERSION}\n")
+                fh.write("#DELIM=,\n")
+                fh.write("#DATE_TYPE=BJD_TDB\n")
+                fh.write(f"#OBSTYPE={self.opts.get('obstype', 'CCD')}\n")
+                fh.write(f"#FILTER={self.opts.get('filter_name', '') or 'CV'}\n")
+                fh.write(f"#TARGET={self.opts.get('target_name', '') or 'UNKNOWN'}\n")
+                if r.get("site_lat_deg") is not None:
+                    fh.write(f"#SITELAT={r['site_lat_deg']:.4f}\n")
+                    fh.write(f"#SITELONG={r['site_lon_deg']:.4f}\n")
+                fh.write(f"#COMPS={len(r['comps'])} ensemble, "
+                         "instrumental\n")
+                if r.get("aperture_px"):
+                    fh.write(f"#APERTURE={r['aperture_px']:.2f} px\n")
+                if fit is not None and fit.get("detected"):
+                    fh.write(f"#TC={fit['t0']:.6f}\n")
+                    if np.isfinite(fit.get("t0_sigma_d", float("nan"))):
+                        fh.write(f"#TC_ERR={fit['t0_sigma_d']:.6f}\n")
+                    fh.write(f"#DEPTH_MMAG={fit['depth_mmag']:.2f}\n")
+                    fh.write(f"#DEPTH_ERR_MMAG={fit['depth_sigma_mmag']:.2f}\n")
+                    fh.write(f"#DURATION_H={fit['duration_h']:.4f}\n")
+                else:
+                    fh.write("#NOTES=no transit claimed; photometry only\n")
+                fh.write("#NOTES=Detrend 1 airmass"
+                         + (", 2 " + "+".join(r.get("multi_used") or [])
+                            if r.get("multi_used") else "")
+                         + f"; red-noise beta "
+                         + (f"{fit['red_noise_beta']:.2f}" if fit else "n/a")
+                         + f"; false alarm at the {MIN_DETECTION_SIGMA:.1f} "
+                           f"sigma floor {100 * MEASURED_FALSE_ALARM:.2f}%\n")
+                fh.write("#DATE,DIFF,ERR,DETREND_1\n")
+                for i in range(jd.size):
+                    x = (f"{X[i]:.4f}" if X is not None
+                         and np.isfinite(X[i]) else "NA")
+                    e = (f"{err[i]:.6f}" if i < err.size
+                         and np.isfinite(err[i]) else "NA")
+                    fh.write(f"{jd[i]:.6f},{detr[i]:.6f},{e},{x}\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(partial, path)
+            self._emit(f"  AAVSO submission file written to {path}"
+                       + ("" if obscode else
+                          " — fill in #OBSCODE before submitting."),
+                       LogColor.GREEN)
+        except OSError as exc:
+            self._emit(f"  Could not write the AAVSO file: {exc}",
+                       LogColor.SALMON)
 
     def _write_csv(self, r: dict) -> None:
         """Write the series to ``lightcurve/lightcurve.csv``, atomically.
@@ -3581,6 +6831,7 @@ class SvenesisLightCurveWindow(QMainWindow):
         self._build_target_group(layout)
         self._build_photometry_group(layout)
         self._build_analysis_group(layout)
+        self._build_export_group(layout)
         layout.addStretch()
 
         scroll.setWidget(inner)
@@ -3710,12 +6961,19 @@ class SvenesisLightCurveWindow(QMainWindow):
         lay = QVBoxLayout(box)
         self.cmb_target = QComboBox()
         self.cmb_target.addItems([
+            "From the frames — name or coordinates in the header",
             "Brightest star in the field",
             "Pixel position on the first frame",
             "RA / Dec (needs plate-solved subs)",
         ])
         self.cmb_target.setToolTip(
             "How to find the star whose light curve you want.\n\n"
+            "FROM THE FRAMES is the one to leave it on. Your subs usually "
+            "already say: OBJCTRA/OBJCTDEC give the target's position "
+            "directly, and OBJECT gives its name, which the archive turns "
+            "into coordinates AND an ephemeris. Whatever it finds is "
+            "checked against a real detected star, and if it finds nothing "
+            "it falls back to brightest and says so.\n\n"
             "Brightest is right surprisingly often — a transit host is "
             "usually the reason the field was framed that way. Pixel and "
             "RA/Dec both SNAP to the nearest detected star rather than "
@@ -3724,6 +6982,36 @@ class SvenesisLightCurveWindow(QMainWindow):
             "seeing changes.")
         self.cmb_target.currentIndexChanged.connect(self._update_target_fields)
         lay.addWidget(self.cmb_target)
+
+        row_name = QHBoxLayout()
+        self.lbl_tname = QLabel("Name")
+        self.ed_target_name = QLineEdit()
+        self.ed_target_name.setPlaceholderText(
+            "e.g. HAT-P-32 b — blank uses OBJECT from the headers")
+        self.ed_target_name.setToolTip(
+            "The planet's name, as the NASA Exoplanet Archive spells it. "
+            "WASP-75b becomes WASP-75 b on the way out, so either works.\n\n"
+            "Left blank, OBJECT from your light frames is used. It also "
+            "names the target in the AAVSO submission file.")
+        row_name.addWidget(self.lbl_tname)
+        row_name.addWidget(self.ed_target_name, 1)
+        lay.addLayout(row_name)
+
+        self.chk_resolve = QCheckBox(
+            "Look the name up (NASA Exoplanet Archive)")
+        self.chk_resolve.setChecked(True)
+        self.chk_resolve.setToolTip(
+            "Fetches RA/Dec and the published ephemeris for that name — so "
+            "you do not type coordinates, and the report can say how far "
+            "your measured mid-transit is from the prediction (O−C).\n\n"
+            "The position is checked: the next step reports how far it "
+            "lands from a real detected star, so a wrong name fails loudly "
+            "instead of quietly mis-pointing.\n\n"
+            "Cached after the first success, so a second run — or an "
+            "offline machine — still has it. Off, or with no connection, "
+            "the coordinates in your headers are still used; only the O−C "
+            "is lost.")
+        lay.addWidget(self.chk_resolve)
 
         grid = QGridLayout()
         self.lbl_x = QLabel("x:")
@@ -3804,6 +7092,27 @@ class SvenesisLightCurveWindow(QMainWindow):
         row.addStretch()
         lay.addLayout(row)
 
+        self.chk_scan_aper = QCheckBox("Search for the best aperture")
+        self.chk_scan_aper.setChecked(True)
+        self.chk_scan_aper.setToolTip(
+            "Aperture size is the most influential number in aperture "
+            "photometry, and without this it is whatever -autoring picks "
+            "from the FWHM.\n\n"
+            "Ticked, six radii from 0.75 to 2.5 FWHM are each photometered "
+            "and the one with the least scatter wins, with the number of "
+            "measured frames as the tie-breaker. Costs six extra passes.")
+        lay.addWidget(self.chk_scan_aper)
+
+        self.chk_screen = QCheckBox("Check comparison stars for variability")
+        self.chk_screen.setChecked(True)
+        self.chk_screen.setToolTip(
+            "Each comparison star is photometered against the OTHERS and "
+            "judged on its own scatter.\n\n"
+            "A variable comparison writes its own curve, inverted, into "
+            "the target's — and nothing else here would notice. Needs no "
+            "catalogue and no network; costs one pass per comparison star.")
+        lay.addWidget(self.chk_screen)
+
         self.chk_autoring = QCheckBox("Auto ring radii from the FWHM")
         self.chk_autoring.setChecked(True)
         self.chk_autoring.setToolTip(
@@ -3858,6 +7167,41 @@ class SvenesisLightCurveWindow(QMainWindow):
         row.addWidget(self.spin_bins)
         row.addStretch()
         lay.addLayout(row)
+        parent.addWidget(box)
+
+    def _build_export_group(self, parent: QVBoxLayout) -> None:
+        box = QGroupBox("6 · Submission")
+        lay = QVBoxLayout(box)
+        self.chk_aavso = QCheckBox("Write an AAVSO Exoplanet Watch file")
+        self.chk_aavso.setChecked(True)
+        self.chk_aavso.setToolTip(
+            "Writes AAVSO_exoplanet.txt beside the CSV. Nothing is sent "
+            "anywhere — submitting is your decision.\n\n"
+            "Refused when the times are not BJD_TDB: the format declares "
+            "that, and JD_UTC under that header is an 8 minute error "
+            "nobody could see.")
+        lay.addWidget(self.chk_aavso)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Observer code"))
+        self.ed_obscode = QLineEdit()
+        self.ed_obscode.setText(DEFAULT_OBSCODE)
+        self.ed_obscode.setPlaceholderText("e.g. ABC — optional")
+        self.ed_obscode.setToolTip(
+            "Your AAVSO observer code. Left empty the file is still "
+            "written, with the field marked, and you can fill it in later.")
+        row.addWidget(self.ed_obscode, 1)
+        lay.addLayout(row)
+        # The target NAME and the archive lookup live in group 3, where
+        # they belong: they decide the target POSITION, not the submission.
+        # Having them here meant the one control that spares you typing
+        # coordinates sat in a group about filing the result.
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Filter"))
+        self.ed_filter = QLineEdit()
+        self.ed_filter.setPlaceholderText("CV")
+        self.ed_filter.setFixedWidth(70)
+        row2.addWidget(self.ed_filter)
+        lay.addLayout(row2)
         parent.addWidget(box)
 
     def _build_action_buttons(self, parent: QVBoxLayout) -> None:
@@ -3936,14 +7280,81 @@ class SvenesisLightCurveWindow(QMainWindow):
         Hiding it outside RA/Dec mode would leave somebody who chose
         "brightest" wondering why the detrend never runs.
         """
-        pixel_mode = self.cmb_target.currentIndex() == 1
+        idx = self.cmb_target.currentIndex()
         for w in (self.lbl_x, self.ed_x, self.lbl_y, self.ed_y):
-            w.setVisible(pixel_mode)
+            w.setVisible(idx == 2)
+        # The name and the lookup only do anything in "from the frames"
+        # mode, but they stay VISIBLE in every mode, greyed: the lookup
+        # also supplies the ephemeris for the O-C, and that is worth having
+        # whichever way the star was picked.
+        for w in (self.lbl_tname, self.ed_target_name, self.chk_resolve):
+            w.setEnabled(True)
 
     def _log(self, msg: str, color=None) -> None:
         tint = {LogColor.GREEN: "#88cc88", LogColor.SALMON: "#ddaa88",
                 LogColor.RED: "#dd8888"}.get(color, "#bbbbbb")
         self.log_view.append(f'<span style="color:{tint}">{msg}</span>')
+
+    def _probe_target(self, files) -> None:
+        """Read a few light headers now and fill in what they already say.
+
+        The run does this anyway, but doing it at folder-choose time is
+        the difference between a number you can check and a number that
+        appears in the log after five minutes of registration.  You see
+        what the frames claim, and you can correct it before starting.
+
+        Only EMPTY fields are filled: anything you typed stays. Capped at
+        PROBE_HEADERS frames because this runs on the UI thread -- measured
+        at 153 ms for 30 compressed N.I.N.A. subs, which is a click, while
+        several hundred would be a freeze.
+        """
+        if not files:
+            return
+        infos = []
+        for path in files[:PROBE_HEADERS]:
+            try:
+                infos.append(inspect_frame(path))
+            except Exception as exc:               # noqa: BLE001
+                _log_swallowed(exc)
+        lights, _cal, _note = split_frames(infos, inside=True)
+        if not lights:
+            lights = infos
+        found = []
+        name = ""
+        for info in lights:
+            if info.get("object"):
+                name = str(info["object"]).strip()
+                break
+        if name and not self.ed_target_name.text().strip():
+            self.ed_target_name.setText(name)
+            found.append(f"OBJECT = {name!r}")
+        elif name:
+            found.append(f"headers say OBJECT = {name!r}")
+
+        ra, dec, note = header_target_radec(lights)
+        if ra is not None:
+            if not self.ed_ra.text().strip() and not self.ed_dec.text().strip():
+                self.ed_ra.setText(f"{ra:.6f}")
+                self.ed_dec.setText(f"{dec:+.6f}")
+                found.append(f"OBJCTRA/OBJCTDEC = {ra:.5f}, {dec:+.5f} ({note})")
+            else:
+                gap = angular_sep_arcsec(ra, dec, self._ra_deg(),
+                                         _sexagesimal(self.ed_dec.text()))
+                found.append(
+                    f"headers say {ra:.5f}, {dec:+.5f}"
+                    + (f" — {gap:.0f}\" from what is in the fields"
+                       if np.isfinite(gap) and gap > TARGET_DISAGREE_ARCSEC
+                       else " (agrees with the fields)"))
+        if found:
+            self._log("Read from the first "
+                      f"{min(len(files), PROBE_HEADERS)} header(s): "
+                      + "; ".join(found) + ".", LogColor.GREEN)
+        else:
+            self._log(
+                "The headers name no target and carry no OBJCTRA/OBJCTDEC. "
+                "Type the planet's name in group 3 and the archive will "
+                "supply the coordinates, or pick another target mode.",
+                LogColor.SALMON)
 
     def _on_pick_folder(self) -> None:
         start = self._folder or os.path.expanduser("~")
@@ -3962,6 +7373,7 @@ class SvenesisLightCurveWindow(QMainWindow):
             f"sub-folders. Lights are sorted from calibration frames when "
             f"you run.")
         self._refresh_calib_preview()
+        self._probe_target(files)
         self.btn_run.setEnabled(len(files) >= 10)
         if len(files) < 10:
             self.lbl_status.setText(
@@ -3971,7 +7383,8 @@ class SvenesisLightCurveWindow(QMainWindow):
             self.lbl_status.setText("Ready.")
 
     def _target_mode(self) -> str:
-        return ("brightest", "pixel", "radec")[self.cmb_target.currentIndex()]
+        return ("auto", "brightest", "pixel",
+                "radec")[self.cmb_target.currentIndex()]
 
     def _ra_deg(self) -> float:
         txt = self.ed_ra.text().strip()
@@ -4011,6 +7424,13 @@ class SvenesisLightCurveWindow(QMainWindow):
             "min_comp_snr": self.spin_snr.value(),
             "channel": self.spin_channel.value(),
             "autoring": self.chk_autoring.isChecked(),
+            "scan_aperture": self.chk_scan_aper.isChecked(),
+            "screen_comps": self.chk_screen.isChecked(),
+            "write_aavso": self.chk_aavso.isChecked(),
+            "obscode": self.ed_obscode.text().strip(),
+            "resolve_target": self.chk_resolve.isChecked(),
+            "target_name": self.ed_target_name.text().strip(),
+            "filter_name": self.ed_filter.text().strip(),
             "detrend_airmass": self.chk_detrend.isChecked(),
         }
 
@@ -4098,6 +7518,17 @@ class SvenesisLightCurveWindow(QMainWindow):
         p.append(f"&nbsp;{r['n_points']} of {r['n_files']} frames measured<br>")
         p.append(f"&nbsp;target at ({r['target_xy'][0]:.1f}, "
                  f"{r['target_xy'][1]:.1f}) — {r['target_how']}<br>")
+        if r.get("n_clipped"):
+            p.append(f"&nbsp;{r['clip_note']}<br>")
+        if r.get("aperture_px"):
+            p.append(f"&nbsp;aperture {r['aperture_px']:.2f} px chosen by "
+                     f"scan ({r['aperture_px'] / max(r['fwhm_px'], 1e-9):.2f}"
+                     " × FWHM)<br>")
+        dropped = [row for row in r.get("comp_rows", []) if "DROP" in row[3]]
+        if dropped:
+            p.append(f"&nbsp;<span style='color:#ddaa88'>{len(dropped)} "
+                     "comparison star(s) dropped for their own "
+                     "variability</span><br>")
         p.append(f"&nbsp;{len(r['comps'])} comparison stars, "
                  f"{len(r['rejected'])} rejected<br>")
         p.append(f"&nbsp;median FWHM {r['fwhm_px']:.2f} px<br>")
@@ -4120,10 +7551,17 @@ class SvenesisLightCurveWindow(QMainWindow):
             p.append("&nbsp;baseline anchored on the "
                      + ("fitted out-of-transit points (second pass)"
                         if r["refined"] else "trimmed brightest points")
-                     + "<br><br>")
+                     + "<br>")
         else:
             why = r.get("airmass_note") or "not requested"
-            p.append(f"&nbsp;not removed — {why}<br><br>")
+            p.append(f"&nbsp;not removed — {why}<br>")
+        if r.get("multi_used"):
+            p.append(f"&nbsp;quality detrend: {r['multi_note']}, anchored on "
+                     "the out-of-transit points<br>")
+        elif r.get("multi_note"):
+            p.append(f"&nbsp;quality detrend not applied — "
+                     f"{r['multi_note']}<br>")
+        p.append("<br>")
 
         p.append("<b>Transit fit</b><br>")
         if fit is None:
@@ -4148,8 +7586,19 @@ class SvenesisLightCurveWindow(QMainWindow):
                      f"{MEASURED_FALSE_ALARM_RUNS} transit-free noise runs "
                      "through this same ~40 000-node search, NOT the "
                      "Gaussian value for that σ.</span><br>")
-            p.append(f"&nbsp;T0 &nbsp;&nbsp; {fit['t0']:.5f} "
-                     f"{r['time_system']}, mid-exposure<br>")
+            p.append(f"&nbsp;T0 &nbsp;&nbsp; {fit['t0']:.5f} ± "
+                     + (f"{fit['t0_sigma_s']:.0f} s"
+                        if np.isfinite(fit.get('t0_sigma_d', float('nan')))
+                        else "(unconstrained)")
+                     + f" &nbsp;{r['time_system']}, mid-exposure<br>")
+            for line, _h in oc_lines(r, fit):
+                p.append("&nbsp;" + line.strip().replace("O-C", "O−C")
+                         + "<br>")
+            p.append("&nbsp;χ²/ν&nbsp; "
+                     + (f"{fit['chi2_nu']:.2f}" if np.isfinite(
+                         fit.get('chi2_nu', float('nan'))) else "—")
+                     + " <span style='color:#888888'>(~1 = the trapezoid "
+                       "describes the data)</span><br>")
             if r["time_system"] != "BJD_TDB":
                 p.append("&nbsp;<span style='color:#e08080'>This T0 is NOT "
                          "comparable with a published ephemeris — those are "
@@ -4166,7 +7615,13 @@ class SvenesisLightCurveWindow(QMainWindow):
                      "weaker of the two sides. Quote the "
                      "significance.</span><br>")
             p.append(f"&nbsp;length {fit['duration_h']:.2f} h, ingress "
-                     f"{fit['ingress_frac'] * 100:.0f} % of it<br>")
+                     f"shape rp/R★≈{fit['rp_over_rs']:.2f}, b≈"
+                     f"{fit['impact_b']:.1f}<br>")
+            p.append("<span style='color:#888888'>&nbsp;that rp/R★ is the "
+                     "template that fitted best, NOT a measured planet "
+                     "radius: with the duration free a smaller template "
+                     "stretched fits nearly as well. The DEPTH is the "
+                     "measurement.</span><br>")
             p.append(f"&nbsp;{fit['n_in']} points inside, {fit['n_out']} "
                      "outside<br>")
             p.append(f"&nbsp;residual scatter {fit['rms_resid_mmag']:.2f} "
@@ -4203,6 +7658,20 @@ class SvenesisLightCurveWindow(QMainWindow):
         A(f"Target            ({r['target_xy'][0]:.2f}, {r['target_xy'][1]:.2f})"
           f"  [{r['target_how']}]")
         A(f"Comparison stars  {len(r['comps'])} used, {len(r['rejected'])} rejected")
+        for x, y, rms, verdict in r.get("comp_rows", []):
+            A(f"   variability    ({x:8.2f}, {y:8.2f})  "
+              + ("     —" if not np.isfinite(rms) else f"{rms:6.1f} mmag")
+              + f"  {verdict}")
+        if r.get("aperture_px"):
+            A(f"Aperture          {r['aperture_px']:.2f} px chosen by scan "
+              f"({r['aperture_px'] / max(r['fwhm_px'], 1e-9):.2f} x FWHM)")
+            for a, n, rms in r.get("aper_rows", []):
+                A(f"   tried          {a:5.2f} px  {n:4d} point(s)  "
+                  + ("     —" if not np.isfinite(rms) else f"{rms:6.2f} mmag")
+                  + ("   <-- chosen" if abs(a - r["aperture_px"]) < 1e-9
+                     else ""))
+        if r.get("n_clipped"):
+            A(f"Outliers          {r['clip_note']}")
         for i, (x, y, snr) in enumerate(r["comps"], start=1):
             A(f"   comp {i:<2d}       ({x:8.2f}, {y:8.2f})  SNR {snr:.0f}")
         for x, y, why in r["rejected"]:
@@ -4221,6 +7690,14 @@ class SvenesisLightCurveWindow(QMainWindow):
             A(f"Airmass ramp      {r['slope'] * 1000.0:+.2f} mmag/airmass, "
               + ("anchored on the fitted out-of-transit points"
                  if r["refined"] else "blind trimmed baseline"))
+        if r.get("multi_used"):
+            A(f"Quality detrend   {r['multi_note']}")
+            A("                  (Siril's own per-frame registration "
+              "measurements, anchored on the")
+            A("                  out-of-transit points so the depth cannot "
+              "be absorbed)")
+        elif r.get("multi_note"):
+            A(f"Quality detrend   not applied — {r['multi_note']}")
         else:
             A(f"Airmass ramp      not removed — {r.get('airmass_note') or 'not requested'}")
         A("")
@@ -4247,8 +7724,19 @@ class SvenesisLightCurveWindow(QMainWindow):
         for w, b, nb, k in fit.get("red_noise_rows", []):
             A(f"      bin {w * 24 * 60:5.1f} min  beta {b:4.2f}  "
               f"{nb} bins of ~{k:.1f} points")
-        A(f"   T0             {fit['t0']:.6f} {r['time_system']}, "
-          "mid-exposure")
+        A(f"   T0             {fit['t0']:.6f} +/- "
+          + (f"{fit['t0_sigma_d']:.6f} d ({fit['t0_sigma_s']:.0f} s)"
+             if np.isfinite(fit.get('t0_sigma_d', float('nan')))
+             else "(unconstrained)")
+          + f"  {r['time_system']}, mid-exposure")
+        for line, _h in oc_lines(r, fit):
+            A(line)
+        A(f"   chi2/nu        "
+          + (f"{fit['chi2_nu']:.2f}" if np.isfinite(
+              fit.get('chi2_nu', float('nan'))) else "—")
+          + "   (~1 = the trapezoid describes the data; well above 1 means")
+        A("                  it does not, well below means the noise floor "
+          "is too large)")
         A(f"   Time system    {r['time_note']}")
         if r["time_system"] != "BJD_TDB":
             A("                  <-- NOT comparable with a published "
@@ -4264,7 +7752,14 @@ class SvenesisLightCurveWindow(QMainWindow):
               "measured contrast against the weaker")
             A("                  of both sides. Quote the significance.")
             A(f"   duration       {fit['duration_h']:.3f} h")
-            A(f"   ingress        {fit['ingress_frac'] * 100:.0f} % of the duration")
+            A(f"   shape          rp/Rs ~ {fit['rp_over_rs']:.2f}, "
+              f"b ~ {fit['impact_b']:.1f}, limb darkening "
+              f"u1={fit['ld_u1']:.2f} u2={fit['ld_u2']:.2f}")
+            A("                  (that rp/Rs is the best-fitting TEMPLATE, "
+              "not a measured planet radius:")
+            A("                  with the duration free a smaller template "
+              "stretched fits nearly as well.")
+            A("                  The depth is the measurement.)")
             A(f"   points         {fit['n_in']} in, {fit['n_out']} out")
             A(f"   residual RMS   {fit['rms_resid_mmag']:.2f} mmag")
             A(f"   duty cycle     {fit['duty_cycle'] * 100:.0f} % of the run")
@@ -4330,6 +7825,17 @@ class SvenesisLightCurveWindow(QMainWindow):
         self.chk_calibrate.setChecked(
             str(st.value("calibrate", "true")) == "true")
         self.chk_cfa.setChecked(str(st.value("cfa", "false")) == "true")
+        self.chk_scan_aper.setChecked(
+            str(st.value("scan_aperture", "true")) == "true")
+        self.chk_screen.setChecked(
+            str(st.value("screen_comps", "true")) == "true")
+        self.chk_aavso.setChecked(str(st.value("aavso", "true")) == "true")
+        self.ed_obscode.setText(str(st.value("obscode", DEFAULT_OBSCODE)
+                                    or DEFAULT_OBSCODE))
+        self.ed_target_name.setText(str(st.value("target_name", "") or ""))
+        self.chk_resolve.setChecked(
+            str(st.value("resolve_target", "true")).lower() != "false")
+        self.ed_filter.setText(str(st.value("filter_name", "") or ""))
         self.chk_autoring.setChecked(str(st.value("autoring", "true")) == "true")
         self.chk_detrend.setChecked(str(st.value("detrend", "true")) == "true")
 
@@ -4346,6 +7852,15 @@ class SvenesisLightCurveWindow(QMainWindow):
         st.setValue("calibrate",
                     "true" if self.chk_calibrate.isChecked() else "false")
         st.setValue("cfa", "true" if self.chk_cfa.isChecked() else "false")
+        st.setValue("scan_aperture",
+                    "true" if self.chk_scan_aper.isChecked() else "false")
+        st.setValue("screen_comps",
+                    "true" if self.chk_screen.isChecked() else "false")
+        st.setValue("aavso", "true" if self.chk_aavso.isChecked() else "false")
+        st.setValue("obscode", self.ed_obscode.text().strip())
+        st.setValue("target_name", self.ed_target_name.text().strip())
+        st.setValue("resolve_target", self.chk_resolve.isChecked())
+        st.setValue("filter_name", self.ed_filter.text().strip())
         st.setValue("autoring", "true" if self.chk_autoring.isChecked() else "false")
         st.setValue("detrend", "true" if self.chk_detrend.isChecked() else "false")
 
@@ -4574,16 +8089,24 @@ search:</p>
 <td style='color:#88aaff'><b>false alarm</b></td>
 <td style='color:#88aaff'><b>4 mmag</b></td><td style='color:#88aaff'>
 <b>6 mmag</b></td><td style='color:#88aaff'><b>8 mmag</b></td></tr>
-<tr><td>3.0 σ</td><td>4.42 %</td><td>91 %</td><td>100 %</td><td>100 %</td></tr>
-<tr><td><b>4.0 σ</b></td><td><b>0.17 %</b></td><td>53 %</td><td>98 %</td>
+<tr><td>3.0 σ</td><td>7.67 %</td><td>88 %</td><td>100 %</td><td>100 %</td></tr>
+<tr><td>3.5 σ</td><td>1.92 %</td><td>70 %</td><td>97 %</td><td>100 %</td></tr>
+<tr><td>4.0 σ</td><td>0.50 %</td><td>45 %</td><td>93 %</td><td>100 %</td></tr>
+<tr><td><b>4.5 σ</b></td><td><b>0.25 %</b></td><td>29 %</td><td>89 %</td>
 <td>100 %</td></tr>
-<tr><td>5.0 σ</td><td>0.00 %</td><td>19 %</td><td>86 %</td><td>99 %</td></tr>
 </table>
-<p>4.0 is where the false-alarm rate reaches the 0.13 % that "3 sigma" was
-always read to mean. It costs nothing above 6 mmag; what it costs is the
-4-5 mmag case, a dip at about the per-point scatter, which was never safe
-to claim from one night. The measured rate is printed next to every
-result.</p>
+<p>4.5 halves the false alarms against 4.0 for four points of detection at
+6 mmag and none at 8. What it costs is the 4-5 mmag case, a dip at about
+the per-point scatter, which was never safe to claim from one night. The
+measured rate is printed next to every result.</p>
+<p>The table has been re-measured three times. The T0 refinement pass
+roughly doubled every rate — more search finds a deeper minimum in pure
+noise. A robust post-fit scatter raised them again. The limb-darkened
+model fitted simultaneously with the systematics brought them back down,
+because a rounded shape matches noise less well than one with a free
+corner. The rate at 4.5 came out 0.25 % before and after that last change:
+coincidence, not stability. <b>A calibration table is only valid for the
+search, the statistic and the model it was measured on.</b></p>
 
 <h2 style='color:#88aaff'>A trapezoid, not a limb-darkened model</h2>
 <p>At amateur precision the two are indistinguishable — a 10 mmag dip

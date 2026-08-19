@@ -29,7 +29,10 @@ src = open(SRC).read()
 tree = ast.parse(src)
 
 ns = {"np": np, "math": math, "re": re, "datetime": datetime, "os": os,
-      "csv": __import__("csv"), "shutil": __import__("shutil")}
+      "csv": __import__("csv"), "shutil": __import__("shutil"),
+      "io": __import__("io"), "json": __import__("json"),
+      "urllib": __import__("urllib.request").request and
+                __import__("urllib.parse") or __import__("urllib")}
 for node in tree.body:                       # module constants
     if isinstance(node, ast.Assign):
         try:
@@ -108,13 +111,29 @@ check(parse(os.path.join(tmp, "nope.dat"))[0].size == 0,
       "a missing file gives empty arrays, not an exception")
 
 print("\n4) the trapezoid recovers a transit it was given")
-fit, shape = ns["fit_transit"], ns["trapezoid_shape"]
+fit = ns["fit_transit"]
+_TMPL = ns["ld_template"](0.10, 0.0)
+
+
+def shape(t, t0, duration, _ingress=None):
+    """A limb-darkened transit of unit depth — the model the fit searches.
+
+    The suite used to synthesise trapezoids, which flattered a trapezoid
+    fitter. It now injects the real shape, so a signal the fit cannot make
+    would show up here rather than being hidden by a matching assumption.
+    """
+    return ns["ld_shape"](t, t0, duration, _TMPL)
 rng = np.random.default_rng(20260818)
 t = np.linspace(0.0, 8.0 / 24.0, 480)
 TRUE_T0, TRUE_DUR, TRUE_DEPTH = 4.0 / 24.0, 2.5 / 24.0, 0.015
 truth = TRUE_DEPTH * shape(t, TRUE_T0, TRUE_DUR, 0.15)
-check(abs(float(np.max(truth)) - TRUE_DEPTH) < 1e-12,
-      "the shape reaches exactly 1 at the flat bottom")
+# A limb-darkened transit has a ROUNDED bottom, not a flat one, so the
+# sampled maximum sits just below the nominal depth — by 0.4% here at 480
+# points. That rounding is the whole reason for the model change: a
+# trapezoid fitted to it comes out 5-6% too shallow.
+check(0.97 * TRUE_DEPTH <= float(np.max(truth)) <= TRUE_DEPTH + 1e-12,
+      "the shape peaks at the nominal depth, and never above it",
+      f"{float(np.max(truth))/TRUE_DEPTH:.4f} of depth")
 check(float(np.min(truth)) == 0.0, "and exactly 0 outside the event")
 
 for label, noise, t0_tol_min, depth_tol in (
@@ -530,13 +549,17 @@ check("-at=1504,1505" in line, "the target rounds to the nearest pixel")
 check(line.count("-refat=") == 3, "every comparison star is passed")
 check(args[:3] == ["light_curve", "lights", "0"],
       "sequence and channel come first, in that order", str(args[:3]))
-check(args[3] == "-autoring" and args[4].startswith("-at="),
-      "-autoring precedes the positions", str(args[3:5]))
+check(args[3].startswith("-at="),
+      "the positions follow the channel directly — -autoring used to sit "
+      "here and no longer does: measured against Siril 1.4.4, the flag "
+      "makes light_curve abort on coordinates that are inside the image, "
+      "and the caller sets the same radii with setphot instead (8r4)",
+      str(args[3:5]))
 
 plain = lc("lights", 1, False, (10.4, 20.6), [])
 check("-autoring" not in plain and plain[2] == "1",
-      "autoring is omitted when off, and the channel is honoured",
-      str(plain))
+      "the flag is absent with the option off as with it on, and the "
+      "channel is honoured", str(plain))
 check(plain[-1] == "-at=10,21", "rounding is to nearest, not truncation",
       plain[-1])
 
@@ -1083,6 +1106,1041 @@ check(sat(far, 100, 100)[0] is False,
       "a saturated star 40 px away is NOT the target — the box does not "
       "annex the neighbourhood")
 
+print("\n8p2) a locally-imported name is imported in every function using it")
+# astropy is optional everywhere else in this file, so `fits` is imported
+# inside the three functions that need it. Forgetting one cost a whole
+# run: the drift filter raised NameError, the frame size stayed None, the
+# filter silently did nothing, and the log said only "swallowed NameError".
+tree_li = ast.parse(src)
+LOCAL_ONLY = {"fits"}
+offenders = []
+for fn in [n for n in ast.walk(tree_li) if isinstance(n, ast.FunctionDef)]:
+    brought = {a.asname or a.name.split(".")[0]
+               for n in ast.walk(fn)
+               if isinstance(n, (ast.Import, ast.ImportFrom))
+               for a in n.names}
+    used_names = {n.id for n in ast.walk(fn)
+                  if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    missing_imp = (used_names & LOCAL_ONLY) - brought
+    if missing_imp:
+        offenders.append(f"{fn.name}:{fn.lineno} needs {sorted(missing_imp)}")
+check(not offenders,
+      "every function that uses a locally-imported module imports it — a "
+      "NameError here does not crash, it makes a guard quietly do nothing",
+      "; ".join(offenders) if offenders else "all clean")
+probe_src = src[src.index("envelope = getattr(self, \"_drift\", None)"):]
+probe_src = probe_src[:probe_src.index("comps, rejected, how_ranked")]
+check("drift filter is" in probe_src and "OFF for this run" in probe_src,
+      "and if the frame size cannot be read the run SAYS the filter is off "
+      "— a guard that quietly does not run is worse than no guard")
+
+print("\n8q2) repeated failures stop instead of hammering Siril")
+# Twelve light_curve calls failed in a row on EXOTIC's demo set — five in
+# the comparison screen, six in the aperture scan, one final — every one
+# for the SAME reason. Siril's process then died and the script could only
+# report "[Errno 32] Broken pipe", which reads as somebody else's bug.
+check(ns["MAX_PHOTOMETRY_FAILURES"] <= 5,
+      "the probes give up after a handful of identical failures — three is "
+      "enough to tell an unlucky aperture from a broken geometry",
+      f"{ns['MAX_PHOTOMETRY_FAILURES']} in a row")
+meas = src[src.index("def _measure_curve"):]
+meas = meas[:meas.index("\n    def _screen_comparisons")]
+check("self._photometry_failures >= MAX_PHOTOMETRY_FAILURES" in meas,
+      "and the guard is at the TOP of the probe, so the remaining calls "
+      "are skipped rather than merely counted")
+check("self._photometry_failures = 0" in meas,
+      "a success resets the count — a bad frame in the middle of a good "
+      "run must not end the scan")
+note = src[src.index("def _note_photometry_failure"):]
+note = note[:note.index("\n    def ", 10)]
+check("!= MAX_PHOTOMETRY_FAILURES" in note,
+      "the diagnosis is printed ONCE, at the moment a streak becomes one")
+drift_h = src[src.index('if "light_curve" in str(exc) and drift'):]
+drift_h = drift_h[:drift_h.index("elif")]
+check("seqapplyreg" in drift_h and "trim the run" in drift_h,
+      "a light_curve refusal on a drifting run names the two ways out — "
+      "resample, or cut to the stretch that holds still — instead of "
+      "handing back 'Generic error'")
+fail_h = src[src.index('elif "broken pipe" in str(exc).lower()'):]
+fail_h = fail_h[:fail_h.index("else:")]
+check("crash on Siril's side" in fail_h and "Restart Siril" in fail_h,
+      "and a broken pipe is named for what it is — Siril's process is "
+      "gone, so the command in flight is the one thing that CANNOT be at "
+      "fault any more")
+
+print("\n8r2) a comparison star must stay ON the sensor for the whole run")
+env_f = ns["drift_envelope"]
+stays = ns["stays_in_frame"]
+# Siril moves each measurement box by the registration data. A star that
+# is comfortably inside the reference frame can still leave the sensor
+# later — and when a COMPARISON does, the whole light_curve command fails
+# with "generic error" after a warning that names one FRAME and never says
+# which star. Measured on EXOTIC's demo set: dx runs +52 to -218 px on a
+# 650 px frame.
+# x from the stored h02 range (-52.04..+218.25) NEGATED — the measured
+# convention — and y from the h12 range directly. The first envelope used
+# the raw x values, judged every star by the mirror of its true
+# excursion, and kept (222, 73): a star that in truth walks to x = 4 and
+# was the first -refat light_curve then failed on.
+ENV = (-218.25, 52.04, -37.42, 24.85)
+MARGIN = 11.0
+verdicts = {(x, y): stays(x, y, 650, 500, ENV, MARGIN)
+            for x, y in ((371, 323), (222, 73), (645, 120),
+                         (567, 198), (499, 88), (51, 232))}
+for xy, ok in verdicts.items():
+    print(f"   {str(xy):>11} -> {'stays' if ok else 'leaves'}")
+check(verdicts[(371, 323)],
+      "the target of that run stays on the chip — which is why the failure "
+      "looked like a photometry bug rather than a geometry one")
+gone = [xy for xy, ok in verdicts.items() if not ok]
+check(len(gone) == 3 and (51, 232) in gone and (645, 120) in gone,
+      "while THREE of the five comparisons it chose spend part of the run "
+      "off the sensor: one runs to x = -167, another to x = 697 on a 650 px "
+      "frame", str(sorted(gone)))
+# sirilpy hands back an OBJECT with h00..h22 attributes, not an array.
+# The first version of this test used a numpy 3x3 — a shape the running
+# code never sees — so it passed while the filter returned None on every
+# real run and quietly did nothing. Both forms are checked now, and the
+# object one is the one that matters.
+class _Hom:
+    def __init__(self, dx, dy):
+        self.h00, self.h10, self.h02, self.h12 = 1.0, 0.0, dx, dy
+# The REAL stored values of that run: frame 1, frame 140, the reference.
+SHIFTS = ((-52.04, -37.42), (218.25, -17.32), (0.0, 0.0))
+for label, homs in (
+        ("sirilpy objects", [_Hom(dx, dy) for dx, dy in SHIFTS]),
+        ("plain 3x3 arrays", [np.array([[1, 0, dx], [0, 1, dy], [0, 0, 1]],
+                                       float) for dx, dy in SHIFTS])):
+    got_env = env_f(homs)
+    check(got_env is not None and abs(got_env[0] + 218.25) < 1e-6
+          and abs(got_env[1] - 52.04) < 1e-6,
+          f"the envelope reads {label} — sirilpy hands back an object with "
+          "h00..h22, and a plain 3x3 works too so the maths can be "
+          "exercised without sirilpy", str(got_env))
+class _Opaque:
+    pass
+check(env_f([_Opaque(), _Opaque()]) is None,
+      "and something it cannot read at all gives None, which switches the "
+      "filter off rather than inventing an envelope")
+check(env_f([]) is None and env_f([None, None]) is None,
+      "and an unregistered sequence gives None, which switches the filter "
+      "off rather than rejecting everything")
+check(stays(300, 250, 650, 500, None, MARGIN),
+      "with no envelope every star passes — the filter must never be the "
+      "reason a run with no registration data finds nothing")
+ccs2 = ns["choose_comparison_stars"]
+class _S2:
+    def __init__(self, x, y, m):
+        self.xpos, self.ypos, self.mag = x, y, m
+        self.has_saturated = False
+pool = [_S2(371, 323, 10.0), _S2(51, 232, 10.2), _S2(645, 120, 10.3),
+        _S2(400, 250, 10.4), _S2(450, 300, 10.5), _S2(500, 200, 10.6)]
+kept, rej, _n = ccs2(pool, (371, 323), 5, 1.84,
+                     frame_wh=(650, 500), envelope=ENV)
+why = {(int(r[0]), int(r[1])): r[2] for r in rej}
+check("drifts" in why.get((51, 232), "") and "drifts" in why.get((645, 120), ""),
+      "and the two that would walk off are rejected with that reason, not "
+      "silently", why.get((51, 232), "KEPT"))
+check(all((int(c[0]), int(c[1])) not in ((51, 232), (645, 120)) for c in kept),
+      "so they never reach the -refat list that would fail the command")
+
+print("\n8s2) the plate scale is handed to Siril, not left to its memory")
+isc = ns["image_scale_arcsec"]
+s2f = ns["scale_to_focal_pixel"]
+# Siril takes the scale from FOCALLEN and XPIXSZ. With neither it uses
+# whatever it last SAVED as a default — the previous target's telescope.
+# On EXOTIC's demo set that was 3.76 um / 380.33 mm from another rig: a
+# 0.46 deg field where the truth is 0.94, 373 000 catalogue stars fetched,
+# and "Generic error". Nothing in that message says "wrong scale".
+sc, where = isc({"IM_SCALE": "5.210"})
+print(f"   IM_SCALE 5.210 -> {sc:.3f} arcsec/px, field {650 * sc / 3600:.2f} deg")
+check(abs(sc - 5.210) < 1e-9 and where == "IM_SCALE",
+      "a header that states the scale outright is read directly — "
+      "MicroObservatory writes IM_SCALE, older systems SECPIX", where)
+check(abs(650 * sc / 3600 - 0.94) < 0.01,
+      "and that is the 0.94 deg field Siril could not find while looking "
+      "for 0.46", f"{650 * sc / 3600:.2f} deg")
+sc2, where2 = isc({"FOCALLEN": "382.0", "XPIXSZ": "3.76"})
+check(abs(sc2 - 2.03) < 0.01 and "FOCALLEN" in where2,
+      "and where the optics are given instead, the scale is derived — this "
+      "matches Siril's own solve of the same frames to 0.4%", f"{sc2:.3f}")
+foc, pix = s2f(5.210)
+check(abs(206.265 * pix / foc - 5.210) < 1e-6,
+      "the focal/pixel pair handed back reproduces the scale — only the "
+      "RATIO matters to a solver, so one value is fixed and the other "
+      "follows", f"focal {foc:.1f} mm, pixel {pix:.1f} um")
+none_sc, why = isc({})
+check(none_sc is None and "saved defaults" in why,
+      "with nothing to go on it says so rather than guessing — a wrong "
+      "scale fails as 'Generic error', which reads like a broken solve",
+      why[-40:])
+solver = src[src.index("def _solve_reference"):]
+solver = solver[:solver.index("\n    def ", 10)]
+check("-focal=" in solver and "-pixelsize=" in solver,
+      "and the run passes both to platesolve, so Siril never reaches for "
+      "the previous target's optics")
+
+print("\n8t2) a crowded field still yields an ensemble, with the price named")
+class _St:
+    def __init__(self, x, y, m):
+        self.xpos, self.ypos, self.mag = x, y, m
+        self.has_saturated = False
+ccs = ns["choose_comparison_stars"]
+FW = 1.84
+OUT = ns["AUTORING_OUTER_FWHM"] * FW
+rng8t2 = np.random.default_rng(4)
+def _field(n, w=650, h=500):
+    xs = rng8t2.uniform(20, w - 20, n)
+    ys = rng8t2.uniform(20, h - 20, n)
+    ms = rng8t2.uniform(10.0, 12.0, n)
+    return [_St(x, y, m) for x, y, m in zip(xs, ys, ms)]
+# EXOTIC's demo set is 650x500 at 5.2 arcsec/px: 164 of 261 stars fell to
+# the isolation cut, ONE comparison survived, and the run stopped. Refusing
+# to run is worse than running with a stated compromise.
+for n, expect_relaxed in ((400, False), (1500, True)):
+    stars = _field(n)
+    got, _rej, note = ccs(stars, (stars[0].xpos, stars[0].ypos), 5, FW)
+    relaxed = "isolation relaxed" in note
+    print(f"   {n:5d} stars in 650x500 -> {len(got)} comps"
+          + ("  (relaxed)" if relaxed else "  (full radius)"))
+    check(len(got) >= ns["MIN_COMPS"],
+          f"{n} stars still yields an ensemble", f"{len(got)} comps")
+    check(relaxed is expect_relaxed,
+          "and the relaxation engages ONLY when the strict radius cannot "
+          f"reach the MINIMUM ({n} stars: "
+          f"{'relaxed' if expect_relaxed else 'full'}) — relaxing to reach "
+          "the requested count would trade isolation away in any field "
+          "that simply has fewer good stars than asked for",
+          note.split(";")[-1].strip()[:50] if relaxed else "full radius")
+stars = _field(1500)
+_g, _r, note = ccs(stars, (stars[0].xpos, stars[0].ypos), 5, FW)
+check("isolation relaxed to" in note and "survived a field this crowded" in note,
+      "the compromise is NAMED with its radius and its reason — a silently "
+      "loosened criterion is a measurement nobody can weigh", note[-60:])
+src2 = src[src.index("def choose_comparison_stars"):]
+src2 = src2[:src2.index("\ndef crowding_note")]
+check("COMP_APERTURE_FLOOR_FWHM" in src2,
+      "and the floor is the APERTURE: a neighbour inside that is blended "
+      "photometry, not a background error, and no report rescues it")
+
+print("\n8v1) choosing a folder reads the headers straight away")
+probe = src[src.index("def _probe_target"):]
+probe = probe[:probe.index("\n    def ", 10)]
+pick = src[src.index("def _on_pick_folder"):]
+pick = pick[:pick.index("\n    def ", 10)]
+check("self._probe_target(files)" in pick,
+      "the folder picker probes immediately — the run does this anyway, but "
+      "at folder-choose time it is a number you can CHECK rather than one "
+      "that appears after five minutes of registration")
+check("PROBE_HEADERS" in probe and ns["PROBE_HEADERS"] <= 50,
+      "capped, because this runs on the UI thread: 30 compressed N.I.N.A. "
+      "subs measured 153 ms, which is a click; several hundred would freeze "
+      "the window", f"{ns['PROBE_HEADERS']} headers")
+for guard in ("not self.ed_target_name.text().strip()",
+              "not self.ed_ra.text().strip()"):
+    check(guard in probe,
+          f"and it fills only EMPTY fields ({guard.split('.')[1]}) — "
+          "anything you typed stays")
+check("split_frames" in probe,
+      "it splits lights from calibration first, so a folder of flats "
+      "cannot prefill the target from a parked mount")
+check("agrees with the fields" in probe and "from what is in the fields" in probe,
+      "when the fields are already filled it COMPARES instead of "
+      "overwriting, and says which")
+check("carry no OBJCTRA/OBJCTDEC" in probe,
+      "and headers that say nothing produce a line too — silence there "
+      "reads as 'nothing to do' when it means 'type the name'")
+
+# The data path itself, on the two shapes of header this met.
+NINA = [{"kind": "light", "object": "WASP-75b",
+         "objctra": "22 49 33", "objctdec": "-10 40 32"} for _ in range(25)]
+MICRO = [{"kind": None, "object": "HATP-32",
+          "objctra": "", "objctdec": ""} for _ in range(30)]
+FLATS = [{"kind": "flat", "object": "WASP-75b",
+          "objctra": "00 00 00", "objctdec": "+00 00 00"} for _ in range(5)]
+ra_n, dec_n, _n = ns["header_target_radec"](NINA + FLATS)
+check(ra_n is not None and abs(ra_n - 342.3875) < 1e-3,
+      "N.I.N.A. subs beside their flats yield the target, not the park "
+      "position", f"{ra_n:.5f}")
+check(ns["header_target_radec"](MICRO)[0] is None
+      and next((i["object"] for i in MICRO if i.get("object")), "") == "HATP-32",
+      "MicroObservatory subs yield no coordinates but DO yield the name, "
+      "which is exactly the case the archive lookup exists for")
+
+print("\n8v2) the target controls sit where the target is chosen")
+grp3 = src[src.index('QGroupBox("3 · Target star")'):]
+grp3 = grp3[:grp3.index("def _build_photometry_group")]
+grp6 = src[src.index("def _build_export_group"):]
+grp6 = grp6[:grp6.index("\n    def _build_action_buttons")]
+# The name box and the archive lookup DECIDE THE POSITION, so they belong
+# with the other ways of deciding it. Having them in the submission group
+# meant the one control that spares you typing coordinates sat in a group
+# about filing the result.
+for w in ("self.ed_target_name = QLineEdit()", "self.chk_resolve = QCheckBox("):
+    check(w in grp3 and w not in grp6,
+          f"{w.split('=')[0].strip()} lives in group 3, not group 6 — it "
+          "decides the target, not the submission")
+check("From the frames" in grp3,
+      "and the frames themselves are a target MODE, offered first: subs "
+      "usually carry OBJCTRA/OBJCTDEC or OBJECT, and asking the user to "
+      "retype what the file already says is the thing to remove")
+modes = src[src.index("def _target_mode"):]
+modes = modes[:modes.index("\n    def ", 10)]
+check('"auto"' in modes and modes.index('"auto"') < modes.index('"brightest"'),
+      "'auto' is the FIRST mode, so it is what a fresh install starts on",
+      modes.strip().splitlines()[-1].strip())
+run_src = src[src.index("eph = self._resolve_from_name"):]
+run_src = run_src[:run_src.index("_detect_reference_stars")]
+check('"auto"' in run_src and "BRIGHTEST star is used" in run_src,
+      "and when the frames say nothing, falling back to brightest is "
+      "ANNOUNCED — a guess that looks like a measurement is the failure "
+      "this whole tool is against")
+
+print("\n8w) time stamps real telescopes actually write")
+jdf = ns["_jd_from_dateobs"]
+ref = jdf("2017-12-20T01:33:43.317")
+# Both of these came back NaN before, and both are silent failures.
+for stamp, why in (
+        ("2026-08-15T07:26:29.1714366",
+         "N.I.N.A. writes SEVEN fractional digits, which fromisoformat "
+         "refuses on Python 3.10 and earlier — every frame of a 178-sub run "
+         "parsed to NaN, so the seeing, sky and star-count bases could never "
+         "be paired and the fit quietly ran on airmass alone"),
+        ("2017-12-19T18:33:43.317-0700",
+         "and MicroObservatory writes LOCAL time with a UTC offset — taking "
+         "that as UTC is a seven-hour error in a quantity measured in "
+         "minutes"),
+        ("2017-12-20T01:33:43.317-0000",
+         "as well as the explicit +00:00 form")):
+    got = jdf(stamp)
+    check(np.isfinite(got), why, repr(stamp))
+check(abs(jdf("2017-12-19T18:33:43.317-0700") - ref) * 86400 < 0.01,
+      "the offset is SUBTRACTED, so local and UTC land on the same instant",
+      f"{abs(jdf('2017-12-19T18:33:43.317-0700') - ref) * 86400:.4f} s apart")
+# Against the header's own MJD-OBS = 58107.065 -> JD 2458107.565.
+check(abs(ref - 2458107.565) < 0.002,
+      "and the result matches the MJD-OBS the same header records",
+      f"{ref:.5f} vs 2458107.565")
+check(not np.isfinite(jdf("")), "empty is still NaN, not a date")
+
+print("\n8x) the longitude sign is decided by measurement, not convention")
+lsc = ns["longitude_sign_check"]
+# FITS never settled east- vs west-positive. Getting it wrong mirrors the
+# site across the globe and detrends the airmass for the wrong place —
+# silently. But the frames carry the answer: an altitude, a pointing and a
+# time say where the telescope actually was.
+MICRO = {"TELALT": "+62.592", "RA": "31.312099", "DEC": "46.769087",
+         "DATE-OBS": "2017-12-19T18:33:43.317-0700"}
+lon, note = lsc(MICRO, 31.68, 110.88)
+print(f"   MicroObservatory: {lon:+.4f} — {note[:70]}…")
+check(abs(lon + 110.88) < 1e-9 and "FLIPPED" in note,
+      "a WEST-positive header is caught and flipped, because +110.88 would "
+      "put the target below the horizon while -110.88 reproduces TELALT",
+      f"{lon:+.4f}")
+NINA = {"CENTALT": "47.8483", "RA": "342.2429", "DEC": "-10.3012",
+        "DATE-OBS": "2026-08-15T07:26:29.1714366"}
+lon2, note2 = lsc(NINA, 31.5469, -99.3822)
+check(abs(lon2 + 99.3822) < 1e-9 and "confirmed" in note2,
+      "a correct east-positive header is CONFIRMED, not flipped — the check "
+      "has to be able to say yes", note2[:50])
+lon3, note3 = lsc({}, 31.68, 110.88)
+check(abs(lon3 - 110.88) < 1e-9 and "no altitude" in note3,
+      "with no altitude to check against, nothing is changed and the "
+      "assumption is stated rather than hidden", note3[:50])
+lon4, note4 = lsc(dict(MICRO, RA="2.087"), 31.68, 110.88)
+check(abs(lon4 - 110.88) < 1e-9 and "not conclusive" in note4,
+      "and an RA in the WRONG UNIT makes the check inconclusive rather than "
+      "flipping wrongly — a guess that can only fail safe", note4[-40:])
+
+print("\n8y) a frame with no IMAGETYP is still a light")
+hdr2 = ns["header_target_radec"]
+UNK = {"kind": None, "objctra": "22 49 33", "objctdec": "-10 40 32"}
+check(hdr2([dict(UNK) for _ in range(5)])[0] is not None,
+      "most archive and school-telescope data carries OBJECT but no "
+      "IMAGETYP, and requiring kind=='light' made this whole path invisible "
+      "on it — 142 frames of EXOTIC's own demo set")
+check(hdr2([dict(UNK, kind="flat") for _ in range(5)])[0] is None,
+      "while a frame that SAYS it is a flat is still skipped: unknown is "
+      "not the same as known-to-be-something-else")
+
+print("\n8z) a saturation flag far below the pixels does not win")
+sat_frac = ns["_sat_fraction"]
+data_lo = np.zeros((60, 60)); data_lo[30, 30] = 846.0; data_lo[0, 0] = 32767.0
+verdict, why = ns["saturation_verdict"](data_lo, 30, 30)
+frac = sat_frac(why)
+print(f"   peak 846 of 32767 -> verdict {verdict}, fraction {frac:.3f}")
+check(verdict is False and frac is not None and abs(frac - 0.026) < 1e-6,
+      "the fraction reads back out of the very message that reports it, so "
+      "the two can never describe different things", f"{frac}")
+check(frac < 0.5 * ns["SATURATION_FRACTION"],
+      "and 2.6% of full scale is far enough under the limit that Siril's "
+      "flag is reported as a disagreement rather than accepted — measured "
+      "on MicroObservatory data, where that false positive would block the "
+      "AAVSO file and tell the observer to re-shoot a good night")
+check(sat_frac("no percentage here") is None,
+      "an unparseable message gives None, and None keeps the old "
+      "flag-wins behaviour")
+
+print("\n8u) the target comes from the headers first, the archive second")
+hdr = ns["header_target_radec"]
+sep = ns["angular_sep_arcsec"]
+# The rig this was written for: N.I.N.A. writes the OBJECT's position in
+# OBJCTRA/OBJCTDEC, and all 178 lights carry it identically.
+LIGHT = {"kind": "light", "objctra": "22 49 33", "objctdec": "-10 40 32"}
+# A flat is shot with the mount PARKED, and this rig then writes the
+# sentinel plus a pointing near the celestial pole. Reading one of those
+# instead of a light is what made these fields look untrustworthy.
+FLAT = {"kind": "flat", "objctra": "00 00 00", "objctdec": "+00 00 00"}
+ra_h, dec_h, note_h = hdr([dict(LIGHT) for _ in range(178)])
+d_arch = sep(ra_h, dec_h, 342.3858995, -10.6754686)
+print(f"   178 lights -> {ra_h:.5f} / {dec_h:+.5f}, {d_arch:.1f}\" from the "
+      f"archive ({note_h})")
+check(d_arch < 15.0,
+      "the headers put the target within a few arcsec of the archive — under "
+      "3 px at 2 arcsec/px, well inside Siril's own +/-19 px search box, so "
+      "no lookup is needed for the POSITION", f"{d_arch:.1f} arcsec")
+check(hdr([dict(FLAT) for _ in range(5)])[0] is None,
+      "a folder of flats yields nothing — the mount was parked and the "
+      "sentinel is not a position on the sky")
+mixed = [dict(FLAT) for _ in range(5)] + [dict(LIGHT) for _ in range(178)]
+check(abs(hdr(mixed)[0] - ra_h) < 1e-9,
+      "and a flat sitting beside the lights cannot pull the answer toward "
+      "the pole, because only LIGHT frames are read")
+two = [dict(LIGHT), dict(LIGHT, objctra="12 00 00")]
+check(hdr(two)[0] is None and "more than one target" in hdr(two)[2],
+      "two targets in one folder is a refusal with the reason, not a median "
+      "between them", hdr(two)[2][:60])
+# The pointing pair is a different thing and must never be substituted.
+resolver = src[src.index("def _resolve_from_name"):]
+resolver = resolver[:resolver.index("\n    def ", 10)]
+body = resolver[resolver.index('"""', resolver.index('"""') + 3) + 3:]
+check("header_target_radec" in body and 'info.get("objctra")' not in body,
+      "the run reads the object position through that one helper, rather "
+      "than parsing the cards a second time somewhere else")
+for bad in ('get("RA")', 'info["RA"]', '"DEC"'):
+    check(bad not in resolver,
+          f"and never {bad} — those are the TELESCOPE pointing, a quarter of "
+          "a degree off here because the target is not the field centre",
+          "absent")
+check("KIND_LIGHT" in resolver,
+      "the OBJECT name is taken from a light frame too, for the same reason")
+# A real run exposed this: the user had RA/Dec stored from an earlier
+# session, so the manual entry won — correctly — and NOTHING said the
+# headers had also been read and agreed. Silence there is the worst of the
+# three outcomes, because a coordinate left over from the previous target
+# looks exactly like a deliberate one.
+for branch in ("Target position not in the headers",
+               "Target from OBJCTRA/OBJCTDEC in your lights",
+               "Using the RA/Dec in the form"):   # "you entered" would be
+               # wrong now: the folder picker prefills these fields
+    check(branch in resolver,
+          f"every path says where the position came from: {branch!r}")
+check("from what OBJCTRA/OBJCTDEC in your lights say" in resolver,
+      "and a manual entry that DISAGREES with the frames is called out — "
+      "that is how a stale coordinate from the previous target announces "
+      "itself")
+
+print("\n8u2) the name lookup adds the ephemeris, and cross-checks")
+norm = ns["normalise_planet_name"]
+for raw, want in (("WASP-75b", "WASP-75 b"), ("  HAT-P-32B ", "HAT-P-32 b"),
+                  ("Kepler-8 b", "Kepler-8 b"), ("TrES-3", "TrES-3"),
+                  ("", "")):
+    check(norm(raw) == want,
+          f"{raw!r} normalises to {want!r} — one missing space is the whole "
+          "difference between a hit and a silent miss", repr(norm(raw)))
+calls = []
+class _Resp:
+    def __init__(self, body): self.body = body
+    def read(self): return self.body.encode()
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+def _fake(url, timeout=None):
+    calls.append(url)
+    return _Resp("pl_name,ra,dec,pl_orbper,pl_tranmid,pl_trandur,pl_trandep,"
+                 "st_teff,st_logg,sy_vmag\n"
+                 '"WASP-75 b",342.3858995,-10.6754686,2.484193,'
+                 "2456016.2669,1.9728,1.07,6100.0,4.29,11.591\n")
+eph, note = ns["archive_lookup"]("wasp-75B", opener=_fake)
+check(eph is not None and not note, "a lower-case name still resolves", note)
+# EXOTIC's demo headers read OBJECT = 'HATP-32'; the archive holds
+# 'HAT-P-32 b'. Hyphens and spaces are stripped from BOTH sides, so every
+# spelling in between works without a table of survey prefixes.
+for typed in ("HATP-32", "hatp32b", "HAT-P-32 b"):
+    calls.clear()
+    ns["archive_lookup"](typed, opener=_fake)
+    check("REPLACE" in calls[0] and "HATP32" in calls[0].upper(),
+          f"{typed!r} queries the same stripped key", typed)
+check("hostname" in calls[0],
+      "and hostname is searched as well as pl_name — a name with no planet "
+      "letter, which is what a header usually carries, exists only there")
+def _many(url, timeout=None):
+    return _Resp("pl_name,hostname,ra,dec\n"
+                 '"Kepler-11 b","Kepler-11",1,2\n'
+                 '"Kepler-11 c","Kepler-11",1,2\n')
+e_m, n_m = ns["archive_lookup"]("Kepler-11", opener=_many)
+check(e_m is None and "2 known planets" in n_m and "Kepler-11 b" in n_m,
+      "a multi-planet system is a REFUSAL that lists the choices — picking "
+      "one silently would attach the wrong ephemeris to the O−C", n_m[:60])
+check(eph.get("period_d") and eph.get("t0_bjd"),
+      "and it brings the ephemeris, which is the part the header CANNOT "
+      "carry and the only reason to go to the network at all")
+check("TARGET_DISAGREE_ARCSEC" in resolver and "disagree by" in resolver,
+      "a header/archive disagreement is REPORTED, not silently resolved — "
+      "the two describing different things is what a wrong OBJECT looks like")
+check("The headers win" in resolver,
+      "and the headers win, because they arrived with the frames")
+def _empty(url, timeout=None): return _Resp("pl_name,ra,dec\n")
+e2, n2 = ns["archive_lookup"]("Nonesuch 1 b", opener=_empty)
+check(e2 is None and "no planet" in n2,
+      "an unknown name is a named refusal, not a crash", n2)
+def _boom(url, timeout=None): raise OSError("no route to host")
+e3, n3 = ns["archive_lookup"]("WASP-75 b", opener=_boom)
+check(e3 is None and "could not be reached" in n3,
+      "and no connection loses only the O−C — the position came from the "
+      "headers and still stands", n3)
+
+print("\n8v) O−C is what a single night is worth contributing")
+oc = ns["o_minus_c"]
+P, T0 = 2.484193, 2456016.2669
+for off in (0.0, 4.2, -7.5):
+    got, ep = oc(T0 + 2114 * P + off / 1440.0, T0, P)
+    check(abs(got - off) < 1e-6 and ep == 2114,
+          f"a mid-transit {off:+.1f} min from the prediction reads "
+          f"{off:+.1f} min at epoch 2114", f"{got:+.3f} min, epoch {ep}")
+check(oc(1.0, 0.0, 0.0) == (None, None),
+      "a missing period is None, not a division")
+lines = ns["oc_lines"]({"time_system": "JD_UTC",
+                        "ephemeris": {"period_d": P, "t0_bjd": T0}},
+                       {"t0": T0 + 2114 * P, "t0_sigma_s": 300.0})
+check(lines and "not computed" in lines[0][0],
+      "and JD_UTC against a BJD_TDB ephemeris is REFUSED — the 8-minute "
+      "offset would land in a number whose whole interest is minutes",
+      lines[0][0][:60] if lines else "no line")
+good = ns["oc_lines"]({"time_system": "BJD_TDB",
+                       "ephemeris": {"period_d": P, "t0_bjd": T0,
+                                     "name": "WASP-75 b"}},
+                      {"t0": T0 + 2114 * P + 4.2 / 1440.0,
+                       "t0_sigma_s": 300.0})
+joined = " ".join(l for l, _h in good)
+print("   " + good[0][0].strip())
+check("+4.20 min" in joined and "epoch 2114" in joined,
+      "a usable one prints the drift AND the epoch — the drift alone is "
+      "unreadable once a stale period mislabels which transit it was")
+
+print("\n8r3) the reference frame is moved to the middle of the DRIFT")
+# Siril 1.4.4 REFUSES light_curve when any frame sits more than 160 px
+# from the reference: bisected on EXOTIC's demo set, 159.6 px runs and
+# 160.7 px aborts with a line Siril calls a "Warning" followed by a
+# generic error. Siril picks its reference on image quality, which put
+# the whole drift on one side (image 35 of 142, worst drift 218.9 px).
+shift_f = ns["shift_list"]
+worst_f = ns["worst_drift"]
+best_f = ns["best_reference"]
+LIMIT = ns["SIRIL_DRIFT_LIMIT_PX"]
+check(abs(LIMIT - 160.0) < 1e-9,
+      "the limit is the measured 160 px, not a guess", f"{LIMIT:g} px")
+
+class _H2:
+    """A homography the way sirilpy hands it back: all nine elements."""
+    def __init__(self, dx, dy, rot_deg=0.0):
+        c, sn = math.cos(math.radians(rot_deg)), math.sin(math.radians(rot_deg))
+        self.h00, self.h01, self.h02 = c, -sn, dx
+        self.h10, self.h11, self.h12 = sn, c, dy
+        self.h20, self.h21, self.h22 = 0.0, 0.0, 1.0
+
+W_IMG, H_IMG = 650, 500
+# The real run's geometry, sampled the way the real run samples it: dx
+# runs +52 to -218 in small steps, dy stays small. The coarse five-point
+# version this started as had only ONE frame under the limit, which hid
+# the very thing the choice has to get right.
+REAL = [(52.0 - 10.0 * k, 37.42 - 2.0 * k) for k in range(28)]
+homs2 = [_H2(dx, dy) for dx, dy in REAL]
+sh = shift_f(homs2, W_IMG, H_IMG)
+# The list holds where the centre LANDS; the callers take differences.
+# The signs are the MEASURED convention (see ref_to_frame): the stored
+# homography maps frame onto reference in Siril's bottom-up row order,
+# so in FITS coordinates a stored (h02, h12) moves a star by (-h02, +h12)
+# — anchored by cross-correlating real frames and confirming on the
+# target star itself: frame 1 stores (-52.0, -37.4) and the star sits at
+# ref + (+52, -37).  The first reading applied H forwards and seeded half
+# the centroids onto the wrong stars: 900 mmag of scatter.
+check(len(sh) == len(REAL)
+      and abs(sh[0][0] - (W_IMG / 2.0 - 52.0)) < 1e-6
+      and abs(sh[0][1] - (H_IMG / 2.0 + 37.42)) < 1e-6,
+      "a stored pure shift (h02, h12) moves the centre by (-h02, +h12) "
+      "in FITS coordinates — the measured convention, not a guessed one",
+      str(sh[0]))
+r2f = ns["ref_to_frame"]
+pos1 = r2f([1.0, 0.0, -52.04, 0.0, 1.0, -37.42, 0.0, 0.0, 1.0],
+           371.1, 323.3, 650, 500)
+check(abs(pos1[0] - 423.14) < 0.01 and abs(pos1[1] - 285.88) < 0.01,
+      "and the real frame-1 numbers reproduce where the target was "
+      "actually found on the pixels: stored (-52.0, -37.4) puts "
+      "(371.1, 323.3) at (423.1, 285.9)", str(pos1))
+check(abs(worst_f(sh, 0) - max(math.hypot(dx - 52.0, dy - 37.42)
+                               for dx, dy in REAL)) < 1e-6,
+      "and the worst drift against a frame is the plain distance between "
+      "the two centres")
+
+# A MERIDIAN FLIP is what exposed reading the translation column instead.
+# 180 degrees about the centre leaves every star on the same piece of sky
+# and moves nothing off the sensor, but the translation column becomes the
+# width and height of the frame.
+FLIP_W = FLIP_H = 3008
+flip = [_H2(0.0, 0.0), _H2(3000.97, 3013.91, 179.878)]
+fs = shift_f(flip, FLIP_W, FLIP_H)
+flip_centre = math.hypot(fs[1][0] - fs[0][0], fs[1][1] - fs[0][1])
+flip_column = math.hypot(3000.97, 3013.91)
+check(flip_column > 4000 and flip_centre < 30,
+      "a 180-degree flip moves the image centre a few px while its "
+      "translation column reads thousands — measured on a real 3008x3008 "
+      "run: 4253 px by the column, 13.7 px by the centre",
+      f"column {flip_column:.0f} px, centre {flip_centre:.1f} px")
+check(flip_centre < LIMIT,
+      "so a flipped run is NOT declared unmeasurable. Reading the column "
+      "said 'no reference can rescue this run' about a run with no drift "
+      "problem at all, and threw the whole photometry away")
+check(shift_f(flip)[1] == (-3000.97, 3013.91),
+      "with no frame size there is no flip axis, so the fallback is the "
+      "translation column with the measured signs (-h02, +h12) — right "
+      "whenever the field does not rotate")
+
+MARGIN = ns["DRIFT_LIMIT_MARGIN"]
+CEIL = LIMIT * MARGIN
+# Weighted FWHM, lower is better.
+QUAL = [2.4 + 0.01 * k for k in range(28)]
+QUAL[0] = 1.80                               # Siril's pick: the best frame
+mid = min(range(len(sh)), key=lambda i: worst_f(sh, i))
+QUAL[mid] = 8.50                             # ...and the middle is the worst
+w_siril = worst_f(sh, 0)                     # Siril's quality pick
+i_best, w_best = best_f(sh, QUAL, CEIL)
+check(w_siril > LIMIT,
+      "with Siril's own reference the run is over the limit and CANNOT be "
+      "measured at all", f"{w_siril:.1f} px vs {LIMIT:.0f}")
+check(w_best <= CEIL,
+      "re-centring brings it under, with margin — a frame that only just "
+      "squeaks under would abort again on the next nudge of the mount",
+      f"frame index {i_best}, {w_best:.1f} px vs {CEIL:.0f}")
+check(i_best != mid,
+      "and the frame at the exact middle of the drift is NOT taken when a "
+      "usable frame is better: that one was the worst of the night, and "
+      "picking it made light_curve run and return 6 points of 142",
+      f"middle {mid} (q={QUAL[mid]}), chosen {i_best} (q={QUAL[i_best]})")
+check(all(QUAL[i_best] <= QUAL[i] for i in range(len(sh))
+          if worst_f(sh, i) <= CEIL),
+      "the chosen frame is the best-QUALITY one Siril will accept, not "
+      "merely an acceptable one")
+i_free, _ = best_f(sh, QUAL, None)
+check(QUAL[i_free] == min(QUAL),
+      "and with no limit to satisfy it reproduces Siril's own criterion — "
+      "quality alone", f"index {i_free}")
+# Unregistered frames must not be chosen and must not break the search.
+sh_gap = shift_f([_H2(*REAL[0]), None, _H2(*REAL[2]), None, _H2(*REAL[4])],
+                 W_IMG, H_IMG)
+check(sh_gap[1] is None and sh_gap[3] is None,
+      "frames that failed registration come back as None, not as (0, 0) — "
+      "a fake zero shift would look like a perfect reference")
+i_gap, w_gap = best_f(sh_gap, None, None)
+check(i_gap is not None and sh_gap[i_gap] is not None,
+      "and the reference is chosen from frames that HAVE registration")
+check(best_f([None, None], None, None) == (None, None),
+      "a run with no registration at all yields no choice rather than an "
+      "index that would then be handed to setref")
+# The envelope must follow the reference that is actually in use.
+env_f2 = ns["drift_envelope"]
+e0 = env_f2(homs2, (0.0, 0.0), W_IMG, H_IMG)
+e1 = env_f2(homs2, sh[i_best], W_IMG, H_IMG)
+check(abs(e0[0] - e1[0]) > 1.0,
+      "the drift envelope is measured against the reference in use, not "
+      "against the one Siril happened to start with",
+      f"{e0[0]:.0f} -> {e1[0]:.0f}")
+check(abs((e1[1] - e1[0]) - (e0[1] - e0[0])) < 1e-6,
+      "and re-centring moves the window without changing its width — the "
+      "field drifts just as far either way")
+
+print("\n8r4) -autoring is set with setphot, never passed as a flag")
+# Measured against Siril 1.4.4: passing -autoring makes light_curve abort
+# with "The given coordinates are not in the image" on coordinates that
+# are demonstrably inside it. The identical command without the flag, on
+# the same sequence and the same stars, produces the light curve.
+lca = ns["light_curve_args"]
+argv = lca("lights", 0, True, (371, 323), [(222, 73)])
+check("-autoring" not in argv,
+      "the flag never reaches Siril — it is what made light_curve refuse",
+      " ".join(argv))
+check(argv[:3] == ["light_curve", "lights", "0"]
+      and "-at=371,323" in argv and "-refat=222,73" in argv,
+      "while everything else about the command is unchanged")
+inner_f, outer_f = ns["AUTORING_INNER_FWHM"], ns["AUTORING_OUTER_FWHM"]
+check(abs(inner_f * 1.797542 - 7.55) < 0.02
+      and abs(outer_f * 1.797542 - 11.32) < 0.02,
+      "and the radii set instead reproduce Siril's own arithmetic to the "
+      "digit it logged: FWHM 1.797542 -> 7.5 and 11.3",
+      f"{inner_f * 1.797542:.2f} / {outer_f * 1.797542:.2f}")
+setref_src = src[src.index("def _centre_reference"):]
+setref_src = setref_src[:setref_src.index("def _reference_frame")]
+check('self._cmd("setref"' in setref_src and "best_i + 1" in setref_src,
+      "the reference is moved with setref, one-based as Siril counts")
+check("_register(seq)\n        self._centre_reference(seq)" in src,
+      "and it runs AFTER register, which picks its own reference and "
+      "would otherwise overwrite the choice")
+check("weighted_fwhm" in setref_src,
+      "the quality that decides is Siril's own weighted FWHM, read from "
+      "the registration data rather than measured again")
+check('getattr(data, "rx"' in setref_src
+      and 'getattr(data, "ry"' in setref_src,
+      "the frame size comes from the SEQUENCE, not from a FITS read — the "
+      "file read failed on a real run and took the drift filter with it")
+sat_src = src[src.index("def _target_saturation"):]
+sat_src = sat_src[:sat_src.index("# -- calibration")]
+check("memmap=False" in sat_src,
+      "and the pixel read that decides saturation does not memory-map: "
+      "astropy refuses to map a file carrying BZERO/BSCALE/BLANK, which "
+      "Siril's compressed frames do")
+scan_src = src[src.index("Aperture scan produced nothing usable") - 1400:]
+scan_src = scan_src[:scan_src.index("Aperture scan produced nothing usable")]
+check("dyn_ratio" in scan_src,
+      "a failed aperture scan hands the aperture BACK to Siril — without "
+      "that the run measures at the last radius the scan tried, one it "
+      "had just rejected")
+check("seqapplyreg" in setref_src and "Trim" in setref_src,
+      "when no reference can rescue the run it says so and names the two "
+      "ways out, rather than moving the reference pointlessly")
+
+print("\n8q3) the native photometry engine, measured against known truth")
+# Siril's light_curve moves each box by the registration alone and lost
+# half of a drifting run (67 of 140, measured); seqpsf -followstar loses
+# nothing but its numbers are unreachable from a script. So the frames
+# are measured HERE, and every claim below is a measurement against a
+# synthetic truth, not a code-shape check.
+_rng = np.random.default_rng(42)
+
+def _mkstar(shape, x, y, flux, sigma, sky=100.0):
+    ys, xs = np.mgrid[0:shape[0], 0:shape[1]]
+    lam = sky + flux / (2 * np.pi * sigma ** 2) * np.exp(
+        -(((xs - x) ** 2 + (ys - y) ** 2) / (2 * sigma ** 2)))
+    return _rng.poisson(lam).astype(float)
+
+cen_f = ns["refine_centroid"]
+aph_f = ns["aperture_photometry"]
+img = _mkstar((60, 60), 30.37, 28.81, 60000, 1.6)
+got_c = cen_f(img, 34.0, 25.0)
+check(got_c is not None
+      and math.hypot(got_c[0] - 30.37, got_c[1] - 28.81) < 0.15,
+      "a centroid seeded 5 px off lands subpixel on the true centre — "
+      "this is the follow-star light_curve lacks", str(got_c))
+check(cen_f(img, 3.0, 3.0) is None,
+      "a box that leaves the frame is None, not a truncated centroid")
+
+wgt = ns["circle_weights"]((31, 31), 15.0, 15.0, 8.0)
+check(abs(float(wgt.sum()) / (math.pi * 64.0) - 1.0) < 0.005,
+      "subpixel aperture weights integrate to the circle's area within "
+      "0.5% — and after sky subtraction an AREA error only couples to "
+      "the residual sky error, second order for relative photometry",
+      f"{float(wgt.sum()):.3f} vs {math.pi * 64.0:.3f}")
+areas = [float(ns["circle_weights"]((31, 31), 15.0 + fr, 15.0, 8.0).sum())
+         for fr in (0.0, 0.25, 0.5)]
+check(max(areas) - min(areas) < 0.3,
+      "and the area is SMOOTH under subpixel centre shifts — a binary "
+      "mask steps by whole pixels as the centroid moves between frames, "
+      "which is scatter with the cadence of the seeing",
+      str([f"{a:.3f}" for a in areas]))
+
+fls = []
+for _ in range(30):
+    im = _mkstar((80, 80), 40.2, 39.7, 80000, 1.6)
+    rows, _sky, _ssig, _pk = aph_f(im, 40.2, 39.7, [5.6], 10, 15, 1.0)
+    fls.append(rows[5.6][0])
+fls = np.asarray(fls)
+truth = 80000 * (1.0 - math.exp(-5.6 ** 2 / (2 * 1.6 ** 2)))
+check(abs(fls.mean() / truth - 1.0) < 0.01,
+      "the flux in 3.5 sigma matches the analytic Gaussian integral to "
+      "1%", f"{fls.mean():.0f} vs {truth:.0f}")
+rows, _sky, _ssig, _pk = aph_f(_mkstar((80, 80), 40.2, 39.7, 80000, 1.6),
+                               40.2, 39.7, [5.6], 10, 15, 1.0)
+pred = rows[5.6][1]
+check(0.6 < pred / fls.std() < 1.6,
+      "and the CCD-equation error agrees with the empirical scatter of "
+      "30 independent Poisson realisations",
+      f"predicted {pred:.0f}, empirical {fls.std():.0f}")
+sat = aph_f(np.full((60, 60), 100.0)
+            + 70000.0 * (np.hypot(*np.mgrid[0:60, 0:60] -
+                                  np.array([[[30]], [[30]]])) < 2),
+            30, 30, [5.6], 10, 15, 1.0, sat_adu=65535 * 0.98)
+check(sat is not None and math.isinf(sat[3]),
+      "a clipped core reports an infinite peak, which the caller reads "
+      "as: this frame's flux is not a measurement")
+
+ens_f = ns["ensemble_relative_mags"]
+n = 100
+c_a = np.full(n, 10000.0) + _rng.normal(0, 20, n)
+c_b = np.full(n, 30000.0) + _rng.normal(0, 40, n)
+c_b[50:] = np.nan
+t_f = np.full(n, 20000.0) + _rng.normal(0, 30, n)
+mag2, _err2 = ens_f(t_f, [c_a, c_b])
+step = abs(np.nanmedian(mag2[:50]) - np.nanmedian(mag2[50:]))
+check(step < 0.005,
+      "a comp that vanishes mid-run steps the ensemble by under 5 mmag — "
+      "normalised members; a raw flux sum would step by ~440 mmag, the "
+      "exact shape of an ingress", f"{1000 * step:.2f} mmag")
+
+rank_f = ns["rank_comps_by_scatter"]
+quiet = [np.full(n, 10000.0) + _rng.normal(0, 15, n) for _ in range(4)]
+wob = (np.full(n, 10000.0) + _rng.normal(0, 15, n)
+       + 300.0 * np.sin(np.arange(n) / 4.0))
+keep2, sc2 = rank_f(quiet + [wob])
+check(keep2 == [True, True, True, True, False],
+      "a comp with a SLOW 30 mmag wobble is dropped — scored by total "
+      "robust scatter, not point-to-point, precisely because slow "
+      "structure written inverted into the target is what a fake transit "
+      "looks like", str([f"{1000 * v:.1f}" for v in sc2]))
+keep3, _ = rank_f([quiet[0], wob])
+check(keep3 == [True, True],
+      "but with only two comps nobody is dropped — one comp is no "
+      "ensemble and zero comps un-calibrates the run silently")
+
+p2p_f = ns["point_to_point_sigma"]
+base = _rng.normal(0, 0.002, 200)
+tr = base.copy()
+tr[80:120] -= 0.02
+check(abs(p2p_f(tr) - p2p_f(base)) < 0.3 * p2p_f(base)
+      and np.std(tr) > 3 * p2p_f(tr),
+      "the aperture is judged by point-to-point noise, which a 20 mmag "
+      "transit barely moves while the plain standard deviation triples — "
+      "an aperture chooser on std would prefer whatever washes the "
+      "transit out",
+      f"p2p {1000 * p2p_f(tr):.2f} vs std {1000 * np.std(tr):.2f} mmag")
+
+f2r = ns["frame_to_ref"]
+r2f2 = ns["ref_to_frame"]
+H70 = [1.0, -0.0016, 75.26, 0.0016, 1.0, 24.85, 0.0, 0.0, 1.0]
+fp = r2f2(H70, 371.1, 323.3, 650, 500)
+bk = f2r(H70, fp[0], fp[1], 650, 500)
+nat_src = src[src.index("def _native_photometry"):]
+nat_src = nat_src[:nat_src.index("def _run_light_curve")]
+check('hdr.get("DATE-OBS"' in nat_src
+      and nat_src.index('hdr.get("DATE-OBS"')
+      < nat_src.index("when.isoformat()"),
+      "the native engine stamps each point from the frame's OWN header, "
+      "with sirilpy's date_obs only as fallback — ImgData.date_obs came "
+      "back empty on a real N.I.N.A. run: 83 good magnitudes, zero "
+      "usable time stamps, silent fallback to Siril")
+late_src = nat_src[nat_src.index("yield_frac"):]
+silent = [m.start() for m in re.finditer(r"return None", late_src)
+          if "_emit" not in late_src[max(0, m.start() - 700):m.start()]]
+check(not silent,
+      "and every bail-out after the measuring starts SAYS why before "
+      "handing over to Siril — the silent one was found only because the "
+      "fallback's log lines appeared after the engine had already "
+      "printed its aperture table", str(silent))
+check(math.hypot(bk[0] - 371.1, bk[1] - 323.3) < 1e-9,
+      "frame_to_ref inverts ref_to_frame exactly — needed because setref "
+      "moves the DETECTION frame without rebasing the homographies "
+      "(measured: after setref 70 the .seq keeps the identity at image "
+      "35), so detected positions must ride through the detection "
+      "frame's own H before any seeding")
+
+print("\n8q5) audit fixes, each measured against truth")
+# --- ensemble error must be flux-weighted, like the reference itself ---
+_rng5 = np.random.default_rng(3)
+_meds = [1e5, 1e4, 2e3]
+_n5 = 4000
+_comps5 = [_rng5.normal(m, math.sqrt(m), _n5) for m in _meds]
+_errs5 = [np.full(_n5, math.sqrt(m)) for m in _meds]
+_tf5 = _rng5.normal(2e4, math.sqrt(2e4), _n5)
+_mag5, _err5 = ns["ensemble_relative_mags"](
+    _tf5, _comps5, np.full(_n5, math.sqrt(2e4)), _errs5)
+_pred = float(np.nanmedian(_err5))
+_emp = float(np.std(_mag5))
+check(abs(_pred / _emp - 1.0) < 0.10,
+      "the predicted per-point error matches 4000 Poisson realisations on "
+      "comps of 100k/10k/2k ADU — the reference is flux-weighted, so its "
+      "error must be too", f"pred {1000 * _pred:.2f} vs emp "
+      f"{1000 * _emp:.2f} mmag")
+_equal_split = math.sqrt(2e4 / 2e4 ** 2
+                         + sum(m / m ** 2 for m in _meds) / 9.0) * 1.0857
+check(_equal_split / _emp > 1.3,
+      "while the equal-split formula this replaces overstates by >30% on "
+      "the same data — it divided every comp's variance by N^2 although "
+      "the faint comp barely enters the weighted reference",
+      f"{1000 * _equal_split:.2f} vs {1000 * _emp:.2f} mmag")
+
+# --- the yield note names whichever engine measured --------------------
+_note_f = ns["photometry_yield_note"]
+_sev_n, _msg_n = _note_f(83, 178, True, engine="This script")
+check("Siril" not in _msg_n and "This script" in _msg_n,
+      "on the native path the note never says 'Siril kept' — the first "
+      "full native run printed '83 points measured by this script' "
+      "immediately followed by 'Siril kept 83 of 178'")
+_sev_s, _msg_s = _note_f(83, 178, True, engine="Siril")
+check("pixel out of range" in _msg_s and "pixel out of range" not in _msg_n,
+      "and Siril's reason codes are quoted only when Siril measured — "
+      "they do not exist on the native path")
+_sev_ok, _msg_ok = _note_f(170, 178, False, engine="This script")
+check(_msg_ok is None, "a healthy yield still says nothing")
+
+# --- source honesty: gain provenance and centred magnitudes ------------
+check("gain_src" in nat_src and "assumed" in nat_src,
+      "the gain line says where the number came from — it used to print "
+      "'from the header' even when no header card was usable and 1.0 was "
+      "an assumption")
+check('float(hdr.get(card))' in nat_src
+      and '("GAIN", 10.0)' in nat_src,
+      "and GAIN (the camera SETTING, 0-500 arbitrary units) is only "
+      "believed in the range real e-/ADU conversion factors live in — "
+      "GAIN=100 read as e-/ADU would multiply every error bar tenfold")
+check("np.nanmedian(mag)" in nat_src,
+      "native magnitudes are centred on their median — the raw zero point "
+      "sits near -10 and reads as broken in every plot and CSV")
+
+# --- fit_transit end to end against synthetic truth --------------------
+_rngF = np.random.default_rng(11)
+_nF = 140
+_tF = np.linspace(0.0, 0.22, _nF)
+_XF = 1.1 + 1.4 * (_tF / 0.22) ** 2
+_tmplF = ns["ld_template"](0.10, 0.0)
+_shapeF = ns["ld_shape"](_tF, 0.11, 0.055, _tmplF)
+_magF = (0.004 * _rngF.standard_normal(_nF) + 0.020 * _shapeF
+         + 0.008 * (_XF - _XF.mean()))
+_fitF = ns["fit_transit"](_tF, _magF, bases={"airmass": _XF})
+check(_fitF is not None and abs(_fitF["depth_mmag"] - 20.0) < 3.0,
+      "a 20 mmag limb-darkened transit on a quadratic airmass ramp is "
+      "recovered to better than 3 mmag with the systematics fitted "
+      "simultaneously", f"{_fitF['depth_mmag']:.1f} mmag")
+check(abs(_fitF["t0"] - 0.11) * 86400.0 < 3.0 * _fitF["t0_sigma_s"],
+      "the mid-time lands within 3 error bars of the truth",
+      f"off by {abs(_fitF['t0'] - 0.11) * 86400.0:.0f} s, "
+      f"bar {_fitF['t0_sigma_s']:.0f} s")
+check(_fitF["significance"] > 10.0 and _fitF["detected"],
+      "and the detection is unambiguous",
+      f"{_fitF['significance']:.1f} sigma")
+check(abs(_fitF["airmass_slope"] - 0.008) < 0.004,
+      "the airmass coefficient comes back in readable units near its true "
+      "value", f"{_fitF['airmass_slope']:.4f} vs 0.0080")
+_mag0 = 0.004 * _rngF.standard_normal(_nF) + 0.008 * (_XF - _XF.mean())
+_fit0 = ns["fit_transit"](_tF, _mag0, bases={"airmass": _XF})
+check(_fit0 is None or not _fit0["detected"],
+      "the same night WITHOUT a transit is not claimed — the two-sided "
+      "in/out test and the red-noise correction hold the floor",
+      "" if _fit0 is None else f"{_fit0['significance']:.2f} sigma")
+
+print("\n8q4) both measurement paths feed the results dict completely")
+# The native engine's first FULL run — comps ranked, aperture chosen,
+# transit FITTED — died one line before writing its results:
+# UnboundLocalError on `aperture`, a name born only inside the Siril
+# fallback branch. This walks the actual AST of _run: any name assigned
+# ONLY in the fallback branch and read after the merge is a crash waiting
+# for whichever path skipped it.
+_tree_q4 = ast.parse(src)
+_run_fn = next(n for n in ast.walk(_tree_q4)
+               if isinstance(n, ast.FunctionDef) and n.name == "_run")
+_branch = None
+for n in ast.walk(_run_fn):
+    if isinstance(n, ast.If):
+        t = ast.get_source_segment(src, n.test) or ""
+        if "native is not None" in t:
+            _branch = n
+            break
+check(_branch is not None,
+      "the native/fallback branch exists in _run at all")
+
+def _q4_assigned(nodes):
+    out = set()
+    for nd in nodes:
+        for x in ast.walk(nd):
+            if isinstance(x, ast.Assign):
+                for tgt in x.targets:
+                    for y in ast.walk(tgt):
+                        if isinstance(y, ast.Name):
+                            out.add(y.id)
+            elif isinstance(x, (ast.AugAssign, ast.AnnAssign)):
+                if isinstance(x.target, ast.Name):
+                    out.add(x.target.id)
+            elif isinstance(x, ast.For) and isinstance(x.target, ast.Name):
+                out.add(x.target.id)
+    return out
+
+if _branch is not None:
+    _only_else = _q4_assigned(_branch.orelse)
+    _only_if = _q4_assigned(_branch.body)
+    _before, _after, _seen = [], [], False
+    for stmt in _run_fn.body:
+        if stmt.lineno <= _branch.lineno <= (stmt.end_lineno or stmt.lineno):
+            _seen = True
+            continue
+        (_after if _seen else _before).append(stmt)
+    _pre = _q4_assigned(_before)
+    _post_loads = set()
+    for stmt in _after:
+        for x in ast.walk(stmt):
+            if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Load):
+                _post_loads.add(x.id)
+    _risky = sorted((_only_else - _only_if - _pre) & _post_loads)
+    check(not _risky,
+          "no name is assigned only in the Siril fallback branch and read "
+          "after the merge — `aperture` and `dat` both were, and the "
+          "first one crashed a run AFTER the transit fit had succeeded",
+          str(_risky))
+    check("aperture" in _pre and "dat" in _pre,
+          "and the two that crashed are now initialised before the branch")
+
+print("\n8s) a submission is held to a higher bar than the report")
+src = open(SRC).read()
+gate = src[src.index("def _write_aavso"):]
+gate = gate[:gate.index("\n    def ", 10)]
+for token, why in (
+        ('r.get("target_saturated")',
+         "a saturated target means the core carries no flux information, so "
+         "the depth is not a measurement and must not reach a public "
+         "database"),
+        ('r.get("yield_severity") == "bad"',
+         "and neither must a run whose surviving frames are the ones seeing "
+         "happened to favour"),
+        ('r.get("time_system") != "BJD_TDB"',
+         "and the header declares BJD_TDB, so JD_UTC under it would be an "
+         "8-minute error nobody downstream can see")):
+    check(token in gate, why, token)
+# Measured on the WASP-75 run this was written for.
+n_pts, n_frm = 11, 178
+sev, note = ns["photometry_yield_note"](n_pts, n_frm, True)
+print(f"   {n_pts} of {n_frm} frames, target saturated -> severity {sev!r}")
+check(sev == "bad",
+      "the real run that exposed this — 11 of 178 frames, saturated target — "
+      "is judged 'bad', which is what now stops the submission",
+      f"{sev!r}")
+
+print("\n8t) the aperture scan cannot be won by measuring less")
+# Identical underlying noise, a night whose seeing swings 3x. An aperture
+# surviving only on the quiet frames shows LOWER scatter for that reason
+# alone, so least-scatter alone would crown the one that measured least.
+rng8t = np.random.default_rng(7)
+n8t = 150
+seeing = 1.0 + 1.8 * np.abs(np.sin(np.linspace(0.0, 3.1, n8t)))
+quiet = np.argsort(seeing)
+sc = {}
+for frac in (1.0, 0.8, 0.07):
+    keep = quiet[: max(5, int(frac * n8t))]
+    vals = [float(ns["_mad_std"](rng8t.normal(0, 0.004, n8t)[keep] * seeing[keep])
+                  * 1000.0) for _ in range(200)]
+    sc[frac] = float(np.median(vals))
+    print(f"   measured {frac:5.0%} of frames -> {sc[frac]:5.2f} mmag")
+check(sc[0.07] < 0.6 * sc[1.0],
+      "a candidate surviving on 7% of frames reads far quieter than the full "
+      "sample on THE SAME noise — selection, not a better aperture",
+      f"{sc[0.07]:.2f} vs {sc[1.0]:.2f} mmag")
+check(sc[0.8] > 0.85 * sc[1.0],
+      f"at {ns['APERTURE_MIN_YIELD_RATIO']:.0%} yield the bias is small "
+      "enough to live with, which is why that is the cut",
+      f"{sc[0.8]:.2f} vs {sc[1.0]:.2f} mmag")
+scan = src[src.index("def _scan_aperture"):]
+scan = scan[:scan.index("\n    def ", 10)]
+check("APERTURE_MIN_YIELD_RATIO * top" in scan,
+      "so candidates are compared only against the best YIELD, not ranked on "
+      "scatter alone")
+check("not compared" in scan,
+      "and the ones dropped are named with the reason, because a silent "
+      "exclusion looks like it was never a candidate")
+
 print("\n8i) every name a method uses actually resolves")
 # `_log_swallowed` was called from three exception handlers and never
 # defined.  Nothing noticed for weeks: all three are fallbacks for cases
@@ -1152,136 +2210,230 @@ check(not missing,
 check("_log_swallowed" in _defined,
       "and _log_swallowed in particular exists, since three handlers call it")
 
-print("\n8n) the detection floor is calibrated, not chosen")
-# The significance is the best of 121 x 41 x 8 = 39 688 grid nodes and the
-# formula does not know it. Measured over 1200 transit-free white-noise
-# runs (150 points, 5 h, 4 mmag) through this same search:
-#
-#     floor   false alarm | 4mmag 5mmag 6mmag 8mmag 12mmag
-#       3.0         4.42% |  91%   94%  100%  100%   100%
-#       4.0         0.17% |  53%   81%   98%  100%   100%
-#       5.0         0.00% |  19%   53%   86%   99%   100%
-#
-# Running that here would take twenty minutes, so what is pinned is the
-# arithmetic that made the old floor wrong and the shape of the fix.
-nodes = (ns["FIT_T0_STEPS"] * ns["FIT_DURATION_STEPS"]
-         * len(ns["FIT_INGRESS_FRACTIONS"]))
-print(f"   grid: {ns['FIT_T0_STEPS']} x {ns['FIT_DURATION_STEPS']} x "
-      f"{len(ns['FIT_INGRESS_FRACTIONS'])} = {nodes} nodes")
-check(nodes > 10000,
-      "the search really is large enough for the look-elsewhere effect to "
-      "dominate — that is WHY the floor needs calibrating", str(nodes))
-check(abs(ns["MIN_DETECTION_SIGMA"] - 4.0) < 1e-9,
-      "the floor is the calibrated 4.0, not the Gaussian-looking 3.0",
-      str(ns["MIN_DETECTION_SIGMA"]))
-check(ns["MEASURED_FALSE_ALARM"] < 0.002,
-      "and the measured rate at that floor is under 0.2%",
-      f"{100*ns['MEASURED_FALSE_ALARM']:.2f}%")
-# The point of the whole exercise: the floor must be justified by its
-# MEASURED rate, so the constant carrying that rate has to exist and be
-# reported. A floor without one is a number the reader has to trust.
-check(ns["MEASURED_FALSE_ALARM_RUNS"] >= 1000,
-      "measured over enough runs to resolve a rate that small",
-      str(ns["MEASURED_FALSE_ALARM_RUNS"]))
-src_txt = open(SRC).read()
-check(src_txt.count("MEASURED_FALSE_ALARM") >= 4,
-      "and it reaches the reports, not just the constant block",
-      f"{src_txt.count('MEASURED_FALSE_ALARM')} uses")
+print("\n8q) one satellite must not cost the detection")
+clipper = ns["sigma_clip_series"]
+fitq = ns["fit_transit"]
+shpq = shape
+tq = np.linspace(0.0, 5 / 24, 150)
+T0Q, DURQ, DEPTHQ = 0.5 * 5 / 24, 0.30 * 5 / 24, 0.012
+trq = DEPTHQ * shpq(tq, T0Q, DURQ, 0.15)
+insideq = trq > 0.0
 
-print("\n8m) the noise model is one model, applied everywhere")
-rnb2 = ns["red_noise_beta"]
-binner2 = ns["bin_series"]
-fitt = ns["fit_transit"]
-shape_of = ns["trapezoid_shape"]
+# The failure this closes, measured before the fix: a single 100 mmag
+# point on a real 12 mmag transit took the significance from 12.1 to 3.2
+# sigma -- under the 4.0 floor, so a measured transit read as "not
+# claimed". The parameters barely moved; it was the divisor. Two changes
+# fix it: a robust post-fit scatter (12.1 -> 6.9) and removing the point
+# (6.9 -> 12.1).
+rng = np.random.default_rng(77)
+sig_clean, sig_hit = [], []
+for _ in range(12):
+    base = trq + rng.normal(0.0, 0.004, tq.size)
+    f = fitq(tq, base)
+    if f:
+        sig_clean.append(f["significance"])
+    hit = base.copy()
+    hit[int(rng.integers(20, 130))] -= 0.10
+    keep, n, note = clipper(tq, hit)
+    f2 = fitq(tq[keep], hit[keep])
+    if f2:
+        sig_hit.append(f2["significance"])
+print(f"   clean {np.median(sig_clean):.1f}s   with a 100 mmag spike, "
+      f"clipped {np.median(sig_hit):.1f}s")
+check(np.median(sig_hit) > 0.8 * np.median(sig_clean),
+      "a 100 mmag spike costs almost nothing once it is removed — it used "
+      "to cost 12.1 sigma down to 3.2",
+      f"{np.median(sig_clean):.1f} -> {np.median(sig_hit):.1f}")
 
-# (a) The binned error bar is a SAMPLE standard error. numpy's default
-# ddof=0 makes it 29% too small at two points per bin, 11% at five -- and
-# a curve with small error bars looks more convincing than it is.
-rng = np.random.default_rng(7)
-for n, tol in ((2, 0.29), (5, 0.10)):
-    got, want = [], []
-    for _ in range(4000):
-        y = rng.normal(0.0, 1.0, n)
-        got.append(np.std(y, ddof=1) / math.sqrt(n))
-        want.append(np.std(y) / math.sqrt(n))
-    ratio = float(np.mean(want) / np.mean(got))
-    tb, mb, eb, nb = binner2(np.arange(n, dtype=float),
-                            np.array([0.0, 1.0] + [0.5] * (n - 2)), 1)
-    ref = float(np.std(np.array([0.0, 1.0] + [0.5] * (n - 2)), ddof=1)
-                / math.sqrt(n))
-    check(abs(float(eb[0]) - ref) < 1e-12,
-          f"the error bar at {n} points per bin uses ddof=1",
-          f"{eb[0]:.6f} vs {ref:.6f}")
-print("   (numpy's default ddof=0 is 29% low at n=2, 11% at n=5)")
+# It must not eat the transit. The reference is a running median far
+# shorter than any transit, so a smooth multi-point dip passes through.
+for depth in (0.012, 0.030, 0.060):
+    y = depth * shpq(tq, T0Q, DURQ, 0.15) + rng.normal(0.0, 0.004, tq.size)
+    keep, n, _note = clipper(tq, y)
+    eaten = int((~keep & (depth * shpq(tq, T0Q, DURQ, 0.15) > 0)).sum())
+    check(eaten <= 1,
+          f"a real {depth*1000:.0f} mmag transit keeps its points",
+          f"{eaten} clipped inside")
 
-# (b) sigma1 inside beta must be robust. It was np.std -- the one place in
-# this file that was not -- and an inflated sigma1 DIVIDES beta, switching
-# the red-noise correction off exactly when the data are bad enough to
-# need it.
-rng = np.random.default_rng(11)
-t_lin = np.linspace(0.0, 0.25, 150)
-clean = rng.normal(0.0, 0.004, 150)
-dirty = clean.copy()
-dirty[rng.choice(150, 3, replace=False)] += 0.05      # three satellite trails
-b_clean, _ = rnb2(t_lin, clean, 0.06)
-b_dirty, _ = rnb2(t_lin, dirty, 0.06)
-print(f"   beta clean {b_clean:.2f}, with three 50 mmag outliers {b_dirty:.2f}")
-check(b_dirty >= b_clean * 0.85,
-      "three outliers no longer halve beta — with np.std they cut it to "
-      "0.47x, which is the correction disabling itself when it is needed",
-      f"{b_clean:.2f} -> {b_dirty:.2f}")
+# And it must not quietly delete a bad night into a good-looking one.
+noisy = trq + rng.standard_t(2, tq.size) * 0.004
+_k, n_noisy, note_noisy = clipper(tq, noisy)
+print(f"   heavy-tailed night: {n_noisy} removed")
+# A third of the run beyond the threshold is not an outlier population.
+# (Noise on top matters: without it the running median follows the pattern
+# exactly, the residual MAD is zero and the function correctly reports it
+# has nothing to measure a threshold against.)
+huge = trq + rng.normal(0.0, 0.004, tq.size)
+huge[::3] += 0.05
+_k2, n_huge, note_huge = clipper(tq, huge)
+print(f"   a third of the run outlying: {n_huge} removed — '{note_huge}'")
+check(n_huge == 0 and "not an outlier population" in note_huge,
+      "refused, with the reason — removing a third of a light curve to "
+      "make it look better is the opposite of the job", note_huge)
+flat = np.zeros(tq.size)
+_k3, n_flat, note_flat = clipper(tq, flat)
+check(n_flat == 0 and "zero" in note_flat,
+      "and a series with no scatter at all has nothing to clip against, "
+      "which is said rather than divided by", note_flat)
 
-# (c) The expected scatter of the SET of bin means is sigma*sqrt(mean(1/k)),
-# not sigma/sqrt(mean(k)). Equal bins hide the difference; unequal ones do
-# not -- 55% apart on [2,4,8,16,32], 86% on [2,2,2,30].
-for counts in ([2, 4, 8, 16, 32], [2, 2, 2, 30]):
-    k = np.array(counts, dtype=float)
-    old_way = 1.0 / math.sqrt(k.mean())
-    new_way = math.sqrt(float(np.mean(1.0 / k)))
-    check(new_way > old_way,
-          f"unequal bins {counts}: the correct expected scatter is larger, "
-          f"so the old form over-stated beta by {100*(new_way/old_way-1):.0f}%")
-check(abs(math.sqrt(float(np.mean(1.0 / np.array([10.0]*8))))
-          - 1.0/math.sqrt(10.0)) < 1e-12,
-      "and on equal bins the two agree exactly, which is why this hid")
+print("\n8r) the comparison ensemble is judged by measurement, and the "
+      "aperture is chosen")
+# Both of these run Siril, so what is pinned here is the arithmetic and
+# the guards, not the I/O.
+check(ns["COMP_VARIABILITY_RATIO"] >= 2.0,
+      "the variability threshold is a RATIO to the ensemble median, not an "
+      "absolute mmag — a good night and a poor one differ by a factor")
+aps = ns["APERTURE_SCAN_FWHM"]
+print(f"   aperture ladder: {aps} x FWHM")
+check(len(aps) >= 4 and min(aps) < 1.0 < max(aps),
+      "the ladder brackets 1 FWHM on both sides, so the optimum is inside "
+      "it rather than at an end", str(aps))
+check(ns["APERTURE_INNER_RATIO"] > 1.0
+      and ns["APERTURE_OUTER_RATIO"] > ns["APERTURE_INNER_RATIO"],
+      "and the sky annulus sits outside the aperture, in that order")
+src_all = open(SRC).read()
+check("_scan_aperture" in src_all and "-aperture=" in src_all,
+      "the scan drives Siril's own setphot rather than reimplementing "
+      "photometry")
+check("autoring=(aperture is None)" in src_all,
+      "and -autoring is switched OFF when a scanned aperture is in use — "
+      "leaving it on would silently discard the whole scan")
 
-# (d) One noise model. The significance is divided by beta; the depth error
-# must be multiplied by it, or the same report says "1.6 sigma" and
-# "depth/error = 9.5" about one fit.
-def _red(n, rho=0.85, s=0.004, gen=None):
-    g = gen or np.random.default_rng(3)
-    e = g.normal(0.0, s, n)
-    out = np.empty(n)
-    out[0] = e[0]
-    for i in range(1, n):
-        out[i] = rho * out[i - 1] + math.sqrt(1 - rho ** 2) * e[i]
-    return out
+print("\n8o) T0 carries an error bar, and it is calibrated")
+# T0 is the number ExoClock and ETD exist for, and it used to be printed to
+# six decimals -- 0.09 s -- with nothing beside it.
+t0err = ns["t0_uncertainty"]
+chi2nu = ns["chi2_per_dof"]
+fitt2 = ns["fit_transit"]
+shp2 = shape
+mad2 = ns["_mad_std"]
 
-gen = np.random.default_rng(3)
-tt = np.linspace(0.0, 5 / 24, 150)
-worst = 0.0
-seen = 0
-for _ in range(10):
-    y = 0.012 * shape_of(tt, 0.5 * 5 / 24, 0.3 * 5 / 24, 0.15) + _red(150, gen=gen)
-    f = fitt(tt, y)
-    if not f or f["red_noise_beta"] <= 1.05:
-        continue
-    seen += 1
-    implied = f["depth_mmag"] / f["depth_sigma_mmag"]
-    worst = max(worst, implied / max(f["significance"], 1e-9))
-print(f"   {seen} correlated-noise fits; worst depth/error over significance "
-      f"= {worst:.1f}x")
-check(seen >= 3, "the probe actually produced correlated fits", str(seen))
-# They are still not the same number, and should not be: the significance
-# uses the MEASURED contrast against the WEAKER of two baselines and counts
-# diluted ingress points as "inside", while depth is the FITTED amplitude
-# against one baseline. What the fix removed is the part that was pure
-# inconsistency -- one number scaled by beta and the other not. The report
-# now says which of the two to quote.
-check(worst < 4.0,
-      "the beta inconsistency is gone; the residual gap is structural, and "
-      "was 6.0x when only one of the two carried the red-noise scaling",
-      f"{worst:.1f}x")
+rng = np.random.default_rng(5)
+tt2 = np.linspace(0.0, 5 / 24, 150)
+T0T, DURT = 0.5 * 5 / 24, 0.30 * 5 / 24
+# Measured over 50 runs per depth at 4 mmag on a 120 s cadence:
+#     depth   sigma reported   MAD(T0) recovered   ratio   chi2/nu
+#      20mm         53.4 s            46.7 s        1.14     1.06
+#      12mm         91.4 s            89.5 s        1.02     1.01
+#       8mm        133.6 s           136.2 s        0.98     0.97
+#       6mm        173.4 s           190.7 s        0.91     0.99
+# Twelve runs here is enough to catch a bar that is wrong by a factor,
+# which is what the two rejected designs below were.
+t0s, sig = [], []
+for _ in range(12):
+    y = 0.012 * shp2(tt2, T0T, DURT, 0.15) + rng.normal(0.0, 0.004, tt2.size)
+    f = fitt2(tt2, y)
+    if f and np.isfinite(f["t0_sigma_d"]):
+        t0s.append(f["t0"])
+        sig.append(f["t0_sigma_d"])
+t0s, sig = np.array(t0s), np.array(sig)
+scatter = mad2(t0s)
+ratio = float(np.median(sig) / scatter) if scatter > 0 else float("inf")
+print(f"   sigma {np.median(sig)*86400:.0f} s vs recovered scatter "
+      f"{scatter*86400:.0f} s  ->  ratio {ratio:.2f}")
+check(len(sig) >= 8, "the probe produced fits with a finite bar", str(len(sig)))
+check(0.5 < ratio < 2.0,
+      "the bar tracks the run-to-run scatter within a factor of two — the "
+      "delta-chi2 walk it replaced plateaued at 0.7 cadences and read 0.50 "
+      "of the truth on an 8 mmag dip", f"{ratio:.2f}")
+check(np.median(sig) * 86400 < 300,
+      "and it is a useful number, not the whole run")
+
+# The coarse grid quantised T0 to (0.7*span)/120 = 105 s on a 5 h run: over
+# 60 runs of a deep transit EVERY fit returned the same value, and the MAD
+# at every lower depth was exactly 1.4826 x one grid step. The refinement
+# pass is what removed that.
+step = (0.7 * (tt2.max() - tt2.min())) / (ns["FIT_T0_STEPS"] - 1)
+uniq = len(set(np.round(np.array(t0s) / step).astype(int)))
+print(f"   coarse grid step {step*86400:.0f} s; {len(t0s)} fits landed on "
+      f"{len(set(np.round(np.array(t0s), 9)))} distinct T0 values")
+check(len(set(np.round(np.array(t0s), 9))) > 2,
+      "T0 is no longer rounded onto the coarse grid")
+
+# chi2/nu needs a MODEL-INDEPENDENT noise floor, or it is 1 by construction.
+resid = rng.normal(0.0, 0.004, 200)
+oot = np.ones(200, dtype=bool)
+c_ok = chi2nu(resid, 5, oot)
+print(f"   chi2/nu on pure noise: {c_ok:.2f}")
+check(0.7 < c_ok < 1.4, "pure noise gives about 1", f"{c_ok:.2f}")
+bad = resid.copy()
+bad[80:120] += 0.02                       # a 20 mmag lump the model missed
+c_bad = chi2nu(bad, 5, oot)
+print(f"   chi2/nu with an unmodelled 20 mmag lump: {c_bad:.2f}")
+check(c_bad > 2.0,
+      "and a feature the model did not describe drives it well above 1 — "
+      "which is the whole point of measuring the noise elsewhere",
+      f"{c_bad:.2f}")
+check(not np.isfinite(chi2nu(np.zeros(3), 5, None)),
+      "fewer points than parameters is NaN, not a number")
+
+print("\n8p) the transit and the systematics are fitted TOGETHER")
+matcher = ns["match_frames_to_curve"]
+n2 = 150
+t3 = np.linspace(0.0, 5 / 24, n2)
+T0T3, DURT3 = 0.5 * 5 / 24, 0.30 * 5 / 24
+transit = 0.012 * shape(t3, T0T3, DURT3)
+rng = np.random.default_rng(21)
+
+# The failure a sequential detrend has to guard against, and a
+# simultaneous fit cannot have: a basis that CORRELATES with the transit.
+# Fitted first and subtracted, such a basis eats the depth. Fitted
+# alongside, it cannot -- the transit is its own column.
+ramp = (t3 - t3.min()) / np.ptp(t3)          # rises across the run
+corr = -shape(t3, T0T3, DURT3) + 0.3 * ramp  # deliberately transit-shaped
+for label, basis in (("a plain rising ramp", ramp),
+                     ("a basis SHAPED like the transit", corr)):
+    depths = []
+    for k in range(6):
+        y = transit + 0.02 * basis + rng.normal(0.0, 0.003, n2)
+        f = fit(t3, y, bases={"probe": basis})
+        if f:
+            depths.append(f["depth_mmag"])
+    got = float(np.median(depths)) if depths else float("nan")
+    print(f"   {label:<34} depth {got:6.2f} mmag of 12.00")
+    check(abs(got - 12.0) < 2.5,
+          f"the depth survives {label} — a sequential detrend would have "
+          f"absorbed it", f"{got:.2f} mmag")
+
+# Systematics are still removed, not merely tolerated.
+fwhm = 2.0 + 1.2 * ramp + rng.normal(0, 0.05, n2)
+sky = 300 + 900 * ramp ** 2 + rng.normal(0, 5, n2)
+sysd = (0.010 * (fwhm - fwhm.mean()) / fwhm.std()
+        + 0.008 * (sky - sky.mean()) / sky.std())
+y3 = transit + sysd + rng.normal(0.0, 0.004, n2)
+f3 = fit(t3, y3, bases={"fwhm": fwhm, "sky": sky})
+oot3 = transit == 0.0
+before = float(np.std(y3[oot3]) * 1000.0)
+after = float(np.std(f3["detrended"][oot3]) * 1000.0)
+print(f"   out-of-transit RMS {before:.2f} -> {after:.2f} mmag, "
+      f"bases {f3['base_note']}")
+check(after < before / 3.0,
+      "a seeing plus sky trend comes out down to the noise floor",
+      f"{before:.2f} -> {after:.2f} mmag")
+check(set(f3["bases"]) == {"fwhm", "sky"}, "and both bases were used",
+      str(f3["bases"]))
+
+# Guards on the design matrix.
+bd = ns["build_design"]
+_fx, names, note, _o, _s = bd(n2, {"flat": np.ones(n2)})
+check(names == [] and "no spread" in note,
+      "a basis with no spread is dropped and named", note)
+_fx, names, note, _o, _s = bd(n2, {"short": np.ones(5)})
+check(names == [] and "wrong length" in note,
+      "and so is one of the wrong length", note)
+_fx, names, _n, _o, scales = bd(n2, {"big": sky})
+check(abs(float(np.std(_fx[:, 1])) - 1.0) < 1e-9,
+      "every basis is scaled to unit spread, so airmass (1-3) and sky "
+      "(hundreds of ADU) can share one matrix without wrecking it")
+
+# Siril photometers a SUBSET, and light_curve.dat carries no frame number.
+jd_f = np.linspace(2461267.8, 2461267.9, 20)
+picked = [0, 3, 4, 9, 15, 19]
+got_idx = matcher(jd_f[picked], jd_f)
+check(list(got_idx) == picked,
+      "rows are paired with their frames by time, exactly", str(list(got_idx)))
+check(matcher(np.array([2461200.0]), jd_f)[0] == -1,
+      "a row with no frame within tolerance is -1, not the nearest one")
 
 print("\n9) the target snaps to a detected star, never to a typed number")
 pick = ns["pick_target"]

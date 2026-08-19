@@ -135,6 +135,114 @@ The first run takes a few minutes: registering a few hundred subs is the slow pa
 
 ---
 
+## 4a. You do not have to type coordinates
+
+**Choosing the folder already fills it in.** The first 30 light headers are read the moment you pick a folder, and what they say lands in the fields:
+
+> *Read from the first 30 header(s): OBJECT = 'WASP-75b'; OBJCTRA/OBJCTDEC = 342.38750, −10.67556 (25 light frames agree to 0.0").*
+
+Only **empty** fields are filled — anything you typed stays, and if it disagrees with the frames you are told by how much. Calibration frames are sorted out first, so a folder of flats cannot prefill the target from a parked mount. Headers that say nothing get a line too, because silence there reads as *nothing to do* when it means *type the name*.
+
+Everything that decides *which star* now lives in one place — **group 3 · Target star** — and its first mode, **From the frames**, is where it starts:
+
+| Mode | What it uses |
+|---|---|
+| **From the frames** | `OBJCTRA`/`OBJCTDEC` for the position, `OBJECT` (or the name you type) for the archive lookup. Falls back to brightest and says so. |
+| Brightest star | the brightest detection |
+| Pixel position | your x/y, snapped to the nearest star |
+| RA / Dec | your coordinates, snapped to the nearest star |
+
+The **name** box and the **archive lookup** sit there too, not in the submission group: they decide the target's *position*, and the one control that spares you typing coordinates belongs where you choose the target. The name still labels the AAVSO file — one field, both jobs.
+
+Your frames already know where the target is. N.I.N.A. writes **`OBJCTRA` / `OBJCTDEC`** — the position of the *object*, not of the telescope — and the run reads it straight out of the light frames:
+
+> *Target from OBJCTRA/OBJCTDEC in your lights: RA 342.38750°, Dec −10.67556° (178 light frames agree to 0.0"). No lookup needed for the position.*
+
+Measured against the NASA Exoplanet Archive: **5.7" × 0.2"**, under three pixels at 2 arcsec/px and comfortably inside Siril's own ±19 px search box. No network, no typing.
+
+### Two cards that look right and are not
+
+| Card | On this run | What it is |
+|---|---|---|
+| **`OBJCTRA` / `OBJCTDEC`** | `22 49 33` / `−10 40 32` | **the target** — used |
+| `RA` / `DEC` | 342.24 / −10.30 | the **telescope pointing** — a quarter of a degree off, because the target is not the field centre |
+| `OBJCTRA` in a **flat** | `00 00 00`, with `RA/DEC` = 359.10 / **+89.85** | the mount **parked near the pole** — a sentinel, not a position |
+
+Both traps are closed: only **LIGHT** frames are read, and the `0 0 0` sentinel is discarded. If the frames in one folder disagree about where the target is, the run says so and uses neither — that is more than one target in a folder, not one position.
+
+### Your own RA/Dec still wins — and the run says so
+
+Anything you type into the RA/Dec fields takes precedence. But the headers are read either way, and the run always names its source:
+
+> *Using the RA/Dec you entered; your lights agree to 3.1".*
+
+If the two disagree by more than about two arcminutes, that is said in red. **A coordinate left over from the previous target looks exactly like a deliberate one** — this is the line that tells them apart.
+
+### The name lookup adds what the header cannot carry
+
+Spelling is not your problem: hyphens and spaces are stripped from **both** sides, so `HATP-32`, `HAT-P-32`, `hatp32b` and `HAT-P-32 b` all reach the same entry — and the **host name** is searched as well, because a name with no planet letter is what a header usually carries. A system with several known planets is a refusal that lists them, since their ephemerides differ.
+
+Give the planet a **name** — from `OBJECT` in the lights, or the *Target* box in group 6 — and the run fetches the published **ephemeris** from the NASA Exoplanet Archive. `WASP-75b` becomes `WASP-75 b` on the way out; one missing space is the whole difference between a hit and a silent miss.
+
+It also **cross-checks** the position. Agreement is reported; a disagreement is *reported, not resolved*:
+
+> *The headers and the archive disagree by 340" about where WASP-75 b is. The headers win — they came with these frames — but check the OBJECT name, because that gap means the two are describing different things.*
+
+Without a connection you lose the O−C and nothing else. The position came from your files.
+
+### When the frames disagree with the convention
+
+Two header traps handled by measurement rather than assumption.
+
+**The longitude sign.** FITS never settled east- versus west-positive, and getting it wrong mirrors the site across the globe — it does not fail, it just detrends the airmass for the wrong place. An altitude in the header, with the pointing and the time, says where the telescope actually was:
+
+> *SIGN FLIPPED to −110.8800: the header value would put the target 73° from the TELALT=62.59° it records, the flipped one reproduces it to 0.01°. This header is WEST-positive.*
+
+A correct header is **confirmed**, not flipped. With no altitude to check against, nothing is changed and the assumption is stated.
+
+**The field drifting off the sensor.** Siril moves each measurement box by the registration data, so a comparison star that sits comfortably in the reference frame can leave the chip later — and when one does, the *whole* `light_curve` command fails with `generic error` after a warning that names a frame and never says which star. The drift envelope is measured from the registration and stars that would walk off are dropped with that reason. If the **target** is the one that leaves, the run stops: no aperture follows a star off the sensor.
+
+**How the flux is measured.** The division of labour follows what each side is demonstrably good at. Siril does the staging, calibration, two-pass registration, star detection, plate solve and per-frame quality — and this script does the flux measurement itself, the way EXOTIC and HOPS do: each frame is read once, every star is **re-centroided** from its registration-predicted position (the "follow star" that Siril's `light_curve` lacks — a centroid that walks more than 6 px has locked onto a neighbour and is discarded), and the flux is summed in a subpixel-weighted circular aperture against a sigma-clipped sky annulus. Several apertures are measured in the same pass; the one with the lowest **point-to-point** noise wins, a measure a transit barely moves while a plain standard deviation would triple — an aperture chosen on standard deviation prefers whatever washes the transit out. Comparison stars are each normalised to their own median (so one that misses a frame cannot step the ensemble — the step of a raw sum is the exact shape of an ingress) and are kept or dropped by their **total** scatter against their peers, because a slowly variable comp is precisely the one that writes a fake transit into the target. Errors come from the CCD equation with every term measured, none assumed.
+
+Measured on the same 142-frame drifting run: this engine keeps 140 points at 7.2 mmag point-to-point where Siril's `light_curve` kept 67. If the engine measures fewer than 30% of the frames it says so and Siril's `light_curve` takes over — the whole old path remains intact as the fallback, including everything below.
+
+**The 160-pixel wall.** Siril refuses `light_curve` outright when any frame's registration shift exceeds 160 px from the reference. It prints a line it calls a "Warning" about "heavy drifted images" and then returns a generic error — the warning *is* the abort, and it names a frame, never a star. The threshold was found by bisection against Siril 1.4.4: 159.6 px runs, 160.7 px does not.
+
+This matters because Siril chooses its registration reference on **image quality** — FWHM, roundness, star count — which is the right criterion for stacking and the wrong one here. On EXOTIC's HAT-P-32 demo set it picked image 35 of 142, which put the entire drift on one side: 218.9 px, refused every time. The reference is now moved. Which frame it moves to matters as much as that it moves: choosing purely on drift takes the frame at the exact centre, and on this data set that frame — image 72 — is the worst of the night, weighted FWHM 8.50 against 2.42 for its neighbour, 110 detected stars against 262. The command then *runs*, which is the dangerous kind of wrong: the sky annulus came out more than twice too large, the target was matched 200 arcsec from its catalogue position, and 6 frames of 142 survived photometry.
+
+So the rule is: among the frames Siril will accept, take the best one. On this data that is image 70 — 149.1 px of drift, 261 stars, weighted FWHM 2.41 — and the run yields 67 measured points calibrated against 5 comparison stars. The quality measure is Siril's own weighted FWHM, read from the registration data; with no drift limit to satisfy, the same rule picks image 35, exactly what Siril picked. The run reports both numbers when it moves the reference.
+
+If even the best reference stays over the limit, the drift itself is too large: trim the run to the stretch where the field holds still, or apply the registration first (`seqapplyreg`) and point this script at the resampled sequence. That costs one interpolation, which is why it is not the default.
+
+**A meridian flip is not drift.** Siril's registration stores each frame as a 3×3 homography, and its translation column is *not* the distance the field moved when the frame is also rotated. A 180° flip about the centre leaves every star on the same piece of sky, but its translation column is the frame's own width and height — measured on a real 3008×3008 run, 4253 px by the column against 13.7 px by the centre. The drift is therefore measured by sending the image centre through the whole matrix: that returns exactly the translation for a pure shift, and the truth for a flip.
+
+**`-autoring`.** Siril's flag for deriving the sky-annulus radii from the frame's FWHM makes `light_curve` abort with "The given coordinates are not in the image" — on coordinates that are demonstrably inside it. The same command without the flag, on the same sequence and the same stars, produces the curve. The radii are therefore set with `setphot` beforehand, using Siril's own factors of 4.2 and 6.3 times the FWHM. Those reproduce its arithmetic exactly: for FWHM 1.797542 Siril logs 7.5 and 11.3, and the factors give 7.55 and 11.32. Nothing about the measurement changes; only the way the numbers reach Siril.
+
+**Siril's process ending.** Twelve failing `light_curve` calls in a row once took Siril down with them, leaving only `[Errno 32] Broken pipe`. The probes now stop after a handful of identical failures and name the pattern, and a broken pipe is reported as a crash on Siril's side — restart it — rather than as a refused command.
+
+**The plate scale.** Siril reads it from `FOCALLEN` and `XPIXSZ`; with neither it falls back to whatever it last *saved* — the previous target's telescope. On a 5.21″/px frame that meant looking for a 0.46° field where the truth is 0.94°, and the solve failed with *Generic error*, which reads like a broken solve rather than a wrong scale. `IM_SCALE`, `SECPIX` and friends are now read directly, derived from the optics when absent, and passed on the command line.
+
+**Time stamps.** N.I.N.A. writes seven fractional digits; MicroObservatory writes *local* time with a `−0700` offset. Both were silent NaN before — the second is a seven-hour error in a quantity measured in minutes, and the first cost the seeing, sky and star-count bases on every run.
+
+### O−C: what a single night is worth contributing
+
+```
+O-C            +4.20 min +/- 5.0 min  (consistent with the prediction)
+               epoch 2114 of WASP-75 b, P = 2.484193 d
+```
+
+This is the number ExoClock and ETD collect. Until now the fit measured T0 with a calibrated error bar and had nothing to compare it against.
+
+Two guards: **refused** unless the times are BJD_TDB — the archive's epoch is BJD_TDB, and subtracting a JD_UTC from it would put an 8-minute offset into a quantity measured in minutes — and the **epoch is always printed beside the drift**, because over thousands of epochs a stale period eventually mislabels which transit this was.
+
+Whatever the position came from, the next step still reports how far it lands from a real *detected* star:
+
+> *Target at (1503.4, 1505.6) — nearest detection, 0.9" from the position you gave.*
+
+Nothing here can mis-point quietly.
+
+---
+
 ## 5. The User Interface
 
 **Left panel**, four numbered groups in the order you use them:
@@ -142,7 +250,7 @@ The first run takes a few minutes: registering a few hundred subs is the slow pa
 | Group | Contents |
 |---|---|
 | **1 · Subs** | Folder picker, symlink/copy toggle |
-| **2 · Target star** | Selection mode, pixel or RA/Dec fields |
+| **3 · Target star** | Selection mode (starts on *From the frames*), planet name, archive lookup, pixel or RA/Dec fields |
 | **3 · Photometry** | Comparison count, SNR floor, channel, auto ring radii |
 | **4 · Analysis** | Airmass detrend, site, plot binning |
 
@@ -225,19 +333,92 @@ The fix is not a cleverer algorithm. It is more baseline: start earlier, finish 
 
 ---
 
+### Beyond airmass: what Siril already measured
+
+Airmass is not the only thing that drifts through a night. Three more do, and Siril measures all three for every frame during registration — this script was reading them for the meridian-flip check and throwing them away:
+
+| Basis | Why it moves the light curve |
+|---|---|
+| **FWHM** | Worse seeing spreads the star, and a fixed aperture then holds a smaller share of its light. Strongest on an undersampled star |
+| **Sky level** | Moon, twilight and light pollution change what the annulus subtracts, and the error scales with the aperture area |
+| **Star count** | Not a systematic itself — it is what a passing cloud *looks like* from inside the data |
+
+They are fitted together with one least-squares solve, each basis centred and scaled so airmass (1–3), FWHM (2–5 px) and sky (hundreds of ADU) can share a matrix.
+
+**Anchored on the out-of-transit rows, and it refuses to run without them.** All three drift monotonically through a night, so at least one usually correlates with the dip; a plain fit over every point would absorb the depth into it. That is the same trap the airmass detrend already guards against, and it is the reason this runs as a *third* pass, after the transit window is known.
+
+Measured on a synthetic run with a seeing and a sky trend injected: out-of-transit scatter **20.8 → 3.9 mmag** against a 4.0 mmag noise floor, with the depth at the flat bottom untouched.
+
+`light_curve.dat` carries no frame number, so rows are paired with frames by mid-exposure time. Matching on order would be wrong — the frames Siril drops are scattered through the run.
+
+---
+
 ## 9. The Transit Fit
 
-### A trapezoid, not a limb-darkened model
+### A limb-darkened model, and why the trapezoid had to go
 
-At amateur precision the two are indistinguishable — a 10 mmag dip measured at 3 mmag per point does not constrain a limb-darkening coefficient. What the trapezoid recovers is **depth, mid-time and duration**, which is exactly what ExoClock and ETD consume. Its ingress fraction is free, so it also handles the grazing case: at 0.5 the trapezoid degenerates into a triangle.
+The trapezoid was defended here on the grounds that at amateur precision the two are indistinguishable. **That was wrong, and measurably so.** Fitted to a real limb-darkened transit:
+
+| Rp/R★ | true depth | trapezoid | **bias** | χ²/ν |
+|---|---|---|---|---|
+| 0.08 | 8.27 mmag | 7.76 | **−6.2 %** | 1.05 |
+| 0.10 | 12.95 mmag | 12.23 | **−5.6 %** | 1.02 |
+| 0.15 | 29.34 mmag | 27.89 | **−4.9 %** | 1.11 |
+
+Systematically 5–6 % too shallow — and **χ²/ν stays at 1.0**, so nothing in the output would ever have said so. A real star is darker at its limb, so a transit has a *rounded* bottom; a trapezoid splits the difference and loses depth doing it.
+
+The shapes searched are now real geometries: four planet-to-star radius ratios crossed with two impact parameters — exactly the eight variants the eight ingress fractions used to provide. The bias comes to **+0.6 / −0.0 / −0.2 / +0.1 %**.
+
+**Nothing else changed.** Each shape is a *template* on normalised phase, built once and interpolated at each node, so the model stays **linear in depth** — the closed-form solve, the determinism and the no-optimiser guarantee all survive. A physically free Rp/R★ would couple depth and shape and cost all three. (The occultation is integrated *radially* — the arc a planet covers at radius r has a closed form — so there are no elliptic integrals, no new dependency, and it is verified against an independent 2-D integration.)
+
+> **The reported Rp/R★ is a shape index, not a planet radius.** With the duration free, a smaller template stretched fits nearly as well, so the fitted value sits systematically below the truth. The **depth** is the measurement, and both reports say so.
+
+### Everything is fitted at once
+
+The old sequence was: detrend, fit, re-detrend on the fitted window, re-fit. Three passes, each treating the previous baseline as *exactly known*. It is not — the baseline has an uncertainty, and a sequential fit throws it away instead of carrying it into the depth and the mid-time.
+
+Airmass, seeing, sky level and star count now sit in the **same design matrix** as the transit, solved together at every grid node. Two consequences:
+
+- **The transit cannot be absorbed into a correlated basis.** That is what the out-of-transit anchoring existed to prevent, and it is no longer needed: the transit is its own column. Verified against a basis deliberately *shaped like the transit* — the depth survives at 11.2 mmag of 12.0, where a sequential detrend would have eaten it.
+- **The baseline's uncertainty ends up where it belongs**, in the depth and the mid-time.
+
+It is also **faster**. Only the transit column changes from node to node, so the Gram matrix of everything else is computed once: 11.1 µs per node against the old 13.8, and a whole fit in 0.56 s against 1.0.
 
 ### A grid, not an optimiser
 
-The search walks a grid over **T0**, **duration** and **ingress fraction**. At every node the depth and the baseline are solved *analytically*: for a fixed shape the model is `baseline + depth × shape(t)`, which is linear in both, so a 2×2 solve gives the exact best pair.
+The search walks a grid over **T0**, **duration** and **shape**. At every node the depth, the baseline and every systematic coefficient are solved *analytically* — the model is linear in all of them, so one small linear system gives the exact best set.
 
-Four strongly correlated parameters is precisely where a local optimiser walks into a noise minimum and gives a different answer depending on where it started. The grid gives the same answer every run, cannot fail to converge, and its resolution is a number you can read rather than a tolerance nobody checks.
+Strongly correlated parameters are precisely where a local optimiser walks into a noise minimum and gives a different answer depending on where it started. The grid gives the same answer every run, cannot fail to converge, and its resolution is a number you can read rather than a tolerance nobody checks.
 
 Depth is constrained **positive** — the star gets fainter — so the fit cannot "detect" a brightening and call it a transit.
+
+---
+
+### T0 comes with an error bar
+
+The mid-transit time is the number ExoClock and ETD exist for. It is measured from the **curvature** of the χ² surface along T0, with depth and baseline re-solved and the duration re-minimised at every step, then scaled by the red-noise β.
+
+Two designs were tried and rejected first, and both failures are instructive:
+
+- **Walking outward to Δχ² = 1** plateaued at 86 s for every depth below 12 mmag — 0.7 of one sampling interval. A trapezoid on sampled data has a *bumpy* χ² surface: shifting T0 by less than one cadence changes which points fall inside the window. The walk was measuring the local dell, not the envelope the fit explores.
+- **A wider parabola window** (0.3 durations) over-stated the bar by 1.5× to 1.75× at every depth.
+
+Five sampling intervals tracks the truth. Reported against the run-to-run scatter actually recovered, 50 runs per depth at 4 mmag per point:
+
+| Depth | σ(T0) reported | scatter recovered |
+|---|---|---|
+| 20 mmag | 53 s | 47 s |
+| 12 mmag | 91 s | 90 s |
+| 8 mmag | 134 s | 136 s |
+| 6 mmag | 173 s | 191 s |
+
+That measurement exposed something else. The coarse search grid quantised T0 to (0.7 × span) / 120 — **105 s on a five-hour run**. Over 60 runs of a 20 mmag transit every single fit returned the *same* T0, and at every lower depth the MAD of the recovered times was exactly 1.4826 × one grid step: the data were being rounded to the search. The winning node now gets a local pass at 1/20th the T0 step.
+
+### χ²/ν: does the model actually fit?
+
+Around 1 means the trapezoid describes the data. Well above 1 means it does not — systematics, or a shape the trapezoid cannot make. Well below 1 means the noise estimate is too large, usually because the out-of-transit window still holds part of the event.
+
+The noise floor is deliberately **model-independent**: a fit's own residual scatter cannot judge that fit, because dividing residuals by their own RMS gives 1 whether the model is right or nonsense. So it comes from the MAD of the out-of-transit residuals, or failing that from the MAD of first differences ÷ √2. Measured 1.0 on pure noise and 3.1 with an unmodelled 20 mmag lump.
 
 ---
 
@@ -275,17 +456,64 @@ So the floor was measured. 1200 transit-free white-noise runs (150 points, 5 h, 
 
 | Floor | False alarm | 4 mmag | 5 mmag | 6 mmag | 8 mmag | 12 mmag |
 |---|---|---|---|---|---|---|
-| 3.0 σ | **4.42 %** | 91 % | 94 % | 100 % | 100 % | 100 % |
-| 3.5 σ | 0.83 % | 79 % | 89 % | 98 % | 100 % | 100 % |
-| **4.0 σ** | **0.17 %** | 53 % | 81 % | **98 %** | **100 %** | **100 %** |
-| 4.5 σ | 0.08 % | 33 % | 70 % | 96 % | 100 % | 100 % |
-| 5.0 σ | 0.00 % | 19 % | 53 % | 86 % | 99 % | 100 % |
+| 3.0 σ | **7.67 %** | 88 % | 95 % | 100 % | 100 % | 100 % |
+| 3.5 σ | 1.92 % | 70 % | 91 % | 97 % | 100 % | 100 % |
+| 4.0 σ | 0.50 % | 45 % | 77 % | 93 % | 100 % | 100 % |
+| **4.5 σ** | **0.25 %** | 29 % | 57 % | **89 %** | **100 %** | **100 %** |
+| 5.0 σ | 0.00 % | 15 % | 40 % | 78 % | 100 % | 100 % |
 
-The old 3σ floor let **one run in 23** of pure noise through — 33× the 0.13 % that "3σ" is universally read to mean. **4.0σ** is where the measured rate reaches that 0.13 %, and it costs nothing above 6 mmag. What it costs is the 4–5 mmag case: a dip at about the per-point scatter, which was never safe to claim from a single night.
+A 3σ floor lets **one run in ten** of pure noise through — where "3σ" is universally read as one in 750. **4.5σ** halves the false alarms against 4.0 for four points of detection at 6 mmag and none at 8, and costs the 4–5 mmag case: a dip at about the per-point scatter, which was never safe to claim from a single night.
 
-The measured rate is printed next to every result, so the number can be weighed rather than trusted. ExoClock and AAVSO submissions want more still — but that is a decision for the submission, not for the fit.
+> **The table has been re-measured three times.** The T0 refinement pass (~2700 more nodes per fit) roughly doubled every rate — more search finds a deeper minimum in pure noise. A robust post-fit scatter raised them again, because a MAD is a smaller divisor than an RMS an outlier has inflated. The limb-darkened model, fitted simultaneously with the systematics, brought them back down: a rounded shape matches noise less well than one with a free corner did. The rate at 4.5σ came out **0.25 % before and after that last change — coincidence, not stability**. A calibration table is only valid for the search, the statistic *and* the model it was measured on.
+>
+> Measured *without* the spike clip, which is the conservative direction: on pure Gaussian noise the clip removes about 0.2 points per run, trimming exactly the tail this table is about.
 
-Below the floor nothing is claimed. The report still prints what the fitter wanted, clearly marked as not a measurement, because "no detection" and "the tool crashed" should not look the same.
+---
+
+### The aperture is chosen, not assumed
+
+Aperture size is the most influential number in aperture photometry, and until now it was whatever `-autoring` derived from the frame's FWHM. Too small loses a *seeing-dependent* share of the star — a systematic that moves with the night. Too large collects sky and neighbours. The optimum sits between and depends on the data.
+
+Six radii from **0.75 to 2.5 × FWHM** are each photometered through Siril's own `setphot` + `light_curve`, and the one with the least robust scatter wins. The number of measured frames is the tie-breaker: an aperture that scores well by measuring fewer frames has not won anything.
+
+Costs six extra passes. Switch it off under **4 · Photometry** if you would rather have the speed.
+
+### Comparison stars are measured, not just filtered
+
+Each candidate is photometered **against the others** — the same differential measurement the target gets — and judged on the robust scatter of its own curve. A star that wobbles against its peers writes that wobble, inverted, into the target's curve, and nothing else in this script would ever notice.
+
+The threshold is a **ratio to the ensemble median**, not an absolute millimagnitude: a good night and a poor one differ by a factor, and a fixed limit would reject everything on one and nothing on the other. A drop is never taken if it would leave fewer than two comparison stars — measuring with a suspect comparison beats not measuring, as long as the suspicion is on the record, and it is.
+
+No catalogue and no network. A variability flag from AAVSO's VSX would be better where it exists, but the star has to *be* in the catalogue, and the ones that ruin an amateur light curve usually are not.
+
+### One satellite must not cost the detection
+
+There was no outlier rejection at all, and it mattered more than it looks. Measured on a real 12 mmag transit at 4 mmag per point:
+
+| Outlier | Depth | T0 shift | **Significance** | χ²/ν |
+|---|---|---|---|---|
+| none | 12.0 mmag | 47 s | **12.1σ** | 1.03 |
+| 50 mmag | 11.9 mmag | 92 s | 7.5σ | 2.00 |
+| 100 mmag | 12.5 mmag | 55 s | **3.2σ** | 4.99 |
+
+The *parameters* barely moved — a trapezoid over 150 points shrugs off one point. What broke was the **divisor**: the post-fit scatter behind the significance was a plain RMS, and one spike inflates it. A measured transit was being reported as *not claimed*.
+
+Two changes fix it, and both were needed:
+
+1. **The post-fit scatter is now the MAD**, like every other scatter in this file. That alone recovers 3.2σ → 6.9σ, and on clean data the two agree to 1 %.
+2. **The spike is removed.** The reference is a running median over nine points — far shorter than any transit — so a smooth multi-point dip passes through untouched (verified at 12, 30 and 60 mmag: not one point lost) while a one-frame spike stands out against its own neighbours. That takes it the rest of the way, back to 11.9σ.
+
+It never removes more than **5 %** of a run. Past that the outliers *are* the data, and the run says so instead:
+
+> 49 point(s) exceed 4 sigma, more than 5% of the run — that is a noisy night, not an outlier population, and nothing was removed
+
+### The AAVSO file
+
+`AAVSO_exoplanet.txt` lands beside the CSV, in Exoplanet Watch's own format: `#TYPE=EXOPLANET`, observer code, filter, `#DATE_TYPE=BJD_TDB`, then `DATE,DIFF,ERR,DETREND_1`. Mid-transit time and its error, depth and its error, duration and the red-noise β travel in the header.
+
+**Refused unless the times are BJD_TDB.** The header declares that system; writing JD_UTC under it would hand a submission an eight-minute error nobody could see.
+
+Nothing is sent anywhere. Submitting is your decision — the file just stops the run one step short of being useless.
 
 ---
 
@@ -330,7 +558,7 @@ Everything lands in a `lightcurve/` folder next to your subs:
 
 **"light_curve produced no light_curve.dat"** — Siril rejects the whole run when a comparison star cannot be measured in enough frames. Try fewer comps or a higher SNR floor.
 
-**No transit claimed but you expected one** — check the significance in the Result tab. If it is close to the 4.0σ floor you may simply not have the precision; if it is negative, the fit found a brightening, which usually means a trend the detrend did not remove.
+**No transit claimed but you expected one** — check the significance in the Result tab. If it is close to the 4.5σ floor you may simply not have the precision; if it is negative, the fit found a brightening, which usually means a trend the detrend did not remove.
 
 ---
 
