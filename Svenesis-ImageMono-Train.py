@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.7.11
+Script Version: 1.7.12
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.7.11
+# Script Version: 1.7.12
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +97,36 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.7.12 - Two silent failures the first 1.7.11 run exposed
+      - FITS READS SURVIVE ASTROPY'S MEMMAP REFUSAL.  astropy declines
+        to memory-map an image whose header carries BZERO/BSCALE/BLANK
+        -- every N.I.N.A. integer sub -- and raises "Cannot load a
+        memory-mapped image ... Set memmap=False." at `.data` access
+        time.  One run swallowed that ~130 times, and worse than the
+        noise: the flat consistency check read no frame at all and
+        silently skipped, and the blank-frame check silently kept
+        everything.  All readers now go through `_with_fits`, which
+        reopens the file unmapped on that specific refusal and repeats
+        the read; unrelated errors still propagate.
+      - The multiprocessing resource tracker is started at import time,
+        while the environment is clean.  sirilpy's shared-memory
+        transfers spawn it lazily mid-run, where (on macOS, inside
+        Siril's process) it dies with PermissionError and is relaunched,
+        spraying tracebacks into Siril's log.  1.7.9 hardened the log
+        readers against those tracebacks; this removes them at the
+        source.  Same fix as in Svenesis LightCurve.
+      - A DEAD SIRIL FAILS THE RUN ONCE, NOT EVERY FALLBACK IN TURN.
+        When Siril crashed mid-run, the broken pipe matched every
+        fallback's `except (CommandError, DataError, SirilError)` and
+        the log blamed plate solving, star alignment and single-pass
+        registration in turn, for both filters -- four diagnoses for one
+        dead process.  `_cmd`, the single funnel every command uses, now
+        tells a transport death (broken pipe, connection closed/reset,
+        SirilConnectionError) apart from a refusal and raises
+        SirilGoneError, which no fallback catches; the worker's top
+        level reports it once, with the recovery spelled out: restart
+        Siril, run again, finished masters are picked up by 'Reuse
+        existing masters'.
 1.7.11 - The flat-comparison statistics audited, and three smaller fixes
       - THE NOISE FLOOR OF THE FLAT-ON-FLAT CHECK IS NOW SCALED TO THE
         COMPARISON IT JUDGES.  The floor comes from splitting the
@@ -1398,6 +1428,22 @@ import datetime
 
 import sirilpy as s
 
+# Start multiprocessing's resource tracker NOW, while the interpreter
+# still has a clean environment.  sirilpy's shared-memory transfers spawn
+# it lazily on first use -- mid-run, on macOS from inside Siril's
+# sandboxed process, where it dies with `PermissionError: Operation not
+# permitted` during importlib's path scan and is relaunched, spraying
+# tracebacks into Siril's log.  1.7.9 made the log READERS survive those
+# tracebacks; this removes them at the source.  Harmless either way: the
+# run completes identically, but a traceback that means nothing trains
+# people to ignore the ones that do.  If it cannot start at all, nothing
+# is lost -- Python relaunches it on demand exactly as before.
+try:
+    from multiprocessing import resource_tracker as _resource_tracker
+    _resource_tracker.ensure_running()
+except Exception:                                     # noqa: BLE001
+    pass
+
 # Siril 1.4 ships sirilpy 1.0.x, and everything this script needs to run
 # at all is in 1.0.0.  Checked before anything else -- before the imports
 # below, which the floor is what guarantees -- so a too-old module gives
@@ -1450,7 +1496,7 @@ from PyQt6.QtGui import QColor, QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.7.11"
+VERSION = "1.7.12"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -1655,6 +1701,38 @@ def _log_swallowed(exc: BaseException) -> None:
             f"(line {lineno}): {exc}\n")
     except Exception:
         pass
+
+
+class SirilGoneError(RuntimeError):
+    """The connection to Siril is dead -- no further command can succeed.
+
+    Raised by the worker's `_cmd` when a command fails at the transport
+    level (broken pipe, connection closed/reset) rather than being
+    refused.  Nothing below the worker's top level catches it ON
+    PURPOSE: every fallback chain in this file exists to try a different
+    COMMAND, and no command survives a dead socket.  One real run
+    cascaded through plate-solve -> star alignment -> single-pass,
+    blamed each in turn, then repeated the dance for the next filter --
+    four misleading diagnoses for one crashed Siril.
+    """
+
+
+_CONNECTION_DEAD_MARKS = ("broken pipe", "connection closed",
+                          "connection reset", "connection refused")
+
+
+def _connection_dead(exc: BaseException) -> bool:
+    """True when an error means the Siril link itself is gone.
+
+    By type where sirilpy says so (SirilConnectionError); by message
+    otherwise -- sirilpy wraps socket deaths into CommandError with the
+    OS text preserved ("[Errno 32] Broken pipe", "Connection closed
+    during data transfer"), so the type alone does not identify them.
+    """
+    if isinstance(exc, SirilConnectionError):
+        return True
+    text = str(exc).lower()
+    return any(mark in text for mark in _CONNECTION_DEAD_MARKS)
 
 
 def _nofocus(w) -> None:
@@ -1895,6 +1973,31 @@ def _infer_kind_from_content(header) -> str:
     return ""
 
 
+def _with_fits(path: str, reader, **open_kw):
+    """Open a FITS file and hand the HDU list to `reader`, surviving
+    astropy's memmap refusal.
+
+    astropy declines to memory-map an image whose header carries
+    BZERO/BSCALE/BLANK -- integer camera frames, i.e. every N.I.N.A.
+    sub -- and raises "Cannot load a memory-mapped image ... Set
+    memmap=False." at `.data` access time, AFTER the open succeeded.  So
+    a retry has to repeat the whole read, not just the open.  One run
+    swallowed that error ~130 times and, worse than the noise, the flat
+    consistency check read no frame at all and silently skipped, and the
+    blank-frame check silently kept everything.  Mapped first (cheap for
+    our own float intermediates, whose sampling reads a fraction of the
+    file); on that specific refusal, reopened unmapped and read again.
+    """
+    try:
+        with fits.open(path, memmap=True, **open_kw) as hdul:
+            return reader(hdul)
+    except ValueError as exc:
+        if "memmap=False" not in str(exc):
+            raise
+    with fits.open(path, memmap=False, **open_kw) as hdul:
+        return reader(hdul)
+
+
 def _header_string(path: str) -> str:
     """A FITS header as text, for `set_image_metadata_from_header_string`.
 
@@ -1903,11 +2006,14 @@ def _header_string(path: str) -> str:
     read: a composite without a WCS can still be plate-solved, so this is
     never worth failing over.
     """
+    def read(hdul):
+        for hdu in hdul:
+            if getattr(hdu, "data", None) is not None:
+                return hdu.header.tostring(sep="\n")
+        return ""
+
     try:
-        with fits.open(path, memmap=True, ignore_missing_simple=True) as hdul:
-            for hdu in hdul:
-                if getattr(hdu, "data", None) is not None:
-                    return hdu.header.tostring(sep="\n")
+        return _with_fits(path, read, ignore_missing_simple=True)
     except Exception as exc:
         _log_swallowed(exc)
     return ""
@@ -1920,12 +2026,15 @@ def _fits_filter(path: str) -> str:
     caller believes it is.  "" means "could not tell", never "wrong": a
     master whose header lost the keyword must not be thrown away over it.
     """
+    def read(hdul):
+        for hdu in hdul:
+            token = _clean_token((hdu.header or {}).get("FILTER"))
+            if token:
+                return token
+        return ""
+
     try:
-        with fits.open(path, memmap=True, ignore_missing_simple=True) as hdul:
-            for hdu in hdul:
-                token = _clean_token((hdu.header or {}).get("FILTER"))
-                if token:
-                    return token
+        return _with_fits(path, read, ignore_missing_simple=True)
     except Exception as exc:
         _log_swallowed(exc)
     return ""
@@ -2031,21 +2140,26 @@ def _flat_shape(paths: list, limit: int = FLAT_COMPARE_MAX_FRAMES,
     frames than were offered -- silently thinning the sample was how a
     two-frame map once posed as an eight-frame one.
     """
+    def read(hdul):
+        data = next((h.data for h in hdul
+                     if getattr(h, "data", None) is not None), None)
+        if data is None:
+            return None
+        # float32 throughout the heavy part: a flat sits near
+        # 24 000 ADU and eight of them sum to under 200 000, which
+        # a 24-bit mantissa holds exactly.  The map is a few
+        # hundred pixels across by the time precision could matter.
+        # Converted INSIDE the read: a memmapped array does not survive
+        # the file being closed.
+        return np.asarray(data, dtype=np.float32)
+
     stack = None
     used = skipped = 0
     for path in paths[:limit]:
         try:
-            with fits.open(path, memmap=True,
-                           ignore_missing_simple=True) as hdul:
-                data = next((h.data for h in hdul
-                             if getattr(h, "data", None) is not None), None)
-                if data is None:
-                    continue
-                # float32 throughout the heavy part: a flat sits near
-                # 24 000 ADU and eight of them sum to under 200 000, which
-                # a 24-bit mantissa holds exactly.  The map is a few
-                # hundred pixels across by the time precision could matter.
-                frame = np.asarray(data, dtype=np.float32)
+            frame = _with_fits(path, read, ignore_missing_simple=True)
+            if frame is None:
+                continue
         except Exception as exc:
             _log_swallowed(exc)
             continue
@@ -2453,22 +2567,22 @@ def _is_blank_frame(path: str) -> bool:
     On any doubt the frame is KEPT (returns False): dropping a good frame
     is worse than keeping a marginal one.
     """
+    def read(hdul):
+        # Pick the image HDU from the HEADER only.  Touching `.data`
+        # here would already decompress a Rice-compressed (.fz) frame in
+        # full -- exactly what this sampling is meant to avoid.
+        image_hdu = None
+        for hdu in hdul:
+            try:
+                if int(hdu.header.get("NAXIS", 0)) >= 2:
+                    image_hdu = hdu
+                    break
+            except (ValueError, TypeError):
+                continue
+        return None if image_hdu is None else _sample_pixels(image_hdu)
+
     try:
-        with fits.open(path, memmap=True) as hdul:
-            # Pick the image HDU from the HEADER only.  Touching `.data`
-            # here would already decompress a Rice-compressed (.fz) frame in
-            # full -- exactly what this sampling is meant to avoid.
-            image_hdu = None
-            for hdu in hdul:
-                try:
-                    if int(hdu.header.get("NAXIS", 0)) >= 2:
-                        image_hdu = hdu
-                        break
-                except (ValueError, TypeError):
-                    continue
-            if image_hdu is None:
-                return False
-            sample = _sample_pixels(image_hdu)
+        sample = _with_fits(path, read)
         if sample is None or sample.size == 0:
             return False
         finite = sample[np.isfinite(sample)]
@@ -2867,7 +2981,21 @@ class StackWorker(QThread):
 
     # -- helpers ----------------------------------------------------------
     def _cmd(self, *args) -> None:
-        self.siril.cmd(*args)
+        """Run one Siril command, telling a dead link apart from a refusal.
+
+        A refusal (bad arguments, unusable frames) raises CommandError
+        and the callers' fallback chains are the right response.  A dead
+        transport matches the very same `except` tuples and would send
+        the run cascading through fallbacks that cannot work; it becomes
+        SirilGoneError here, at the single funnel every command uses,
+        and fails the RUN with one honest message instead.
+        """
+        try:
+            self.siril.cmd(*args)
+        except Exception as exc:
+            if _connection_dead(exc):
+                raise SirilGoneError(str(exc)) from exc
+            raise
 
     def _emit(self, msg: str, color=LogColor.BLUE) -> None:
         """Log a worker message.
@@ -5989,6 +6117,18 @@ class StackWorker(QThread):
                  "preview": (composite_load
                              if composite_load != composite else None),
                  "separate_lum": self._separate_lum})
+        except SirilGoneError as exc:
+            # One message for one cause.  The traceback would only point
+            # at whichever command happened to die first, which is noise:
+            # the cause is that Siril itself went away.
+            msg = ("The connection to Siril was lost mid-run "
+                   f"({exc}).  Siril has crashed or was closed; no further "
+                   "command can succeed, so the run stopped at the first "
+                   "dead reply instead of blaming each step in turn.  "
+                   "Restart Siril and run this script again — finished "
+                   "masters are picked up by 'Reuse existing masters'.")
+            self._write_failure_report(exc, msg)
+            self.failed.emit(msg)
         except Exception as exc:
             # Never leave the "processing is running…" stub behind: replace it
             # with an honest failure report so the folder explains itself.

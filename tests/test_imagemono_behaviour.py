@@ -814,6 +814,63 @@ check("_median(" in warn_src and "ordered" not in warn_src,
       "_align_pairs_warn uses the module's _median instead of a second "
       "hand-rolled copy")
 
+print("\n18) FITS reads survive astropy's memmap refusal")
+# astropy refuses to memory-map BZERO/BSCALE/BLANK frames — every
+# N.I.N.A. integer sub — and raises at `.data` access time.  One run
+# swallowed that ~130 times while the flat consistency check silently
+# skipped and the blank-frame check silently kept everything.  Every
+# reader now goes through _with_fits, which reopens unmapped on that
+# specific refusal.
+def _mod_fn(name):
+    return ast.get_source_segment(
+        src, next(n for n in tree.body
+                  if isinstance(n, ast.FunctionDef) and n.name == name))
+
+
+check(src.count("memmap=True") == 1
+      and "memmap=True" in _mod_fn("_with_fits"),
+      "exactly one memmap=True remains, inside _with_fits itself")
+for fn in ("_header_string", "_fits_filter", "_flat_shape",
+           "_is_blank_frame"):
+    check("_with_fits(" in _mod_fn(fn),
+          f"{fn} reads through the retrying opener")
+check('"memmap=False" not in str(exc)' in _mod_fn("_with_fits"),
+      "and only astropy's own refusal triggers the retry — other "
+      "ValueErrors still propagate")
+# The resource tracker is started while the environment is clean, so
+# sirilpy's lazy mid-run spawn no longer dies with PermissionError and
+# sprays tracebacks into Siril's log (1.7.9 hardened the log readers
+# against exactly those; this removes them at the source).
+check("_resource_tracker.ensure_running()" in src
+      and src.index("ensure_running") < src.index("import numpy as np"),
+      "the multiprocessing resource tracker is started at import time, "
+      "before the heavy imports")
+
+print("\n19) a dead Siril fails the run once, not every fallback in turn")
+# On a real run Siril crashed during seqplatesolve; the broken pipe then
+# matched every fallback's `except (CommandError, DataError, SirilError)`
+# and the log blamed plate solving, star alignment and single-pass
+# registration in turn, for both filters — four diagnoses for one dead
+# process.  A transport death is not a command failure.
+cmd_body = body("_cmd")
+check("_connection_dead(exc)" in cmd_body
+      and "raise SirilGoneError" in cmd_body,
+      "_cmd, the single funnel every command uses, converts a transport "
+      "death into SirilGoneError")
+check(src.count("raise SirilGoneError") == 1,
+      "and only there — no other raise site to drift out of sync")
+check(src.count("except SirilGoneError") == 1,
+      "exactly one handler: the fallback chains never catch it, so it "
+      "rises straight to the worker's top level")
+run_body = body("run")
+check("except SirilGoneError" in run_body
+      and (run_body.index("except SirilGoneError")
+           < run_body.index("except Exception as exc:")),
+      "which catches it before the generic crash handler")
+check("Reuse existing masters" in run_body,
+      "and the message names the recovery: restart Siril, re-run, reuse "
+      "the finished masters")
+
 print()
 if fails:
     print(f"{len(fails)} FAILURE(S)")

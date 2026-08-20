@@ -388,6 +388,103 @@ check(rebin(np.ones((250, 200)), 250).shape == (250, 200),
 check(float(rebin(np.full((499, 400), 7.0), 250).mean()) == 7.0,
       "block means preserve the level")
 
+print("\n10d) _with_fits retries unmapped on astropy's memmap refusal")
+# astropy raises "Cannot load a memory-mapped image ... Set memmap=False."
+# at `.data` ACCESS time, after the open succeeded — so the retry has to
+# repeat the whole read.  On one real run that error was swallowed ~130
+# times and the flat consistency check silently skipped.  Executed against
+# a stub fits module so the refusal is reproducible.
+import contextlib
+
+_wf_node = next(n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == "_with_fits")
+
+
+class _StubFits:
+    def __init__(self):
+        self.calls = []
+
+    def open(self, path, memmap=None, **kw):
+        self.calls.append(memmap)
+
+        @contextlib.contextmanager
+        def cm():
+            yield memmap                     # reader sees the memmap flag
+        return cm()
+
+
+_stub = _StubFits()
+_wf_ns = {"fits": _stub}
+exec("from __future__ import annotations\n"
+     + ast.get_source_segment(src, _wf_node), _wf_ns)
+with_fits = _wf_ns["_with_fits"]
+
+REFUSAL = ("Cannot load a memory-mapped image: BZERO/BSCALE/BLANK header "
+           "keywords present. Set memmap=False.")
+
+
+def refusing_reader(mapped):
+    if mapped:
+        raise ValueError(REFUSAL)
+    return "payload"
+
+
+_stub.calls.clear()
+got = with_fits("x.fit", refusing_reader)
+check(got == "payload" and _stub.calls == [True, False],
+      "the refusal at read time triggers ONE unmapped reopen "
+      f"(calls: {_stub.calls})")
+
+_stub.calls.clear()
+got = with_fits("x.fit", lambda mapped: "fine")
+check(got == "fine" and _stub.calls == [True],
+      "a clean read stays mapped — no second open")
+
+_stub.calls.clear()
+try:
+    with_fits("x.fit", lambda mapped: (_ for _ in ()).throw(
+        ValueError("some other problem")))
+    check(False, "an unrelated ValueError must propagate")
+except ValueError:
+    check(_stub.calls == [True],
+          "an unrelated ValueError propagates without a retry")
+
+print("\n10e) _connection_dead tells a dead link from a refusal")
+# sirilpy wraps socket deaths into CommandError with the OS text kept, so
+# the type alone cannot identify them.  These are the two messages from
+# the real run that cascaded through every fallback.
+
+
+class _StubConnErr(Exception):
+    pass
+
+
+_cd_ns = {"SirilConnectionError": _StubConnErr}
+_marks_node = next(n for n in tree.body if isinstance(n, ast.Assign)
+                   and getattr(n.targets[0], "id", "")
+                   == "_CONNECTION_DEAD_MARKS")
+_cd_node = next(n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef)
+                and n.name == "_connection_dead")
+exec("from __future__ import annotations\n"
+     + ast.get_source_segment(src, _marks_node) + "\n"
+     + ast.get_source_segment(src, _cd_node), _cd_ns)
+conn_dead = _cd_ns["_connection_dead"]
+
+check(conn_dead(Exception(
+    "Error in cmd(): Error in _send_command(): [Errno 32] Broken pipe")),
+    "a broken pipe inside sirilpy's wrapper text is a dead link")
+check(conn_dead(Exception(
+    "Error in cmd(): Error receiving data: Connection closed during data "
+    "transfer")),
+    "so is a connection closed mid-transfer")
+check(conn_dead(_StubConnErr("whatever the message")),
+      "and SirilConnectionError is one by type, whatever it says")
+check(not conn_dead(Exception("Unknown command: seqfoo")),
+      "a plain refusal is NOT — the fallback chains stay in charge")
+check(not conn_dead(Exception("could not open file lights_00001.fit")),
+      "neither is an unreadable frame")
+
 print()
 if fails:
     print(f"{len(fails)} FAILURE(S)")

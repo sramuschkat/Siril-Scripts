@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.7.11** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.7.12** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.7.11](#17-whats-new-in-1711)
+17. [What's New in 1.7.12](#17-whats-new-in-1712)
 
 ---
 
@@ -908,7 +908,13 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.7.11
+## 17. What's New in 1.7.12
+
+- **FITS reads survive astropy's memmap refusal.** astropy declines to memory-map an image whose header carries BZERO/BSCALE/BLANK — every N.I.N.A. integer sub — and raises *"Cannot load a memory-mapped image … Set memmap=False."* at data-access time. One run swallowed that ~130 times, and worse than the noise: the flat consistency check read no frame at all and silently skipped, and the blank-frame check silently kept everything. Every reader now retries the file unmapped on that specific refusal; unrelated errors still propagate.
+- **No more resource-tracker tracebacks in Siril's log.** sirilpy's shared-memory transfers spawn Python's resource tracker lazily mid-run, where (on macOS, inside Siril's process) it dies with `PermissionError` and is relaunched, spraying tracebacks into the log. 1.7.9 hardened the log readers against those; the tracker is now started at import time, while the environment is clean — removing them at the source.
+- **A dead Siril fails the run once, not every fallback in turn.** When Siril crashed mid-run, the broken pipe matched every fallback's error handling: the log blamed plate solving, star alignment and single-pass registration in turn, for both filters — four diagnoses for one dead process. A transport death (broken pipe, connection closed) is now told apart from a command refusal at the single funnel every command uses; the run stops at the first dead reply with one honest message and the recovery spelled out: restart Siril, run again, finished masters are picked up by *Reuse existing masters*.
+
+## What was new in 1.7.11
 
 - **The flat-check noise floor is scaled to the comparison it judges.** The floor comes from splitting the reference night in half — but each half averages *fewer* frames than the maps in the real night-vs-night comparison, so the raw half spread overstated the true comparison noise by a measured **√2** (1.415 over 300 simulated runs) at equal frame counts. "No shape difference detectable" then covered real flat differences as large as the noise itself. The half spread is now mapped onto the actual frame counts (per-map variance ∝ 1/n, ratio variances add); when both halves already hit the per-night frame cap the factor is 1, because then the halves carry the same noise as the full maps.
 - **`_rebin_mean` honours its "long side at most target" contract.** Floor division left a 650 px frame at 325 px and anything between the target and twice the target entirely unbinned — small sensors were compared on a finer, noisier grid against thresholds calibrated for the ~250 px scale. The factor is now the ceiling.

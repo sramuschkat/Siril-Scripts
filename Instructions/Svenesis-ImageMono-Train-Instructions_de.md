@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.7.11** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.7.12** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.7.11](#17-neu-in-1711)
+17. [Neu in 1.7.12](#17-neu-in-1712)
 
 ---
 
@@ -908,7 +908,13 @@ Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.7.11
+## 17. Neu in 1.7.12
+
+- **FITS-Lesen übersteht astropys memmap-Verweigerung.** astropy lehnt es ab, ein Bild mit BZERO/BSCALE/BLANK im Header zu memory-mappen — jedes N.I.N.A.-Integer-Sub — und wirft *„Cannot load a memory-mapped image … Set memmap=False."* erst beim Datenzugriff. Ein Lauf schluckte das ~130-mal, und schlimmer als der Lärm: Die Flat-Konsistenzprüfung las kein einziges Frame und fiel still aus, und die Blank-Frame-Prüfung behielt still alles. Jeder Leser versucht die Datei bei genau dieser Verweigerung erneut ungemappt; andere Fehler schlagen weiter durch.
+- **Keine resource-tracker-Tracebacks mehr in Sirils Log.** sirilpys Shared-Memory-Transfers starten Pythons Resource-Tracker träge mitten im Lauf, wo er (auf macOS, in Sirils Prozess) mit `PermissionError` stirbt und neu gestartet wird — Tracebacks im Log. 1.7.9 härtete die Log-Leser dagegen; jetzt startet der Tracker beim Import, solange die Umgebung sauber ist — das entfernt sie an der Quelle.
+- **Ein totes Siril lässt den Lauf einmal scheitern, nicht jede Rückfallebene der Reihe nach.** Als Siril mitten im Lauf abstürzte, passte der Broken Pipe auf jede Fallback-Fehlerbehandlung: Das Log beschuldigte nacheinander Plate-Solving, Star-Alignment und Single-Pass-Registrierung, für beide Filter — vier Diagnosen für einen toten Prozess. Ein Transport-Tod (Broken Pipe, Verbindung geschlossen) wird jetzt am einen Trichter, durch den jedes Kommando läuft, von einer Kommando-Ablehnung unterschieden; der Lauf stoppt bei der ersten toten Antwort mit einer ehrlichen Meldung samt Ausweg: Siril neu starten, erneut ausführen, fertige Master übernimmt *Vorhandene Master wiederverwenden*.
+
+## Was in 1.7.11 neu war
 
 - **Der Rauschboden der Flat-Prüfung wird auf den Vergleich skaliert, den er beurteilt.** Der Boden entsteht durch Halbieren der Referenznacht — aber jede Hälfte mittelt *weniger* Frames als die Karten im echten Nacht-zu-Nacht-Vergleich, die rohe Hälften-Streuung überschätzte das wahre Vergleichsrauschen also um gemessene **√2** (1,415 über 300 simulierte Läufe) bei gleichen Frame-Zahlen. „Kein Formunterschied nachweisbar" deckte damit echte Flat-Unterschiede bis zur Größe des Rauschens selbst. Die Hälften-Streuung wird jetzt auf die tatsächlichen Frame-Zahlen abgebildet (Varianz pro Karte ∝ 1/n, Ratio-Varianzen addieren sich); stoßen beide Hälften bereits an die Frame-Obergrenze pro Nacht, ist der Faktor 1, denn dann tragen die Hälften dasselbe Rauschen wie die vollen Karten.
 - **`_rebin_mean` hält seinen Vertrag „Langseite höchstens target" ein.** Floor-Division ließ ein 650-px-Frame bei 325 px stehen und alles zwischen target und dem Doppelten ganz ungebinnt — kleine Sensoren verglichen auf feinerem, rauschigerem Raster gegen Schwellen, die für die ~250-px-Skala kalibriert sind. Der Faktor ist jetzt das Ceiling.
