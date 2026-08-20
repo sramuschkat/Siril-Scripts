@@ -75,6 +75,29 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 CHANGELOG:
 1.0.0 - Initial release
+      - SUITE POLISH after the first fully successful calibrated run: the
+        left-panel title now carries the version (the window title always
+        did), and the bottom of the panel matches every other Svenesis
+        script -- "Buy me a Coffee", a full-width Help button instead of
+        the lone "?", and Close stacked below the action buttons, with the
+        same coffee dialog the rest of the suite opens.  Two log lines
+        were also made honest: the gain line prints the header gain in
+        e-/ADU (the x65535 float scaling is named, not folded into the
+        number -- "gain 65535 e-/ADU assumed" claimed an absurd gain), and
+        the not-used tally prints real numeric ranges ("607 x 2-6.8 mag
+        fainter") instead of the masked template's literal "N".
+      - THE TARGET NAME NOW COMES FROM THE FRAMES FIRST.  The Target box
+        is restored from the last session's settings, so after switching
+        targets it holds the PREVIOUS name -- and `typed or from_hdr` let
+        that stale box outrank a correct OBJECT card: a WASP-75b run was
+        analysed under HAT-P-32's ephemeris, flagged only by the 1085765"
+        position warning.  OBJECT came with these frames and cannot be
+        about a different folder, so it wins; a disagreement with the box
+        is said out loud with both names, and an OBJECT the archive does
+        not know falls back to the typed name (junk cards like 'Target'
+        are what the box is for).  The AAVSO #TARGET= line carries the
+        RESOLVED name, not the box -- a submission under the previous
+        target's name is worse than one under UNKNOWN.
       - Differential photometry of a sub-exposure folder via Siril's own
         `light_curve` command, with comparison stars picked from Siril's
         star detection and filtered on SNR, saturation, separation and
@@ -168,6 +191,68 @@ CHANGELOG:
           synthesises transits with the SAME limb-darkened model the fit
           searches -- injecting trapezoids into a trapezoid fitter had been
           flattering it
+      - THE FIRST CALIBRATED END-TO-END RUN exposed a units error: on
+        Siril's [0,1]-normalised float output the gain was still applied
+        as plain e-/ADU, feeding the CCD equation the wrong scale --
+        measured 100x off against 40 Poisson realisations.  Siril divides
+        16-bit ADU by 65535, so the gain now scales by the same factor
+        when the [0,1] convention is detected, and the gain line names
+        the scaling.  With it the predicted error lands within ~20% of
+        the truth (conservative side).  Also confirmed on that run: the
+        engine measures Siril's calibrated float frames, the saturation
+        verdict reads the [0,1] full scale, the honest "gain assumed"
+        message fires when no EGAIN exists anywhere (this camera writes
+        only GAIN=125, the setting), and the whole pipeline reaches CSV
+        without touching the Siril fallback.
+      - THIRD AUDIT PASS: the ERROR BARS themselves were put on trial,
+        by refitting 24 independent synthetic nights and comparing the
+        reported bars against the true run-to-run scatter.
+        * THE DEPTH BAR WAS 26% OPTIMISTIC -- and it is the number the
+          AAVSO file carries.  The two-box formula
+          sigma*sqrt(1/n_in+1/n_out) ignores the correlation between the
+          depth and the fitted baseline-plus-systematics and treats
+          ingress points as all-or-nothing.  It is now the covariance of
+          the joint solve, sigma^2*(G^-1)_kk at the winning node:
+          measured true scatter 1.01 mmag, old bar 0.81, new bar 0.89.
+          The residual ~15% is template-family discreteness; the profile
+          over T0/duration was measured to carry none of it.
+        * THE T0 BAR OVERCOVERS by ~1.75x at this configuration -- the
+          parabola profiles over the systematics, which widens the
+          surface.  Left as is, deliberately: overcoverage is the safe
+          failure direction for the number O-C claims rest on, shrinking
+          the window re-opens the bumpy-surface trap the docstring
+          documents, and the suite now bounds the overcoverage at 2.5x
+          so it cannot quietly grow until every O-C reads "consistent".
+        * DURATION AND DEPTH RECOVERY verified en passant: medians 1.28 h
+          against 1.32 true and 12.0 mmag against 12.0.
+        * THE AAVSO HEADER WROTE TWO #NOTES KEYS on a no-transit run --
+          its own line plus the detrend line.  Which one a parser keeps
+          is the parser's mood; they are one line now.
+        * Read and passed without findings: light_curve.dat parsing (both
+          offset conventions), bin_series (ddof=1 standard errors),
+          match_frames_to_curve, _fill_gaps, the Kasten&Young airmass.
+      - SECOND AUDIT PASS, deeper than the first, every finding measured:
+        * THE RED-NOISE BETA WAS BIASED LOW BY ITS OWN SMALL-SAMPLE
+          CORRECTION.  E[std of M bin means] sits BELOW the true scatter
+          by c4(M); the code multiplied EXPECTED by sqrt(M/(M-1)) -- the
+          wrong direction -- so white-noise ladder rungs that should read
+          1.0 read 0.80-0.94 (40000 draws per M).  A deflated beta
+          overstates every significance on exactly the correlated-noise
+          nights the correction exists for.  Now c4: rungs centre on
+          0.997-0.999, and genuinely red noise still reads 2.5.
+        * THE FINITENESS INVARIANT AT THE MERGE POINT IS NOW ENFORCED,
+          not hoped for.  The fit filters by its own good-mask and
+          returns FILTERED-size arrays; the CSV/AAVSO writers then index
+          them with the full jd.  Both engines happen to deliver finite
+          rows today, but a single NaN would have silently paired times
+          with the wrong magnitudes from that row on.
+        * VERIFIED AND NOW OWNED BY THE SUITE: the LD template's radial
+          quadrature agrees with a blind 2D integration to 7 ppm across
+          rp 0.06-0.18 and b 0-0.5 (the docstring claimed this
+          verification; the suite now performs it), and the spherical
+          altitude/airmass helper reproduces astropy within its
+          documented 21-arcminute tolerance -- fine for a detrending
+          basis, and said so.
       - A FULL AUDIT PASS (logic, maths, statistics, dead code), every
         finding measured before it was fixed:
         * ENSEMBLE ERROR WAS EQUAL-SPLIT WHILE THE REFERENCE IS
@@ -1257,6 +1342,7 @@ QPushButton{background-color:#444444;color:#dddddd;border:1px solid #666666;bord
 QPushButton:hover{background-color:#555555;border-color:#777777}
 QPushButton:disabled{background-color:#333333;color:#666666;border-color:#444444}
 QPushButton#CoffeeButton{background-color:#FFDD00;color:#000000;border:1px solid #ccb100;font-weight:bold}
+QPushButton#CoffeeButton:hover{background-color:#ffe740;border-color:#ddcc00}
 QPushButton#CloseButton{background-color:#553333;color:#ffaaaa;border:1px solid #884444}
 QPushButton#CloseButton:hover{background-color:#664444}
 QPushButton#RenderButton{background-color:#335533;color:#aaffaa;border:1px solid #448844}
@@ -2478,10 +2564,24 @@ def fit_transit(t, mag, bases=None, u1: float = LD_U1, u2: float = LD_U2):
     inside = shape > 0.5
     n_in = int(np.count_nonzero(inside))
     n_out = int(np.count_nonzero(~inside))
-    if n_in > 0 and n_out > 0 and sigma > 0:
-        depth_sigma = beta * sigma * math.sqrt(1.0 / n_in + 1.0 / n_out)
-    else:
-        depth_sigma = float("nan")
+    # The depth bar comes from the COVARIANCE of the joint solve, not
+    # from the two-box formula sigma*sqrt(1/n_in + 1/n_out) it replaces.
+    # The box formula ignores the correlation between the depth and the
+    # fitted baseline-plus-systematics, and it treats ingress points as
+    # either fully in or fully out.  Calibrated over 24 synthetic nights
+    # (12 mmag transit, 4 mmag noise, airmass ramp in the design): true
+    # run-to-run depth scatter 1.01 mmag, box formula 0.81 (26% narrow --
+    # and this number goes into the AAVSO file), covariance 0.89.  The
+    # remaining ~15% is the discreteness of the template family, which
+    # the profile over T0/duration was measured NOT to carry.
+    depth_sigma = float("nan")
+    if sigma > 0 and n_in > 0 and n_out > 0:
+        try:
+            a_full = np.column_stack([fixed, shape])
+            g_inv = np.linalg.inv(a_full.T @ a_full)
+            depth_sigma = beta * sigma * math.sqrt(max(g_inv[-1, -1], 0.0))
+        except np.linalg.LinAlgError:
+            depth_sigma = beta * sigma * math.sqrt(1.0 / n_in + 1.0 / n_out)
 
     t0_sigma = t0_uncertainty(t, mag, best["t0"], best["duration"],
                               tmpl, sigma, coarse_t0, beta,
@@ -2970,11 +3070,20 @@ def red_noise_beta(t, resid, duration_days):
         # in the same direction: measured 0% apart on equal bins, 55% on
         # [2,4,8,16,32] and 86% on [2,2,2,30].
         #
-        # sqrt(M/(M-1)) is the small-sample correction for estimating the
-        # scatter of M bin means; without it every short ladder rung reads
-        # low and beta is biased toward "the noise is fine".
+        # c4(M) is the small-sample correction: E[std(x, ddof=1)] is
+        # BELOW the true sigma by that factor, so every short ladder rung
+        # reads low and beta is biased toward "the noise is fine".  The
+        # first version multiplied expected by sqrt(M/(M-1)) instead --
+        # the WRONG DIRECTION, deflating beta further.  Measured on 40000
+        # white-noise draws per M: uncorrected rungs average 0.92-0.98,
+        # the sqrt factor drove them to 0.80-0.94, c4 lands on
+        # 0.997-0.999.  A deflated beta overstates every significance on
+        # exactly the nights the correction exists for.
+        c4 = (math.sqrt(2.0 / (n_bins - 1))
+              * math.gamma(n_bins / 2.0)
+              * (1.0 / math.gamma((n_bins - 1) / 2.0)))
         expected = sigma1 * math.sqrt(float(np.mean(1.0 / np.asarray(
-            counts, dtype=float)))) * math.sqrt(n_bins / float(n_bins - 1))
+            counts, dtype=float)))) * c4
         if expected > 0:
             rows.append((width, observed / expected, n_bins, n_mean))
     if not rows:
@@ -5394,6 +5503,7 @@ class LightCurveWorker(QThread):
         r_in = AUTORING_INNER_FWHM * max(float(fwhm), 1.0)
         r_out = AUTORING_OUTER_FWHM * max(float(fwhm), 1.0)
         gain = 1.0
+        gain_hdr = 1.0
         gain_src = "assumed — no usable EGAIN in the header"
         sat_adu = None
         try:
@@ -5410,6 +5520,7 @@ class LightCurveWorker(QThread):
                         v = float(hdr.get(card))
                         if 0.0 < v < hi:
                             gain = v
+                            gain_hdr = v
                             gain_src = f"from the header ({card})"
                             break
                     except (TypeError, ValueError):
@@ -5423,6 +5534,15 @@ class LightCurveWorker(QThread):
                 sat_adu = SAT_FRACTION * float(np.iinfo(d0.dtype).max)
             elif d0 is not None and float(np.nanmax(d0)) <= 1.05:
                 sat_adu = SAT_FRACTION
+                # Siril's calibrated output is 16-bit ADU divided by
+                # 65535.  A gain quoted in e-/ADU must scale with the
+                # data, or "1 unit" is read as ONE electron and the
+                # Poisson term of the CCD equation collapses by four
+                # orders of magnitude -- the background term survives
+                # (it is measured empirically in data units) but every
+                # bright star's error bar comes out absurdly small.
+                gain = gain * 65535.0
+                gain_src += ", x65535 for normalised float data"
         except Exception as exc:                # noqa: BLE001
             _log_swallowed(exc)
             return None
@@ -5572,7 +5692,7 @@ class LightCurveWorker(QThread):
             f"  Aperture {r_best:.2f} px "
             f"({r_best / max(float(fwhm), 1e-9):.2f} x FWHM) chosen by "
             f"point-to-point noise; sky annulus {r_in:.1f}-{r_out:.1f} px; "
-            f"gain {gain:g} e-/ADU {gain_src}.", LogColor.GREEN)
+            f"gain {gain_hdr:g} e-/ADU {gain_src}.", LogColor.GREEN)
         # Centre the curve on its own median.  The raw value is
         # -2.5*log10(flux / a reference normalised to ~1) — an arbitrary
         # zero point near -10 that reads as broken in every plot, CSV and
@@ -5857,31 +5977,61 @@ class LightCurveWorker(QThread):
             if (not kind or kind == KIND_LIGHT.lower()) and info.get("object"):
                 from_hdr = str(info["object"]).strip()
                 break
-        name = typed or from_hdr
+        # The FRAMES first, the box second.  The box is restored from the
+        # last session's settings, so after switching targets it holds the
+        # PREVIOUS name — and that is exactly how a WASP-75b run got
+        # HAT-P-32's ephemeris: the stale box outranked an OBJECT card
+        # that was right all along.  OBJECT came with these frames and
+        # cannot be about a different folder; the typed name stays as the
+        # fallback for headers whose OBJECT is junk or unknown to the
+        # archive.
+        name = from_hdr or typed
         if not name:
             return None
         planet = normalise_planet_name(name)
-        source = "the Target box" if typed else "OBJECT in the lights"
+        source = "OBJECT in the lights" if from_hdr else "the Target box"
+        typed_planet = normalise_planet_name(typed)
+        names_differ = (from_hdr and typed_planet
+                        and typed_planet.upper() != planet.upper())
+        if names_differ:
+            self._emit(
+                f"  The Target box says {typed_planet!r} but the lights "
+                f"carry OBJECT = {planet!r}. The headers win — they came "
+                "with these frames, and a box entry left over from the "
+                "previous target looks exactly like this. Clear or retype "
+                "the box to override.", LogColor.SALMON)
 
-        cache = self._target_cache()
-        hit = cache.get(planet.upper())
-        if hit:
-            eph, note = hit, ""
-            self._emit(f"  {planet} — ephemeris from the local cache "
-                       f"(name from {source}).", LogColor.BLUE)
-        else:
-            self._emit(f"  Looking up {planet} at the NASA Exoplanet "
-                       f"Archive for the ephemeris (name from {source})…",
+        def _lookup(pl, src):
+            cache = self._target_cache()
+            hit = cache.get(pl.upper())
+            if hit:
+                self._emit(f"  {pl} — ephemeris from the local cache "
+                           f"(name from {src}).", LogColor.BLUE)
+                return hit, ""
+            self._emit(f"  Looking up {pl} at the NASA Exoplanet "
+                       f"Archive for the ephemeris (name from {src})…",
                        LogColor.BLUE)
-            eph, note = archive_lookup(planet)
-            if eph:
-                cache[planet.upper()] = eph
+            found, why = archive_lookup(pl)
+            if found:
+                cache[pl.upper()] = found
                 self._store_target_cache(cache)
+            return found, why
+
+        eph, note = _lookup(planet, source)
+        if not eph and names_differ:
+            # OBJECT can be junk ("Target", a mosaic panel name) — that is
+            # what the typed name is FOR, so a failed header name falls
+            # back instead of ending the lookup.
+            self._emit(f"  {note} — trying the Target box name instead.",
+                       LogColor.SALMON)
+            planet, source = typed_planet, "the Target box"
+            eph, note = _lookup(planet, source)
         if not eph:
             self._emit(f"  {note}. The position above still stands; only "
                        "the O−C against a published ephemeris is lost.",
                        LogColor.SALMON)
             return None
+        self.opts["resolved_target_name"] = str(eph.get("name") or planet)
 
         if hdr_ra is not None:
             sep = angular_sep_arcsec(hdr_ra, hdr_dec,
@@ -6206,14 +6356,29 @@ class LightCurveWorker(QThread):
         # Tally the reasons, not the stars.  865 individual rejection lines
         # is not a diagnosis; "865 x SNR 0 below 20" is one, and it is the
         # line that would have explained the first real run in one glance.
+        # Group by the reason with its numbers masked out, but display each
+        # group with the numbers put back as min-max ranges -- a literal
+        # "607 x N mag fainter" tells nobody how much fainter.
         tally = {}
         for _x, _y, why in rejected:
             key = re.sub(r"[-+]?\d*\.?\d+", "N", why)
-            tally[key] = tally.get(key, 0) + 1
-        summary = sorted(tally.items(), key=lambda kv: kv[1], reverse=True)
+            tally.setdefault(key, []).append(why)
+        summary = sorted(tally.items(), key=lambda kv: len(kv[1]),
+                         reverse=True)
+
+        def _group_label(whys):
+            nums = [re.findall(r"[-+]?\d*\.?\d+", w) for w in whys]
+            ranges = []
+            for slot in zip(*nums):
+                vals = sorted(float(v) for v in slot)
+                lo, hi = vals[0], vals[-1]
+                ranges.append(f"{lo:g}" if lo == hi else f"{lo:g}–{hi:g}")
+            it = iter(ranges)
+            return re.sub(r"[-+]?\d*\.?\d+", lambda _m: next(it), whys[0])
 
         if len(comps) < MIN_COMPS:
-            lines = "; ".join(f"{n} x {why}" for why, n in summary[:4])
+            lines = "; ".join(f"{len(whys)} x {_group_label(whys)}"
+                              for _key, whys in summary[:4])
             self._fail(
                 f"Only {len(comps)} usable comparison star(s) after filtering "
                 f"(need at least {MIN_COMPS}). Of {len(rejected)} not used: "
@@ -6222,8 +6387,9 @@ class LightCurveWorker(QThread):
         self._emit(f"  {len(comps)} comparison star(s) chosen "
                    f"({how_ranked}), {len(rejected)} not used.",
                    LogColor.GREEN)
-        for why, n in summary[:4]:
-            self._emit(f"    {n} x {why}", LogColor.SALMON)
+        for _key, whys in summary[:4]:
+            self._emit(f"    {len(whys)} x {_group_label(whys)}",
+                       LogColor.SALMON)
 
         # The measurement itself.  This script's own engine first -- it
         # re-centroids every star per frame (follow star), measures all
@@ -6389,6 +6555,21 @@ class LightCurveWorker(QThread):
 
         self.progress.emit(70, "Detrending and fitting…")
         raw_mag = mag.copy()
+        # Enforce, once, the invariant every consumer downstream relies
+        # on: jd, mag and err are the same length and finite.  The fit
+        # filters internally by its own good-mask and returns arrays of
+        # the FILTERED size; the writers then index them with the full
+        # jd.  Both engines happen to deliver finite rows today, but a
+        # single NaN would silently misalign every column after it — the
+        # CSV would pair times with the wrong magnitudes and no one could
+        # tell by looking.
+        finite = np.isfinite(jd) & np.isfinite(mag)
+        if not finite.all():
+            self._emit(f"  {int((~finite).sum())} row(s) without a finite "
+                       "time or magnitude dropped before analysis.",
+                       LogColor.SALMON)
+            jd, mag = jd[finite], mag[finite]
+            err = err[finite] if err.size == finite.size else err
         # Centre on the median so the curve reads as a delta and the plot
         # does not depend on the arbitrary comp-ensemble zero point.
         mag = mag - _median(mag)
@@ -6582,7 +6763,13 @@ class LightCurveWorker(QThread):
                 fh.write("#DATE_TYPE=BJD_TDB\n")
                 fh.write(f"#OBSTYPE={self.opts.get('obstype', 'CCD')}\n")
                 fh.write(f"#FILTER={self.opts.get('filter_name', '') or 'CV'}\n")
-                fh.write(f"#TARGET={self.opts.get('target_name', '') or 'UNKNOWN'}\n")
+                # The RESOLVED name, not the box: the box can hold the
+                # previous target's name, and a submission under the wrong
+                # star is worse than one under 'UNKNOWN'.
+                fh.write("#TARGET="
+                         + (self.opts.get("resolved_target_name")
+                            or self.opts.get("target_name", "")
+                            or "UNKNOWN") + "\n")
                 if r.get("site_lat_deg") is not None:
                     fh.write(f"#SITELAT={r['site_lat_deg']:.4f}\n")
                     fh.write(f"#SITELONG={r['site_lon_deg']:.4f}\n")
@@ -6597,9 +6784,15 @@ class LightCurveWorker(QThread):
                     fh.write(f"#DEPTH_MMAG={fit['depth_mmag']:.2f}\n")
                     fh.write(f"#DEPTH_ERR_MMAG={fit['depth_sigma_mmag']:.2f}\n")
                     fh.write(f"#DURATION_H={fit['duration_h']:.4f}\n")
-                else:
-                    fh.write("#NOTES=no transit claimed; photometry only\n")
-                fh.write("#NOTES=Detrend 1 airmass"
+                # ONE #NOTES line.  The no-transit case used to write its
+                # own and then fall through to the detrend line -- two
+                # #NOTES keys in one header, and which one a parser keeps
+                # is the parser's mood.
+                fh.write("#NOTES="
+                         + ("no transit claimed; photometry only; "
+                            if not (fit is not None and fit.get("detected"))
+                            else "")
+                         + "Detrend 1 airmass"
                          + (", 2 " + "+".join(r.get("multi_used") or [])
                             if r.get("multi_used") else "")
                          + f"; red-noise beta "
@@ -6818,7 +7011,7 @@ class SvenesisLightCurveWindow(QMainWindow):
         inner = QWidget()
         layout = QVBoxLayout(inner)
 
-        title = QLabel("Svenesis LightCurve")
+        title = QLabel(f"Svenesis LightCurve {VERSION}")
         title.setStyleSheet("color:#88aaff;font-size:14pt;font-weight:bold;")
         layout.addWidget(title)
         sub = QLabel("Exoplanet light curve from a folder of subs")
@@ -6987,12 +7180,15 @@ class SvenesisLightCurveWindow(QMainWindow):
         self.lbl_tname = QLabel("Name")
         self.ed_target_name = QLineEdit()
         self.ed_target_name.setPlaceholderText(
-            "e.g. HAT-P-32 b — blank uses OBJECT from the headers")
+            "e.g. HAT-P-32 b — OBJECT from the headers is preferred")
         self.ed_target_name.setToolTip(
             "The planet's name, as the NASA Exoplanet Archive spells it. "
             "WASP-75b becomes WASP-75 b on the way out, so either works.\n\n"
-            "Left blank, OBJECT from your light frames is used. It also "
-            "names the target in the AAVSO submission file.")
+            "OBJECT from your light frames is preferred when it exists — "
+            "it came with the data and cannot be about a different folder. "
+            "This field is the fallback for headers whose OBJECT is junk "
+            "or unknown to the archive. The resolved name also labels the "
+            "AAVSO submission file.")
         row_name.addWidget(self.lbl_tname)
         row_name.addWidget(self.ed_target_name, 1)
         lay.addLayout(row_name)
@@ -7210,17 +7406,11 @@ class SvenesisLightCurveWindow(QMainWindow):
         self.progress.setValue(0)
         parent.addWidget(self.progress)
 
-        row = QHBoxLayout()
         self.btn_run = QPushButton("Measure light curve")
         self.btn_run.setObjectName("RenderButton")
         self.btn_run.setEnabled(False)
         self.btn_run.clicked.connect(self._on_run)
-        row.addWidget(self.btn_run, 2)
-        self.btn_help = QPushButton("?")
-        self.btn_help.setFixedWidth(34)
-        self.btn_help.clicked.connect(self._show_help)
-        row.addWidget(self.btn_help)
-        parent.addLayout(row)
+        parent.addWidget(self.btn_run)
 
         row2 = QHBoxLayout()
         self.btn_png = QPushButton("Save plot…")
@@ -7231,11 +7421,20 @@ class SvenesisLightCurveWindow(QMainWindow):
         self.btn_report.setEnabled(False)
         self.btn_report.clicked.connect(self._on_save_report)
         row2.addWidget(self.btn_report)
+        parent.addLayout(row2)
+
+        btn_coffee = QPushButton("☕  Buy me a Coffee")
+        btn_coffee.setObjectName("CoffeeButton")
+        btn_coffee.setToolTip("Support the development of this tool")
+        btn_coffee.clicked.connect(self._show_coffee_dialog)
+        parent.addWidget(btn_coffee)
+        self.btn_help = QPushButton("Help")
+        self.btn_help.clicked.connect(self._show_help)
+        parent.addWidget(self.btn_help)
         self.btn_close = QPushButton("Close")
         self.btn_close.setObjectName("CloseButton")
         self.btn_close.clicked.connect(self.close)
-        row2.addWidget(self.btn_close)
-        parent.addLayout(row2)
+        parent.addWidget(self.btn_close)
 
         self.lbl_status = QLabel("Choose a folder of sub-exposures.")
         self.lbl_status.setStyleSheet("color:#888888;font-size:9pt;")
@@ -7863,6 +8062,75 @@ class SvenesisLightCurveWindow(QMainWindow):
         st.setValue("filter_name", self.ed_filter.text().strip())
         st.setValue("autoring", "true" if self.chk_autoring.isChecked() else "false")
         st.setValue("detrend", "true" if self.chk_detrend.isChecked() else "false")
+
+    # -- coffee -----------------------------------------------------------
+    def _show_coffee_dialog(self) -> None:
+        BMC_URL = "https://buymeacoffee.com/sramuschkat"
+        dlg = QDialog(self)
+        dlg.setWindowTitle("☕ Support Svenesis LightCurve")
+        dlg.setMinimumSize(520, 480)
+        dlg.setStyleSheet(
+            "QDialog{background-color:#1e1e1e;color:#e0e0e0}"
+            "QLabel{color:#e0e0e0}"
+            "QPushButton{font-weight:bold;padding:8px;border-radius:6px}")
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(12)
+
+        header_msg = QLabel(
+            "<div style='text-align:center; font-size:12pt; line-height:1.6;'>"
+            "<span style='font-size:48pt;'>☕</span><br>"
+            "<span style='font-size:18pt; font-weight:bold; color:#FFDD00;'>"
+            "Buy me a Coffee</span><br><br>"
+            "<b style='color:#e0e0e0;'>Enjoying Svenesis LightCurve?</b><br><br>"
+            "This tool is free and open source. It's built with love for the "
+            "astrophotography community by <b style='color:#88aaff;'>Sven Ramuschkat</b> "
+            "(<span style='color:#88aaff;'>svenesis.org</span>).<br><br>"
+            "If LightCurve turned a folder of subs into a transit you could "
+            "actually measure — consider buying me a coffee to keep "
+            "development going!<br><br>"
+            "<span style='color:#FFDD00;'>☕ Every coffee fuels a new feature, "
+            "bug fix, or clear-sky night of testing.</span><br>"
+            "</div>")
+        header_msg.setWordWrap(True)
+        header_msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        header_msg.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(header_msg)
+
+        layout.addSpacing(8)
+
+        btn_open = QPushButton("☕  Buy me a Coffee  ☕")
+        btn_open.setStyleSheet(
+            "QPushButton{background-color:#FFDD00;color:#000;"
+            "font-size:14pt;font-weight:bold;"
+            "padding:12px 24px;border-radius:8px;"
+            "border:2px solid #ccb100;}"
+            "QPushButton:hover{background-color:#ffe740;border-color:#ddcc00;}")
+        btn_open.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_open.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl(BMC_URL)))
+        layout.addWidget(btn_open)
+
+        layout.addSpacing(4)
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(dlg.accept)
+        layout.addWidget(btn_close)
+
+        footer = QLabel(
+            f"<div style='text-align:center; line-height:1.8;'>"
+            f"<a style='color:#88aaff; font-size:12pt;' href='{BMC_URL}'>"
+            f"{BMC_URL}</a><br>"
+            f"<span style='font-size:13pt; color:#999;'>"
+            f"Thank you for supporting open-source astrophotography tools!<br>"
+            f"Clear skies ✨</span></div>")
+        footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        footer.setTextFormat(Qt.TextFormat.RichText)
+        footer.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction)
+        footer.setOpenExternalLinks(True)
+        layout.addWidget(footer)
+
+        dlg.exec()
 
     # -- help -------------------------------------------------------------
     def _show_help(self) -> None:

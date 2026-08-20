@@ -20,6 +20,7 @@ import math
 import os
 import re
 import sys
+import textwrap
 
 import numpy as np
 
@@ -1940,6 +1941,159 @@ check(math.hypot(bk[0] - 371.1, bk[1] - 323.3) < 1e-9,
       "35), so detected positions must ride through the detection "
       "frame's own H before any seeding")
 
+print("\n8q7) error-bar calibration, measured over synthetic nights")
+# 24 independent nights of the same 12 mmag transit at 4 mmag per point
+# with an airmass ramp in the design.  The run-to-run scatter of the
+# recovered parameters is the TRUTH the reported bars must match.
+_rng7 = np.random.default_rng(21)
+_n7 = 140
+_t7 = np.linspace(0.0, 0.22, _n7)
+_X7 = 1.1 + 1.4 * (_t7 / 0.22) ** 2
+_tmpl7 = ns["ld_template"](0.10, 0.0)
+_sh7 = ns["ld_shape"](_t7, 0.11, 0.055, _tmpl7)
+_deps7, _dbars7, _t0s7, _tbars7 = [], [], [], []
+for _ in range(24):
+    _m7 = (0.004 * _rng7.standard_normal(_n7) + 0.012 * _sh7
+           + 0.008 * (_X7 - _X7.mean()))
+    _f7 = ns["fit_transit"](_t7, _m7, bases={"airmass": _X7})
+    if _f7 is None:
+        continue
+    _deps7.append(_f7["depth_mmag"])
+    _dbars7.append(_f7["depth_sigma_mmag"])
+    _t0s7.append(_f7["t0"])
+    _tbars7.append(_f7["t0_sigma_s"])
+check(len(_deps7) >= 20, "the fits converge night after night",
+      f"{len(_deps7)} of 24")
+_d_true = float(np.std(_deps7))
+_d_bar = float(np.median(_dbars7))
+check(0.7 < _d_true / _d_bar < 1.35,
+      "the DEPTH bar is calibrated within ~30% of the true run-to-run "
+      "scatter — it comes from the covariance of the joint solve now; "
+      "the two-box formula it replaces was 26% optimistic, and that "
+      "number goes into the AAVSO file",
+      f"true {_d_true:.2f} vs bar {_d_bar:.2f} mmag")
+_t_true = 86400.0 * float(np.std(_t0s7))
+_t_bar = float(np.median(_tbars7))
+check(_t_bar >= 0.9 * _t_true,
+      "the T0 bar COVERS the true scatter — overcoverage is the safe "
+      "failure direction for a number that feeds O−C claims",
+      f"true {_t_true:.0f} vs bar {_t_bar:.0f} s")
+check(_t_bar <= 2.5 * _t_true,
+      "but not by more than a factor ~2 — measured 1.75x at this "
+      "configuration, from profiling over the systematics; a wider gap "
+      "would make every O−C 'consistent' and the bar useless",
+      f"true {_t_true:.0f} vs bar {_t_bar:.0f} s")
+
+# --- AAVSO header carries exactly one #NOTES key -----------------------
+aav_src = src[src.index("def _write_aavso"):src.index("def _write_csv")]
+check(aav_src.count('"#NOTES=') == 1
+      and "no transit claimed" in aav_src,
+      "the no-transit case merges into the single #NOTES line — two "
+      "#NOTES keys in one header, and which one a parser keeps is the "
+      "parser's mood")
+
+print("\n8q8) error bars survive Siril's [0,1] float normalisation")
+# Siril's calibrated output is 16-bit ADU divided by 65535.  A gain in
+# e-/ADU must scale with the data or the CCD equation is fed the wrong
+# units — measured on the first calibrated live run: err 100x off.
+_rng8 = np.random.default_rng(4)
+
+def _pstar01(flux_e, sigma, sky_e=6000.0, g=0.8):
+    ys, xs = np.mgrid[0:80, 0:80]
+    lam = sky_e + flux_e / (2 * np.pi * sigma ** 2) * np.exp(
+        -(((xs - 40.2) ** 2 + (ys - 39.7) ** 2) / (2 * sigma ** 2)))
+    return _rng8.poisson(lam) / g / 65535.0
+
+_fl8 = []
+for _ in range(30):
+    _im8 = _pstar01(120000, 1.6)
+    _r8, *_rest = ns["aperture_photometry"](_im8, 40.2, 39.7, [5.6],
+                                            10, 15, 0.8 * 65535.0)
+    _fl8.append(_r8[5.6][0])
+_true8 = float(np.std(_fl8))
+_im8 = _pstar01(120000, 1.6)
+_r8s, *_x1 = ns["aperture_photometry"](_im8, 40.2, 39.7, [5.6],
+                                       10, 15, 0.8 * 65535.0)
+_r8n, *_x2 = ns["aperture_photometry"](_im8, 40.2, 39.7, [5.6],
+                                       10, 15, 0.8)
+check(0.5 < _r8s[5.6][1] / _true8 < 2.0,
+      "with the x65535 scaling the predicted error brackets the true "
+      "Poisson scatter of [0,1]-normalised frames",
+      f"pred {_r8s[5.6][1]:.6f} vs true {_true8:.6f}")
+check(_r8n[5.6][1] / _true8 > 10.0,
+      "while an unscaled e-/ADU gain on the same frames is off by two "
+      "orders of magnitude — the state the first calibrated run exposed",
+      f"{_r8n[5.6][1] / _true8:.0f}x off")
+check("gain * 65535.0" in nat_src,
+      "and the native engine applies the scaling exactly when it detects "
+      "the [0,1] convention")
+
+print("\n8q6) second audit pass — beta bias, template truth, invariants")
+# --- red-noise beta: the small-sample correction must LIFT the rungs ---
+# E[std(x, ddof=1)] sits BELOW sigma by c4(M).  The first correction
+# multiplied expected by sqrt(M/(M-1)) — the wrong direction — and drove
+# white-noise rungs from 0.92-0.98 down to 0.80-0.94.  A deflated beta
+# overstates every significance on exactly the nights that need the
+# correction.  With c4 the rungs centre on 1.
+_rng6 = np.random.default_rng(9)
+_beta_f = ns["red_noise_beta"]
+_n6 = 200
+_t6 = np.linspace(0.0, 0.2, _n6)
+_rungs = []
+for _ in range(120):
+    _rows6 = _beta_f(_t6, _rng6.normal(0, 0.004, _n6), 0.05)[1]
+    _rungs.extend(b for _w, b, _m, _k in _rows6)
+_med_rung = float(np.median(_rungs))
+check(0.95 < _med_rung < 1.05,
+      "white-noise ladder rungs centre on 1.0 — the pre-clamp ratios, "
+      "straight from the rows the report prints",
+      f"median rung {_med_rung:.3f} over {len(_rungs)} rungs")
+_red_betas = []
+for _ in range(60):
+    _slow = np.interp(_t6, np.linspace(0, 0.2, 12),
+                      _rng6.normal(0, 0.004, 12))
+    _red_betas.append(_beta_f(_t6, _slow + _rng6.normal(0, 0.004, _n6),
+                              0.05)[0])
+check(float(np.median(_red_betas)) > 1.5,
+      "while genuinely correlated noise with the transit's own timescale "
+      "still reads well above 1", f"median {np.median(_red_betas):.2f}")
+check("math.gamma" in src and "sqrt(n_bins / float(n_bins - 1))" not in src,
+      "and the correction in the source is c4, not the sqrt(M/(M-1)) "
+      "that pushed the wrong way")
+
+# --- the 1D radial quadrature against an independent 2D integration ----
+def _blocked_2d(z, rp, u1, u2, ngrid=700):
+    xs = np.linspace(-1, 1, ngrid)
+    dA = (xs[1] - xs[0]) ** 2
+    XX, YY = np.meshgrid(xs, xs)
+    r2 = XX * XX + YY * YY
+    disc = r2 <= 1.0
+    mu = np.sqrt(np.clip(1 - r2, 0, None))
+    II = (1 - u1 * (1 - mu) - u2 * (1 - mu) ** 2) * disc
+    cover = ((XX - z) ** 2 + YY ** 2) <= rp * rp
+    return float((II * cover).sum() / II.sum())
+
+for _rp, _b, _phase in ((0.10, 0.0, 0.30), (0.14, 0.5, 0.0)):
+    _ph6, _sh6 = ns["ld_template"](_rp, _b, 0.35, 0.23)
+    _xmax = math.sqrt((1 + _rp) ** 2 - _b * _b)
+    _z = math.hypot(_phase * 2 * _xmax, _b)
+    _peak2d = _blocked_2d(_b, _rp, 0.35, 0.23)
+    _got1d = float(np.interp(_phase, _ph6, _sh6)) * _peak2d
+    _got2d = _blocked_2d(_z, _rp, 0.35, 0.23)
+    check(abs(_got1d - _got2d) < 3e-4,
+          f"the arc quadrature matches a blind 2D integration at "
+          f"rp={_rp}, b={_b}, phase={_phase} — the docstring claimed this "
+          "verification; now the suite owns it",
+          f"{_got1d:.6f} vs {_got2d:.6f}")
+
+# --- the merge point enforces the finiteness invariant -----------------
+run_src = src[src.index("def _run("):src.index("def _write_aavso")]
+check("finite = np.isfinite(jd) & np.isfinite(mag)" in run_src
+      and "jd, mag = jd[finite], mag[finite]" in run_src,
+      "jd/mag finiteness is enforced once at the merge point — the fit "
+      "filters internally and returns FILTERED-size arrays, so a single "
+      "NaN row would silently misalign every CSV column after it")
+
 print("\n8q5) audit fixes, each measured against truth")
 # --- ensemble error must be flux-weighted, like the reference itself ---
 _rng5 = np.random.default_rng(3)
@@ -2463,6 +2617,76 @@ check(bt.size == 10 and int(bn.sum()) == 100,
       "every point lands in exactly one bin", f"{bt.size} bins, {bn.sum()} pts")
 check(np.all(np.diff(bt) > 0), "bin centres increase")
 check(binner(np.empty(0), np.empty(0), 5)[0].size == 0, "empty in, empty out")
+
+print("\n8q9) suite parity and honest log lines "
+      "(from the first fully successful run's feedback)")
+# The 12:38 run worked end to end — what was left to fix was presentation:
+# the panel title lacked the version, the bottom of the panel didn't match
+# the other Svenesis scripts (no coffee button, a lone "?" for help), the
+# gain line printed the x65535 float scaling AS the gain ("gain 65535
+# e-/ADU assumed"), and the not-used tally printed its masked grouping
+# template literally ("607 x N mag fainter than the target").
+check('QLabel(f"Svenesis LightCurve {VERSION}")' in src,
+      "the left-panel title carries the version like every other script "
+      "in the suite — the window title alone is hidden on macOS full-screen")
+check('setObjectName("CoffeeButton")' in src
+      and "def _show_coffee_dialog" in src
+      and "buymeacoffee.com/sramuschkat" in src,
+      "the coffee button and its dialog exist, matching the rest of the "
+      "suite")
+check('QPushButton("Help")' in src and 'QPushButton("?")' not in src,
+      "help is a full-width Help button, not the lone '?'")
+check("gain_hdr" in nat_src and "gain {gain_hdr:g} e-/ADU" in nat_src,
+      "the gain line prints the HEADER gain in e-/ADU — after the x65535 "
+      "float scaling the working number is no longer in ADU, and printing "
+      "it claimed 'gain 65535 e-/ADU assumed'")
+
+# The tally's group label, run as shipped: extract the nested function.
+_gl_src = src[src.index("def _group_label"):]
+_gl_src = _gl_src[:_gl_src.index("if len(comps) < MIN_COMPS")]
+_gl_ns = {"re": re}
+exec(textwrap.dedent(_gl_src), _gl_ns)                 # noqa: S102
+_gl = _gl_ns["_group_label"]
+check(_gl(["3 mag fainter than the target",
+           "6.8 mag fainter than the target"])
+      == "3–6.8 mag fainter than the target",
+      "a group's numbers come back as a min-max range, not a literal 'N'")
+check(_gl(["usable, but only 5 were needed",
+           "usable, but only 5 were needed"])
+      == "usable, but only 5 were needed",
+      "a constant collapses to the single value")
+check(_gl(["neighbour 3 px away, inside its own 12 px annulus",
+           "neighbour 11 px away, inside its own 12 px annulus"])
+      == "neighbour 3–11 px away, inside its own 12 px annulus",
+      "each numeric slot ranges independently")
+check(_gl(["saturated"]) == "saturated",
+      "a reason with no numbers passes through untouched")
+
+print("\n8q10) the frames' OBJECT outranks a stale Target box")
+# The box is restored from QSettings, so after switching targets it holds
+# the PREVIOUS name — a WASP-75b run was analysed under HAT-P-32's
+# ephemeris because 'typed or from_hdr' let the stale box win over an
+# OBJECT card that was right all along.
+res_src = src[src.index("def _resolve_from_name"):]
+res_src = res_src[:res_src.index("def _target_cache")]
+check("name = from_hdr or typed" in res_src,
+      "the name from the lights' OBJECT card is preferred; the box is the "
+      "fallback, not the master")
+check("The headers win" in res_src and "OBJECT = {planet!r}" in res_src,
+      "a disagreement between box and headers is said out loud, with both "
+      "names, not resolved silently")
+check("trying the Target box name instead" in res_src,
+      "an OBJECT the archive does not know falls back to the typed name — "
+      "junk OBJECT cards ('Target', mosaic panels) are what the box is for")
+check('opts["resolved_target_name"]' in res_src,
+      "the name that actually resolved is recorded for downstream writers")
+_aav2 = src[src.index("def _write_aavso"):]
+_aav2 = _aav2[:_aav2.index("#DATE,DIFF")]
+check('"resolved_target_name"' in _aav2
+      and _aav2.index('"resolved_target_name"')
+      < _aav2.index('"target_name"'),
+      "#TARGET= carries the resolved name first — a submission under the "
+      "previous target's name is worse than one under UNKNOWN")
 
 print()
 if fails:
