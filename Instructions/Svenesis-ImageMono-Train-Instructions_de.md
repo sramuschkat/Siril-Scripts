@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.7.10** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.7.11** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.7.10](#17-neu-in-1710)
+17. [Neu in 1.7.11](#17-neu-in-1711)
 
 ---
 
@@ -256,7 +256,7 @@ Vor der Messung passieren zwei Dinge, ohne die die Schwellen unten bedeutungslos
 | 0,15 % – 0,30 % | brauchbar, wird im Report vermerkt |
 | über 0,30 % | am Aufbau wurde vermutlich etwas verändert; der Report nennt die Nächte und verweist auf *Match flats to the same night* |
 
-Die Prüfung misst außerdem ihren eigenen **Rauschboden**: Die Referenznacht wird halbiert und mit sich selbst verglichen, und da zwei Hälften derselben Nacht sich um nichts als Rauschen unterscheiden, ist das Ergebnis die Fehlergrenze der Zahl darüber. Ein Unterschied, der den Boden nicht überschreitet, wird als „kein Formunterschied nachweisbar" gemeldet statt als Zahl — jede Hälfte mittelt halb so viele Frames wie der Nacht-zu-Nacht-Vergleich, der Boden ist also bewusst konservativ.
+Die Prüfung misst außerdem ihren eigenen **Rauschboden**: Die Referenznacht wird halbiert und mit sich selbst verglichen, und da zwei Hälften derselben Nacht sich um nichts als Rauschen unterscheiden, ist das Ergebnis die Fehlergrenze der Zahl darüber. Ein Unterschied, der den Boden nicht überschreitet, wird als „kein Formunterschied nachweisbar" gemeldet statt als Zahl. Jede Hälfte mittelt weniger Frames als die Karten im echten Vergleich, deshalb wird die rohe Hälften-Streuung zuerst auf die tatsächlichen Frame-Zahlen skaliert — unskaliert überschätzte sie das wahre Vergleichsrauschen um gemessene √2 bei gleichen Zahlen, und „nicht nachweisbar" deckte dann echte Unterschiede bis zur Größe des Rauschens selbst.
 
 Die Prüfung schweigt, wenn es nur eine Nacht gibt oder wenn die Frames nicht lesbar sind. Ist *Match flats to the same night* an, läuft sie weiter und wird weiter berichtet — die Zahl zeigt ja, dass die Aufteilung ihren zusätzlichen Stack wert ist — aber sie ist keine Warnung mehr, und sie rät nie dazu, etwas einzuschalten, das schon an ist. Verfahren und Schwellen stammen aus dem **Flat On Flat Analyzer** von Carlo Mollicone im offiziellen Siril-Skript-Repository, samt Mittelung und Blockung.
 
@@ -908,7 +908,14 @@ Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.7.10
+## 17. Neu in 1.7.11
+
+- **Der Rauschboden der Flat-Prüfung wird auf den Vergleich skaliert, den er beurteilt.** Der Boden entsteht durch Halbieren der Referenznacht — aber jede Hälfte mittelt *weniger* Frames als die Karten im echten Nacht-zu-Nacht-Vergleich, die rohe Hälften-Streuung überschätzte das wahre Vergleichsrauschen also um gemessene **√2** (1,415 über 300 simulierte Läufe) bei gleichen Frame-Zahlen. „Kein Formunterschied nachweisbar" deckte damit echte Flat-Unterschiede bis zur Größe des Rauschens selbst. Die Hälften-Streuung wird jetzt auf die tatsächlichen Frame-Zahlen abgebildet (Varianz pro Karte ∝ 1/n, Ratio-Varianzen addieren sich); stoßen beide Hälften bereits an die Frame-Obergrenze pro Nacht, ist der Faktor 1, denn dann tragen die Hälften dasselbe Rauschen wie die vollen Karten.
+- **`_rebin_mean` hält seinen Vertrag „Langseite höchstens target" ein.** Floor-Division ließ ein 650-px-Frame bei 325 px stehen und alles zwischen target und dem Doppelten ganz ungebinnt — kleine Sensoren verglichen auf feinerem, rauschigerem Raster gegen Schwellen, die für die ~250-px-Skala kalibriert sind. Der Faktor ist jetzt das Ceiling.
+- **Flats abweichender Bildgröße werden benannt statt still verworfen.** Eine Nacht mit gemischtem Binning ging bisher in den Vergleich ein, als wäre sie sauber — auf einer Karte, die still aus einem Bruchteil ihrer Frames gebaut war; die Prüfung meldet jetzt, wie viele Frames außen vor blieben und warum.
+- **Keine falsche „Werte wurden zurückgesetzt"-Zeile mehr beim Start.** Mit gespeichertem k-sigma wendet die Wiederherstellung zuerst den Modus an (er setzt die Spin-Bereiche), und der Modus-Handler behauptete dann, die ersetzten Konstruktor-Defaults „waren Prozente" — einen Moment bevor die echten Sigmas wiederhergestellt wurden. Während Settings oder ein Preset angewandt werden, ist die Meldung stumm; ein Live-Moduswechsel meldet sie weiterhin.
+
+## Was in 1.7.10 neu war
 
 - **Die HaRGB-Beimischung ist jetzt linear.** Sie mischte Ha per Screen-Blend in Rot, `1-(1-R)·(1-k·Ha)`, dessen `R·Ha`-Kreuzterm quadratisch im Fluss ist. Am schwachen Ende unsichtbar — die Handbücher haben das sogar nachgemessen — aber bei R = 0,8 und k·Ha = 0,4 liefert er 0,88 statt 1,2, also **27 % Kompression** genau der Sterne und Nebelkerne, die du danach streckst. Nicht linear, und Linearität ist die eine Eigenschaft, mit der hier jedes Komposit übergeben wird — derselbe Einwand, der `rmgreen` in 1.7.4 entfernt hat. Es ist jetzt `(R + k·Ha) / (1+k)`: eine gewichtete Summe, ohne Rescale in [0,1], die R nie verwirft. Der Regler geht von reinem R bei 0 % bis zu einer gleichen Mischung bei 100 %, und das Log nennt die beiden verwendeten Gewichte. §9 rechnet es durch.
 - **Der Hilfe-Tab mit den Ausgabedateien behauptet nicht mehr, `_HaRGB` sei kalibriert.** Er nannte alle Komposite „calibrated and linear", während ein zweiter Tab korrekt sagte, HaRGB werde von der photometrischen Kalibrierung ausgenommen. Für diese eine Datei war beides falsch; die Ausnahme steht jetzt dort, wo die Dateien aufgezählt werden.

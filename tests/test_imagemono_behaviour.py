@@ -784,6 +784,36 @@ check("if not missing:" in rc, "silent when there is nothing to say")
 check('opts.get("missing_api")' in wd,
       "and output.md explains why a number is an estimate")
 
+print("\n17) the 1.7.11 audit fixes hold their shape")
+# The floor is SCALED onto the real comparison's frame counts — raw, the
+# half-vs-half spread overstates the true noise by sqrt(2) at equal
+# counts, and "no shape difference detectable" then covered real
+# differences as large as the noise itself.
+check("floor *= _floor_rescale(" in fc,
+      "the flat-check floor is rescaled before any verdict uses it")
+check(fc.index("floor *= _floor_rescale(") < fc.index("worst <= floor"),
+      "and the rescale happens before the floor judges anything")
+check("left out of the night comparison" in fc,
+      "flats of a different image size are named, not silently dropped")
+shape2 = src[src.index("def _flat_shape"):src.index("def _flat_normalise")]
+check("stats[\"used\"], stats[\"skipped\"] = used, skipped" in shape2,
+      "_flat_shape reports how many frames it actually averaged")
+mode = body("_on_filter_mode_changed", win_cls)
+check("_restoring_settings" in mode and "_applying_preset" in mode,
+      "the 'values were reset' line is silenced while stored settings or "
+      "a preset are applied — it used to fire on every k-sigma startup, "
+      "about constructor defaults, one moment before the real values "
+      "were restored")
+loads = body("_load_settings", win_cls)
+check("self._restoring_settings = True" in loads
+      and "self._restoring_settings = False" in loads,
+      "and _load_settings sets and clears that flag around the restore")
+warn_src = src[src.index("def _align_pairs_warn"):]
+warn_src = warn_src[:warn_src.index("\ndef ")]
+check("_median(" in warn_src and "ordered" not in warn_src,
+      "_align_pairs_warn uses the module's _median instead of a second "
+      "hand-rolled copy")
+
 print()
 if fails:
     print(f"{len(fails)} FAILURE(S)")

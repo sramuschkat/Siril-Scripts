@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.7.10
+Script Version: 1.7.11
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.7.10
+# Script Version: 1.7.11
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +97,40 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.7.11 - The flat-comparison statistics audited, and three smaller fixes
+      - THE NOISE FLOOR OF THE FLAT-ON-FLAT CHECK IS NOW SCALED TO THE
+        COMPARISON IT JUDGES.  The floor comes from splitting the
+        reference night in half, and each half averages FEWER frames
+        than the maps in the real night-vs-night comparison -- so the
+        raw half spread overstated the true comparison noise by a
+        measured factor of 1.415 (sqrt 2, 300 simulated runs) at equal
+        frame counts.  "No shape difference detectable" then covered
+        real flat differences as large as the noise itself, and the old
+        docstring called that "noise beyond doubt" -- the opposite
+        direction of certainty.  `_floor_rescale` now maps the half
+        spread onto the actual frame counts (per-map variance ~ 1/n,
+        ratio variances add); when both halves already hit the
+        FLAT_COMPARE_MAX_FRAMES cap the factor is 1, because then the
+        halves carry the same noise as the full maps.
+      - `_rebin_mean` honours its "long side at most target" contract.
+        Floor division left a 650 px frame at 325 px and anything
+        between target and 2*target entirely unbinned, so small sensors
+        were compared on a finer, noisier grid against thresholds that
+        assume the ~250 px scale.  The factor is now the ceiling.
+      - Flats of a different image size are no longer dropped silently
+        from the night comparison.  `_flat_shape` reports used/skipped
+        counts and the check names them -- a mixed-binning night once
+        compared as if it were clean, on a map quietly built from a
+        fraction of its frames.
+      - No more false "your values were reset" line on startup.  With
+        k-sigma stored, restoring the settings applies the mode first
+        (it sets the spin ranges); the mode handler then announced that
+        the constructor defaults it replaced "were percentages", one
+        moment before the user's real sigmas were restored.  The
+        message is now silenced while settings or a preset are being
+        applied -- a live mode switch still reports it.
+      - `_align_pairs_warn` uses the module's own `_median` instead of
+        hand-rolling a second one.
 1.7.10 - The HaRGB blend made linear, and two guards that did not guard
       - HaRGB screen-blended Ha into Red: `1-(1-R)*(1-k*Ha)`, which
         expands to `R + k*Ha - k*R*Ha`.  That cross term is quadratic in
@@ -1416,7 +1450,7 @@ from PyQt6.QtGui import QColor, QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.7.10"
+VERSION = "1.7.11"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -1955,13 +1989,21 @@ LOG_ANCHOR_CHARS = 400
 def _rebin_mean(arr, target: int = FLAT_COMPARE_TARGET):
     """Block-average a 2-D array until its long side is at most `target`.
 
-    Copied in behaviour from the reference tool's `_rebin`: an integer
-    factor, the remainder trimmed off, plain block means.  Averaging is
-    what makes the measurement possible -- a k*k block divides the noise
-    by k while leaving vignetting and dust, which are hundreds of pixels
-    across, exactly where they were.
+    An integer factor, the remainder trimmed off, plain block means, as
+    in the reference tool's `_rebin`.  Averaging is what makes the
+    measurement possible -- a k*k block divides the noise by k while
+    leaving vignetting and dust, which are hundreds of pixels across,
+    exactly where they were.
+
+    The factor is the CEILING of long_side/target, not the floor.  Floor
+    division quietly violated the contract in this docstring: a 650 px
+    frame came back at 325 px, and anything between `target` and
+    2*target came back untouched -- so small sensors were compared on a
+    finer grid with correspondingly more noise per pixel, against
+    thresholds (FLAT_MATCH_GOOD/LIMIT) that assume the ~250 px scale.
     """
-    factor = max(arr.shape[-2:]) // max(1, target)
+    long_side = max(arr.shape[-2:])
+    factor = -(-long_side // max(1, target))
     if factor <= 1:
         return arr
     h = (arr.shape[0] // factor) * factor
@@ -1971,7 +2013,8 @@ def _rebin_mean(arr, target: int = FLAT_COMPARE_TARGET):
             .mean(axis=(1, 3)))
 
 
-def _flat_shape(paths: list, limit: int = FLAT_COMPARE_MAX_FRAMES):
+def _flat_shape(paths: list, limit: int = FLAT_COMPARE_MAX_FRAMES,
+                stats: dict | None = None):
     """One night's flats as a normalised shape map, or None.
 
     The frames are AVERAGED before anything else, which is what makes
@@ -1980,9 +2023,16 @@ def _flat_shape(paths: list, limit: int = FLAT_COMPARE_MAX_FRAMES):
     so a difference in illumination level -- twilight fading, a panel at
     another brightness -- does not count as disagreement.  What is left
     is the SHAPE: vignetting, dust, spacing.
+
+    A frame whose image size differs from the first one read is left out
+    (mixed binning or a second sensor inside one filter's flats).  Pass
+    ``stats`` to learn about it: the dict comes back with ``used`` and
+    ``skipped`` counts, so the caller can say a map was built from fewer
+    frames than were offered -- silently thinning the sample was how a
+    two-frame map once posed as an eight-frame one.
     """
     stack = None
-    used = 0
+    used = skipped = 0
     for path in paths[:limit]:
         try:
             with fits.open(path, memmap=True,
@@ -2006,8 +2056,11 @@ def _flat_shape(paths: list, limit: int = FLAT_COMPARE_MAX_FRAMES):
         elif stack.shape == frame.shape:
             stack = stack + frame
         else:
-            continue                        # a different sensor size, skip
+            skipped += 1                    # a different sensor size, skip
+            continue
         used += 1
+    if stats is not None:
+        stats["used"], stats["skipped"] = used, skipped
     if stack is None or not used:
         return None
     return _flat_normalise(stack / used)
@@ -2037,6 +2090,36 @@ def _flat_ratio_spread(sa, sb) -> float | None:
         ratio = sa / np.where(sb <= 0, np.nan, sb)
         spread = float(np.nanstd(ratio))
     return spread if np.isfinite(spread) else None
+
+
+def _floor_rescale(n_half_a: int, n_half_b: int,
+                   n_base: int, n_other: int) -> float:
+    """Scale a half-vs-half spread onto the night-vs-night comparison.
+
+    The noise floor is measured by splitting the reference night in half
+    and comparing the halves -- but each half averages FEWER frames than
+    the maps in the real comparison, so its noise is higher.  Left
+    unscaled, the floor overstated the true comparison noise by a
+    measured factor of 1.415 (sqrt 2) at equal frame counts, and "no
+    shape difference detectable" then covered real differences as large
+    as the noise itself -- the opposite of what an error bar is for.
+
+    Per-map variance goes as 1/n (each map is a mean of n frames of
+    similar per-frame noise), and the spread of a ratio of two maps adds
+    their variances.  So the measured half spread relates to the wanted
+    night spread by the ratio of those sums:
+
+        floor_true = floor_half * sqrt((1/n_base + 1/n_other)
+                                       / (1/n_half_a + 1/n_half_b))
+
+    All four counts must be the counts `_flat_shape` actually AVERAGED
+    (its `limit` caps them) -- when both halves already hit the cap the
+    factor correctly comes out 1, because then the halves carry the same
+    noise as the full maps.
+    """
+    h = 1.0 / max(1, n_half_a) + 1.0 / max(1, n_half_b)
+    t = 1.0 / max(1, n_base) + 1.0 / max(1, n_other)
+    return math.sqrt(t / h)
 
 
 # Everything the script uses BEYOND the floor, and what happens without
@@ -3648,10 +3731,12 @@ class StackWorker(QThread):
         noise floor is measured too, by splitting the reference night in
         half and comparing it with itself -- two halves of one night have
         no shape difference by construction, so whatever that comparison
-        returns is noise.  Each half averages half as many frames as the
-        night-to-night comparison does, which makes the floor a
-        deliberately conservative bound: a difference below it is noise
-        beyond doubt.
+        returns is noise.  Each half averages fewer frames than the real
+        comparison does, so the raw half spread is scaled onto the
+        night-vs-night frame counts (see `_floor_rescale`) -- unscaled it
+        overstated the true noise by a measured sqrt(2) at equal counts,
+        and "no shape difference detectable" then covered real
+        differences as large as the noise itself.
 
         ``handled`` says the nights are already being calibrated apart.
         The measurement still runs and is still reported -- it is the
@@ -3676,24 +3761,49 @@ class StackWorker(QThread):
         # Each night is read and averaged ONCE.  A helper taking two file
         # lists would re-read the reference night for every comparison, and
         # these are the largest files the run touches.
-        base_shape = _flat_shape(base)
+        base_stats: dict = {}
+        base_shape = _flat_shape(base, stats=base_stats)
+        skipped_total = base_stats.get("skipped", 0)
         worst = worst_night = None
+        worst_used = 0
         for night in nights[:-1]:
-            spread = _flat_ratio_spread(base_shape,
-                                        _flat_shape(by_night[night]))
+            night_stats: dict = {}
+            spread = _flat_ratio_spread(
+                base_shape, _flat_shape(by_night[night], stats=night_stats))
+            skipped_total += night_stats.get("skipped", 0)
             if spread is None:
                 continue
             if worst is None or spread > worst:
                 worst, worst_night = spread, night
+                worst_used = night_stats.get("used", 0)
+        if skipped_total:
+            # A map built from fewer frames than were offered must not
+            # pose as the full sample -- silently thinning it was how a
+            # mixed-binning night once compared as if it were clean.
+            self._emit(
+                f"  flat {filt}: {skipped_total} frame(s) of a different "
+                "image size were left out of the night comparison — mixed "
+                "binning or a second sensor inside this filter's flats.",
+                LogColor.SALMON)
         if worst is None:
             return
         # The reference night against itself: the noise floor of the
-        # number just measured, in the same units and the same pipeline.
+        # number just measured, in the same units and the same pipeline --
+        # then scaled onto the frame counts of the real comparison, since
+        # each half averages fewer frames than the full maps do.
         floor = None
         if len(base) > 1:
             cut = len(base) // 2
-            floor = _flat_ratio_spread(_flat_shape(base[:cut]),
-                                       _flat_shape(base[cut:]))
+            half_a, half_b = {}, {}
+            floor = _flat_ratio_spread(
+                _flat_shape(base[:cut], stats=half_a),
+                _flat_shape(base[cut:], stats=half_b))
+            if floor is not None:
+                floor *= _floor_rescale(
+                    half_a.get("used", cut) or 1,
+                    half_b.get("used", len(base) - cut) or 1,
+                    base_stats.get("used", len(base)) or 1,
+                    worst_used or 1)
         bar = (f" (noise floor {floor * 100:.3f}%)"
                if floor is not None else "")
         # Agreement, in two grades: inside the error bar, where naming a
@@ -7369,10 +7479,7 @@ def _align_pairs_warn(pairs: dict) -> set:
     """
     if not pairs:
         return set()
-    ordered = sorted(pairs.values())
-    half = len(ordered) // 2
-    mid = (ordered[half] if len(ordered) % 2
-           else (ordered[half - 1] + ordered[half]) / 2)
+    mid = _median(list(pairs.values()))
     return {f for f, n in pairs.items()
             if n < ALIGN_PAIRS_FLOOR or n < mid * ALIGN_PAIRS_FRACTION}
 
@@ -8046,7 +8153,15 @@ class ImageMonoTrainWindow(QMainWindow):
             spin.setSuffix(" σ" if k_sigma else " %")
         # This also runs once during construction, before the Log tab
         # exists -- and there is nothing to report at that point anyway.
-        if changed and hasattr(self, "log_text"):
+        # It is also silenced while stored settings or a preset are being
+        # applied: the mode arrives first (it sets the ranges), the real
+        # values right after, so what gets "reset" here is only the
+        # constructor defaults.  On every startup with k-sigma stored,
+        # this line used to claim the user's values "were percentages"
+        # a moment before their actual sigmas were restored.
+        if (changed and hasattr(self, "log_text")
+                and not getattr(self, "_applying_preset", False)
+                and not getattr(self, "_restoring_settings", False)):
             self._log(
                 f"Filter mode is now '{mode}' — the values were reset to "
                 f"{default}{'σ' if k_sigma else '%'}; they were percentages."
@@ -9145,83 +9260,109 @@ class ImageMonoTrainWindow(QMainWindow):
         st.setValue("spcc_seeded", True)
 
     def _load_settings(self) -> None:
-        st = self._settings
-        self._seed_rig_defaults()
-        self._attach_spcc_completers()
-        self.chk_skip_blank.setChecked(st.value("skip_blank", True, type=bool))
-        self.chk_rejection.setChecked(st.value("rejection", True, type=bool))
-        self.chk_weighting.setChecked(st.value("weighting", True, type=bool))
-        self.cmb_weight.setCurrentText(
-            str(st.value("weight_method", "Weighted FWHM")))
-        self.chk_bg_rbf.setChecked(st.value("bg_rbf", False, type=bool))
-        self.spin_bg_smooth.setValue(int(st.value("bg_smooth", 50)))
-        self.chk_spcc.setChecked(st.value("use_spcc", True, type=bool))
-        self.edit_spcc_sensor.setText(
-            str(st.value("spcc_sensor", DEFAULT_SPCC_SENSOR)))
-        self.edit_spcc_r.setText(
-            str(st.value("spcc_rfilter", DEFAULT_SPCC_RFILTER)))
-        self.edit_spcc_g.setText(
-            str(st.value("spcc_gfilter", DEFAULT_SPCC_GFILTER)))
-        self.edit_spcc_b.setText(
-            str(st.value("spcc_bfilter", DEFAULT_SPCC_BFILTER)))
-        self.spin_nb_bw.setValue(
-            float(st.value("nb_bandwidth", DEFAULT_NB_BANDWIDTH)))
-        # Mode BEFORE the values: it decides the spin boxes' range, and a
-        # percentage restored into a k-sigma range would be clamped to 10.
-        self.cmb_filter_mode.setCurrentText(
-            str(st.value("filter_mode", "% best")))
-        self.spin_keep.setValue(int(st.value("f_wfwhm_val", 90)))
-        self.chk_f_wfwhm.setChecked(st.value("f_wfwhm_on", False, type=bool))
-        self.chk_f_round.setChecked(st.value("f_round_on", False, type=bool))
-        self.spin_f_round.setValue(int(st.value("f_round_val", 90)))
-        self.chk_f_stars.setChecked(st.value("f_stars_on", False, type=bool))
-        self.spin_f_stars.setValue(int(st.value("f_stars_val", 90)))
-        self.chk_f_bkg.setChecked(st.value("f_bkg_on", False, type=bool))
-        self.spin_f_bkg.setValue(int(st.value("f_bkg_val", 90)))
-        self.chk_disto.setChecked(st.value("disto_master", False, type=bool))
-        self.chk_cleanup.setChecked(st.value("cleanup_work", False, type=bool))
-        self.chk_output_norm.setChecked(st.value("output_norm", True, type=bool))
-        self.chk_rejmap.setChecked(st.value("rejmap", False, type=bool))
-        self.chk_crop_edges.setChecked(st.value("crop_edges", True, type=bool))
-        self.chk_palette_only.setChecked(
-            st.value("palette_only", False, type=bool))
-        self.chk_bg_master.setChecked(st.value("bg_master", True, type=bool))
-        self.chk_bg_extract.setChecked(st.value("bg_extract", False, type=bool))
-        self.chk_platesolve_reg.setChecked(
-            st.value("platesolve_reg", False, type=bool))
-        self.chk_copy.setChecked(st.value("copy", False, type=bool))
-        self.chk_align_filters.setChecked(
-            st.value("align_filters", True, type=bool))
-        self.chk_platesolve_master.setChecked(
-            st.value("platesolve_master", False, type=bool))
-        self.chk_calibrate.setChecked(st.value("calibrate", True, type=bool))
-        self.chk_cosmetic.setChecked(st.value("cosmetic", True, type=bool))
-        self.chk_flats_by_date.setChecked(
-            st.value("flats_by_date", False, type=bool))
-        self._set_library(str(st.value("calib_library", "")))
-        self._on_calibrate_toggled(self.chk_calibrate.isChecked())
-        self.chk_reuse.setChecked(st.value("reuse_masters", False, type=bool))
-        self.chk_load_result.setChecked(st.value("load_result", True, type=bool))
-        self.chk_clear_log.setChecked(st.value("clear_log", True, type=bool))
-        # Restore the preset label last: the individual options above were
-        # already restored, so just reflect what was saved (no re-apply).
-        self.cmb_preset.setCurrentText(str(st.value("preset", "Balanced")))
-        self.cmb_drizzle.setCurrentText(str(st.value("drizzle", "Off")))
-        self.chk_compose.setChecked(st.value("compose", True, type=bool))
-        self.cmb_palette.setCurrentText(str(st.value("palette", "Auto")))
-        self.chk_nb_norm.setChecked(st.value("nb_normalize", True, type=bool))
-        self.chk_synth_lum.setChecked(
-            st.value("synth_lum", False, type=bool))
-        self.chk_quick_lrgb.setChecked(st.value("quick_lrgb", False, type=bool))
-        self.spin_ha.setValue(int(st.value("ha_strength", 50)))
-        self._on_palette_changed()
-        self.chk_finish.setChecked(st.value("finish", True, type=bool))
-        self.chk_finish_stretch.setChecked(
-            st.value("finish_stretch", False, type=bool))
-        self._on_compose_toggled(self.chk_compose.isChecked())
-        last = str(st.value("last_folder", ""))
-        if last and os.path.isdir(last):
-            self._set_root(last)
+        # The stored filter MODE is applied before the stored values
+        # (it sets the spin ranges), and the mode handler must not
+        # announce a "reset" of what are only constructor defaults
+        # about to be overwritten -- see _on_filter_mode_changed.
+        self._restoring_settings = True
+        try:
+            st = self._settings
+            self._seed_rig_defaults()
+            self._attach_spcc_completers()
+            self.chk_skip_blank.setChecked(
+                st.value("skip_blank", True, type=bool))
+            self.chk_rejection.setChecked(
+                st.value("rejection", True, type=bool))
+            self.chk_weighting.setChecked(
+                st.value("weighting", True, type=bool))
+            self.cmb_weight.setCurrentText(
+                str(st.value("weight_method", "Weighted FWHM")))
+            self.chk_bg_rbf.setChecked(st.value("bg_rbf", False, type=bool))
+            self.spin_bg_smooth.setValue(int(st.value("bg_smooth", 50)))
+            self.chk_spcc.setChecked(st.value("use_spcc", True, type=bool))
+            self.edit_spcc_sensor.setText(
+                str(st.value("spcc_sensor", DEFAULT_SPCC_SENSOR)))
+            self.edit_spcc_r.setText(
+                str(st.value("spcc_rfilter", DEFAULT_SPCC_RFILTER)))
+            self.edit_spcc_g.setText(
+                str(st.value("spcc_gfilter", DEFAULT_SPCC_GFILTER)))
+            self.edit_spcc_b.setText(
+                str(st.value("spcc_bfilter", DEFAULT_SPCC_BFILTER)))
+            self.spin_nb_bw.setValue(
+                float(st.value("nb_bandwidth", DEFAULT_NB_BANDWIDTH)))
+            # Mode BEFORE the values: it decides the spin boxes' range, and a
+            # percentage restored into a k-sigma range would be clamped to 10.
+            self.cmb_filter_mode.setCurrentText(
+                str(st.value("filter_mode", "% best")))
+            self.spin_keep.setValue(int(st.value("f_wfwhm_val", 90)))
+            self.chk_f_wfwhm.setChecked(
+                st.value("f_wfwhm_on", False, type=bool))
+            self.chk_f_round.setChecked(
+                st.value("f_round_on", False, type=bool))
+            self.spin_f_round.setValue(int(st.value("f_round_val", 90)))
+            self.chk_f_stars.setChecked(
+                st.value("f_stars_on", False, type=bool))
+            self.spin_f_stars.setValue(int(st.value("f_stars_val", 90)))
+            self.chk_f_bkg.setChecked(st.value("f_bkg_on", False, type=bool))
+            self.spin_f_bkg.setValue(int(st.value("f_bkg_val", 90)))
+            self.chk_disto.setChecked(
+                st.value("disto_master", False, type=bool))
+            self.chk_cleanup.setChecked(
+                st.value("cleanup_work", False, type=bool))
+            self.chk_output_norm.setChecked(
+                st.value("output_norm", True, type=bool))
+            self.chk_rejmap.setChecked(st.value("rejmap", False, type=bool))
+            self.chk_crop_edges.setChecked(
+                st.value("crop_edges", True, type=bool))
+            self.chk_palette_only.setChecked(
+                st.value("palette_only", False, type=bool))
+            self.chk_bg_master.setChecked(
+                st.value("bg_master", True, type=bool))
+            self.chk_bg_extract.setChecked(
+                st.value("bg_extract", False, type=bool))
+            self.chk_platesolve_reg.setChecked(
+                st.value("platesolve_reg", False, type=bool))
+            self.chk_copy.setChecked(st.value("copy", False, type=bool))
+            self.chk_align_filters.setChecked(
+                st.value("align_filters", True, type=bool))
+            self.chk_platesolve_master.setChecked(
+                st.value("platesolve_master", False, type=bool))
+            self.chk_calibrate.setChecked(
+                st.value("calibrate", True, type=bool))
+            self.chk_cosmetic.setChecked(st.value("cosmetic", True, type=bool))
+            self.chk_flats_by_date.setChecked(
+                st.value("flats_by_date", False, type=bool))
+            self._set_library(str(st.value("calib_library", "")))
+            self._on_calibrate_toggled(self.chk_calibrate.isChecked())
+            self.chk_reuse.setChecked(
+                st.value("reuse_masters", False, type=bool))
+            self.chk_load_result.setChecked(
+                st.value("load_result", True, type=bool))
+            self.chk_clear_log.setChecked(
+                st.value("clear_log", True, type=bool))
+            # Restore the preset label last: the individual options above were
+            # already restored, so just reflect what was saved (no re-apply).
+            self.cmb_preset.setCurrentText(str(st.value("preset", "Balanced")))
+            self.cmb_drizzle.setCurrentText(str(st.value("drizzle", "Off")))
+            self.chk_compose.setChecked(st.value("compose", True, type=bool))
+            self.cmb_palette.setCurrentText(str(st.value("palette", "Auto")))
+            self.chk_nb_norm.setChecked(
+                st.value("nb_normalize", True, type=bool))
+            self.chk_synth_lum.setChecked(
+                st.value("synth_lum", False, type=bool))
+            self.chk_quick_lrgb.setChecked(
+                st.value("quick_lrgb", False, type=bool))
+            self.spin_ha.setValue(int(st.value("ha_strength", 50)))
+            self._on_palette_changed()
+            self.chk_finish.setChecked(st.value("finish", True, type=bool))
+            self.chk_finish_stretch.setChecked(
+                st.value("finish_stretch", False, type=bool))
+            self._on_compose_toggled(self.chk_compose.isChecked())
+            last = str(st.value("last_folder", ""))
+            if last and os.path.isdir(last):
+                self._set_root(last)
+        finally:
+            self._restoring_settings = False
 
     def _save_settings(self) -> None:
         st = self._settings

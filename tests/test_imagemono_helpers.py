@@ -343,6 +343,51 @@ for _ in range(5):
 check(spread(five_a, noisy_moved / 5) > limit,
       "a moved vignette is still caught through the noise")
 
+print("\n10b) the noise floor is scaled to the comparison it judges")
+# Each half of the reference night averages FEWER frames than the maps in
+# the real comparison, so the raw half spread overstates the true noise —
+# measured at sqrt(2) for equal counts.  _floor_rescale maps it back.
+fns["math"] = math
+rescale = fns["_floor_rescale"]
+check(abs(rescale(1, 1, 2, 2) - math.sqrt(0.5)) < 1e-12,
+      "a 2-frame night split 1/1: factor sqrt(1/2)")
+check(abs(rescale(4, 4, 8, 8) - math.sqrt(0.5)) < 1e-12,
+      "an 8-frame night split 4/4: same sqrt(1/2)")
+check(rescale(8, 8, 8, 8) == 1.0,
+      "both halves at the per-night cap: the halves carry the same noise "
+      "as the full maps, factor exactly 1")
+check(abs(rescale(2, 3, 5, 5)
+          - math.sqrt((1 / 5 + 1 / 5) / (1 / 2 + 1 / 3))) < 1e-12,
+      "an odd split follows the general 1/n formula")
+check(rescale(4, 4, 8, 2) > 1.0,
+      "a sparse OTHER night raises the floor — its map is noisier than "
+      "the reference's halves")
+# End to end, the way the run does it: base night of 5 frames, halves of
+# 2 and 3, judged against another 5-frame night.  The scaled floor has to
+# land NEAR the true comparison noise, where the raw one sat sqrt(2) high.
+floor_raw = spread(night(2), night(3))
+floor_scaled = floor_raw * rescale(2, 3, 5, 5)
+print(f"   raw floor {floor_raw:.5f}, scaled {floor_scaled:.5f}, "
+      f"true comparison noise {n_full:.5f}")
+check(0.7 < floor_scaled / n_full < 1.35,
+      "the scaled floor estimates the true comparison noise "
+      f"(ratio {floor_scaled / n_full:.3f})")
+check(floor_raw / n_full > 1.25,
+      "where the raw half spread overstated it "
+      f"(ratio {floor_raw / n_full:.3f})")
+
+print("\n10c) _rebin_mean honours 'long side at most target'")
+rebin = fns["_rebin_mean"]
+for h, w in ((499, 400), (650, 500), (2000, 2000), (251, 200)):
+    out = rebin(np.ones((h, w)), 250)
+    check(max(out.shape) <= 250,
+          f"{h}x{w} -> {out.shape}: long side within the target "
+          "(floor division left these unbinned or oversized)")
+check(rebin(np.ones((250, 200)), 250).shape == (250, 200),
+      "an already-small frame is returned untouched")
+check(float(rebin(np.full((499, 400), 7.0), 250).mean()) == 7.0,
+      "block means preserve the level")
+
 print()
 if fails:
     print(f"{len(fails)} FAILURE(S)")

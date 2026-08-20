@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.7.10** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.7.11** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.7.10](#17-whats-new-in-1710)
+17. [What's New in 1.7.11](#17-whats-new-in-1711)
 
 ---
 
@@ -256,7 +256,7 @@ Two steps happen before the spread is read, and the thresholds below are meaning
 | 0.15 % – 0.30 % | usable, noted in the report |
 | above 0.30 % | the train was probably touched; the report names the nights and points at *Match flats to the same night* |
 
-The check also measures its own **noise floor**: the reference night is split in half and compared with itself, and since two halves of one night differ by nothing but noise, whatever that returns is the error bar on the number above it. A difference that does not clear the floor is reported as "no shape difference is detectable" rather than as a figure — each half averages half as many frames as the night-to-night comparison, so the floor is a deliberately conservative bound.
+The check also measures its own **noise floor**: the reference night is split in half and compared with itself, and since two halves of one night differ by nothing but noise, whatever that returns is the error bar on the number above it. A difference that does not clear the floor is reported as "no shape difference is detectable" rather than as a figure. Each half averages fewer frames than the maps in the real comparison, so the raw half spread is scaled onto the actual frame counts first — unscaled it overstated the true comparison noise by a measured √2 at equal counts, and "not detectable" then covered real differences as large as the noise itself.
 
 The check is silent when there is only one night or when the frames cannot be read. With *Match flats to the same night* on it still runs and is still reported — the number is what shows the split is earning its extra stack — but it stops being a warning, and it never advises switching on something that is already on. Method and thresholds come from the **Flat On Flat Analyzer** by Carlo Mollicone in the official Siril script repository, including the averaging and the binning.
 
@@ -908,7 +908,14 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.7.10
+## 17. What's New in 1.7.11
+
+- **The flat-check noise floor is scaled to the comparison it judges.** The floor comes from splitting the reference night in half — but each half averages *fewer* frames than the maps in the real night-vs-night comparison, so the raw half spread overstated the true comparison noise by a measured **√2** (1.415 over 300 simulated runs) at equal frame counts. "No shape difference detectable" then covered real flat differences as large as the noise itself. The half spread is now mapped onto the actual frame counts (per-map variance ∝ 1/n, ratio variances add); when both halves already hit the per-night frame cap the factor is 1, because then the halves carry the same noise as the full maps.
+- **`_rebin_mean` honours its "long side at most target" contract.** Floor division left a 650 px frame at 325 px and anything between the target and twice the target entirely unbinned — small sensors were compared on a finer, noisier grid against thresholds calibrated for the ~250 px scale. The factor is now the ceiling.
+- **Flats of a different image size are named, not silently dropped.** A mixed-binning night used to enter the comparison as if it were clean, on a map quietly built from a fraction of its frames; the check now reports how many frames were left out and why.
+- **No more false "your values were reset" line on startup.** With k-sigma stored, restoring the settings applies the mode first (it sets the spin ranges), and the mode handler then claimed the constructor defaults it replaced "were percentages" — one moment before the real sigmas were restored. Silenced while settings or a preset are being applied; a live mode switch still reports it.
+
+## What was new in 1.7.10
 
 - **The HaRGB blend is linear now.** It screen-blended Ha into Red, `1-(1-R)·(1-k·Ha)`, whose `R·Ha` cross term is quadratic in flux. Invisible on faint nebulosity — the manuals even measured that — but at R = 0,8 with k·Ha = 0,4 it returns 0,88 against 1,2, a **27 % compression** of exactly the stars and nebula cores you stretch afterwards. Non-linear, in other words: the one property every composite here is handed over with, and the same objection that removed `rmgreen` in 1.7.4. It is now `(R + k·Ha) / (1+k)` — a weighted sum, bounded in [0,1] without a rescale, never discarding R. The slider runs from plain R at 0 % to an even mix at 100 %, and the log prints the two weights it used. §9 works it through.
 - **The help tab listing the output files no longer claims `_HaRGB` is calibrated.** It said all composites were "calibrated and linear" while a second tab correctly said HaRGB is excluded from photometric calibration. Wrong on both counts for that one file; the exception is now named where the files are listed.
