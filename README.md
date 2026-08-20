@@ -503,9 +503,11 @@ Point it at the folder holding one night's sub-exposures of an exoplanet host st
 
 ### Who does what
 
-**Siril does the pixel work.** `light_curve` is Siril's own aperture photometry — the same code behind its Photometry tool — and it already handles the sky annulus, the FWHM-scaled ring radii, saturation and per-frame star matching. Re-implementing that in a script would give you a second, worse photometry engine that has to be kept in step with the first.
+**Siril does what it is demonstrably good at:** staging, calibration, two-pass registration, star detection, the plate solve and per-frame quality.
 
-**The script does the parts Siril has no opinion about:** which star is the target, which stars are worth calibrating against, how to remove the airmass ramp without eating the transit depth — and whether to claim anything at all.
+**The script measures the flux itself**, the way EXOTIC and HOPS do: every star re-centroided per frame from its registration-predicted position (the "follow star" Siril's `light_curve` lacks), subpixel circular apertures against a sigma-clipped sky annulus, the aperture chosen by point-to-point noise, comparison stars kept or dropped by their *measured* scatter, errors from the CCD equation with every term measured. Measured on the same drifting 142-frame run: this engine keeps 140 points at 6.3 mmag where Siril's `light_curve` kept 67 — and `light_curve` remains intact as the loud fallback. The script also does the parts nobody's pixels decide: which star is the target, how to remove the airmass ramp without eating the transit depth — and whether to claim anything at all.
+
+**Validated against EXOTIC on its own sample data** (HAT-P-32 b, 142 frames): Rp/R★ = 0.1525 ± 0.0064 against EXOTIC's published 0.1541 ± 0.0033 — 0.2 σ apart — at the same residual scatter (0.58 % vs 0.55 %). Both depth conventions are reported and labelled: the limb-darkened central depth the fit measures, and the (Rp/R★)² that EXOTIC, HOPS and AstroImageJ quote (~20 % shallower on a solar-type star — compare *that* one with theirs and with the archive).
 
 **Calibration finds its own frames.** Point at the subs — or at any folder above them, the scan is recursive and sorts lights from calibration frames by header — and, once, at the folder where your reusable darks live; the flats are found beside the lights in the N.I.N.A. `LIGHT`/`FLAT` layout, grouped by exposure/gain/temperature/binning/size/camera, stacked into masters and cached for the next run. The pixel work is Siril's `calibrate` — there is no bias/dark/flat arithmetic in the script, for the same reason there is no photometry in it. What gets refused is said out loud, because a master that was found and rejected leaves a run that looks exactly like one where no master existed: a dark at the wrong exposure is named with what the mismatch would have done, darks are split by temperature and bias is not, and bias is never applied together with a dark — the dark already carries the offset, so it corrects the flats instead.
 
@@ -521,11 +523,11 @@ Point it at the folder holding one night's sub-exposures of an exoplanet host st
 
 ### Output
 
-`lightcurve/lightcurve.csv` (JD, raw, centred, detrended, error, airmass), the plot as PNG, and a plain-text report with the comparison stars, every rejection and its reason, the method, and the result.
+`lightcurve/lightcurve.csv` (JD, raw, centred, detrended, error, airmass), the plot as PNG, a plain-text report with the comparison stars, every rejection and its reason, the method, and the result — and, when the times are BJD_TDB, an `AAVSO_exoplanet.txt` in Exoplanet Watch's format with T0 ± error, both depth conventions, Rp/R★ ± error and duration in the header.
 
 ### Tests
 
-`tests/test_lightcurve_helpers.py` runs with plain `python3` — no Siril required. It checks the numeric core against input with a known answer: the J2000 epoch, sec z, a synthetic transit of a stated depth, twelve pure-noise runs that must not be claimed, and the monotonic ramp that the two-sided test exists for.
+`tests/test_lightcurve_helpers.py` runs with plain `python3` — no Siril required. Over 450 checks against input with a known answer: the J2000 epoch, sec z, synthetic transits of stated depths recovered by the full photometry engine and the full fit, twelve pure-noise runs that must not be claimed, the monotonic ramp that the two-sided test exists for, error bars calibrated against 24 independent synthetic nights, and the limb-darkened depth conventions round-tripped through the same model the fit uses.
 
 ---
 

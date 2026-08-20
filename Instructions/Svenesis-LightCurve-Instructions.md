@@ -35,9 +35,11 @@ Point **Svenesis LightCurve** at the folder holding one night's sub-exposures of
 
 The division of labour is deliberate and worth understanding, because it explains most of the design.
 
-**Siril does the pixel work.** `light_curve` is Siril's own aperture photometry — the same code behind its Photometry tool. It already handles the sky annulus, the FWHM-scaled ring radii, saturation rejection and the per-frame star matching. Re-implementing that inside a script would give you a *second* photometry engine that has to be kept in step with the first, and would be worse at it.
+**Siril does what it is demonstrably good at:** staging, calibration, two-pass registration, star detection, the plate solve and per-frame quality.
 
-**This script does the parts Siril has no opinion about:** which star is the target, which stars are worth calibrating against, how to remove the airmass ramp without eating the transit depth, how to fit the event — and, above all, whether to claim anything at all.
+**This script measures the flux itself**, the way EXOTIC and HOPS do — every star re-centroided per frame, subpixel apertures, sigma-clipped sky, the aperture chosen by point-to-point noise, comparison stars kept by their *measured* scatter (§4a explains each piece, with the measurement that motivated it). Siril's `light_curve` remains intact as the loud fallback: if the engine measures under 30 % of the frames it says so and hands over. And the script does the parts nobody's pixels decide: which star is the target, how to remove the airmass ramp without eating the transit depth, how to fit the event — and, above all, whether to claim anything at all.
+
+**Validated against EXOTIC on its own sample data** (HAT-P-32 b): Rp/R★ = 0.1525 ± 0.0064 against EXOTIC's published 0.1541 ± 0.0033 — 0.2 σ apart, at the same residual scatter (0.58 % vs 0.55 %).
 
 ### The pipeline
 
@@ -47,8 +49,8 @@ The division of labour is deliberate and worth understanding, because it explain
 | **Link** | Siril builds a sequence | |
 | **Calibrate** | Calibration frames are found, stacked into masters and applied via Siril's `calibrate` | Optional and *delegated* — there is no bias/dark/flat arithmetic in this script, for the same reason there is no photometry in it. Per-pixel arithmetic, so it does not break the no-resampling promise; it does write a second copy of every frame |
 | **Register** | `register -2pass` — data only, **no resampling** | Interpolation correlates neighbouring pixel noise and moves flux inside the aperture. The aperture follows the star through the registration data while the pixels stay exactly as the sensor recorded them |
-| **Detect** | Siril finds the stars; the script picks target + comps | |
-| **Photometry** | Siril's `light_curve` | |
+| **Detect** | Siril finds the stars (and plate-solves the reference when the target needs sky coordinates); the script picks target + comps | |
+| **Photometry** | This script's own engine — follow-star, subpixel apertures, aperture chosen by noise. Siril's `light_curve` as the fallback, announced | Measured on the same drifting run: 140 points against `light_curve`'s 67 |
 | **Analyse** | Detrend → fit → decide | |
 
 ---
@@ -141,13 +143,13 @@ The first run takes a few minutes: registering a few hundred subs is the slow pa
 
 > *Read from the first 30 header(s): OBJECT = 'WASP-75b'; OBJCTRA/OBJCTDEC = 342.38750, −10.67556 (25 light frames agree to 0.0").*
 
-Only **empty** fields are filled — anything you typed stays, and if it disagrees with the frames you are told by how much. Calibration frames are sorted out first, so a folder of flats cannot prefill the target from a parked mount. Headers that say nothing get a line too, because silence there reads as *nothing to do* when it means *type the name*.
+**The fields follow the frames.** They are restored from your last session, so after switching targets they still show the *previous* target — and a WASP-75 b run was once analysed under HAT-P-32's ephemeris exactly that way. So: a name that keys to a *different* target than `OBJECT` is replaced (any spelling of the *same* target — `WASP-75b`, `wasp75`, with or without the planet letter — stays exactly as you typed it), coordinates further than ~2′ from the headers are replaced with the header position, and when the target name switches but the new headers carry no position, the stale coordinates are cleared so the archive can supply them. Every replacement is logged; nothing is swapped silently. To aim at a star that is *not* the headers' object, type it **after** choosing the folder — nothing re-probes. Calibration frames are sorted out first, so a folder of flats cannot prefill the target from a parked mount. Headers that say nothing get a line too, because silence there reads as *nothing to do* when it means *type the name*.
 
 Everything that decides *which star* now lives in one place — **group 3 · Target star** — and its first mode, **From the frames**, is where it starts:
 
 | Mode | What it uses |
 |---|---|
-| **From the frames** | `OBJCTRA`/`OBJCTDEC` for the position, `OBJECT` (or the name you type) for the archive lookup. Falls back to brightest and says so. |
+| **From the frames** | `OBJCTRA`/`OBJCTDEC` for the position when present; otherwise the **archive position of the planet the frames name** (`OBJECT`), with the reference frame plate-solved around it. Falls back to brightest only when nothing names or places the target — labelled as the guess it is, and a guess the drift would carry off the sensor guesses again among the stars that stay on it. |
 | Brightest star | the brightest detection |
 | Pixel position | your x/y, snapped to the nearest star |
 | RA / Dec | your coordinates, snapped to the nearest star |
@@ -170,13 +172,13 @@ Measured against the NASA Exoplanet Archive: **5.7" × 0.2"**, under three pixel
 
 Both traps are closed: only **LIGHT** frames are read, and the `0 0 0` sentinel is discarded. If the frames in one folder disagree about where the target is, the run says so and uses neither — that is more than one target in a folder, not one position.
 
-### Your own RA/Dec still wins — and the run says so
+### The frames outrank a stale form — and the run says so
 
-Anything you type into the RA/Dec fields takes precedence. But the headers are read either way, and the run always names its source:
+The RA/Dec fields are used when they *agree* with what the frames (or, failing header coordinates, the archive) say about the frames' own target — and the run always names its source:
 
-> *Using the RA/Dec you entered; your lights agree to 3.1".*
+> *Using the RA/Dec in the form; your lights agree to 0.0".*
 
-If the two disagree by more than about two arcminutes, that is said in red. **A coordinate left over from the previous target looks exactly like a deliberate one** — this is the line that tells them apart.
+A coordinate further than about two arcminutes from that is the previous target, not a choice — the fields persist across sessions, and **a coordinate left over from the previous target looks exactly like a deliberate one**. It is replaced, in red, with both values printed. Aiming at a star that is *not* the headers' object still works: type it after choosing the folder, and at run time the disagreement is reported rather than overridden.
 
 ### The name lookup adds what the header cannot carry
 
@@ -371,7 +373,21 @@ The shapes searched are now real geometries: four planet-to-star radius ratios c
 
 **Nothing else changed.** Each shape is a *template* on normalised phase, built once and interpolated at each node, so the model stays **linear in depth** — the closed-form solve, the determinism and the no-optimiser guarantee all survive. A physically free Rp/R★ would couple depth and shape and cost all three. (The occultation is integrated *radially* — the arc a planet covers at radius r has a closed form — so there are no elliptic integrals, no new dependency, and it is verified against an independent 2-D integration.)
 
-> **The reported Rp/R★ is a shape index, not a planet radius.** With the duration free, a smaller template stretched fits nearly as well, so the fitted value sits systematically below the truth. The **depth** is the measurement, and both reports say so.
+> **The template's Rp/R★ is a shape index, not a planet radius.** With the duration free, a smaller template stretched fits nearly as well, so that value sits systematically below the truth. The **depth** is the measurement, and both reports say so.
+
+### Two depth conventions, both reported
+
+The fit measures the **limb-darkened central depth** — the deepest point of the curve. EXOTIC, HOPS and AstroImageJ all quote **(Rp/R★)²**, and with limb darkening the centre of the star is brighter than its mean, so the central depth is ~20 % *deeper* than (Rp/R★)² on a solar-type star. Two correct tools comparing those two numbers look like a disagreement — which is exactly how this was found, against EXOTIC's own reference result for its sample data.
+
+So the measured depth is also inverted **through the same limb-darkened model the fit used** into a *measured* Rp/R★ (distinct from the template index above) and its square. All three numbers appear in the log, both report forms and the AAVSO header, each labelled:
+
+```
+depth      30.23 ± 2.55 mmag  (limb-darkened CENTRE)
+Rp/Rs      0.1525 ± 0.0064
+(Rp/Rs)^2  2.33 ± 0.19 %      <- compare THIS with EXOTIC/HOPS/AIJ and the archive
+```
+
+On EXOTIC's HAT-P-32 sample set that reads 0.1525 ± 0.0064 against EXOTIC's 0.1541 ± 0.0033 — 0.2 σ apart.
 
 ### Everything is fitted at once
 
@@ -416,7 +432,7 @@ That measurement exposed something else. The coarse search grid quantised T0 to 
 
 ### χ²/ν: does the model actually fit?
 
-Around 1 means the trapezoid describes the data. Well above 1 means it does not — systematics, or a shape the trapezoid cannot make. Well below 1 means the noise estimate is too large, usually because the out-of-transit window still holds part of the event.
+Around 1 means the model describes the data. Well above 1 means it does not — systematics, or a shape the template family cannot make. Well below 1 means the noise estimate is too large, usually because the out-of-transit window still holds part of the event.
 
 The noise floor is deliberately **model-independent**: a fit's own residual scatter cannot judge that fit, because dividing residuals by their own RMS gives 1 whether the model is right or nonsense. So it comes from the MAD of the out-of-transit residuals, or failing that from the MAD of first differences ÷ √2. Measured 1.0 on pure noise and 3.1 with an unmodelled 20 mmag lump.
 
@@ -509,7 +525,7 @@ It never removes more than **5 %** of a run. Past that the outliers *are* the da
 
 ### The AAVSO file
 
-`AAVSO_exoplanet.txt` lands beside the CSV, in Exoplanet Watch's own format: `#TYPE=EXOPLANET`, observer code, filter, `#DATE_TYPE=BJD_TDB`, then `DATE,DIFF,ERR,DETREND_1`. Mid-transit time and its error, depth and its error, duration and the red-noise β travel in the header.
+`AAVSO_exoplanet.txt` lands beside the CSV, in Exoplanet Watch's own format: `#TYPE=EXOPLANET`, observer code, filter, `#DATE_TYPE=BJD_TDB`, the **resolved** target name (never a stale form entry), then `DATE,DIFF,ERR,DETREND_1`. Mid-transit time and its error, the central depth and its error, **`#RPRS`, `#RPRS_ERR` and `#DEPTH_RPRS2_PCT`** (the convention EXOTIC and AIJ quote — see §9), duration and the red-noise β travel in the header.
 
 **Refused unless the times are BJD_TDB.** The header declares that system; writing JD_UTC under it would hand a submission an eight-minute error nobody could see.
 
@@ -578,8 +594,12 @@ Everything lands in a `lightcurve/` folder next to your subs:
 
 ## 15. What's New in 1.0.0
 
-- Initial release: differential photometry of a sub-exposure folder via Siril's own `light_curve`, with the comparison ensemble picked from Siril's star detection and filtered on SNR, saturation, separation and isolation
+- **The photometry engine is the script's own** (§4a): follow-star re-centroiding, subpixel apertures, sigma-clipped sky, aperture chosen by point-to-point noise, comps kept by measured scatter, CCD-equation errors. Siril keeps staging, calibration, two-pass registration, detection and the plate solve; `light_curve` remains as the announced fallback. Measured: 140 points where `light_curve` kept 67 on the same drifting run
+- **Validated against EXOTIC on its own sample data**: Rp/R★ 0.1525 ± 0.0064 vs 0.1541 ± 0.0033 (0.2 σ), residual scatter 0.58 % vs 0.55 %
+- **A limb-darkened template fit** (§9) — a trapezoid was measured 5–6 % too shallow with χ²/ν silent about it — with airmass, seeing, sky and star count fitted *simultaneously*, and **both depth conventions reported and labelled**: the central depth the fit measures and the (Rp/R★)² that EXOTIC/HOPS/AIJ quote
+- **The target comes from the frames** (§4a): `OBJCTRA`/`OBJCTDEC`, or the archive position of the `OBJECT` name with the reference plate-solved around it; stale form entries from a previous target are replaced out loud, never silently
+- Calibration frames discovered beside the lights, stacked into masters through Siril's own `calibrate`, refusals named with what they would have done (§3a)
 - Airmass detrending with a one-sided least-trimmed baseline and an out-of-transit-anchored second pass; the breakdown figure is **measured**, not asserted (§8)
-- Trapezoid fit on a deterministic grid with depth and baseline solved analytically
-- **The significance test is two-sided.** The first version pooled the out-of-transit points, and the test suite caught what that costs: on a monotonic ramp with no transit in it the pooled contrast reaches +25σ, where the two-sided test returns −10σ. Uncorrected extinction, a drifting cloud and focus creep all produce that ramp, so this was not a corner case
-- CSV, PNG and plain-text report export
+- **The significance test is two-sided** with a **calibrated** floor: on a monotonic ramp with no transit in it the pooled contrast reaches +25σ, where the two-sided test returns −10σ; 1200 transit-free runs through the same search put the false-alarm rate next to every result (§10)
+- Times converted to **BJD_TDB**, O−C against the published ephemeris with the epoch printed, error bars calibrated against 24 independent synthetic nights
+- CSV, PNG, plain-text report and an **AAVSO Exoplanet Watch file** (refused unless the times are BJD_TDB)

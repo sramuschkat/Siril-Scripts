@@ -9,22 +9,33 @@ Contact and support: See repository README and Siril forum / scripts repository.
 This script turns a folder of sub-exposures of an exoplanet host star into a
 differential light curve, and then tells you whether there is a transit in it.
 
-The division of labour is deliberate:
+The division of labour follows what each side is demonstrably good at:
 
-  * SIRIL does the pixel work.  `light_curve` is Siril's own aperture
-    photometry -- the same code the Photometry tool uses -- and it already
-    handles the annulus sky estimate, the FWHM-scaled ring radii, saturation
-    rejection and the per-frame star matching.  Re-implementing that here
-    would produce a second, worse photometry engine that has to be kept in
-    step with the first.  So the script drives `light_curve` and reads its
-    `light_curve.dat`.
-  * THIS SCRIPT does the analysis Siril does not do: airmass detrending,
-    the transit fit, and -- most importantly -- the honest question of
-    whether the dip is real.
+  * SIRIL does the staging, calibration, two-pass registration, star
+    detection, plate solving and per-frame quality.
+  * THIS SCRIPT measures the flux itself, the way EXOTIC and HOPS do:
+    every star re-centroided per frame from its registration-predicted
+    position (the follow-star that Siril's `light_curve` lacks), subpixel
+    circular apertures against a sigma-clipped sky annulus, the aperture
+    chosen by point-to-point noise, comparison stars kept by their
+    MEASURED scatter, errors from the CCD equation.  Measured on the same
+    drifting 142-frame run: 140 points where `light_curve` kept 67.
+    Siril's `light_curve` remains intact as the loud fallback.  And the
+    script does the analysis: airmass detrending, the transit fit, and --
+    most importantly -- the honest question of whether the dip is real.
+
+Validated against EXOTIC on its own HAT-P-32 sample data:
+Rp/Rs = 0.1525 +/- 0.0064 against EXOTIC's published 0.1541 +/- 0.0033 --
+0.2 sigma apart, at the same residual scatter (0.58% vs 0.55%).
+
+Full manual (per design decision, with the measurement behind it):
+https://github.com/sramuschkat/Siril-Scripts/blob/main/Instructions/Svenesis-LightCurve-Instructions.md
+Deutsche Anleitung:
+https://github.com/sramuschkat/Siril-Scripts/blob/main/Instructions/Svenesis-LightCurve-Instructions_de.md
 
 Features:
 - Folder of subs in, light curve out: link -> calibrate -> register ->
-  light_curve -> fit
+  measure -> fit
 - Point at any folder above the subs: the scan is recursive, sorts lights
   from calibration frames by header, and drops duplicate exposures
 - Calibration finds its own frames: inside your selection, beside the
@@ -34,8 +45,10 @@ Features:
 - Comparison-star ensemble chosen from Siril's own star detection, filtered
   by SNR, saturation, distance from the target, and isolation -- a neighbour
   inside the sky annulus is a seeing-driven trend, not a comparison star
-- Target by pixel position, by RA/Dec (plate-solved sequences), or automatic
-  (brightest star in the field)
+- Target from the frames: OBJCTRA/OBJCTDEC when present, otherwise the
+  archive position of the OBJECT name with the reference plate-solved
+  around it; the frames outrank a form entry left from a previous target,
+  out loud.  Also by pixel position, by RA/Dec, or brightest star
 - Mid-exposure times from DATE-OBS + EXPTIME/2, optionally converted to
   BJD_TDB via astropy, from the site position and the target direction
       - Red-noise (beta) correction on every reported significance
@@ -47,7 +60,10 @@ Features:
 - Aperture chosen by scanning six radii and measuring, not by formula
 - Comparison stars screened by photometering each against the others
 - Model-free spike rejection: one satellite used to cost the detection
-- AAVSO Exoplanet Watch submission file
+- Both depth conventions, reported and labelled: the limb-darkened central
+  depth the fit measures, and the (Rp/Rs)^2 that EXOTIC, HOPS and
+  AstroImageJ quote
+- AAVSO Exoplanet Watch submission file (T0, both depths, Rp/Rs, duration)
 - Mid-transit time with a calibrated error bar, and chi2/nu against a
   model-independent noise floor
 - Limb-darkened transit fit, solved SIMULTANEOUSLY with the systematics:
@@ -167,6 +183,19 @@ CHANGELOG:
         unconditionally -- it now describes the engine that actually
         measured (results carry an `engine` flag) and the LD template
         fit.
+      - DOCUMENTATION CAUGHT UP WITH THE CODE.  The in-app help, the
+        README section and both manuals still described the light_curve
+        era: "re-implementing that would give you a second, worse
+        photometry engine" stood in three places about an engine that
+        measurably keeps 140 points where light_curve kept 67, the help
+        called the fit "a trapezoid, not a limb-darkened model", and the
+        target section knew nothing of the frames-first precedence.  All
+        three now describe what runs: the native engine with light_curve
+        as the announced fallback, the LD template fit with both depth
+        conventions, the frames-outrank-a-stale-form rule, and the
+        EXOTIC validation numbers.  The help dialog links the full
+        manuals on GitHub (DOCS_URL_EN / DOCS_URL_DE) in both languages,
+        the same pattern ImageMono-Train uses.
       - The multiprocessing resource-tracker helper is started at script
         load, in a clean environment.  sirilpy's shared-memory transport
         spawns it lazily on the first pixel transfer, and on macOS that
@@ -1053,6 +1082,14 @@ from matplotlib.figure import Figure
 from sirilpy import LogColor
 
 VERSION = "1.0.0"
+
+# The full manual on GitHub, linked from the help dialog.  The in-app
+# tabs are the quick reference; the manual carries the measurements
+# behind every design decision, per section, in two languages.
+_DOCS_BASE = ("https://github.com/sramuschkat/Siril-Scripts/blob/main/"
+              "Instructions/Svenesis-LightCurve-Instructions")
+DOCS_URL_EN = f"{_DOCS_BASE}.md"
+DOCS_URL_DE = f"{_DOCS_BASE}_de.md"
 
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "LightCurve"
@@ -7243,7 +7280,7 @@ class LightCurvePlot(FigureCanvas):
             mx = (fit["model_t"][order] - t0_ref) * 24.0
             my = fit["model_mag"][order] * 1000.0
             colour = "#66dd88" if fit["detected"] else "#dd8866"
-            label = (f"trapezoid, {fit['significance']:.1f}σ"
+            label = (f"transit model, {fit['significance']:.1f}σ"
                      if fit["detected"] else
                      f"best fit, only {fit['significance']:.1f}σ — not claimed")
             ax.plot(mx, my, "-", color=colour, linewidth=1.6, label=label)
@@ -8134,7 +8171,7 @@ class SvenesisLightCurveWindow(QMainWindow):
             p.append("&nbsp;too few usable points to attempt a fit.<br>")
         elif not fit["detected"]:
             p.append(f"&nbsp;<span style='color:#dd8866'>No transit claimed."
-                     f"</span> The best trapezoid reaches only "
+                     f"</span> The best template reaches only "
                      f"{fit['significance']:.1f}σ against a "
                      f"{MIN_DETECTION_SIGMA:.1f}σ floor.<br>")
             p.append(f"&nbsp;(For the curious: it wanted "
@@ -8163,7 +8200,7 @@ class SvenesisLightCurveWindow(QMainWindow):
             p.append("&nbsp;χ²/ν&nbsp; "
                      + (f"{fit['chi2_nu']:.2f}" if np.isfinite(
                          fit.get('chi2_nu', float('nan'))) else "—")
-                     + " <span style='color:#888888'>(~1 = the trapezoid "
+                     + " <span style='color:#888888'>(~1 = the model "
                        "describes the data)</span><br>")
             if r["time_system"] != "BJD_TDB":
                 p.append("&nbsp;<span style='color:#e08080'>This T0 is NOT "
@@ -8285,7 +8322,7 @@ class SvenesisLightCurveWindow(QMainWindow):
         if fit is None:
             A("Transit fit       not attempted — too few usable points")
         elif not fit["detected"]:
-            A(f"Transit fit       NOT CLAIMED — best trapezoid reaches only "
+            A(f"Transit fit       NOT CLAIMED — best template reaches only "
               f"{fit['significance']:.2f} sigma")
             A(f"                  (floor is {MIN_DETECTION_SIGMA:.1f} sigma; "
               "the fitted numbers below are not a measurement)")
@@ -8315,7 +8352,7 @@ class SvenesisLightCurveWindow(QMainWindow):
         A(f"   chi2/nu        "
           + (f"{fit['chi2_nu']:.2f}" if np.isfinite(
               fit.get('chi2_nu', float('nan'))) else "—")
-          + "   (~1 = the trapezoid describes the data; well above 1 means")
+          + "   (~1 = the model describes the data; well above 1 means")
         A("                  it does not, well below means the noise floor "
           "is too large)")
         A(f"   Time system    {r['time_note']}")
@@ -8563,47 +8600,67 @@ exoplanet host star. It measures how the star's brightness changed relative
 to other stars in the same field, and tells you whether there is a transit
 in the result.</p>
 <h3 style='color:#88aaff'>Who does what</h3>
-<p><b>Siril</b> does the pixel work. <tt>light_curve</tt> is Siril's own
-aperture photometry — the same code behind its Photometry tool — and it
-already handles the sky annulus, the FWHM-scaled ring radii, saturation
-and per-frame star matching. Re-implementing that here would give you a
-second, worse photometry engine that has to be kept in step with the
-first.</p>
-<p><b>This script</b> does the parts Siril has no opinion about: which star
-is the target, which stars are worth calibrating against, removing the
-airmass ramp, fitting the transit — and, above all, deciding whether the
-dip is real.</p>
+<p><b>Siril</b> does what it is demonstrably good at: staging,
+calibration, two-pass registration, star detection, the plate solve and
+per-frame quality.</p>
+<p><b>This script</b> measures the flux itself, the way EXOTIC and HOPS
+do: every star re-centroided per frame from its registration-predicted
+position (the "follow star" Siril's <tt>light_curve</tt> lacks),
+subpixel circular apertures against a sigma-clipped sky annulus, the
+aperture chosen by point-to-point noise, comparison stars kept or
+dropped by their measured scatter, errors from the CCD equation with
+every term measured. Then the parts nobody's pixels decide: removing
+the airmass ramp, fitting the transit — and, above all, deciding
+whether the dip is real. Measured on the same drifting 142-frame run:
+this engine keeps 140 points where <tt>light_curve</tt> kept 67 — and
+<tt>light_curve</tt> remains intact as the loud fallback.</p>
 <h3 style='color:#88aaff'>The steps</h3>
 <ol>
 <li><b>Stage</b> — your subs are symlinked into a working folder. The
 original folder is never written to.</li>
-<li><b>Link</b> — Siril builds a sequence from them.</li>
+<li><b>Link + Calibrate</b> — Siril builds a sequence; calibration
+frames found beside the lights become masters and are applied via
+Siril's own <tt>calibrate</tt>.</li>
 <li><b>Register (two-pass)</b> — registration data only, <i>no
 resampling</i>. This matters more for photometry than for stacking:
 interpolation correlates neighbouring pixel noise and moves flux around
 inside the aperture. The aperture follows the star through the
 registration data while the pixels stay exactly as the sensor recorded
 them.</li>
-<li><b>Detect + choose</b> — Siril finds the stars, this script picks the
+<li><b>Detect + choose</b> — Siril finds the stars (plate-solving the
+reference when the target needs sky coordinates); this script picks the
 target and the comparison ensemble.</li>
-<li><b>light_curve</b> — Siril's aperture photometry, writing
-<tt>light_curve.dat</tt>.</li>
+<li><b>Measure</b> — this script's photometry engine, per frame, all
+apertures in one pass. Siril's <tt>light_curve</tt> takes over only if
+the engine measures under 30% of the frames, and says so.</li>
 <li><b>Analyse</b> — detrend, fit, decide.</li>
 </ol>
 <h3 style='color:#88aaff'>What you get</h3>
 <p><tt>lightcurve/lightcurve.csv</tt> with every point (raw, centred, detrended,
-airmass), the plot as PNG, and a plain-text report you can attach to a
-submission or a forum post.</p>
+airmass), the plot as PNG, a plain-text report you can attach to a
+submission or a forum post — and, when the times are BJD_TDB, an AAVSO
+Exoplanet Watch file with T0, both depth conventions (central and
+(Rp/R★)²) and Rp/R★ in the header.</p>
 """)
 
         _tab("Choosing stars", """
 <h2 style='color:#88aaff'>The target</h2>
-<p>Three ways, and all three end at a <i>detected</i> star:</p>
+<p>Four ways, and all four end at a <i>detected</i> star:</p>
 <ul>
+<li><b>From the frames</b> — the default. <tt>OBJCTRA/OBJCTDEC</tt>
+from the lights when present; otherwise the archive position of the
+planet the frames NAME (<tt>OBJECT</tt>), with the reference frame
+plate-solved around it. The frames outrank a value left in the form
+from a previous target — that is said out loud, never resolved
+silently. Only if nothing names or places the target does it fall to
+the brightest star, labelled as the guess it is — and a guess that the
+drift would carry off the sensor guesses again among the stars that
+stay on it.</li>
 <li><b>Brightest</b> — right more often than you would think. A transit
 host is usually the reason the field was framed the way it was.</li>
 <li><b>Pixel position</b> — from the first frame.</li>
-<li><b>RA / Dec</b> — needs plate-solved subs.</li>
+<li><b>RA / Dec</b> — needs plate-solved subs (the run solves the
+reference itself when it can).</li>
 </ul>
 <p>Pixel and RA/Dec both <b>snap to the nearest detected star</b> rather
 than using your number directly. A position two pixels off the centroid
@@ -8682,14 +8739,23 @@ through the night and looks like a slow trend.</td></tr>
 <td>The same argument aimed at any neighbour rather than at the target. A
 star inside the comparison star's own sky annulus puts part of its light in
 the aperture and the rest in the sky estimate, and its share moves with the
-seeing. The radius is Siril's own geometry, not taste: <tt>-autoring</tt>
-sets the outer ring to 6.3 × FWHM, so two annuli stop touching at twice
-that.</td></tr>
+seeing. The radius is Siril's own geometry, not taste: the outer ring is
+6.3 × FWHM, so two annuli stop sharing sky at twice that — and the tally
+says which of the two geometries it means, inside or overlapping.</td></tr>
+<tr><td style='color:#88aaff'><b>Leaves the frame</b></td>
+<td>The drift envelope is measured from the registration data. A star
+that would walk off the sensor part-way through the run is dropped
+up front, because a box off the edge is a hole in the curve — or, on
+the Siril fallback, the failure of the whole command.</td></tr>
 </table>
 <p>Every rejection is listed in the Log and in the report, and the tally
-accounts for every detected star — including the ones that passed all four
-filters and were merely surplus. The target cannot be dropped, so the same
+accounts for every detected star — including the ones that passed every
+filter and were merely surplus. The target cannot be dropped, so the same
 geometry is reported for it instead.</p>
+<p><b>And then they are measured.</b> The survivors are photometered
+against each other and a comp that varies against its peers is DROPPED
+with its scatter printed — a slowly variable comparison star is
+precisely the one that writes a fake transit into the target.</p>
 <p><b>How many?</b> More comparison stars average down the ensemble's own
 noise, but each one added is fainter than the last, so the gain flattens
 quickly. Five is a good default. Below two there is no ensemble at all:
@@ -8782,20 +8848,34 @@ corner. The rate at 4.5 came out 0.25 % before and after that last change:
 coincidence, not stability. <b>A calibration table is only valid for the
 search, the statistic and the model it was measured on.</b></p>
 
-<h2 style='color:#88aaff'>A trapezoid, not a limb-darkened model</h2>
-<p>At amateur precision the two are indistinguishable — a 10 mmag dip
-measured at 3 mmag per point does not constrain a limb-darkening
-coefficient. What the trapezoid recovers is <b>depth, mid-time and
-duration</b>, which is exactly what ExoClock and ETD consume.</p>
-<p>Its ingress fraction is free, so it also handles the grazing case: at
-0.5 the trapezoid degenerates into a triangle.</p>
+<h2 style='color:#88aaff'>A limb-darkened template, not a trapezoid</h2>
+<p>A trapezoid fitted to a real limb-darkened transit comes out
+<b>5–6 % too shallow, systematically</b> — and χ²/ν stays at 1.0, so
+nothing in the output would ever say so. The shapes searched are now
+real limb-darkened geometries (radius ratios crossed with impact
+parameters), built once as templates so the model stays linear in
+depth: the closed-form solve, the determinism and the no-optimiser
+guarantee all survive. What the fit recovers is <b>depth, mid-time and
+duration</b> — exactly what ExoClock and ETD consume — with airmass,
+seeing, sky and star count fitted <i>simultaneously</i> in the same
+design matrix.</p>
+
+<h2 style='color:#88aaff'>Two depth conventions, both reported</h2>
+<p>The fit measures the <b>limb-darkened central depth</b> — the deepest
+point of the curve. EXOTIC, HOPS and AstroImageJ quote
+<b>(Rp/R★)²</b>, which on a solar-type star is ~20 % <i>shallower</i>
+than the centre. Both numbers appear in the log, the report and the
+AAVSO header, each labelled — compare (Rp/R★)² with theirs and with the
+archive, never the central depth. On EXOTIC's own HAT-P-32 sample set
+this script reads Rp/R★ = 0.1525 ± 0.0064 against EXOTIC's
+0.1541 ± 0.0033 — 0.2 σ apart.</p>
 
 <h2 style='color:#88aaff'>A grid, not an optimiser</h2>
-<p>The search walks a grid over <b>T0</b>, <b>duration</b> and <b>ingress
-fraction</b>. At every node the depth and the baseline are solved
-<i>analytically</i>: for a fixed shape the model is
-<tt>baseline + depth × shape(t)</tt>, which is linear in both, so a 2×2
-solve gives the exact best pair.</p>
+<p>The search walks a grid over <b>T0</b>, <b>duration</b> and
+<b>shape</b>. At every node the depth, the baseline and every
+systematic coefficient are solved <i>analytically</i> — the model is
+linear in all of them, so one small linear system gives the exact best
+set.</p>
 <p>Why not an optimiser? Four strongly correlated parameters is precisely
 where a local search walks into a noise minimum and gives a different
 answer depending on where it started. The grid gives the same answer every
@@ -8813,7 +8893,7 @@ fit cannot "detect" a brightening and call it a transit.</p>
 baseline does not make a shallow dip twice as certain — the uncertainty is
 dominated by how many points fall <i>inside</i> the event.</li>
 <li>The contrast is <b>measured, not taken from the fitted depth</b>. The
-trapezoid has no free baseline term, so on transit-free data the fitter
+template has no free baseline term, so on transit-free data the fitter
 can always absorb a small offset as a wide shallow "dip" with a nonzero
 depth. The data's own in/out contrast on such a run is about zero, so
 noise-only runs get rejected where a depth-based test would pass them.</li>
@@ -8892,6 +8972,24 @@ needs in order to be honest about itself.</p>
 """)
 
         lay.addWidget(tabs)
+
+        # These tabs are the quick reference; the manual on GitHub goes
+        # deeper — the measurements behind every design decision, per
+        # section, in two languages.  QTextEdit does not open links, so
+        # the pointer lives in a QLabel that does.
+        docs = QLabel(
+            "<div style='text-align:center;'>"
+            "<span style='color:#888;'>Full manual: </span>"
+            f"<a style='color:#88aaff;' href='{DOCS_URL_EN}'>English</a>"
+            "<span style='color:#888;'> · </span>"
+            f"<a style='color:#88aaff;' href='{DOCS_URL_DE}'>Deutsch</a>"
+            "</div>")
+        docs.setTextFormat(Qt.TextFormat.RichText)
+        docs.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction)
+        docs.setOpenExternalLinks(True)
+        lay.addWidget(docs)
+
         row = QHBoxLayout()
         row.addStretch()
         btn = QPushButton("Close")

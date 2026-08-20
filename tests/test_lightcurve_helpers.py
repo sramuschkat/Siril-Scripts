@@ -2818,6 +2818,19 @@ check('r.get("engine") == "native"' in src,
 check("#RPRS=" in src and "#DEPTH_RPRS2_PCT=" in src,
       "the AAVSO header carries Rp/Rs and (Rp/Rs)^2 alongside the "
       "central depth")
+check("DOCS_URL_EN" in src and "DOCS_URL_DE" in src
+      and "Instructions/Svenesis-LightCurve-Instructions" in src
+      and src.count("href='{DOCS_URL_EN}'") == 1,
+      "the help dialog links the full manuals on GitHub, both languages")
+_help = src[src.index("def _show_help"):src.index("def closeEvent")]
+check("second, worse photometry engine" not in _help
+      and "A trapezoid, not a limb-darkened model" not in _help,
+      "the in-app help no longer describes the light_curve era — it "
+      "claimed the fit was 'a trapezoid, not a limb-darkened model' and "
+      "warned against the very engine that now measures")
+check("From the frames" in _help and "(Rp/R★)²" in _help,
+      "and it covers the frames-first target mode and both depth "
+      "conventions")
 check("_resource_tracker.ensure_running()" in src
       and src.index("ensure_running()") < src.index("import numpy"),
       "multiprocessing's resource tracker starts at script load, before "

@@ -35,9 +35,11 @@ Richte **Svenesis LightCurve** auf den Ordner mit den Subs einer Nacht auf einen
 
 Die Arbeitsteilung ist bewusst gewählt und erklärt den größten Teil des Designs.
 
-**Siril macht die Pixelarbeit.** `light_curve` ist Sirils eigene Aperturphotometrie — derselbe Code wie hinter dem Photometrie-Werkzeug. Er behandelt bereits den Himmels-Annulus, die FWHM-skalierten Ringradien, die Sättigungsprüfung und das Sternmatching pro Frame. Das in einem Skript nachzubauen ergäbe eine *zweite* Photometrie-Engine, die man mit der ersten synchron halten müsste — und die schlechter wäre.
+**Siril macht, was es nachweislich gut kann:** Bereitstellen, Kalibrieren, Zwei-Pass-Registrierung, Sternerkennung, Plate Solve und die Qualität pro Frame.
 
-**Dieses Skript macht das, wozu Siril keine Meinung hat:** welcher Stern das Ziel ist, gegen welche Sterne sich kalibrieren lohnt, wie man die Airmass-Rampe entfernt, ohne die Transittiefe mitzunehmen, wie man das Ereignis fittet — und vor allem, ob überhaupt etwas behauptet werden darf.
+**Dieses Skript misst den Fluss selbst**, so wie EXOTIC und HOPS es tun — jeder Stern pro Frame neu zentriert, Subpixel-Aperturen, sigma-geclippter Himmel, die Apertur nach Punkt-zu-Punkt-Rauschen gewählt, Vergleichssterne nach ihrer *gemessenen* Streuung behalten (§4a erklärt jedes Teil samt der Messung dahinter). Sirils `light_curve` bleibt als lauter Fallback intakt: misst die Engine unter 30 % der Frames, sagt sie es und übergibt. Und das Skript macht, worüber keine Pixel entscheiden: welcher Stern das Ziel ist, wie man die Airmass-Rampe entfernt, ohne die Transittiefe mitzunehmen, wie man das Ereignis fittet — und vor allem, ob überhaupt etwas behauptet werden darf.
+
+**Gegen EXOTIC an dessen eigenen Beispieldaten validiert** (HAT-P-32 b): Rp/R★ = 0,1525 ± 0,0064 gegen EXOTICs publizierte 0,1541 ± 0,0033 — 0,2 σ auseinander, bei gleicher Residuenstreuung (0,58 % vs 0,55 %).
 
 ### Der Ablauf
 
@@ -47,8 +49,8 @@ Die Arbeitsteilung ist bewusst gewählt und erklärt den größten Teil des Desi
 | **Link** | Siril baut eine Sequenz | |
 | **Kalibrieren** | Kalibrierframes werden gefunden, zu Mastern gestapelt und über Sirils `calibrate` angewandt | Optional und *delegiert* — in diesem Skript steckt keine Bias-/Dark-/Flat-Arithmetik, aus demselben Grund, aus dem keine Photometrie darin steckt. Reine Pixelrechnung, das Versprechen „kein Resampling" bleibt also unberührt; es wird allerdings eine zweite Kopie jedes Frames geschrieben |
 | **Registrieren** | `register -2pass` — nur Daten, **kein Resampling** | Interpolation korreliert Nachbarrauschen und verschiebt Fluss innerhalb der Apertur. Die Apertur folgt dem Stern über die Registrierungsdaten, die Pixel bleiben, wie der Sensor sie aufgezeichnet hat |
-| **Erkennen** | Siril findet die Sterne, das Skript wählt Ziel + Vergleiche | |
-| **Photometrie** | Sirils `light_curve` | |
+| **Erkennen** | Siril findet die Sterne (und löst das Referenzframe astrometrisch, wenn das Ziel Himmelskoordinaten braucht); das Skript wählt Ziel + Vergleiche | |
+| **Photometrie** | Die eigene Engine dieses Skripts — Follow-Star, Subpixel-Aperturen, Apertur nach Rauschen gewählt. Sirils `light_curve` als angekündigter Fallback | Am selben driftenden Lauf gemessen: 140 Punkte gegen 67 von `light_curve` |
 | **Analyse** | Detrend → Fit → Entscheidung | |
 
 ---
@@ -141,13 +143,13 @@ Der erste Lauf dauert einige Minuten; das Registrieren einiger hundert Subs ist 
 
 > *Read from the first 30 header(s): OBJECT = 'WASP-75b'; OBJCTRA/OBJCTDEC = 342.38750, −10.67556 (25 light frames agree to 0.0").*
 
-Gefüllt wird nur, was **leer** ist — Getipptes bleibt, und widerspricht es den Frames, erfährst du um wieviel. Kalibrierframes werden vorher aussortiert, ein Ordner voller Flats kann das Ziel also nicht von einer geparkten Montierung vorbelegen. Auch Header, die nichts sagen, bekommen eine Zeile: Schweigen liest sich dort als *nichts zu tun*, gemeint ist *tipp den Namen ein*.
+**Die Felder folgen den Frames.** Sie werden aus der letzten Sitzung wiederhergestellt, zeigen nach einem Zielwechsel also noch das *vorige* Ziel — genau so lief ein WASP-75-b-Datensatz einmal unter HAT-P-32s Ephemeride. Deshalb: Ein Name, der ein *anderes* Ziel bezeichnet als `OBJECT`, wird ersetzt (jede Schreibweise *desselben* Ziels — `WASP-75b`, `wasp75`, mit oder ohne Planetenbuchstaben — bleibt exakt wie getippt), Koordinaten weiter als ~2′ von den Headern werden durch die Header-Position ersetzt, und wechselt der Zielname, während die neuen Header keine Position tragen, werden die veralteten Koordinaten geleert, damit das Archiv sie liefern kann. Jede Ersetzung wird geloggt; nichts wird still getauscht. Um einen Stern anzupeilen, der *nicht* das Header-Objekt ist: **nach** der Ordnerwahl eintippen — nichts liest erneut. Kalibrierframes werden vorher aussortiert, ein Ordner voller Flats kann das Ziel also nicht von einer geparkten Montierung vorbelegen. Auch Header, die nichts sagen, bekommen eine Zeile: Schweigen liest sich dort als *nichts zu tun*, gemeint ist *tipp den Namen ein*.
 
 Alles, was über *welchen Stern* entscheidet, liegt jetzt an einer Stelle — **Gruppe 3 · Target star** — und der erste Modus **From the frames** ist die Vorgabe:
 
 | Modus | woraus |
 |---|---|
-| **From the frames** | `OBJCTRA`/`OBJCTDEC` für die Position, `OBJECT` (oder dein getippter Name) für die Archivabfrage. Fällt auf „hellster" zurück und sagt es. |
+| **From the frames** | `OBJCTRA`/`OBJCTDEC` für die Position, wenn vorhanden; sonst die **Archiv-Position des Planeten, den die Frames benennen** (`OBJECT`), mit dem Referenzframe darum herum gelöst. Fällt nur dann auf „hellster" zurück, wenn nichts das Ziel benennt oder platziert — als der Tipp beschriftet, der es ist, und ein Tipp, den der Drift vom Sensor tragen würde, rät neu unter den Sternen, die drauf bleiben. |
 | Brightest star | die hellste Detektion |
 | Pixel position | dein x/y, auf den nächsten Stern gerastet |
 | RA / Dec | deine Koordinaten, auf den nächsten Stern gerastet |
@@ -170,13 +172,13 @@ Gegen die NASA Exoplanet Archive gemessen: **5,7″ × 0,2″**, unter drei Pixe
 
 Beide Fallen sind zu: es werden nur **LIGHT**-Frames gelesen, und der Platzhalter `0 0 0` wird verworfen. Widersprechen sich die Frames eines Ordners über die Zielposition, sagt der Lauf das und benutzt keine davon — das sind mehrere Ziele in einem Ordner, keine Position.
 
-### Deine eigenen RA/Dec gewinnen weiterhin — und der Lauf sagt es
+### Die Frames schlagen ein veraltetes Formular — und der Lauf sagt es
 
-Was du in die RA/Dec-Felder einträgst, hat Vorrang. Die Header werden trotzdem gelesen, und der Lauf nennt immer seine Quelle:
+Die RA/Dec-Felder werden benutzt, wenn sie mit dem *übereinstimmen*, was die Frames (oder, ohne Header-Koordinaten, das Archiv) über deren eigenes Ziel sagen — und der Lauf nennt immer seine Quelle:
 
-> *Using the RA/Dec you entered; your lights agree to 3.1".*
+> *Using the RA/Dec in the form; your lights agree to 0.0".*
 
-Weichen beide um mehr als etwa zwei Bogenminuten ab, steht das in Rot. **Eine Koordinate, die vom vorigen Ziel stehengeblieben ist, sieht exakt aus wie eine absichtliche** — diese Zeile unterscheidet sie.
+Eine Koordinate, die weiter als etwa zwei Bogenminuten davon entfernt ist, ist das vorige Ziel, keine Absicht — die Felder überdauern Sitzungen, und **eine Koordinate, die vom vorigen Ziel stehengeblieben ist, sieht exakt aus wie eine absichtliche**. Sie wird ersetzt, in Rot, mit beiden Werten im Log. Einen Stern anzupeilen, der *nicht* das Header-Objekt ist, geht weiterhin: nach der Ordnerwahl eintippen — zur Laufzeit wird die Abweichung gemeldet statt übersteuert.
 
 ### Die Namensabfrage bringt, was der Header nicht tragen kann
 
@@ -364,7 +366,21 @@ Die gesuchten Formen sind jetzt echte Geometrien: vier Planet-Stern-Radienverhä
 
 **Sonst ändert sich nichts.** Jede Form ist eine *Schablone* auf normierter Phase, einmal gebaut und pro Knoten interpoliert — das Modell bleibt **linear in der Tiefe**, der geschlossene Löser, der Determinismus und die Zusicherung „kein Optimierer" überleben alle drei. Ein physikalisch freies Rp/R★ würde Tiefe und Form koppeln und alle drei kosten. (Die Bedeckung wird *radial* integriert — der vom Planeten überdeckte Bogen bei Radius r hat eine geschlossene Form — also keine elliptischen Integrale, keine neue Abhängigkeit, und gegen eine unabhängige 2-D-Integration verifiziert.)
 
-> **Das gemeldete Rp/R★ ist ein Formindex, kein Planetenradius.** Bei freier Dauer passt eine kleinere Schablone gestreckt fast genauso gut, der gefittete Wert liegt also systematisch unter der Wahrheit. Die **Tiefe** ist die Messung, und beide Reports sagen das.
+> **Das Rp/R★ der Schablone ist ein Formindex, kein Planetenradius.** Bei freier Dauer passt eine kleinere Schablone gestreckt fast genauso gut, dieser Wert liegt also systematisch unter der Wahrheit. Die **Tiefe** ist die Messung, und beide Reports sagen das.
+
+### Zwei Tiefen-Konventionen, beide gemeldet
+
+Der Fit misst die **randverdunkelte zentrale Tiefe** — den tiefsten Punkt der Kurve. EXOTIC, HOPS und AstroImageJ geben alle **(Rp/R★)²** an, und mit Randverdunkelung ist die Sternmitte heller als der Mittelwert, die zentrale Tiefe bei einem sonnenähnlichen Stern also ~20 % *tiefer* als (Rp/R★)². Zwei korrekte Werkzeuge, die diese zwei Zahlen vergleichen, sehen aus wie ein Widerspruch — genau so wurde es gefunden, gegen EXOTICs eigenes Referenzergebnis für seine Beispieldaten.
+
+Die gemessene Tiefe wird deshalb zusätzlich **durch dasselbe randverdunkelte Modell, mit dem gefittet wurde**, in ein *gemessenes* Rp/R★ (nicht der Schablonen-Index oben) und dessen Quadrat übersetzt. Alle drei Zahlen stehen im Log, in beiden Report-Formen und im AAVSO-Kopf, jeweils beschriftet:
+
+```
+depth      30.23 ± 2.55 mmag  (randverdunkeltes ZENTRUM)
+Rp/Rs      0.1525 ± 0.0064
+(Rp/Rs)^2  2.33 ± 0.19 %      <- DIESE Zahl mit EXOTIC/HOPS/AIJ und dem Archiv vergleichen
+```
+
+An EXOTICs HAT-P-32-Beispieldaten liest sich das als 0,1525 ± 0,0064 gegen EXOTICs 0,1541 ± 0,0033 — 0,2 σ auseinander.
 
 ### Alles wird gleichzeitig gefittet
 
@@ -409,7 +425,7 @@ Diese Messung deckte noch etwas auf. Das grobe Suchgitter quantisierte T0 auf (0
 
 ### χ²/ν: passt das Modell überhaupt?
 
-Um 1 heißt, das Trapez beschreibt die Daten. Deutlich über 1 heißt, es tut es nicht — Systematik oder eine Form, die ein Trapez nicht kann. Deutlich unter 1 heißt, die Rauschschätzung ist zu groß, meist weil im Out-of-Transit-Fenster noch ein Teil des Ereignisses steckt.
+Um 1 heißt, das Modell beschreibt die Daten. Deutlich über 1 heißt, es tut es nicht — Systematik oder eine Form, die die Schablonenfamilie nicht kann. Deutlich unter 1 heißt, die Rauschschätzung ist zu groß, meist weil im Out-of-Transit-Fenster noch ein Teil des Ereignisses steckt.
 
 Der Rauschboden ist bewusst **modellunabhängig**: die Residuenstreuung eines Fits kann diesen Fit nicht beurteilen — teilt man Residuen durch ihr eigenes RMS, kommt 1 heraus, egal ob das Modell stimmt. Er kommt daher aus dem MAD der Out-of-Transit-Residuen, ersatzweise aus dem MAD der ersten Differenzen ÷ √2. Gemessen: 1,0 auf reinem Rauschen, 3,1 mit einem nicht modellierten 20-mmag-Buckel.
 
@@ -502,7 +518,7 @@ Es entfernt nie mehr als **5 %** eines Laufs. Darüber *sind* die Ausreißer die
 
 ### Die AAVSO-Datei
 
-`AAVSO_exoplanet.txt` landet neben der CSV, im Format von Exoplanet Watch: `#TYPE=EXOPLANET`, Beobachtercode, Filter, `#DATE_TYPE=BJD_TDB`, dann `DATE,DIFF,ERR,DETREND_1`. Transitmitte samt Fehler, Tiefe samt Fehler, Dauer und das Rotrausch-β stehen im Kopf.
+`AAVSO_exoplanet.txt` landet neben der CSV, im Format von Exoplanet Watch: `#TYPE=EXOPLANET`, Beobachtercode, Filter, `#DATE_TYPE=BJD_TDB`, der **aufgelöste** Zielname (nie ein veralteter Formulareintrag), dann `DATE,DIFF,ERR,DETREND_1`. Transitmitte samt Fehler, die zentrale Tiefe samt Fehler, **`#RPRS`, `#RPRS_ERR` und `#DEPTH_RPRS2_PCT`** (die Konvention, die EXOTIC und AIJ angeben — siehe §9), Dauer und das Rotrausch-β stehen im Kopf.
 
 **Verweigert, solange die Zeiten nicht BJD_TDB sind.** Der Kopf deklariert dieses System; JD_UTC darunter zu schreiben hieße, einer Einreichung einen Acht-Minuten-Fehler mitzugeben, den niemand sehen kann.
 
@@ -571,8 +587,12 @@ Alles landet in einem Ordner `lightcurve/` neben deinen Subs:
 
 ## 15. Neu in 1.0.0
 
-- Erstveröffentlichung: differentielle Photometrie eines Sub-Ordners über Sirils eigenes `light_curve`, mit Vergleichsensemble aus Sirils Sternerkennung, gefiltert nach SNR, Sättigung, Abstand und Isolation
+- **Die Photometrie-Engine gehört dem Skript** (§4a): Follow-Star-Rezentrierung, Subpixel-Aperturen, sigma-geclippter Himmel, Apertur nach Punkt-zu-Punkt-Rauschen gewählt, Vergleichssterne nach gemessener Streuung behalten, Fehler aus der CCD-Gleichung. Siril behält Bereitstellen, Kalibrieren, Zwei-Pass-Registrierung, Erkennung und Plate Solve; `light_curve` bleibt als angekündigter Fallback. Gemessen: 140 Punkte, wo `light_curve` am selben driftenden Lauf 67 behielt
+- **Gegen EXOTIC an dessen eigenen Beispieldaten validiert**: Rp/R★ 0,1525 ± 0,0064 vs 0,1541 ± 0,0033 (0,2 σ), Residuenstreuung 0,58 % vs 0,55 %
+- **Ein randverdunkelter Schablonen-Fit** (§9) — ein Trapez war messbar 5–6 % zu flach, ohne dass χ²/ν es verriet — mit Airmass, Seeing, Himmel und Sternzahl *gleichzeitig* gefittet, und **beide Tiefen-Konventionen gemeldet und beschriftet**: die zentrale Tiefe, die der Fit misst, und das (Rp/R★)², das EXOTIC/HOPS/AIJ angeben
+- **Das Ziel kommt aus den Frames** (§4a): `OBJCTRA`/`OBJCTDEC`, oder die Archiv-Position des `OBJECT`-Namens mit darum herum gelöstem Referenzframe; veraltete Formulareinträge eines vorigen Ziels werden laut ersetzt, nie still
+- Kalibrierframes neben den Lights entdeckt, über Sirils eigenes `calibrate` zu Mastern gestapelt, Ablehnungen mit ihren Folgen benannt (§3a)
 - Airmass-Detrend mit einseitig getrimmter Baseline und einem auf Out-of-Transit verankerten zweiten Durchgang; die Zusammenbruchsgrenze ist **gemessen**, nicht behauptet (§8)
-- Trapez-Fit auf einem deterministischen Raster, Tiefe und Baseline analytisch gelöst
-- **Der Signifikanztest ist zweiseitig.** Die erste Fassung poolte die Out-of-Transit-Punkte, und die Testsuite hat gefangen, was das kostet: auf einer monotonen Rampe ganz ohne Transit erreicht der gepoolte Kontrast +25σ, der zweiseitige Test −10σ. Unkorrigierte Extinktion, ziehende Wolken und Fokusdrift erzeugen alle diese Rampe — das war kein Randfall
-- Export als CSV, PNG und Textreport
+- **Der Signifikanztest ist zweiseitig** mit **kalibrierter** Schwelle: auf einer monotonen Rampe ganz ohne Transit erreicht der gepoolte Kontrast +25σ, der zweiseitige Test −10σ; 1200 transitfreie Läufe durch dieselbe Suche stellen die Fehlalarmrate neben jedes Ergebnis (§10)
+- Zeiten nach **BJD_TDB** konvertiert, O−C gegen die publizierte Ephemeride mit gedruckter Epoche, Fehlerbalken an 24 unabhängigen synthetischen Nächten kalibriert
+- CSV, PNG, Textreport und eine **AAVSO-Exoplanet-Watch-Datei** (verweigert, wenn die Zeiten nicht BJD_TDB sind)
