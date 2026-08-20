@@ -97,7 +97,84 @@ CHANGELOG:
         not know falls back to the typed name (junk cards like 'Target'
         are what the box is for).  The AAVSO #TARGET= line carries the
         RESOLVED name, not the box -- a submission under the previous
-        target's name is worse than one under UNKNOWN.
+        target's name is worse than one under UNKNOWN.  The UI half
+        followed one run later: the box still SHOWED the stale name, so
+        folder analysis now updates the field when OBJECT keys to a
+        different target (target_key: separators, case and the trailing
+        planet letter are spelling, not disagreement), logs the
+        replacement, and leaves any spelling of the SAME target exactly
+        as typed.  The RA/Dec fields follow the same rule one step
+        further: coordinates within TARGET_DISAGREE_ARCSEC of the headers
+        stay as typed, anything further is the previous target and is
+        replaced with OBJCTRA/OBJCTDEC, the gap named in the log.  Aiming
+        at a star that is NOT the headers' object still works -- type it
+        after choosing the folder; nothing re-probes.
+      - THE SAME STALENESS TRAP, ONE LAYER DOWN, killed the first HAT-P-32
+        re-run: those frames carry OBJECT but no OBJCTRA/OBJCTDEC, so the
+        probe had nothing to correct the previous target's coordinates
+        against, and the stale form position silently blocked the archive-
+        position branch -- then went UNUSED in auto mode, and the run fell
+        to the brightest-star guess, which picked an edge star that the
+        273 px drift carried off the sensor: hard abort.  Four fixes:
+        * with no header position, a form coordinate more than the
+          disagreement threshold from where the archive puts the frames'
+          own OBJECT is the previous target and is replaced by the archive
+          position, said in RED; one that agrees is used (and upgrades
+          auto mode to RA/Dec, which it never did before)
+        * the probe CLEARS the RA/Dec fields when the target name switches
+          and the new headers carry no position to replace them with
+        * an auto-derived RA/Dec mode (headers or archive, tracked via
+          radec_auto -- never the user's own mode choice) falls back to
+          the brightest-star guess when the field cannot be plate-solved,
+          instead of failing a run the user never asked to solve
+        * a brightest-star GUESS that lands on a star the drift carries
+          off the sensor guesses again among the stars that stay on it --
+          a named or placed target remains a hard stop, because swapping
+          THAT star would measure the wrong object.  The drift check moved
+          ahead of the saturation and crowding reports so every verdict
+          describes the star actually measured.
+      - THE FIRST COMPLETE END-TO-END RUN WITH AN AAVSO FILE (HAT-P-32,
+        140/142 points at 6.3 mmag point-to-point) confirmed the whole
+        chain: OBJECT -> archive position -> plate solve seeded from
+        IM_SCALE -> target 0.1" from the archive, drift filter dropping
+        132 would-be comps that leave the sensor, honest outlier note.
+        One wording lie it exposed, in two places: "sits 16 px away,
+        inside the 15 px sky annulus" — the crowding and isolation cuts
+        both reach TWICE the annulus radius, where the two annuli OVERLAP
+        rather than one containing the other, and the messages now say
+        which of the two geometries they mean.
+      - DEPTH IN THE CONVENTION THE FIELD QUOTES.  Against EXOTIC's own
+        reference result for that sample set the two tools "disagreed"
+        30.2 vs 26.1 mmag -- pure convention: this script fitted and
+        quoted the limb-darkened CENTRAL depth, while EXOTIC, HOPS and
+        AstroImageJ all quote (Rp/Rs)^2, which on a solar-type star is
+        ~20% shallower than the centre.  New ld_central_depth (the
+        template's radial integral at the deepest point; returns exactly
+        rp^2 when LD is off) and rprs_from_depth (bisection inverse,
+        smooth in rp -- an all-or-nothing quadrature ring made it
+        stepwise and the round trip landed 0.0013 off) translate the
+        measured depth into Rp/Rs +/- and (Rp/Rs)^2, reported in the
+        log, both report forms and the AAVSO header (#RPRS,
+        #DEPTH_RPRS2_PCT) alongside the central depth, each labelled.
+        Re-expressed, the HAT-P-32 sample run reads Rp/Rs 0.1525 +/-
+        0.0064 against EXOTIC's 0.1541 +/- 0.0033 -- 0.2 sigma apart.
+        Writing this exposed two report bugs: the ENTIRE measurement
+        block (depth, duration, shape, points, RMS, duty cycle) of the
+        saved text report sat inside the `time_system != BJD_TDB`
+        warning branch, so every run with CORRECT timestamps saved a
+        report without its own depth; and the Method section still
+        claimed "Siril's own light_curve command" and "trapezoid fit"
+        unconditionally -- it now describes the engine that actually
+        measured (results carry an `engine` flag) and the LD template
+        fit.
+      - The multiprocessing resource-tracker helper is started at script
+        load, in a clean environment.  sirilpy's shared-memory transport
+        spawns it lazily on the first pixel transfer, and on macOS that
+        mid-run spawn died with PermissionError in importlib's path scan
+        and relaunched -- two tracebacks in Siril's log per run, harmless
+        (the run completed identically) but indistinguishable at a glance
+        from a real failure.  If the early start fails, behaviour is
+        exactly as before.
       - Differential photometry of a sub-exposure folder via Siril's own
         `light_curve` command, with comparison stars picked from Siril's
         star detection and filtered on SNR, saturation, separation and
@@ -938,6 +1015,22 @@ except ImportError:                                   # older sirilpy
         pass
 
 s.ensure_installed("numpy", "PyQt6", "matplotlib", "astropy")
+
+# Start multiprocessing's resource-tracker helper NOW, while the process
+# environment is still pristine.  sirilpy moves pixel data over
+# multiprocessing.shared_memory, and the FIRST such access spawns this
+# helper (`python -c ...`) mid-run — on macOS that spawn was seen dying
+# with `PermissionError: Operation not permitted` during importlib's
+# path scan and being relaunched, spraying tracebacks into Siril's log
+# (harmless: the run completed identically, but a traceback that means
+# nothing trains people to ignore the ones that do).  Started here it
+# inherits a working environment once; if it cannot start at all,
+# nothing is lost — Python relaunches it on demand exactly as before.
+try:
+    from multiprocessing import resource_tracker as _resource_tracker
+    _resource_tracker.ensure_running()
+except Exception:                                     # noqa: BLE001
+    pass
 
 import numpy as np
 
@@ -1972,6 +2065,19 @@ def normalise_planet_name(raw) -> str:
     return txt
 
 
+def target_key(raw) -> str:
+    """Two names into one comparable key: same star, same key.
+
+    ``WASP-75 b``, ``WASP-75b``, ``wasp75`` and ``WASP 75`` all describe
+    one target; ``HATP-32`` does not.  Separators go, case goes, and a
+    trailing planet letter goes -- OBJECT usually names the HOST while
+    people type the planet, and that difference is spelling, not
+    disagreement.
+    """
+    key = re.sub(r"[-\s]", "", normalise_planet_name(raw)).upper()
+    return re.sub(r"([0-9])[B-I]$", r"\1", key)
+
+
 def archive_lookup(name: str, timeout: float = ARCHIVE_TIMEOUT_S,
                    opener=None):
     """Ask the NASA Exoplanet Archive about one planet.  ``(dict, note)``.
@@ -2138,6 +2244,76 @@ def ld_template(rp: float, b: float = 0.0, u1: float = LD_U1,
     if peak <= 0:
         return phase, np.zeros_like(phase)
     return phase, shape / peak
+
+
+def ld_central_depth(rp: float, b: float = 0.0, u1: float = LD_U1,
+                     u2: float = LD_U2, n_rad: int = LD_RADIAL_STEPS):
+    """Blocked flux fraction at the DEEPEST point, for a given rp/Rs.
+
+    The same radial integral as ``ld_template``, evaluated only at the
+    planet-centre distance z = b.  This is the bridge between the two
+    depth conventions: the template fit measures the limb-darkened
+    CENTRAL depth, while EXOTIC, HOPS and AstroImageJ all quote
+    (Rp/Rs)^2 -- and with quadratic limb darkening the central depth is
+    deeper by the ratio of central to mean surface brightness (~1.2 for
+    a solar-type star in V).  Verified: with u1 = u2 = 0 this returns
+    exactly rp^2 for a central transit.
+    """
+    rp = float(rp)
+    z = abs(float(b))
+    if rp <= 0.0:
+        return 0.0
+    edges = np.linspace(0.0, 1.0, n_rad + 1)
+    r = 0.5 * (edges[:-1] + edges[1:])
+    dr = edges[1] - edges[0]
+    mu = np.sqrt(np.clip(1.0 - r * r, 0.0, None))
+    intensity = 1.0 - u1 * (1.0 - mu) - u2 * (1.0 - mu) ** 2
+    ring = intensity * 2.0 * np.pi * r * dr
+    total = float(ring.sum())
+    lo = abs(z - rp)
+    hi = z + rp
+    frac = np.zeros_like(r)
+    if z < 1e-12:
+        # Linear ramp across the ring that straddles rp — an all-or-
+        # nothing ring makes this function STEPWISE in rp (plateau width
+        # = one ring), and the bisection in rprs_from_depth then lands
+        # anywhere on the plateau: measured 0.14875 for a true 0.15.
+        frac = np.clip((rp - (r - 0.5 * dr)) / dr, 0.0, 1.0)
+    else:
+        inside = r <= lo
+        partial = (r > lo) & (r < hi)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            cosang = (r * r + z * z - rp * rp) / (2.0 * r * z)
+        frac[partial] = np.arccos(np.clip(cosang[partial], -1.0, 1.0)) / np.pi
+        frac[inside & (z < rp)] = 1.0
+    return float((frac * ring).sum() / total)
+
+
+def rprs_from_depth(depth_flux: float, b: float = 0.0, u1: float = LD_U1,
+                    u2: float = LD_U2):
+    """The measured central FLUX depth back into Rp/Rs, or None.
+
+    Bisection on ``ld_central_depth`` -- monotonic in rp.  This is what
+    lets the report quote the SAME number EXOTIC, HOPS and AstroImageJ
+    quote ((Rp/Rs)^2), instead of a central depth ~20% deeper that reads
+    as a disagreement when it is only a convention.
+    """
+    try:
+        d = float(depth_flux)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(d) or d <= 0.0:
+        return None
+    lo, hi = 1e-4, 0.999
+    if d >= ld_central_depth(hi, b, u1, u2):
+        return None
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        if ld_central_depth(mid, b, u1, u2) < d:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
 
 
 def ld_shape(t, t0: float, duration: float, template):
@@ -2597,6 +2773,24 @@ def fit_transit(t, mag, bases=None, u1: float = LD_U1, u2: float = LD_U2):
         sd = float(scales[i])
         slope = float(coeffs[1 + i] / sd) if sd > 0 else None
 
+    # The measured depth translated into the convention EXOTIC, HOPS and
+    # AstroImageJ quote: Rp/Rs from inverting the same limb-darkened
+    # model the fit used, and (Rp/Rs)^2 as "the depth".  The error bar
+    # propagates by inverting depth +/- sigma -- the mapping is smooth
+    # and nearly linear over any real bar.
+    _dflux = 1.0 - 10.0 ** (-0.4 * best["depth"])
+    _rprs = rprs_from_depth(_dflux, b=best["b"], u1=u1, u2=u2)
+    _rprs_sig = None
+    if _rprs is not None and np.isfinite(depth_sigma) and depth_sigma > 0:
+        _up = rprs_from_depth(1.0 - 10.0 ** (-0.4 * (best["depth"]
+                                                     + depth_sigma)),
+                              b=best["b"], u1=u1, u2=u2)
+        _dn = rprs_from_depth(1.0 - 10.0 ** (-0.4 * (best["depth"]
+                                                     - depth_sigma)),
+                              b=best["b"], u1=u1, u2=u2)
+        if _up is not None and _dn is not None:
+            _rprs_sig = 0.5 * abs(_up - _dn)
+
     return {
         "t0": best["t0"],
         "duration_d": best["duration"],
@@ -2608,6 +2802,12 @@ def fit_transit(t, mag, bases=None, u1: float = LD_U1, u2: float = LD_U2):
         "depth_mag": best["depth"],
         "depth_mmag": best["depth"] * 1000.0,
         "depth_pct": (1.0 - 10.0 ** (-0.4 * best["depth"])) * 100.0,
+        "rprs": _rprs,
+        "rprs_sigma": _rprs_sig,
+        "depth_rprs2_pct": (None if _rprs is None
+                            else _rprs * _rprs * 100.0),
+        "depth_rprs2_pct_sigma": (None if _rprs is None or _rprs_sig is None
+                                  else 2.0 * _rprs * _rprs_sig * 100.0),
         "depth_sigma_mmag": depth_sigma * 1000.0,
         "t0_sigma_d": t0_sigma,
         "t0_sigma_s": t0_sigma * 86400.0,
@@ -4593,9 +4793,15 @@ def choose_comparison_stars(stars, target_xy, n_wanted: int,
                  f"moves with the seeing")
     for x, y, _sc, near in scored:
         if near < chosen_r:
+            # Same two geometries as crowding_note, said apart: a run
+            # printed "neighbour 30 px away, inside its own 15 px
+            # annulus" — the full cut reaches TWICE the radius, where the
+            # two annuli overlap rather than one containing the other.
             rejected.append(
-                (x, y, f"neighbour {near:.0f} px away, inside its own "
-                       f"{outer:.0f} px annulus"
+                (x, y, (f"neighbour {near:.0f} px away, inside its own "
+                        f"{outer:.0f} px annulus" if near < outer else
+                        f"neighbour {near:.0f} px away, overlapping its "
+                        f"{outer:.0f} px annulus")
                  if chosen_r >= ladder[0][0] else
                  f"neighbour {near:.0f} px away, closer than the "
                  f"{chosen_r:.0f} px this crowded field could afford"))
@@ -4637,11 +4843,20 @@ def crowding_note(stars, x: float, y: float, fwhm_px: float):
     d = np.hypot(np.array(xs) - float(x), np.array(ys) - float(y))
     near = float(d.min())
     if near < COMP_ISOLATION_OUTER * outer:
+        # Two different geometries, said apart: inside the annulus the
+        # neighbour's light is IN the sky estimate; further out (up to
+        # twice the radius) the two annuli overlap and share sky.  The
+        # old message called both "inside the annulus", which on a
+        # 16 px neighbour with a 15 px annulus read as a contradiction.
+        where = (f"inside the {outer:.0f} px sky annulus"
+                 if near < outer else
+                 f"close enough that its own {outer:.0f} px sky annulus "
+                 f"overlaps the target's")
         return (LogColor.SALMON,
-                f"Another star sits {near:.0f} px away, inside the "
-                f"{outer:.0f} px sky annulus. Its share of the aperture "
-                f"changes with the seeing, which is a slow trend through "
-                f"the night — do not read a shallow dip here as a transit.")
+                f"Another star sits {near:.0f} px away, {where}. Its share "
+                f"of the aperture changes with the seeing, which is a slow "
+                f"trend through the night — do not read a shallow dip here "
+                f"as a transit.")
     return None
 
 
@@ -5942,6 +6157,7 @@ class LightCurveWorker(QThread):
         elif not typed_radec:
             self.opts["target_radec"] = (hdr_ra, hdr_dec)
             self.opts["target_mode"] = "radec"
+            self.opts["radec_auto"] = True
             self.opts["target_ra_deg"] = hdr_ra
             self.opts["target_dec_deg"] = hdr_dec
             self._emit(f"  Target from OBJCTRA/OBJCTDEC in your lights: RA "
@@ -5954,6 +6170,7 @@ class LightCurveWorker(QThread):
             # from the previous target is exactly how that goes wrong.
             if self.opts.get("target_mode") == "auto":
                 self.opts["target_mode"] = "radec"
+                self.opts["radec_auto"] = True
             gap = angular_sep_arcsec(hdr_ra, hdr_dec,
                                      float(typed_radec[0]),
                                      float(typed_radec[1]))
@@ -5991,8 +6208,8 @@ class LightCurveWorker(QThread):
         planet = normalise_planet_name(name)
         source = "OBJECT in the lights" if from_hdr else "the Target box"
         typed_planet = normalise_planet_name(typed)
-        names_differ = (from_hdr and typed_planet
-                        and typed_planet.upper() != planet.upper())
+        names_differ = (bool(from_hdr) and bool(typed_planet)
+                        and target_key(typed) != target_key(from_hdr))
         if names_differ:
             self._emit(
                 f"  The Target box says {typed_planet!r} but the lights "
@@ -6047,15 +6264,45 @@ class LightCurveWorker(QThread):
             else:
                 self._emit(f"  Archive agrees with the headers to "
                            f"{sep:.1f}\".", LogColor.BLUE)
-        elif not self.opts.get("target_radec"):
-            self.opts["target_radec"] = (eph["ra_deg"], eph["dec_deg"])
-            self.opts["target_mode"] = "radec"
-            self.opts["target_ra_deg"] = eph["ra_deg"]
-            self.opts["target_dec_deg"] = eph["dec_deg"]
-            self._emit(f"  Target from the archive: RA {eph['ra_deg']:.5f}°, "
-                       f"Dec {eph['dec_deg']:+.5f}° — the next step reports "
-                       "how far that lands from a real detection.",
-                       LogColor.GREEN)
+        else:
+            # No position in the headers, but the archive has one for the
+            # planet the frames NAME.  A coordinate already sitting in the
+            # form outranked it here once — and it was the previous
+            # target's, silently kept because these headers carry no
+            # OBJCTRA/OBJCTDEC for the probe to correct it against.  The
+            # archive position of the frames' own OBJECT is the better
+            # authority; a form coordinate survives only when it agrees.
+            typed_pos = self.opts.get("target_radec")
+            gap = (angular_sep_arcsec(float(typed_pos[0]),
+                                      float(typed_pos[1]),
+                                      eph["ra_deg"], eph["dec_deg"])
+                   if typed_pos else float("inf"))
+            if typed_pos and np.isfinite(gap) \
+                    and gap <= TARGET_DISAGREE_ARCSEC:
+                if self.opts.get("target_mode") == "auto":
+                    self.opts["target_mode"] = "radec"
+                    self.opts["radec_auto"] = True
+                self._emit(f"  The RA/Dec in the form agrees with the "
+                           f"archive to {gap:.1f}\".", LogColor.BLUE)
+            else:
+                if typed_pos:
+                    self._emit(
+                        f"  The RA/Dec in the form is {gap:.0f}\" from "
+                        f"where the archive puts {planet} — the OBJECT in "
+                        "your lights. That form coordinate is the previous "
+                        "target (these headers carry no position to correct "
+                        "it against), so the archive position is used.",
+                        LogColor.RED)
+                self.opts["target_radec"] = (eph["ra_deg"], eph["dec_deg"])
+                self.opts["target_mode"] = "radec"
+                self.opts["radec_auto"] = True
+                self.opts["target_ra_deg"] = eph["ra_deg"]
+                self.opts["target_dec_deg"] = eph["dec_deg"]
+                self._emit(f"  Target from the archive: RA "
+                           f"{eph['ra_deg']:.5f}°, "
+                           f"Dec {eph['dec_deg']:+.5f}° — the next step "
+                           "reports how far that lands from a real "
+                           "detection.", LogColor.GREEN)
         if eph.get("period_d") and eph.get("t0_bjd"):
             self._emit(f"  Ephemeris: P = {eph['period_d']:.6f} d, "
                        f"T0 = {eph['t0_bjd']:.5f} BJD"
@@ -6234,6 +6481,19 @@ class LightCurveWorker(QThread):
             want_xy=self.opts.get("target_xy"),
             want_radec=self.opts.get("target_radec"),
         )
+        if (target is None and self.opts.get("radec_auto")
+                and self.opts.get("target_mode") == "radec"):
+            # The RA/Dec came from the headers or the archive, not from the
+            # user's own mode choice — so an unsolvable field falls back to
+            # the guess it would have made anyway, instead of failing a run
+            # the user never asked to plate-solve.
+            self._emit(
+                "  The sky position could not be matched to a detected star "
+                "(these frames carry no plate solve and the reference could "
+                "not be solved), so the BRIGHTEST star is used instead. "
+                "That is a guess — said as one.", LogColor.SALMON)
+            self.opts["target_mode"] = "brightest"
+            target = pick_target(stars, "brightest")
         if target is None:
             # Name the actual cause rather than listing every possibility.
             # In RA/Dec mode the only way to get here is that no detected
@@ -6259,6 +6519,80 @@ class LightCurveWorker(QThread):
             return
         tx, ty, how = target
         self._emit(f"  Target at ({tx:.1f}, {ty:.1f}) — {how}.", LogColor.GREEN)
+
+        # The frame's own size, read from the reference rather than
+        # assumed: a comparison star is only usable if it stays ON the
+        # sensor for the whole run, and that needs both edges.
+        # Read from the SEQUENCE, which always carries it, rather than
+        # from the reference file.  The file read failed on a real run
+        # ("BZERO/BSCALE/BLANK header keywords present. Set memmap=False")
+        # and silently switched the whole filter off.
+        #
+        # This check runs BEFORE the saturation and crowding reports so
+        # that, when the brightest-star GUESS lands on a star the drift
+        # carries off the sensor, the guess can move and every later
+        # verdict describes the star actually measured.
+        frame_wh = getattr(self, "_frame_wh", None)
+        envelope = getattr(self, "_drift", None)
+        if envelope and not frame_wh:
+            # Silence here cost a run: the frame size failed to read, the
+            # drift filter did nothing, and the only trace was a swallowed
+            # NameError three lines earlier.  A guard that quietly does not
+            # run is worse than no guard.
+            self._emit(
+                "  The frame size could not be read, so the drift filter is "
+                "OFF for this run. Comparison stars that leave the sensor "
+                "will not be caught, and light_curve fails outright when one "
+                "does.", LogColor.SALMON)
+        if envelope and frame_wh:
+            dx0, dx1, dy0, dy1 = envelope
+            span = max(dx1 - dx0, dy1 - dy0)
+            if span > DRIFT_REPORT_PX:
+                self._emit(
+                    f"  The field drifts {span:.0f} px across the run "
+                    f"(x {dx0:+.0f} to {dx1:+.0f}, y {dy0:+.0f} to "
+                    f"{dy1:+.0f}) on a {frame_wh[0]}x{frame_wh[1]} frame. "
+                    "Comparison stars that would leave the sensor part-way "
+                    "through are dropped: Siril moves each measurement box "
+                    "by the registration, and one box that walks off the "
+                    "edge fails the WHOLE light_curve command, not just "
+                    "that star.", LogColor.SALMON)
+            margin = AUTORING_OUTER_FWHM * max(1.0, fwhm)
+            if not stays_in_frame(tx, ty, frame_wh[0], frame_wh[1],
+                                  envelope, margin):
+                switched = None
+                if self.opts.get("target_mode") == "brightest":
+                    # A GUESS that walks off the chip is a bad guess, not a
+                    # bad night: guess again among the stars that survive
+                    # the drift.  A target the user actually named or
+                    # placed stays a hard stop — swapping THAT star behind
+                    # their back would measure the wrong object.
+                    survivors = [
+                        st for st in stars
+                        if stays_in_frame(
+                            float(getattr(st, "xpos", 0.0) or 0.0),
+                            float(getattr(st, "ypos", 0.0) or 0.0),
+                            frame_wh[0], frame_wh[1], envelope, margin)]
+                    if survivors:
+                        switched = pick_target(survivors, "brightest")
+                if switched is None:
+                    self._fail(
+                        f"The TARGET at ({tx:.0f}, {ty:.0f}) leaves the "
+                        f"frame as the field drifts {span:.0f} px. No "
+                        "aperture can follow it off the sensor. Trim the "
+                        "run to the frames where it is still on the chip, "
+                        "or re-shoot with better guiding.")
+                    return
+                self._emit(
+                    f"  The brightest star at ({tx:.0f}, {ty:.0f}) leaves "
+                    f"the frame as the field drifts {span:.0f} px — and it "
+                    "was only a guess, so the guess moves. If the star "
+                    "that drifts off IS your target, trim the run to the "
+                    "frames that hold it instead.", LogColor.SALMON)
+                tx, ty = switched[0], switched[1]
+                how = "brightest star that stays on the sensor all run"
+                self._emit(f"  Target at ({tx:.1f}, {ty:.1f}) — {how}.",
+                           LogColor.GREEN)
 
         # Saturation was only ever checked for the COMPARISON stars, on the
         # grounds that a clipped comp turns every cloud into a fake transit.
@@ -6308,46 +6642,6 @@ class LightCurveWorker(QThread):
         if crowd:
             self._emit("  " + crowd[1], crowd[0])
 
-        # The frame's own size, read from the reference rather than
-        # assumed: a comparison star is only usable if it stays ON the
-        # sensor for the whole run, and that needs both edges.
-        # Read from the SEQUENCE, which always carries it, rather than
-        # from the reference file.  The file read failed on a real run
-        # ("BZERO/BSCALE/BLANK header keywords present. Set memmap=False")
-        # and silently switched the whole filter off.
-        frame_wh = getattr(self, "_frame_wh", None)
-        envelope = getattr(self, "_drift", None)
-        if envelope and not frame_wh:
-            # Silence here cost a run: the frame size failed to read, the
-            # drift filter did nothing, and the only trace was a swallowed
-            # NameError three lines earlier.  A guard that quietly does not
-            # run is worse than no guard.
-            self._emit(
-                "  The frame size could not be read, so the drift filter is "
-                "OFF for this run. Comparison stars that leave the sensor "
-                "will not be caught, and light_curve fails outright when one "
-                "does.", LogColor.SALMON)
-        if envelope and frame_wh:
-            dx0, dx1, dy0, dy1 = envelope
-            span = max(dx1 - dx0, dy1 - dy0)
-            if span > DRIFT_REPORT_PX:
-                self._emit(
-                    f"  The field drifts {span:.0f} px across the run "
-                    f"(x {dx0:+.0f} to {dx1:+.0f}, y {dy0:+.0f} to "
-                    f"{dy1:+.0f}) on a {frame_wh[0]}x{frame_wh[1]} frame. "
-                    "Comparison stars that would leave the sensor part-way "
-                    "through are dropped: Siril moves each measurement box "
-                    "by the registration, and one box that walks off the "
-                    "edge fails the WHOLE light_curve command, not just "
-                    "that star.", LogColor.SALMON)
-            if not stays_in_frame(tx, ty, frame_wh[0], frame_wh[1], envelope,
-                                  AUTORING_OUTER_FWHM * max(1.0, fwhm)):
-                self._fail(
-                    f"The TARGET at ({tx:.0f}, {ty:.0f}) leaves the frame as "
-                    f"the field drifts {span:.0f} px. No aperture can follow "
-                    "it off the sensor. Trim the run to the frames where it "
-                    "is still on the chip, or re-shoot with better guiding.")
-                return
         comps, rejected, how_ranked = choose_comparison_stars(
             stars, (tx, ty), int(self.opts.get("n_comps", DEFAULT_N_COMPS)),
             fwhm, float(self.opts.get("min_comp_snr", MIN_COMP_SNR)),
@@ -6634,6 +6928,24 @@ class LightCurveWorker(QThread):
                        + "together — the baseline's uncertainty ends up in "
                          "the depth and the mid-time instead of being "
                          "thrown away between passes.", LogColor.GREEN)
+            if fit.get("detected"):
+                # The headline numbers, in the log rather than only the
+                # report — and in BOTH depth conventions, labelled.
+                self._emit(
+                    f"  T0 = {fit['t0']:.5f} ± "
+                    + (f"{fit['t0_sigma_s']:.0f} s"
+                       if np.isfinite(fit.get("t0_sigma_s", float("nan")))
+                       else "?")
+                    + f"; central depth {fit['depth_mmag']:.1f} ± "
+                      f"{fit['depth_sigma_mmag']:.1f} mmag"
+                    + (f"; Rp/Rs = {fit['rprs']:.4f}"
+                       + (f" ± {fit['rprs_sigma']:.4f}"
+                          if fit.get("rprs_sigma") is not None else "")
+                       + f" → (Rp/Rs)² = {fit['depth_rprs2_pct']:.2f} % "
+                         "(the EXOTIC/HOPS/AIJ depth convention)"
+                       if fit.get("rprs") is not None else "")
+                    + f"; {fit['significance']:.1f} sigma.",
+                    LogColor.GREEN)
         else:
             # No fit: the plot and the RMS still want a curve, so fall back
             # to the standalone airmass detrend for DISPLAY only.
@@ -6691,6 +7003,7 @@ class LightCurveWorker(QThread):
             "n_frames": len(files),
             "dat_path": dat,
             "ref_path": ref_path,
+            "engine": "native" if native is not None else "siril",
         }
         result["site_lat_deg"] = self.opts.get("site_lat_deg")
         result["site_lon_deg"] = self.opts.get("site_lon_deg")
@@ -6783,6 +7096,15 @@ class LightCurveWorker(QThread):
                         fh.write(f"#TC_ERR={fit['t0_sigma_d']:.6f}\n")
                     fh.write(f"#DEPTH_MMAG={fit['depth_mmag']:.2f}\n")
                     fh.write(f"#DEPTH_ERR_MMAG={fit['depth_sigma_mmag']:.2f}\n")
+                    # The convention EXOTIC, HOPS and AstroImageJ quote —
+                    # DEPTH_MMAG above is the limb-darkened CENTRAL depth,
+                    # ~20% deeper than (Rp/Rs)^2 on a solar-type star.
+                    if fit.get("rprs") is not None:
+                        fh.write(f"#RPRS={fit['rprs']:.4f}\n")
+                        if fit.get("rprs_sigma") is not None:
+                            fh.write(f"#RPRS_ERR={fit['rprs_sigma']:.4f}\n")
+                        fh.write(f"#DEPTH_RPRS2_PCT="
+                                 f"{fit['depth_rprs2_pct']:.3f}\n")
                     fh.write(f"#DURATION_H={fit['duration_h']:.4f}\n")
                 # ONE #NOTES line.  The no-transit case used to write its
                 # own and then fall through to the detrend line -- two
@@ -7502,10 +7824,22 @@ class SvenesisLightCurveWindow(QMainWindow):
         appears in the log after five minutes of registration.  You see
         what the frames claim, and you can correct it before starting.
 
-        Only EMPTY fields are filled: anything you typed stays. Capped at
-        PROBE_HEADERS frames because this runs on the UI thread -- measured
-        at 153 ms for 30 compressed N.I.N.A. subs, which is a click, while
-        several hundred would be a freeze.
+        The fields FOLLOW the headers: they are restored from the last
+        session's settings, so after switching targets they show the
+        PREVIOUS target -- WASP-75 frames sat under a box still reading
+        'HATP-32'.  When OBJECT names a DIFFERENT target than the name
+        field, or OBJCTRA/OBJCTDEC sit more than TARGET_DISAGREE_ARCSEC
+        from the coordinate fields, the fields are updated and every
+        replacement is logged; a name that already keys to the same
+        target (any spelling, with or without the planet letter) and
+        coordinates that already agree are left exactly as typed.  To aim
+        at a star that is NOT the headers' object, type it AFTER choosing
+        the folder -- nothing re-probes, and the worker reports the
+        disagreement loudly at run time.
+
+        Capped at PROBE_HEADERS frames because this runs on the UI thread
+        -- measured at 153 ms for 30 compressed N.I.N.A. subs, which is a
+        click, while several hundred would be a freeze.
         """
         if not files:
             return
@@ -7524,26 +7858,59 @@ class SvenesisLightCurveWindow(QMainWindow):
             if info.get("object"):
                 name = str(info["object"]).strip()
                 break
-        if name and not self.ed_target_name.text().strip():
+        existing = self.ed_target_name.text().strip()
+        name_switched = bool(name and existing
+                             and target_key(existing) != target_key(name))
+        if name and (not existing
+                     or target_key(existing) != target_key(name)):
             self.ed_target_name.setText(name)
-            found.append(f"OBJECT = {name!r}")
+            found.append(f"OBJECT = {name!r}"
+                         + (f" (replacing {existing!r} — left over from "
+                            "another target)" if existing else ""))
         elif name:
             found.append(f"headers say OBJECT = {name!r}")
 
         ra, dec, note = header_target_radec(lights)
         if ra is not None:
-            if not self.ed_ra.text().strip() and not self.ed_dec.text().strip():
+            old_ra = self.ed_ra.text().strip()
+            old_dec = self.ed_dec.text().strip()
+            if not old_ra and not old_dec:
                 self.ed_ra.setText(f"{ra:.6f}")
                 self.ed_dec.setText(f"{dec:+.6f}")
                 found.append(f"OBJCTRA/OBJCTDEC = {ra:.5f}, {dec:+.5f} ({note})")
             else:
                 gap = angular_sep_arcsec(ra, dec, self._ra_deg(),
                                          _sexagesimal(self.ed_dec.text()))
-                found.append(
-                    f"headers say {ra:.5f}, {dec:+.5f}"
-                    + (f" — {gap:.0f}\" from what is in the fields"
-                       if np.isfinite(gap) and gap > TARGET_DISAGREE_ARCSEC
-                       else " (agrees with the fields)"))
+                if np.isfinite(gap) and gap <= TARGET_DISAGREE_ARCSEC:
+                    found.append(f"headers say {ra:.5f}, {dec:+.5f} "
+                                 "(agrees with the fields)")
+                else:
+                    # Same rule as the name: the fields persist across
+                    # sessions, so a coordinate this far off is the
+                    # previous target, not a choice.  To aim at a star
+                    # that is NOT the headers' object, type it AFTER
+                    # choosing the folder — nothing re-probes.
+                    self.ed_ra.setText(f"{ra:.6f}")
+                    self.ed_dec.setText(f"{dec:+.6f}")
+                    found.append(
+                        f"OBJCTRA/OBJCTDEC = {ra:.5f}, {dec:+.5f} ({note}), "
+                        f"replacing {old_ra or '?'}, {old_dec or '?'}"
+                        + (f" — {gap:.0f}\" away, left over from another "
+                           "target" if np.isfinite(gap)
+                           else " — the fields did not parse"))
+        elif name_switched and (self.ed_ra.text().strip()
+                                or self.ed_dec.text().strip()):
+            # The target changed but these headers carry no position to
+            # replace the old one with — a coordinate describing the
+            # PREVIOUS target left standing here sent a HAT-P-32 run to
+            # the brightest-star guess.  Cleared, the worker fills the
+            # position from the archive by the frames' own OBJECT name.
+            self.ed_ra.setText("")
+            self.ed_dec.setText("")
+            found.append(
+                "cleared the RA/Dec fields — they were the previous "
+                "target's, and these headers carry no position to replace "
+                "them with (the archive supplies one from the name)")
         if found:
             self._log("Read from the first "
                       f"{min(len(files), PROBE_HEADERS)} header(s): "
@@ -7805,7 +8172,22 @@ class SvenesisLightCurveWindow(QMainWindow):
                          f" ({r['time_note']})</span><br>")
             p.append(f"&nbsp;depth&nbsp; {fit['depth_mmag']:.1f} ± "
                      f"{fit['depth_sigma_mmag']:.1f} mmag "
-                     f"({fit['depth_pct']:.3f} % of the flux)<br>")
+                     f"({fit['depth_pct']:.3f} % of the flux, at the "
+                     "limb-darkened CENTRE of the transit)<br>")
+            if fit.get("rprs") is not None:
+                p.append(f"&nbsp;Rp/R★ {fit['rprs']:.4f}"
+                         + (f" ± {fit['rprs_sigma']:.4f}"
+                            if fit.get("rprs_sigma") is not None else "")
+                         + f" → (Rp/R★)² = {fit['depth_rprs2_pct']:.2f}"
+                         + (f" ± {fit['depth_rprs2_pct_sigma']:.2f}"
+                            if fit.get("depth_rprs2_pct_sigma") is not None
+                            else "") + " %<br>")
+                p.append("<span style='color:#888888'>&nbsp;that is the "
+                         "depth convention EXOTIC, HOPS and AstroImageJ "
+                         "quote — with limb darkening the central depth "
+                         "above is deeper than (Rp/R★)², so compare THIS "
+                         "number with theirs and with the archive.</span>"
+                         "<br>")
             p.append("<span style='color:#888888'>&nbsp;that ± carries the "
                      "same red-noise scaling as the significance, but "
                      "depth/error is NOT the significance: it uses the "
@@ -7940,36 +8322,60 @@ class SvenesisLightCurveWindow(QMainWindow):
         if r["time_system"] != "BJD_TDB":
             A("                  <-- NOT comparable with a published "
               "ephemeris (those use BJD_TDB; the offset reaches 8 minutes)")
-            A(f"   depth          {fit['depth_mmag']:.2f} +/- "
-              f"{fit['depth_sigma_mmag']:.2f} mmag "
-              f"({fit['depth_pct']:.4f} % of flux)")
-            A("                  the +/- carries the same red-noise scaling "
-              "as the significance above, but")
-            A("                  depth/error is NOT that significance — it "
-              "uses the fitted depth against")
-            A("                  one baseline, the significance the "
-              "measured contrast against the weaker")
-            A("                  of both sides. Quote the significance.")
-            A(f"   duration       {fit['duration_h']:.3f} h")
-            A(f"   shape          rp/Rs ~ {fit['rp_over_rs']:.2f}, "
-              f"b ~ {fit['impact_b']:.1f}, limb darkening "
-              f"u1={fit['ld_u1']:.2f} u2={fit['ld_u2']:.2f}")
-            A("                  (that rp/Rs is the best-fitting TEMPLATE, "
-              "not a measured planet radius:")
-            A("                  with the duration free a smaller template "
-              "stretched fits nearly as well.")
-            A("                  The depth is the measurement.)")
-            A(f"   points         {fit['n_in']} in, {fit['n_out']} out")
-            A(f"   residual RMS   {fit['rms_resid_mmag']:.2f} mmag")
-            A(f"   duty cycle     {fit['duty_cycle'] * 100:.0f} % of the run")
+        # This block sat INSIDE the != BJD_TDB branch above — every run
+        # with correct timestamps saved a report without its own depth.
+        A(f"   depth          {fit['depth_mmag']:.2f} +/- "
+          f"{fit['depth_sigma_mmag']:.2f} mmag "
+          f"({fit['depth_pct']:.4f} % of flux, limb-darkened CENTRE)")
+        A("                  the +/- carries the same red-noise scaling "
+          "as the significance above, but")
+        A("                  depth/error is NOT that significance — it "
+          "uses the fitted depth against")
+        A("                  one baseline, the significance the "
+          "measured contrast against the weaker")
+        A("                  of both sides. Quote the significance.")
+        if fit.get("rprs") is not None:
+            A(f"   Rp/Rs          {fit['rprs']:.4f}"
+              + (f" +/- {fit['rprs_sigma']:.4f}"
+                 if fit.get("rprs_sigma") is not None else ""))
+            A(f"   (Rp/Rs)^2      {fit['depth_rprs2_pct']:.2f}"
+              + (f" +/- {fit['depth_rprs2_pct_sigma']:.2f}"
+                 if fit.get("depth_rprs2_pct_sigma") is not None else "")
+              + " %  <- the depth convention EXOTIC, HOPS and")
+            A("                  AstroImageJ quote; compare THIS with "
+              "theirs and with the archive,")
+            A("                  not the limb-darkened central depth "
+              "above")
+        A(f"   duration       {fit['duration_h']:.3f} h")
+        A(f"   shape          rp/Rs ~ {fit['rp_over_rs']:.2f}, "
+          f"b ~ {fit['impact_b']:.1f}, limb darkening "
+          f"u1={fit['ld_u1']:.2f} u2={fit['ld_u2']:.2f}")
+        A("                  (that rp/Rs is the best-fitting TEMPLATE, "
+          "not a measured planet radius:")
+        A("                  with the duration free a smaller template "
+          "stretched fits nearly as well.")
+        A("                  The depth is the measurement, and the "
+          "Rp/Rs above derives from it.)")
+        A(f"   points         {fit['n_in']} in, {fit['n_out']} out")
+        A(f"   residual RMS   {fit['rms_resid_mmag']:.2f} mmag")
+        A(f"   duty cycle     {fit['duty_cycle'] * 100:.0f} % of the run")
         A("")
         A("Method")
-        A("   Aperture photometry by Siril's own light_curve command")
+        if r.get("engine") == "native":
+            A("   Aperture photometry by this script: every star re-centroided")
+            A("   per frame (follow star), subpixel circular apertures, "
+              "sigma-clipped")
+            A("   annulus sky, aperture chosen by point-to-point noise, comps")
+            A("   kept by measured scatter. Siril did detection, registration")
+            A("   and calibration.")
+        else:
+            A("   Aperture photometry by Siril's own light_curve command")
         A("   Registration two-pass, NOT resampled — the aperture follows the")
         A("   star through the registration data while the pixels stay as the")
         A("   sensor recorded them.")
-        A("   Trapezoid fit: grid over T0/duration/ingress, depth and baseline")
-        A("   solved analytically at each node. Deterministic, no optimiser.")
+        A("   Limb-darkened template fit: grid over T0/duration, depth and")
+        A("   baseline solved analytically at each node. Deterministic, no")
+        A("   optimiser.")
         A("   Significance is the in/out contrast over its own standard error,")
         A("   measured empirically rather than taken from the fitted depth.")
         return "\n".join(L)

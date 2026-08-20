@@ -764,6 +764,19 @@ near = crowd([_Star(500, 500, 0.0, mag=-9.0),
 check(near and "annulus" in near[1],
       "a neighbour inside the annulus is named, with the trend it creates",
       near[1] if near else "silent")
+# Two geometries, said apart: the first HAT-P-32 AAVSO run printed
+# "sits 16 px away, inside the 15 px sky annulus" — a contradiction,
+# because the check fires out to TWICE the radius (overlapping annuli).
+_in = crowd([_Star(500, 500, 0.0, mag=-9.0),
+             _Star(508, 500, 0.0, mag=-8.0)], 500, 500, 2.0)
+check(_in and "inside the" in _in[1] and "overlaps" not in _in[1],
+      "a neighbour truly inside the annulus says 'inside'")
+_ov = crowd([_Star(500, 500, 0.0, mag=-9.0),
+             _Star(515, 500, 0.0, mag=-8.0)], 500, 500, 2.0)
+check(_ov and "overlaps" in _ov[1] and "inside the" not in _ov[1],
+      "one between the radius and twice the radius says the annuli "
+      "OVERLAP — not that it sits inside an annulus smaller than the "
+      "distance itself")
 check(crowd([_Star(500, 500, 0.0, mag=-8.0),
              _Star(540, 500, 0.0, mag=-9.0)], 500, 500, 2.0) is None,
       "a brighter star well outside the annulus draws no comment — the "
@@ -1337,17 +1350,21 @@ check("PROBE_HEADERS" in probe and ns["PROBE_HEADERS"] <= 50,
       "capped, because this runs on the UI thread: 30 compressed N.I.N.A. "
       "subs measured 153 ms, which is a click; several hundred would freeze "
       "the window", f"{ns['PROBE_HEADERS']} headers")
-for guard in ("not self.ed_target_name.text().strip()",
-              "not self.ed_ra.text().strip()"):
-    check(guard in probe,
-          f"and it fills only EMPTY fields ({guard.split('.')[1]}) — "
-          "anything you typed stays")
+check("target_key(existing) != target_key(name)" in probe,
+      "the NAME field follows OBJECT when it names a DIFFERENT target — "
+      "the box persists across sessions, and a stale previous name sat "
+      "over WASP-75 frames as 'HATP-32' (see 8q10)")
+check("gap <= TARGET_DISAGREE_ARCSEC" in probe
+      and "left over from another " in probe,
+      "the RA/Dec fields follow OBJCTRA/OBJCTDEC the same way: agreement "
+      "within the threshold leaves them as typed, anything further is the "
+      "previous target and is replaced, with the gap logged")
 check("split_frames" in probe,
       "it splits lights from calibration first, so a folder of flats "
       "cannot prefill the target from a parked mount")
-check("agrees with the fields" in probe and "from what is in the fields" in probe,
-      "when the fields are already filled it COMPARES instead of "
-      "overwriting, and says which")
+check("agrees with the fields" in probe and '\\" away, left over' in probe,
+      "filled fields are COMPARED first — agreement is said and kept, "
+      "and a replacement names the gap it replaced")
 check("carry no OBJCTRA/OBJCTDEC" in probe,
       "and headers that say nothing produce a line too — silence there "
       "reads as 'nothing to do' when it means 'type the name'")
@@ -2687,6 +2704,126 @@ check('"resolved_target_name"' in _aav2
       < _aav2.index('"target_name"'),
       "#TARGET= carries the resolved name first — a submission under the "
       "previous target's name is worse than one under UNKNOWN")
+
+# The UI half of the same trap: the box SHOWED 'HATP-32' on WASP-75
+# frames even after the worker learned to prefer OBJECT.  Folder analysis
+# now replaces a name that keys to a DIFFERENT target and leaves any
+# spelling of the SAME target exactly as typed.
+_tk = ns["target_key"]
+check(_tk("WASP-75 b") == _tk("WASP-75b") == _tk("wasp75")
+      == _tk("WASP 75") == "WASP75",
+      "every spelling of one target — planet letter or not — keys the same")
+check(_tk("HATP-32") != _tk("WASP-75") and _tk("") == "",
+      "different targets key differently, and empty stays empty")
+check(_tk("HAT-P-32") == _tk("HATP-32"),
+      "survey-prefix hyphens do not split a target from itself")
+_probe_src = src[src.index("def _probe_target"):]
+_probe_src = _probe_src[:_probe_src.index("def _on_pick_folder")]
+check("target_key(existing) != target_key(name)" in _probe_src
+      and "replacing {existing!r}" in _probe_src,
+      "the Target box is updated when OBJECT names another target, and "
+      "the replacement is logged — never swapped silently")
+check("self.ed_ra.setText" in _probe_src
+      and "replacing {old_ra or '?'}" in _probe_src,
+      "the RA/Dec fields are updated too when the headers sit beyond the "
+      "disagreement threshold — a stale coordinate is the same trap as a "
+      "stale name")
+check("agrees with the fields" in _probe_src,
+      "coordinates that already agree stay exactly as typed")
+
+print("\n8q11) stale coordinates cannot strand the run on a guess")
+# The HAT-P-32 re-run: frames carry OBJECT but no OBJCTRA/OBJCTDEC.  The
+# previous target's coordinates sat in the form, silently blocked the
+# archive-position branch, went unused in auto mode, and the run fell to
+# the brightest-star guess — an edge star the 273 px drift carried off
+# the sensor.  Hard abort on a measurable night.
+res_src2 = src[src.index("def _resolve_from_name"):]
+res_src2 = res_src2[:res_src2.index("def _target_cache")]
+check("where the archive puts {planet}" in res_src2
+      and "the archive position is used" in res_src2,
+      "with no header position, a form coordinate far from where the "
+      "archive puts the frames' own OBJECT is the previous target and is "
+      "replaced, in RED — it used to silently block the archive branch")
+check("agrees with the " in res_src2
+      and res_src2.count('self.opts["radec_auto"] = True') >= 3,
+      "a form coordinate that AGREES is used, and every auto-to-RA/Dec "
+      "upgrade (headers, archive, agreeing form) is marked radec_auto")
+run_src2 = src[src.index("def _run("):src.index("def _write_aavso")]
+check('self.opts.get("radec_auto")' in run_src2
+      and "BRIGHTEST star is used instead" in run_src2,
+      "an auto-derived RA/Dec mode falls back to the brightest guess when "
+      "the field cannot be plate-solved — only a user-chosen RA/Dec mode "
+      "still hard-fails there")
+check("the guess moves" in run_src2
+      and 'self.opts.get("target_mode") == "brightest"' in run_src2,
+      "a brightest-star GUESS that drifts off the sensor guesses again "
+      "among the stars that stay on it; a named or placed target remains "
+      "a hard stop")
+check(run_src2.index("stays_in_frame(tx, ty")
+      < run_src2.index("_target_saturation(ref_path"),
+      "the drift check runs before the saturation and crowding reports, "
+      "so every verdict describes the star actually measured")
+_probe2 = src[src.index("def _probe_target"):]
+_probe2 = _probe2[:_probe2.index("def _on_pick_folder")]
+check("name_switched" in _probe2
+      and "cleared the RA/Dec fields" in _probe2,
+      "the probe clears stale RA/Dec fields when the target name switches "
+      "and the new headers carry no position to replace them with")
+
+print("\n8q12) depth in the convention EXOTIC, HOPS and AIJ quote")
+# On EXOTIC's own HAT-P-32 sample set the two tools "disagreed" by
+# 30.2 vs 26.1 mmag — pure convention: we quoted the limb-darkened
+# CENTRAL depth, they quote (Rp/Rs)^2.  The fit now reports both,
+# through the same LD model it fitted with.
+_lcd = ns["ld_central_depth"]
+_r2d = ns["rprs_from_depth"]
+check(abs(_lcd(0.10, 0.0, 0.0, 0.0) / 0.01 - 1.0) < 0.02,
+      "with no limb darkening the central depth is exactly (Rp/Rs)^2",
+      f"{_lcd(0.10, 0.0, 0.0, 0.0):.5f} vs 0.01000")
+_boost = _lcd(0.15) / 0.15 ** 2
+check(1.05 < _boost < 1.35,
+      "with the default quadratic LD the centre is deeper than (Rp/Rs)^2 "
+      "by a plausible solar-type factor", f"boost {_boost:.3f}")
+_rt = _r2d(_lcd(0.15))
+check(_rt is not None and abs(_rt - 0.15) < 1e-3,
+      "depth -> Rp/Rs inverts the forward model (round trip at 0.15)",
+      f"{_rt:.5f}" if _rt else "None")
+check(_r2d(0.0) is None and _r2d(-0.01) is None and _r2d(None) is None
+      and _r2d(1.0) is None,
+      "unphysical depths come back as None, not as a made-up radius")
+_fitC = ns["fit_transit"](_tF, _magF, bases={"airmass": _XF})
+check(_fitC is not None and _fitC.get("rprs") is not None
+      and _fitC["depth_rprs2_pct"] < _fitC["depth_pct"],
+      "the fit carries Rp/Rs, and (Rp/Rs)^2 is shallower than the "
+      "central depth — the LD boost points the right way",
+      f"rprs {_fitC['rprs']:.4f}, {_fitC['depth_rprs2_pct']:.2f}% vs "
+      f"central {_fitC['depth_pct']:.2f}%")
+check(abs(_lcd(_fitC["rprs"], _fitC["impact_b"]) * 100.0
+          - _fitC["depth_pct"]) < 0.02,
+      "and the two conventions are consistent through the forward model "
+      "at the fitted impact parameter")
+
+# The report bug this comparison exposed: the whole measurement block
+# (depth, duration, shape, points, RMS) sat INSIDE the
+# `if time_system != BJD_TDB` warning branch — every run with CORRECT
+# timestamps saved a report without its own depth.
+check('\n        A(f"   depth          ' in src,
+      "the text report prints the depth at function level, not inside "
+      "the wrong-time-system warning branch")
+check('"engine": "native" if native is not None else "siril"' in src,
+      "the results dict records which engine measured")
+check('r.get("engine") == "native"' in src,
+      "and the report's Method section describes the engine that "
+      "actually ran — it used to claim light_curve unconditionally")
+check("#RPRS=" in src and "#DEPTH_RPRS2_PCT=" in src,
+      "the AAVSO header carries Rp/Rs and (Rp/Rs)^2 alongside the "
+      "central depth")
+check("_resource_tracker.ensure_running()" in src
+      and src.index("ensure_running()") < src.index("import numpy"),
+      "multiprocessing's resource tracker starts at script load, before "
+      "sirilpy's shared-memory transport can spawn it mid-run — the lazy "
+      "spawn died with PermissionError on macOS and sprayed harmless-but-"
+      "alarming tracebacks into Siril's log")
 
 print()
 if fails:
