@@ -2831,6 +2831,9 @@ check("second, worse photometry engine" not in _help
 check("From the frames" in _help and "(Rp/R★)²" in _help,
       "and it covers the frames-first target mode and both depth "
       "conventions")
+check("Why not Siril's own light-curve tool?" in _help,
+      "the help answers the most fundamental question head-on, pointing "
+      "at the manual's FAQ for the point-by-point comparison")
 check("_resource_tracker.ensure_running()" in src
       and src.index("ensure_running()") < src.index("import numpy"),
       "multiprocessing's resource tracker starts at script load, before "
