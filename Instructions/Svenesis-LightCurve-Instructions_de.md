@@ -23,7 +23,6 @@
 12. [Gute Daten aufnehmen](#12-gute-daten-aufnehmen)
 13. [Fehlersuche](#13-fehlersuche)
 14. [FAQ](#14-faq)
-15. [Neu in 1.0.0](#15-neu-in-100)
 
 ---
 
@@ -584,17 +583,3 @@ Alles landet in einem Ordner `lightcurve/` neben deinen Subs:
 **Warum wird ein Transit am Rand des Laufs abgelehnt?** Weil sich ohne Baseline auf beiden Seiten eine Delle nicht von einem Trend unterscheiden lässt. Das ist eine Eigenschaft der Daten, nicht des Skripts.
 
 **Soll ich das bei ExoClock einreichen?** Tiefe, T0 und Dauer liegen in der richtigen Form vor. Ziele auf 5σ oder besser und lies deren Einreichungshinweise — die Schwelle hier gilt fürs Behaupten einer Detektion, nicht fürs Publizieren.
-
----
-
-## 15. Neu in 1.0.0
-
-- **Die Photometrie-Engine gehört dem Skript** (§4a): Follow-Star-Rezentrierung, Subpixel-Aperturen, sigma-geclippter Himmel, Apertur nach Punkt-zu-Punkt-Rauschen gewählt, Vergleichssterne nach gemessener Streuung behalten, Fehler aus der CCD-Gleichung. Siril behält Bereitstellen, Kalibrieren, Zwei-Pass-Registrierung, Erkennung und Plate Solve; `light_curve` bleibt als angekündigter Fallback. Gemessen: 140 Punkte, wo `light_curve` am selben driftenden Lauf 67 behielt
-- **Gegen EXOTIC an dessen eigenen Beispieldaten validiert**: Rp/R★ 0,1525 ± 0,0064 vs 0,1541 ± 0,0033 (0,2 σ), Residuenstreuung 0,58 % vs 0,55 %
-- **Ein randverdunkelter Schablonen-Fit** (§9) — ein Trapez war messbar 5–6 % zu flach, ohne dass χ²/ν es verriet — mit Airmass, Seeing, Himmel und Sternzahl *gleichzeitig* gefittet, und **beide Tiefen-Konventionen gemeldet und beschriftet**: die zentrale Tiefe, die der Fit misst, und das (Rp/R★)², das EXOTIC/HOPS/AIJ angeben
-- **Das Ziel kommt aus den Frames** (§4a): `OBJCTRA`/`OBJCTDEC`, oder die Archiv-Position des `OBJECT`-Namens mit darum herum gelöstem Referenzframe; veraltete Formulareinträge eines vorigen Ziels werden laut ersetzt, nie still
-- Kalibrierframes neben den Lights entdeckt, über Sirils eigenes `calibrate` zu Mastern gestapelt, Ablehnungen mit ihren Folgen benannt (§3a)
-- Airmass-Detrend mit einseitig getrimmter Baseline und einem auf Out-of-Transit verankerten zweiten Durchgang; die Zusammenbruchsgrenze ist **gemessen**, nicht behauptet (§8)
-- **Der Signifikanztest ist zweiseitig** mit **kalibrierter** Schwelle: auf einer monotonen Rampe ganz ohne Transit erreicht der gepoolte Kontrast +25σ, der zweiseitige Test −10σ; 1200 transitfreie Läufe durch dieselbe Suche stellen die Fehlalarmrate neben jedes Ergebnis (§10)
-- Zeiten nach **BJD_TDB** konvertiert, O−C gegen die publizierte Ephemeride mit gedruckter Epoche, Fehlerbalken an 24 unabhängigen synthetischen Nächten kalibriert
-- CSV, PNG, Textreport und eine **AAVSO-Exoplanet-Watch-Datei** (verweigert, wenn die Zeiten nicht BJD_TDB sind)

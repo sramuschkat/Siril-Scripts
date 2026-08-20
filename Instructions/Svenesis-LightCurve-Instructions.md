@@ -23,7 +23,6 @@
 12. [Capturing Good Data](#12-capturing-good-data)
 13. [Troubleshooting](#13-troubleshooting)
 14. [FAQ](#14-faq)
-15. [What's New in 1.0.0](#15-whats-new-in-100)
 
 ---
 
@@ -591,17 +590,3 @@ Everything lands in a `lightcurve/` folder next to your subs:
 **Why is a transit at the edge of my run refused?** Because without baseline on both sides a dip cannot be distinguished from a trend. That is a property of the data, not of the script.
 
 **Should I submit this to ExoClock?** The depth, T0 and duration are in the right form. Aim for 5σ or better, and read their submission guidance — the floor here is for claiming a detection, not for publishing one.
-
----
-
-## 15. What's New in 1.0.0
-
-- **The photometry engine is the script's own** (§4a): follow-star re-centroiding, subpixel apertures, sigma-clipped sky, aperture chosen by point-to-point noise, comps kept by measured scatter, CCD-equation errors. Siril keeps staging, calibration, two-pass registration, detection and the plate solve; `light_curve` remains as the announced fallback. Measured: 140 points where `light_curve` kept 67 on the same drifting run
-- **Validated against EXOTIC on its own sample data**: Rp/R★ 0.1525 ± 0.0064 vs 0.1541 ± 0.0033 (0.2 σ), residual scatter 0.58 % vs 0.55 %
-- **A limb-darkened template fit** (§9) — a trapezoid was measured 5–6 % too shallow with χ²/ν silent about it — with airmass, seeing, sky and star count fitted *simultaneously*, and **both depth conventions reported and labelled**: the central depth the fit measures and the (Rp/R★)² that EXOTIC/HOPS/AIJ quote
-- **The target comes from the frames** (§4a): `OBJCTRA`/`OBJCTDEC`, or the archive position of the `OBJECT` name with the reference plate-solved around it; stale form entries from a previous target are replaced out loud, never silently
-- Calibration frames discovered beside the lights, stacked into masters through Siril's own `calibrate`, refusals named with what they would have done (§3a)
-- Airmass detrending with a one-sided least-trimmed baseline and an out-of-transit-anchored second pass; the breakdown figure is **measured**, not asserted (§8)
-- **The significance test is two-sided** with a **calibrated** floor: on a monotonic ramp with no transit in it the pooled contrast reaches +25σ, where the two-sided test returns −10σ; 1200 transit-free runs through the same search put the false-alarm rate next to every result (§10)
-- Times converted to **BJD_TDB**, O−C against the published ephemeris with the epoch printed, error bars calibrated against 24 independent synthetic nights
-- CSV, PNG, plain-text report and an **AAVSO Exoplanet Watch file** (refused unless the times are BJD_TDB)
