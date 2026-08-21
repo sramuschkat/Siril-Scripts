@@ -2841,6 +2841,22 @@ check("_resource_tracker.ensure_running()" in src
       "spawn died with PermissionError on macOS and sprayed harmless-but-"
       "alarming tracebacks into Siril's log")
 
+print("\n8r) a skipped airmass basis says WHY, in the log")
+# On a real run with borrowed sample data and a wrong site the target sat
+# below the horizon for every frame; the basis was rightly dropped, but
+# the log showed three fit bases where four were expected — commentless.
+# The reason lived only in the Result tab.  Now the log carries it at the
+# moment of the decision.
+_bases = src[src.index('bases["airmass"] = X'):]
+_bases = _bases[:_bases.index("quality = ")]
+check("Airmass basis skipped: {airmass_note}" in _bases,
+      "the skip is announced in the log, with the reason the series "
+      "builder returned")
+check('elif self.opts.get("detrend_airmass", True) and airmass_note:'
+      in _bases,
+      "and only when the user asked for the detrend — an unticked "
+      "checkbox is a decision, not a surprise")
+
 print()
 if fails:
     print(f"{len(fails)} FAILURE(S)")

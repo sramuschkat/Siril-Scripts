@@ -1,6 +1,6 @@
 """
 Svenesis LightCurve
-Script Version: 1.0.0
+Script Version: 1.0.1
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -90,6 +90,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.0.1 - The airmass basis announces WHY it is skipped
+      - When the airmass detrend is enabled but the basis cannot be
+        built (no site, target below the horizon for every frame, or an
+        airmass that barely moves), the reason now appears in the log at
+        the moment of the decision.  It was already in the Result tab
+        and the report, but the log showed three fit bases where four
+        were expected, commentless — on a real run with borrowed sample
+        data and a wrong site, that read as a bug rather than the
+        refusal it was.
 1.0.0 - Initial release
 """
 from __future__ import annotations
@@ -164,7 +173,7 @@ from matplotlib.figure import Figure
 
 from sirilpy import LogColor
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 # The full manual on GitHub, linked from the help dialog.  The in-app
 # tabs are the quick reference; the manual carries the measurements
@@ -6000,6 +6009,16 @@ class LightCurveWorker(QThread):
         if X is not None and self.opts.get("detrend_airmass", True) \
                 and not airmass_note:
             bases["airmass"] = X
+        elif self.opts.get("detrend_airmass", True) and airmass_note:
+            # The Result tab and the report carry this reason too, but the
+            # log is where a run is read first — and a basis that was
+            # promised by the checkbox and then vanishes without a word
+            # looks like a bug, not a decision.  One real run sat exactly
+            # there: site given, target below the horizon at those times
+            # (wrong site for borrowed data), and the log showed three
+            # bases where four were expected, commentless.
+            self._emit(f"  Airmass basis skipped: {airmass_note}.",
+                       LogColor.SALMON)
         quality = getattr(self, "_frame_quality", None)
         if quality and self.opts.get("detrend_quality", True):
             jd_frames = []
