@@ -2857,6 +2857,127 @@ check('elif self.opts.get("detrend_airmass", True) and airmass_note:'
       "and only when the user asked for the detrend — an unticked "
       "checkbox is a decision, not a surprise")
 
+print("\n8s) per-point error bars are a plot switch, not a recompute")
+# HOPS draws every raw point with its 1-sigma whisker; ours carried the
+# same numbers (err_mag in the CSV, weights in the fit) but only drew
+# them on the binned overlay.  Now a checkbox toggles them on the raw
+# points too — presentation only, so the fit never notices.
+_render = src[src.index("def render(self, r: dict"):]
+_render = _render[:_render.index("\n    def ")]
+check("show_err: bool = False" in _render,
+      "render() takes the switch, defaulting to off")
+check('r.get("err")' in _render
+      and "np.size(err) == jd.size" in _render,
+      "and draws only when a per-point error exists for every point — "
+      "a mismatched array is silently possible after the finite filter")
+check('fmt="none"' in _render and "zorder=1" in _render,
+      "whiskers only, drawn UNDER the points, so the curve stays legible")
+check("axr.errorbar(x, resid, yerr=err_mmag" in _render,
+      "the residual panel carries the SAME whiskers — subtracting the "
+      "model shifts a point, never its uncertainty")
+check(_render.count("err_mmag = np.asarray(err) * 1000.0") == 1,
+      "one error array feeds both panels, so they can never disagree")
+check("self.chk_errbars.toggled.connect(self._redraw)" in src,
+      "the checkbox redraws immediately, like the binning control")
+check("self.chk_errbars.setChecked(False)" in src,
+      "and defaults to off — a few hundred whiskers bury the transit")
+check("self.chk_errbars.isChecked())" in
+      src[src.index("def _redraw"):src.index("def _redraw") + 400],
+      "_redraw passes the switch through to render")
+
+print("\n8t) the chart tells the whole story — expected model, outliers, "
+      "numbers")
+_render2 = src[src.index("def render(self, r: dict"):]
+_render2 = _render2[:_render2.index("\n    def save_png")]
+
+# Expected model from the archive ephemeris, honest about time systems.
+check('r.get("time_system") == "BJD_TDB"' in _render2,
+      "the expected curve is drawn only on BJD_TDB — on JD_UTC the "
+      "offset would be the 8-minute time-system error posing as O−C")
+check("ld_central_depth(rp_exp" in _render2
+      and "math.sqrt(float(depth_pct) / 100.0)" in _render2,
+      "the catalogue depth ((Rp/Rs)² convention) is mapped through the "
+      "same limb darkening as the fit, not pasted in raw")
+check("expected (archive)" in _render2 and "o_minus_c(" in _render2,
+      "and the legend quotes the O−C in minutes next to the curve")
+check('eph.get("duration_h")' in _render2,
+      "the archive duration is used when the archive has one")
+
+# Outlier crosses.
+check('"x", color="#dd5555"' in _render2
+      and "outlier(s), not fitted" in _render2,
+      "spike-rejected points appear as red crosses instead of silently "
+      "vanishing")
+_worker_clip = src[src.index("keep, n_clipped, clip_note ="):]
+_worker_clip = _worker_clip[:2500]
+check("clip_jd = jd[~keep]" in _worker_clip,
+      "the worker keeps the rejected points for the plot")
+check("clip_mag = clip_mag - _zero" in src,
+      "and shifts them by the SAME median as the kept points — else "
+      "their crosses would float on the old zero point")
+
+# Legend numbers and residual verdict.
+check("Rp/R★ {fit['rprs']:.4f}" in _render2,
+      "the model legend carries T0 and Rp/R★ with errors — a "
+      "screenshot is a complete result")
+check("lag-1 autocorr" in _render2
+      and "white-noise-like" in _render2,
+      "the residual panel reports STD and the lag-1 autocorrelation "
+      "with a verdict")
+check('r.get("title_bits")' in _render2,
+      "and the title carries the provenance line the worker assembled "
+      "from the headers")
+
+print("\n8u) the model overlay is paired with the data it is drawn over")
+# The first cut drew fit["model_mag"] — baseline + TREND + transit —
+# over DETRENDED points: the line wiggled with the seeing, drooped where
+# the trend went, and the residual panel subtracted the trend twice.
+check('fit["model_mag"][order]' not in _render2
+      and 'np.interp(jd, fit["model_t"]' not in _render2,
+      "the trend-carrying model array is no longer drawn or subtracted "
+      "(the name may survive in a comment explaining why)")
+check('fit["baseline"] + fit["depth_mag"]' in _render2
+      and "ld_shape(tt_fit" in _render2,
+      "the overlay is baseline + transit on a dense grid — smooth, like "
+      "the expected curve always was")
+check("ld_shape(jd" in _render2,
+      "and the residuals subtract the SAME transit-only model — the "
+      "trend comes off the data once, never twice")
+check('"mild structure"' in _render2 and "abs(r1) < 0.15" in _render2,
+      "the autocorrelation verdict has a middle grade — 0.25 announced "
+      "as white-noise-like was generous")
+check("T0 {t0_pred:.5f}" in _render2
+      and "Rp/R★ {rp_exp:.4f}" in _render2,
+      "the expected legend quotes predicted T0 and catalogue Rp/R★, as "
+      "HOPS does")
+check('bits.append(f"{span_h:.1f} h run")' in src,
+      "and the title line carries the run duration")
+check('"\\ndetrend: " + "+".join(bases_used)' in _render2
+      and '"\\ndetrend: none"' in _render2,
+      "the model legend names the detrending bases, or says none — a "
+      "curve detrended with airmass reads differently from one that "
+      "never had the chance")
+check('self.opts["site_name"] = str(' in src
+      and 'SITENAME' in src[src.index("def _resolve_site"):
+                            src.index("def _resolve_site") + 3000],
+      "_resolve_site keeps the observatory's SITENAME for the title")
+check('if self.opts.get("site_name"):' in src,
+      "and the title appends it only when the frames state one — "
+      "typed-in coordinates carry no name")
+
+print("\n8v) the measured duration is drawn as a time arrow")
+check('arrowstyle="<->"' in _render2
+      and "xy=(c - half, y_arrow)" in _render2
+      and "xytext=(c + half, y_arrow)" in _render2,
+      "a double arrow spans first to last contact of the FITTED transit")
+check("transit {hh} h {mm:02d} min" in _render2,
+      "labelled with the measured duration in hours and minutes")
+check('fit["detected"] and np.isfinite(fit.get("duration_h"' in _render2,
+      "drawn only for a claimed detection — the duration of a "
+      "non-detection is noise wearing a number")
+check("hh, mm = hh + 1, 0" in _render2,
+      "and 59.6 minutes rounds to the next hour, not to '1 h 60 min'")
+
 print()
 if fails:
     print(f"{len(fails)} FAILURE(S)")

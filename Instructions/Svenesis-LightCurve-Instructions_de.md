@@ -1,6 +1,6 @@
 # Svenesis LightCurve — Anleitung
 
-**Version 1.0.1** | Siril Python-Skript für Exoplaneten-Transitphotometrie
+**Version 1.0.3** | Siril Python-Skript für Exoplaneten-Transitphotometrie
 
 > *Ein Ordner Subs hinein, eine Lichtkurve heraus — und eine ehrliche Antwort auf die einzige Frage, die zählt: steckt da ein Transit drin?*
 

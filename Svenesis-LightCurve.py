@@ -1,6 +1,6 @@
 """
 Svenesis LightCurve
-Script Version: 1.0.1
+Script Version: 1.0.3
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -90,6 +90,59 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.0.3 - The chart tells the whole story (what HOPS shows, we show)
+      - THE EXPECTED TRANSIT FROM THE ARCHIVE EPHEMERIS is drawn beside
+        the fit: predicted mid-time, catalogue depth ((Rp/Rs)^2, mapped
+        through the same limb darkening), archive duration.  When the
+        two curves lie on top of each other the night confirms the
+        ephemeris; a visible shift IS the O-C, readable off the plot,
+        and the legend quotes it in minutes with its error.  Drawn only
+        on BJD_TDB times — against JD_UTC the offset would be the
+        8-minute time-system error wearing an O-C costume.
+      - The spike-rejected points appear as red crosses ("N outlier(s),
+        not fitted") instead of silently vanishing: the reader sees WHAT
+        was thrown away and can judge that it was a satellite, not an
+        egress.  Display only — nothing downstream reads them.
+      - The legend carries the numbers: T0 and Rp/R* with errors under
+        the model line, so a screenshot is a complete result.
+      - The residual panel reports its STD and the lag-1 autocorrelation
+        with a verdict (white-noise-like / structure left) — the
+        red-noise tell that separates clean noise from a leftover
+        systematic.
+      - A provenance title line: target, night, sub length, filter, from
+        the headers; any missing keyword drops its part, never the line.
+      - FIXED IN THE SAME BREATH: the model overlay and the plot's
+        residuals now use BASELINE + TRANSIT on a dense grid.  The first
+        cut drew fit["model_mag"], which still carries the systematics
+        trend, over DETRENDED points — the line wiggled with the seeing,
+        drooped where the trend went, and the residual panel subtracted
+        the trend twice, inflating its autocorrelation.  The fit was
+        always consistent; the pairing was not.
+      - The autocorrelation verdict gained a middle grade (< 0.15
+        white-noise-like, 0.15-0.4 mild structure, > 0.4 structure
+        left) — 0.25 announced as "white-noise-like" was generous.
+      - The expected-model legend quotes the predicted T0 and the
+        catalogue Rp/R*, as HOPS does; the title line adds the run
+        duration.
+      - The model legend names the detrending bases that were solved
+        with the transit ("detrend: airmass+fwhm+sky+n_stars", or
+        "none"), and the title carries the observatory's SITENAME when
+        the frames state one — typed-in coordinates have no name and
+        the part simply drops.
+      - The measured duration is drawn as a double arrow spanning
+        first to last contact, labelled "transit N h MM min", parked
+        just below the transit floor.  Deliberately without an error
+        bar: the duration comes off the fit's search grid, and a sigma
+        invented for it would dress a step size up as a measurement.
+1.0.2 - Per-point error bars in the plot, behind a switch
+      - The raw points can now carry their 1-sigma whiskers — the same
+        per-point error the fit weights with and the CSV stores as
+        err_mag.  A checkbox next to the binning control toggles them,
+        in BOTH panels — subtracting the model shifts a point, never
+        its uncertainty, so the residuals carry the same whiskers.  Off
+        by default, because a few hundred whiskers bury the transit
+        shape (the binned overlay always had them).  Presentation only:
+        on or off, the fit and the significance see identical numbers.
 1.0.1 - The airmass basis announces WHY it is skipped
       - When the airmass detrend is enabled but the basis cannot be
         built (no site, target below the horizon for every frame, or an
@@ -173,7 +226,7 @@ from matplotlib.figure import Figure
 
 from sirilpy import LogColor
 
-VERSION = "1.0.1"
+VERSION = "1.0.3"
 
 # The full manual on GitHub, linked from the help dialog.  The in-app
 # tabs are the quick reference; the manual carries the measurements
@@ -4673,14 +4726,21 @@ class LightCurveWorker(QThread):
                        "(east positive).", LogColor.BLUE)
             return
         for path in files[:5]:            # a header can be unreadable
-            site = site_from_header(_read_header(path))
+            hdr = _read_header(path)
+            site = site_from_header(hdr)
             if site is None:
                 continue
             lat, lon, height, where = site
-            lon, sign_note = longitude_sign_check(_read_header(path), lat, lon)
+            lon, sign_note = longitude_sign_check(hdr, lat, lon)
             self.opts["site_lat_deg"] = lat
             self.opts["site_lon_deg"] = lon
             self.opts["site_height_m"] = height
+            # The observatory's NAME rides along for the plot title —
+            # the same SITENAME the log already quotes in "read from the
+            # FITS header (…)".  Typed-in coordinates carry no name, and
+            # the title simply drops that part.
+            self.opts["site_name"] = str(
+                (hdr or {}).get("SITENAME", "") or "").strip()
             self._emit(f"  Site read from the {where}: {lat:+.4f}, "
                        f"{lon:+.4f}, {height:.0f} m."
                        + (f" {sign_note}." if sign_note else ""),
@@ -5946,6 +6006,12 @@ class LightCurveWorker(QThread):
         # transit took the significance from 12.1 to 3.2 sigma, and
         # removing it puts it back at 12.1.
         keep, n_clipped, clip_note = sigma_clip_series(jd, mag)
+        # The rejected points are KEPT for the plot, as red crosses: a
+        # reader should see what was thrown away and judge for themselves
+        # that it was a spike, not an egress.  They stay out of every
+        # calculation.
+        clip_jd = jd[~keep].copy() if n_clipped else np.empty(0)
+        clip_mag = mag[~keep].copy() if n_clipped else np.empty(0)
         if n_clipped:
             jd, mag, err = jd[keep], mag[keep], err[keep]
             self._emit(f"  {clip_note}.", LogColor.SALMON)
@@ -5974,6 +6040,11 @@ class LightCurveWorker(QThread):
         else:
             time_system = "BJD_TDB"
             self._emit(f"  {time_note}.", LogColor.BLUE)
+        # The clipped points ride along on the same axis: the mean offset
+        # is exact to well under a second across one night, and they are
+        # display-only marks, not measurements.
+        if clip_jd.size and bjd is not None and jd_utc.size:
+            clip_jd = clip_jd + float(np.mean(bjd - jd_utc))
         jd = bjd
 
         self.progress.emit(70, "Detrending and fitting…")
@@ -5994,8 +6065,13 @@ class LightCurveWorker(QThread):
             jd, mag = jd[finite], mag[finite]
             err = err[finite] if err.size == finite.size else err
         # Centre on the median so the curve reads as a delta and the plot
-        # does not depend on the arbitrary comp-ensemble zero point.
-        mag = mag - _median(mag)
+        # does not depend on the arbitrary comp-ensemble zero point.  The
+        # clipped points get the SAME shift, or their crosses would float
+        # on the old zero point.
+        _zero = _median(mag)
+        mag = mag - _zero
+        if clip_mag.size:
+            clip_mag = clip_mag - _zero
         raw_rms = _mad_std(mag) * 1000.0
 
         X, airmass_note = self._airmass_series(jd_utc)
@@ -6100,7 +6176,32 @@ class LightCurveWorker(QThread):
         refined = fit is not None
 
         self.progress.emit(88, "Writing results…")
+        # One line of provenance for the plot title: what was observed,
+        # when, how long each sub ran, through which filter.  Every piece
+        # is optional — a missing header keyword drops its part, never
+        # the title.
+        info0 = (getattr(self, "_light_infos", None) or [{}])[0]
+        bits = []
+        eph_name = (eph or {}).get("name") if isinstance(eph, dict) else None
+        name = eph_name or self.opts.get("target_name") or ""
+        if name:
+            bits.append(str(name))
+        stamp = (info0.get("date_obs") or "")[:10]
+        if stamp:
+            bits.append(stamp)
+        if jd.size > 1:
+            span_h = (float(np.max(jd)) - float(np.min(jd))) * 24.0
+            bits.append(f"{span_h:.1f} h run")
+        if info0.get("exp_s"):
+            bits.append(f"{float(info0['exp_s']):g} s subs")
+        if (info0.get("filter") or "").strip():
+            bits.append(f"filter {info0['filter'].strip()}")
+        if self.opts.get("site_name"):
+            bits.append(str(self.opts["site_name"]))
         result = {
+            "title_bits": "  ·  ".join(bits),
+            "clip_jd": clip_jd,
+            "clip_mag": clip_mag,
             "calib_note": getattr(self, "_calib_note", ""),
             "multi_used": multi_used,
             "multi_note": multi_note,
@@ -6353,7 +6454,8 @@ class LightCurvePlot(FigureCanvas):
         ax.set_yticks([])
         self.draw()
 
-    def render(self, r: dict, n_bins: int = 0) -> None:
+    def render(self, r: dict, n_bins: int = 0,
+               show_err: bool = False) -> None:
         self.fig.clear()
         jd = r["jd"]
         y = r["detrended"]
@@ -6367,8 +6469,34 @@ class LightCurvePlot(FigureCanvas):
         self._style(ax)
         self._style(axr)
 
+        # The same per-point sigma the fit weights with and the CSV
+        # carries as err_mag — drawn as whiskers UNDER the points, thin
+        # and translucent, so a long run does not turn into a picket
+        # fence.  Off by default for exactly that reason.  Kept in mmag
+        # here so the residual panel below can reuse it: subtracting the
+        # model shifts a point, never its uncertainty.
+        err_mmag = None
+        if show_err:
+            err = r.get("err")
+            if err is not None and np.size(err) == jd.size:
+                err_mmag = np.asarray(err) * 1000.0
+                ax.errorbar(x, y * 1000.0, yerr=err_mmag,
+                            fmt="none", ecolor="#7799cc", elinewidth=0.7,
+                            alpha=0.35, capsize=0, zorder=1)
+
         ax.plot(x, y * 1000.0, ".", color="#7799cc", markersize=3,
                 alpha=0.65, label=f"{jd.size} points")
+
+        # The points the spike rejection removed, as crosses: the reader
+        # should see WHAT was thrown away and judge for themselves that
+        # it was a satellite, not an egress.  They are display-only —
+        # nothing downstream ever reads them.
+        cj, cm = r.get("clip_jd"), r.get("clip_mag")
+        if cj is not None and np.size(cj):
+            ax.plot((np.asarray(cj) - t0_ref) * 24.0,
+                    np.asarray(cm) * 1000.0, "x", color="#dd5555",
+                    markersize=7, markeredgewidth=1.4,
+                    label=f"{np.size(cj)} outlier(s), not fitted")
 
         if n_bins > 0:
             bt, bm, be, _bn = bin_series(x, y * 1000.0, n_bins)
@@ -6378,29 +6506,169 @@ class LightCurvePlot(FigureCanvas):
                             label=f"binned ({n_bins})")
 
         if fit is not None:
-            order = np.argsort(fit["model_t"])
-            mx = (fit["model_t"][order] - t0_ref) * 24.0
-            my = fit["model_mag"][order] * 1000.0
+            # The overlay is BASELINE + TRANSIT on a dense grid — not
+            # fit["model_mag"], which also carries the systematics trend.
+            # The plotted points are DETRENDED, so a model that still
+            # contains the trend is paired with data that no longer does:
+            # the line wiggled with the seeing, drooped where the trend
+            # went, and the residual panel subtracted the trend TWICE —
+            # its "autocorrelation" was largely that artefact.  The fit
+            # itself was always consistent; only this pairing was not.
+            tmpl_fit = ld_template(float(fit["rp_over_rs"]),
+                                   float(fit.get("impact_b") or 0.0),
+                                   float(fit.get("ld_u1", LD_U1)),
+                                   float(fit.get("ld_u2", LD_U2)))
+            tt_fit = np.linspace(float(np.min(jd)), float(np.max(jd)), 400)
+            mx = (tt_fit - t0_ref) * 24.0
+            my = (fit["baseline"] + fit["depth_mag"]
+                  * ld_shape(tt_fit, float(fit["t0"]),
+                             float(fit["duration_d"]), tmpl_fit)) * 1000.0
             colour = "#66dd88" if fit["detected"] else "#dd8866"
-            label = (f"transit model, {fit['significance']:.1f}σ"
-                     if fit["detected"] else
-                     f"best fit, only {fit['significance']:.1f}σ — not claimed")
+            if fit["detected"]:
+                # The legend carries the numbers HOPS puts there too —
+                # T0 and Rp/R★ with their errors — so a screenshot of
+                # the chart is a complete result, not a teaser.
+                label = f"transit model, {fit['significance']:.1f}σ"
+                sig_s = fit.get("t0_sigma_s")
+                if np.isfinite(fit.get("t0", np.nan)) and sig_s \
+                        and np.isfinite(sig_s):
+                    label += f"\nT0 {fit['t0']:.5f} ± {sig_s:.0f} s"
+                if fit.get("rprs") is not None \
+                        and fit.get("rprs_sigma") is not None:
+                    label += (f"\nRp/R★ {fit['rprs']:.4f} "
+                              f"± {fit['rprs_sigma']:.4f}")
+                # Which systematics were solved alongside the transit —
+                # HOPS states this on its best-fit line too, and a curve
+                # detrended with airmass reads differently from one that
+                # never had the chance.
+                bases_used = fit.get("bases") or []
+                label += ("\ndetrend: " + "+".join(bases_used)
+                          if bases_used else "\ndetrend: none")
+            else:
+                label = (f"best fit, only {fit['significance']:.1f}σ "
+                         "— not claimed")
             ax.plot(mx, my, "-", color=colour, linewidth=1.6, label=label)
             half = fit["duration_d"] * 24.0 / 2.0
             c = (fit["t0"] - t0_ref) * 24.0
             ax.axvspan(c - half, c + half, color="#ffffff", alpha=0.04)
             ax.axvline(c, color=colour, linewidth=0.8, linestyle="--", alpha=0.7)
-            axr.plot(x, (y - np.interp(jd, fit["model_t"], fit["model_mag"]))
-                     * 1000.0, ".", color="#888888", markersize=3, alpha=0.6)
+
+            # The measured duration, as a double arrow spanning first to
+            # last contact, parked a little BELOW the transit floor
+            # (larger mmag — the axis is inverted) where no data sit.
+            # Stated without an error bar on purpose: the duration comes
+            # off the fit's search grid, and inventing a sigma for it
+            # would dress a step size up as a measurement.
+            if fit["detected"] and np.isfinite(fit.get("duration_h",
+                                                       np.nan)):
+                y_arrow = ((fit["baseline"] + fit["depth_mag"]) * 1000.0
+                           + max(3.0, 0.25 * float(fit["depth_mmag"])))
+                ax.annotate("", xy=(c - half, y_arrow),
+                            xytext=(c + half, y_arrow),
+                            arrowprops=dict(arrowstyle="<->", color=colour,
+                                            lw=1.0, alpha=0.8))
+                dur_h = float(fit["duration_h"])
+                hh = int(dur_h)
+                mm = int(round((dur_h - hh) * 60.0))
+                if mm == 60:
+                    hh, mm = hh + 1, 0
+                ax.text(c, y_arrow + max(1.5, 0.08 * float(
+                            fit["depth_mmag"])),
+                        f"transit {hh} h {mm:02d} min", ha="center",
+                        va="top", fontsize=8, color=colour, alpha=0.9)
+
+            # The EXPECTED transit, from the archive ephemeris: predicted
+            # mid-time, catalogue depth ((Rp/Rs)^2 convention, mapped
+            # through the same limb darkening), archive duration when it
+            # has one.  Drawn only on BJD_TDB — against JD_UTC the
+            # horizontal offset would be the 8-minute time-system error
+            # wearing an O−C costume.  When both curves lie on top of
+            # each other, the night CONFIRMS the ephemeris; a visible
+            # shift IS the O−C, readable straight off the plot.
+            eph = r.get("ephemeris") or {}
+            if (fit["detected"] and r.get("time_system") == "BJD_TDB"
+                    and eph.get("period_d") and eph.get("t0_bjd")):
+                drift, epoch = o_minus_c(float(fit["t0"]),
+                                         float(eph["t0_bjd"]),
+                                         float(eph["period_d"]))
+                depth_pct = eph.get("depth_pct")
+                if drift is not None and depth_pct:
+                    t0_pred = (float(eph["t0_bjd"])
+                               + epoch * float(eph["period_d"]))
+                    dur_pred = ((float(eph["duration_h"]) / 24.0)
+                                if eph.get("duration_h")
+                                else float(fit["duration_d"]))
+                    rp_exp = math.sqrt(float(depth_pct) / 100.0)
+                    b = float(fit.get("impact_b") or 0.0)
+                    u1 = float(fit.get("ld_u1", LD_U1))
+                    u2 = float(fit.get("ld_u2", LD_U2))
+                    dflux = ld_central_depth(rp_exp, b, u1, u2)
+                    if dflux and 0.0 < dflux < 1.0:
+                        dmag = -2.5 * math.log10(1.0 - dflux)
+                        tmpl = ld_template(rp_exp, b, u1, u2)
+                        tt = np.linspace(float(np.min(jd)),
+                                         float(np.max(jd)), 400)
+                        em = (fit["baseline"]
+                              + dmag * ld_shape(tt, t0_pred, dur_pred,
+                                                tmpl))
+                        sig_min = (fit["t0_sigma_s"] / 60.0
+                                   if np.isfinite(fit.get("t0_sigma_s",
+                                                          np.nan))
+                                   else float("nan"))
+                        oc = (f"O−C {drift:+.1f} ± {sig_min:.1f} min"
+                              if np.isfinite(sig_min)
+                              else f"O−C {drift:+.1f} min")
+                        ax.plot((tt - t0_ref) * 24.0, em * 1000.0, "-",
+                                color="#55bbcc", linewidth=1.2, alpha=0.9,
+                                label=("expected (archive)\n"
+                                       f"T0 {t0_pred:.5f}, "
+                                       f"Rp/R★ {rp_exp:.4f}\n{oc}"))
+            # Same pairing as the overlay: y is detrended, so the model
+            # subtracted here must be transit-only — baseline + shape,
+            # never the trend a second time.
+            resid = (y - (fit["baseline"] + fit["depth_mag"]
+                          * ld_shape(jd, float(fit["t0"]),
+                                     float(fit["duration_d"]),
+                                     tmpl_fit))) * 1000.0
         else:
-            axr.plot(x, (y - float(np.median(y))) * 1000.0, ".",
-                     color="#888888", markersize=3, alpha=0.6)
+            resid = (y - float(np.median(y))) * 1000.0
+        if err_mmag is not None:
+            axr.errorbar(x, resid, yerr=err_mmag, fmt="none",
+                         ecolor="#888888", elinewidth=0.7, alpha=0.35,
+                         capsize=0, zorder=1)
+        axr.plot(x, resid, ".", color="#888888", markersize=3, alpha=0.6)
+
+        # What is left after the model: how big (STD) and whether it is
+        # noise or structure.  The lag-1 autocorrelation is the red-noise
+        # tell — white noise sits near 0, a leftover systematic (an
+        # airmass ramp nobody removed, a step at a flip) pushes it up,
+        # because neighbouring residuals then lean the same way.
+        if resid.size > 3:
+            rstd = float(np.std(resid, ddof=1))
+            d0 = resid[:-1] - float(np.mean(resid[:-1]))
+            d1 = resid[1:] - float(np.mean(resid[1:]))
+            denom = float(np.sqrt(np.sum(d0 * d0) * np.sum(d1 * d1)))
+            r1 = float(np.sum(d0 * d1) / denom) if denom > 0 else float("nan")
+            verdict = ("white-noise-like" if abs(r1) < 0.15
+                       else "mild structure" if abs(r1) < 0.4
+                       else "structure left") if np.isfinite(r1) else ""
+            note = f"STD {rstd:.2f} mmag"
+            if np.isfinite(r1):
+                note += f"  ·  lag-1 autocorr {r1:+.2f} ({verdict})"
+            axr.text(0.01, 0.94, note, transform=axr.transAxes,
+                     fontsize=8, color="#aaaaaa", va="top")
 
         ax.invert_yaxis()
         ax.set_ylabel("Δ magnitude [mmag]")
-        ax.set_title(f"{os.path.basename(r['folder'])}  ·  "
-                     f"RMS {r['rms_mmag']:.2f} mmag  ·  "
-                     f"{len(r['comps'])} comparison stars")
+        # Two lines of provenance: WHAT was observed (target, night, subs,
+        # filter — assembled by the worker from the headers) above HOW
+        # well it went.  A screenshot then answers both questions.
+        head = (f"{os.path.basename(r['folder'])}  ·  "
+                f"RMS {r['rms_mmag']:.2f} mmag  ·  "
+                f"{len(r['comps'])} comparison stars")
+        if r.get("title_bits"):
+            head = f"{r['title_bits']}\n{head}"
+        ax.set_title(head, fontsize=10)
         leg = ax.legend(loc="best", fontsize=8, facecolor="#2b2b2b",
                         edgecolor="#555555")
         for txt in leg.get_texts():
@@ -6822,6 +7090,18 @@ class SvenesisLightCurveWindow(QMainWindow):
             "needs to be honest about itself.")
         self.spin_bins.valueChanged.connect(self._redraw)
         row.addWidget(self.spin_bins)
+        self.chk_errbars = QCheckBox("Error bars")
+        self.chk_errbars.setChecked(False)
+        self.chk_errbars.setToolTip(
+            "Draw each raw point's 1-sigma uncertainty as a whisker — the "
+            "same per-point error the fit weights with and the CSV carries "
+            "as err_mag (CCD equation: star + sky photon noise and read "
+            "noise).\n\n"
+            "Presentation only, like binning: on or off, the fit and the "
+            "significance see the identical numbers. Off by default "
+            "because a few hundred whiskers bury the transit shape.")
+        self.chk_errbars.toggled.connect(self._redraw)
+        row.addWidget(self.chk_errbars)
         row.addStretch()
         lay.addLayout(row)
         parent.addWidget(box)
@@ -7212,7 +7492,8 @@ class SvenesisLightCurveWindow(QMainWindow):
 
     def _redraw(self) -> None:
         if self._result is not None:
-            self.plot.render(self._result, self.spin_bins.value())
+            self.plot.render(self._result, self.spin_bins.value(),
+                             self.chk_errbars.isChecked())
 
     # -- reporting --------------------------------------------------------
     def _result_html(self, r: dict) -> str:
