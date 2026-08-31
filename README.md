@@ -497,9 +497,15 @@ Reads the current plate-solved image from Siril, identifies the main astronomica
 
 ## Svenesis LightCurve
 
-**File:** `Svenesis-LightCurve.py` (v1.0.3) — **[Detailed Instructions](Instructions/Svenesis-LightCurve-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-LightCurve-Instructions_de.md)**
+**File:** `Svenesis-LightCurve.py` (v1.0.4) — **[Detailed Instructions](Instructions/Svenesis-LightCurve-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-LightCurve-Instructions_de.md)**
 
 Exoplanet transit photometry inside Siril, in the spirit of [EXOTIC](https://github.com/rzellem/EXOTIC) (NASA's Exoplanet Watch pipeline) and [HOPS](https://github.com/ExoWorldsSpies/hops) — and tested against EXOTIC on its own sample data, with matching results. Point it at the folder holding one night's sub-exposures of an exoplanet host star. It measures how that star's brightness changed relative to other stars in the same field, removes the systematic trends it can account for, fits a transit — and tells you whether the dip is real.
+
+### Screenshots
+
+![Svenesis LightCurve — a non-detection told honestly](https://github.com/sramuschkat/Siril-Scripts/raw/main/screenshots/Svenesis_LightCurve_1_0_4.jpg)
+
+*A non-detection told honestly (TOI-3540.01, 160 subs): the wall-clock axis across the top (local time from the headers), the cyan expected transit from the archive ephemeris with its contact times stamped below — "(no transit claimed by the fit)" — the meridian flip marked at 00:57, and the unclaimed 0.0σ best fit that latched onto the flip step, wearing no detection markers.*
 
 ### Who does what
 
@@ -523,13 +529,17 @@ Exoplanet transit photometry inside Siril, in the spirit of [EXOTIC](https://git
 
 **The significance test is two-sided.** A real transit returns to the baseline it left; a trend does not. Pooling both sides into one out-of-transit mean loses that: on a monotonic ramp with no transit in it — uncorrected extinction, a drifting cloud, focus creep — the pooled contrast reaches **+25σ**. Comparing each side separately and taking the weaker returns **−10σ** on the same data. The floor below which nothing is claimed is **calibrated, not chosen**: the significance is the best of ~40 000 grid nodes, so it is not a Gaussian σ. Measured over 1200 transit-free noise runs through that same search, a 3σ floor lets **one run in ten** through — where the label is read as one in 750 — while **4.5σ gives 0.25 %** and still detects 89 % at 6 mmag and 100 % at 8. The table has been re-measured three times — a finer search, a robust scatter, and a limb-darkened model fitted simultaneously with the systematics: a calibration is only valid for the search, the statistic *and* the model it was measured on. The measured rate is printed next to every result. A transit clipped by the start or end of the run returns zero, because without baseline on both sides the question cannot be answered.
 
+### The chart tells the whole story
+
+The legend quotes T0 and Rp/R★ with errors and names the detrending bases; spike-rejected points appear as red crosses instead of vanishing; per-point error bars have an on/off switch; the residual panel reports its STD and lag-1 autocorrelation with a verdict. Beside the fitted model, the **expected transit from the archive ephemeris** is drawn *whether or not the fit claimed anything* — on a detection the shift between the curves **is** the O−C, quoted in minutes with its error; on a non-detection the legend says whether a transit was even due in your window, or names the nearest mid-transit in hours from the run. **TESS candidates** (`TOI-XXXX.NN`) get their ephemeris from the archive's TOI list when the confirmed-planet table cannot know them, with the TFOPWG disposition said out loud and a red warning on false positives. And the chart speaks your planning tool's language: a wall-clock axis across the top (local time from N.I.N.A.'s `DATE-LOC`, UTC otherwise — the axis says which), the predicted start/mid/end contacts stamped in clock time, and the meridian flip drawn as a dashed marker at the moment the field turned. One grammar throughout: orange dashed is the flip, cyan dotted are contacts, and a dashed mid-transit line exists only for a claimed detection.
+
 ### Output
 
 `lightcurve/lightcurve.csv` (JD, raw, centred, detrended, error, airmass), the plot as PNG, a plain-text report with the comparison stars, every rejection and its reason, the method, and the result — and, when the times are BJD_TDB, an `AAVSO_exoplanet.txt` in Exoplanet Watch's format with T0 ± error, both depth conventions, Rp/R★ ± error and duration in the header.
 
 ### Tests
 
-`tests/test_lightcurve_helpers.py` runs with plain `python3` — no Siril required. Over 450 checks against input with a known answer: the J2000 epoch, sec z, synthetic transits of stated depths recovered by the full photometry engine and the full fit, twelve pure-noise runs that must not be claimed, the monotonic ramp that the two-sided test exists for, error bars calibrated against 24 independent synthetic nights, and the limb-darkened depth conventions round-tripped through the same model the fit uses.
+`tests/test_lightcurve_helpers.py` runs with plain `python3` — no Siril required. Over 540 checks against input with a known answer: the J2000 epoch, sec z, synthetic transits of stated depths recovered by the full photometry engine and the full fit, twelve pure-noise runs that must not be claimed, the monotonic ramp that the two-sided test exists for, error bars calibrated against 24 independent synthetic nights, and the limb-darkened depth conventions round-tripped through the same model the fit uses.
 
 ---
 

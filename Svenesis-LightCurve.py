@@ -1,6 +1,6 @@
 """
 Svenesis LightCurve
-Script Version: 1.0.3
+Script Version: 1.0.4
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -90,6 +90,64 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.0.4 - TESS candidates get their ephemeris from the TOI list
+      - A target named TOI-XXXX.NN is a CANDIDATE designation, which the
+        archive's confirmed-planet tables cannot know — the run on
+        TOI-3540.01 lost its whole ephemeris (expected model, O-C,
+        transit window) to a spelling nobody got wrong.  When the planet
+        lookup misses and the name matches the TOI pattern, the
+        archive's own `toi` table is asked instead; its ppm depth and
+        hour duration are converted to the units the script speaks.
+      - The TFOPWG disposition is SAID, not swallowed: PC/CP/KP/APC are
+        informational, FP/FA get a red warning that a 'transit' matching
+        this ephemeris is most likely not a planet — and the warning
+        repeats on cache hits, because a cached false positive is still
+        a false positive.
+      - A bare "TOI-3540" with several candidates lists them and asks
+        which one, the same contract as a multi-planet system.
+      - THE EXPECTED CURVE NO LONGER NEEDS A DETECTION.  It was gated
+        on the fit claiming a transit — exactly backwards for the
+        non-detection case, where the prediction is the more valuable
+        half: it answers "was a transit even due in this window?".  The
+        epoch now comes from the window's centre (a wandering fit
+        cannot drag the prediction), the O−C line appears only with a
+        fitted T0 to compare, an in-window prediction without a
+        detection says "(no transit claimed by the fit)", and a
+        prediction OUTSIDE the window says so and names the nearest
+        mid-transit in hours from the run.
+      - THE CHART SPEAKS THE PLANNING TOOL'S LANGUAGE.  A night is
+        planned in wall-clock time ("start 21:50 … flip 00:55") and was
+        measured in Julian Dates — the anchors could not be found again.
+        Now: a second time axis across the top shows HH:MM, in LOCAL
+        time when the frames carry N.I.N.A.'s DATE-LOC (the DATE-OBS/
+        DATE-LOC pair yields the site's UTC offset, daylight saving
+        included, nothing to configure) and in UTC otherwise — the axis
+        says which.  Clock labels first take the BJD_TDB correction OFF
+        again; a clock reading in barycentric time would be minutes
+        wrong.
+      - The predicted transit's start/mid/end contacts are stamped along
+        the bottom in clock time, the same trio the planner prints under
+        its dip; labels outside the run are dropped, not pinned to the
+        edge.
+      - The meridian flip is DRAWN, not only warned about: a dashed
+        marker in both panels at the moment the field turned ("flip
+        00:55"), so a step or an 'ingress' can be checked against it by
+        eye.  The flip time is measured from the same registration pass
+        that detects the flip angle.
+      - The bottom axis now names the actual time system of its values
+        (BJD TDB when the conversion ran) instead of claiming UTC.
+      - The in-app help caught up: a new "Reading the chart" tab
+        (legend numbers, outliers, error-bar switch, the three
+        expected-curve cases, clock axis, contacts, flip marker and the
+        dashed-line grammar) and the TOI fallback with its FP warning
+        in the star-choosing tab.
+      - An UNCLAIMED fit no longer wears detection markers: its dashed
+        mid-transit line and window shading are drawn only when the fit
+        actually claims a transit.  On the TOI-3540.01 run a 0.0σ fit
+        that latched onto the meridian-flip step put its T0 line right
+        beside the flip marker, in a near-identical colour — two dashed
+        lines, one meaning.  The unclaimed curve itself stays, honestly
+        labelled.
 1.0.3 - The chart tells the whole story (what HOPS shows, we show)
       - THE EXPECTED TRANSIT FROM THE ARCHIVE EPHEMERIS is drawn beside
         the fit: predicted mid-time, catalogue depth ((Rp/Rs)^2, mapped
@@ -223,10 +281,11 @@ import matplotlib
 matplotlib.use("QtAgg")
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+from matplotlib.ticker import FuncFormatter
 
 from sirilpy import LogColor
 
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 
 # The full manual on GitHub, linked from the help dialog.  The in-app
 # tabs are the quick reference; the manual carries the measurements
@@ -799,6 +858,79 @@ def _jd_from_dateobs(date_obs: str) -> float:
     return float(jdn) - 0.5 + day_frac - off_h / 24.0
 
 
+def utc_offset_hours(date_obs: str, date_loc: str):
+    """The site's UTC offset in hours, or None when it cannot be known.
+
+    N.I.N.A. writes ``DATE-LOC`` (the local civil clock) next to
+    ``DATE-OBS`` (UTC) into every frame, and their difference IS the
+    observatory's UTC offset — time zone AND daylight saving already
+    folded in, with nothing to configure and no tz database to guess
+    from a longitude.  Rounded to a quarter hour because real offsets
+    come in nothing finer (Nepal is :45), which also swallows the
+    sub-second write skew between the two stamps.  Anything beyond
+    ±14 h is no time zone on Earth and returns None rather than a
+    clock that lies.
+    """
+    j_utc = _jd_from_dateobs(date_obs)
+    j_loc = _jd_from_dateobs(date_loc)
+    if not (math.isfinite(j_utc) and math.isfinite(j_loc)):
+        return None
+    off = round((j_loc - j_utc) * 24.0 * 4.0) / 4.0
+    if abs(off) > 14.0:
+        return None
+    return off
+
+
+def clock_hhmm(jd_utc_val: float, utc_off_h=None) -> str:
+    """``HH:MM`` civil clock reading for a UTC Julian Date.
+
+    A planning tool speaks in wall-clock time ("start 21:50, flip
+    00:55") and a light curve in Julian Dates; this is the bridge.
+    The +0.5 moves from the JD convention (integer boundary at NOON
+    UTC) to the civil one (midnight), the offset shifts to local time
+    when the caller knows it, and the rounding is symmetric so 23:59:31
+    reads 00:00, not 24:00.
+    """
+    if jd_utc_val is None or not math.isfinite(jd_utc_val):
+        return ""
+    v = jd_utc_val + (utc_off_h or 0.0) / 24.0
+    mins = int(round(((v + 0.5) % 1.0) * 1440.0)) % 1440
+    return f"{mins // 60:02d}:{mins % 60:02d}"
+
+
+def flip_boundary_index(homographies):
+    """Index of the first frame past the meridian flip, or None.
+
+    The rotation is read off each homography exactly the way
+    ``rotation_spread_deg`` reads it; the boundary is the first frame
+    sitting more than 90° (on the circle) from the first readable
+    frame.  90° splits the two clusters a real flip produces — frames
+    live at ~0° or ~180°, never in between — while staying far above
+    any genuine field rotation a tracked run can accumulate.  The
+    caller turns the index into a TIME via that frame's DATE-OBS, so
+    the flip can be drawn where it happened instead of only warned
+    about.
+    """
+    base = None
+    for i, h in enumerate(homographies or []):
+        if h is None:
+            continue
+        try:
+            h00 = float(getattr(h, "h00", 0.0))
+            h10 = float(getattr(h, "h10", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if abs(h00) < 1e-12 and abs(h10) < 1e-12:
+            continue                    # unset registration, not a rotation
+        ang = math.degrees(math.atan2(h10, h00))
+        if base is None:
+            base = ang
+            continue
+        if abs((ang - base + 180.0) % 360.0 - 180.0) > 90.0:
+            return i
+    return None
+
+
 def _sexagesimal(text: str) -> float:
     """Degrees from ``12:34:56.7``, ``12 34 56.7`` or a plain decimal.
 
@@ -1329,6 +1461,99 @@ def archive_lookup(name: str, timeout: float = ARCHIVE_TIMEOUT_S,
         "teff_k": _num("st_teff"),
         "logg": _num("st_logg"),
         "vmag": _num("sy_vmag"),
+    }, ""
+
+
+_TOI_RE = re.compile(r"^TOI[-_\s]*(\d+)(?:\.(\d{1,2}))?$", re.IGNORECASE)
+
+# TFOPWG working-group dispositions, spelled out for the log.  FP/FA are
+# the ones worth shouting about: a "transit" matching a false positive's
+# ephemeris is most likely not a planet.
+_TOI_DISPOSITIONS = {
+    "PC": "planet candidate", "CP": "confirmed planet",
+    "KP": "known planet", "APC": "ambiguous planet candidate",
+    "FP": "FALSE POSITIVE", "FA": "false alarm",
+}
+
+
+def looks_like_toi(name) -> bool:
+    """True when a name is a TESS Object of Interest designation."""
+    return bool(_TOI_RE.match(str(name or "").replace(" ", "")))
+
+
+def toi_lookup(name: str, timeout: float = ARCHIVE_TIMEOUT_S,
+               opener=None):
+    """The TESS candidate list, for names the planet tables cannot know.
+
+    ``TOI-3540.01`` is a CANDIDATE designation.  The archive's confirmed-
+    planet tables index final names ("TOI-3540 b" once confirmed), so a
+    follow-up run on a candidate used to lose its whole ephemeris —
+    expected model, O−C, transit window — to a spelling nobody got wrong.
+    The archive publishes the ``toi`` table for exactly these; its depth
+    arrives in ppm and its duration in hours, converted here to the units
+    the rest of this script speaks.
+
+    Returns ``(dict, note)`` shaped like `archive_lookup`, plus a
+    ``disposition`` field (TFOPWG: PC/CP/KP/APC/FP/FA) the caller is
+    expected to SAY — an ephemeris for a false positive deserves a
+    warning, not a quiet green line.
+    """
+    m = _TOI_RE.match(str(normalise_planet_name(name)).replace(" ", ""))
+    if not m:
+        return None, "not a TOI designation"
+    base = int(m.group(1))
+    cols = ("toi,tfopwg_disp,ra,dec,pl_orbper,pl_tranmid,pl_trandurh,"
+            "pl_trandep,st_teff,st_logg,st_tmag")
+    # The toi column is numeric, so the WHERE clause is built from parsed
+    # integers only — nothing user-typed reaches the query as text.
+    if m.group(2):
+        where = f"toi = {base}.{int(m.group(2)):02d}"
+    else:
+        # A bare "TOI-3540" means any candidate of that star.
+        where = f"toi >= {base}.01 and toi < {base + 1}"
+    query = f"select {cols} from toi where {where}"
+    url = (ARCHIVE_TAP + "?"
+           + urllib.parse.urlencode({"query": query, "format": "csv"}))
+    try:
+        fetch = opener or urllib.request.urlopen
+        with fetch(url, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", "replace")
+    except Exception as exc:                       # noqa: BLE001
+        _log_swallowed(exc)
+        return None, f"the TOI list could not be reached ({type(exc).__name__})"
+    rows = list(csv.DictReader(io.StringIO(body)))
+    if not rows:
+        return None, f"the TOI list has no candidate called {name!r} either"
+    if len(rows) > 1:
+        tois = ", ".join(sorted("TOI-" + str(r.get("toi", "?"))
+                                for r in rows))
+        return None, (f"TOI-{base} has {len(rows)} candidates ({tois}) — "
+                      "name the one you observed, because their "
+                      "ephemerides differ")
+
+    def _num(key_):
+        try:
+            v = float(rows[0].get(key_, "") or "nan")
+        except (TypeError, ValueError):
+            return None
+        return v if math.isfinite(v) else None
+
+    ra, dec = _num("ra"), _num("dec")
+    if ra is None or dec is None:
+        return None, ("the TOI list knows this candidate but has no "
+                      "position for it")
+    depth_ppm = _num("pl_trandep")
+    return {
+        "name": "TOI-" + str(rows[0].get("toi", "") or base),
+        "ra_deg": ra, "dec_deg": dec,
+        "period_d": _num("pl_orbper"),
+        "t0_bjd": _num("pl_tranmid"),
+        "duration_h": _num("pl_trandurh"),      # already hours
+        "depth_pct": (depth_ppm / 1e4 if depth_ppm is not None else None),
+        "teff_k": _num("st_teff"),
+        "logg": _num("st_logg"),
+        "vmag": _num("st_tmag"),                # TESS mag, display only
+        "disposition": str(rows[0].get("tfopwg_disp", "") or "").strip(),
     }, ""
 
 
@@ -2751,7 +2976,7 @@ def inspect_frame(path: str, header=None) -> dict:
     """
     out = {"path": path, "kind": None, "exp_s": None, "gain_v": None,
            "temp_v": None, "binning": 1, "dims": None, "instrument": None,
-           "filter": "", "date_obs": "", "object": "",
+           "filter": "", "date_obs": "", "date_loc": "", "object": "",
            "objctra": "", "objctdec": ""}
     h = header if header is not None else _read_header(path)
     if h is None:
@@ -2764,6 +2989,10 @@ def inspect_frame(path: str, header=None) -> dict:
     out["objctra"] = str(h.get("OBJCTRA", "") or "").strip()
     out["objctdec"] = str(h.get("OBJCTDEC", "") or "").strip()
     out["date_obs"] = str(h.get("DATE-OBS", h.get("DATE_OBS", "")) or "").strip()
+    # N.I.N.A.'s local-clock twin of DATE-OBS: the pair yields the site's
+    # UTC offset, so the chart can label its axis in the same wall-clock
+    # time the user's planning tool speaks.
+    out["date_loc"] = str(h.get("DATE-LOC", h.get("DATE_LOC", "")) or "").strip()
     out["instrument"] = str(h.get("INSTRUME", "") or "").strip() or None
     for key in ("EXPTIME", "EXPOSURE"):
         if key in h:
@@ -4791,6 +5020,24 @@ class LightCurveWorker(QThread):
                                    for k, v in quality.items()}
             wh = getattr(self, "_frame_wh", None) or (0, 0)
             self._drift = drift_envelope(homs, self._ref_shift, wh[0], wh[1])
+            # WHEN the flip happened, not only THAT it happened: the
+            # boundary frame's DATE-OBS (midpoint with its predecessor
+            # when both are readable) becomes a marker in the chart, the
+            # same "flip 00:55" flag the planning tool shows — so the
+            # user can check with their own eyes whether a step or an
+            # "ingress" coincides with it.
+            self._flip_jd_utc = float("nan")
+            idx = flip_boundary_index(homs)
+            infos = getattr(self, "_light_infos", []) or []
+            if idx is not None and idx < len(infos):
+                j_at = _jd_from_dateobs(infos[idx].get("date_obs") or "")
+                j_before = (_jd_from_dateobs(
+                    infos[idx - 1].get("date_obs") or "")
+                    if idx > 0 else float("nan"))
+                if math.isfinite(j_at) and math.isfinite(j_before):
+                    self._flip_jd_utc = 0.5 * (j_at + j_before)
+                elif math.isfinite(j_at):
+                    self._flip_jd_utc = j_at
         except Exception as exc:
             _log_swallowed(exc)
             return 0.0
@@ -5413,11 +5660,41 @@ class LightCurveWorker(QThread):
             if hit:
                 self._emit(f"  {pl} — ephemeris from the local cache "
                            f"(name from {src}).", LogColor.BLUE)
+                # A cached false positive is still a false positive — the
+                # warning must not be a first-run-only event.
+                if str(hit.get("disposition") or "").upper() in ("FP",
+                                                                 "FA"):
+                    self._emit(
+                        "  TFOPWG calls this signal a false positive: a "
+                        "'transit' matching this ephemeris is most likely "
+                        "NOT a planet.", LogColor.RED)
                 return hit, ""
             self._emit(f"  Looking up {pl} at the NASA Exoplanet "
                        f"Archive for the ephemeris (name from {src})…",
                        LogColor.BLUE)
             found, why = archive_lookup(pl)
+            if not found and looks_like_toi(pl):
+                # TOI-XXXX.01 is a CANDIDATE designation — the confirmed-
+                # planet table cannot know it, and losing the whole
+                # ephemeris to that was a spelling nobody got wrong.
+                self._emit(f"  {why} — but that is a TESS candidate "
+                           "designation; asking the archive's TOI list "
+                           "instead…", LogColor.BLUE)
+                found, why = toi_lookup(pl)
+                if found:
+                    disp = str(found.get("disposition") or "").upper()
+                    label = _TOI_DISPOSITIONS.get(disp, disp or "unknown")
+                    bad = disp in ("FP", "FA")
+                    self._emit(f"  Found in the TOI list — TFOPWG "
+                               f"disposition: {disp or '—'} ({label}).",
+                               LogColor.RED if bad else LogColor.BLUE)
+                    if bad:
+                        self._emit(
+                            "  The working group calls this signal a "
+                            "false positive: a 'transit' matching this "
+                            "ephemeris is most likely NOT a planet. The "
+                            "measurement below still stands as "
+                            "photometry.", LogColor.RED)
             if found:
                 cache[pl.upper()] = found
                 self._store_target_cache(cache)
@@ -6233,6 +6510,10 @@ class LightCurveWorker(QThread):
             "fwhm_px": fwhm,
             "fit": fit,
             "flip_deg": flip,
+            "flip_jd_utc": float(getattr(self, "_flip_jd_utc",
+                                         float("nan"))),
+            "utc_offset_h": utc_offset_hours(
+                info0.get("date_obs") or "", info0.get("date_loc") or ""),
             "yield_note": yield_note,
             "yield_severity": severity,
             "target_saturated": bool(target_saturated),
@@ -6469,6 +6750,53 @@ class LightCurvePlot(FigureCanvas):
         self._style(ax)
         self._style(axr)
 
+        # The bridge from plot time back to the wall clock the user's
+        # planning tool speaks.  Plot time is BJD_TDB when the run got
+        # that far — the barycentric+TDB offset (several minutes, the
+        # same quantity the log announces) must come OFF again before a
+        # value may be printed as a clock reading, or every label would
+        # be wrong by exactly the correction we were proud of.
+        jd_utc_arr = r.get("jd_utc")
+        bjd_off = 0.0
+        if jd_utc_arr is not None and np.size(jd_utc_arr) == jd.size \
+                and jd.size:
+            bjd_off = float(np.mean(jd - np.asarray(jd_utc_arr)))
+        utc_off = r.get("utc_offset_h")
+
+        def _clock_at(hours):
+            return clock_hhmm(t0_ref + hours / 24.0 - bjd_off, utc_off)
+
+        # A second time axis across the top, in HH:MM — local when the
+        # headers carried DATE-LOC, UTC otherwise, and the axis SAYS
+        # which, because a clock that might be either is worse than no
+        # clock.  This is what lets "start 21:50 … flip 00:55" from the
+        # planning screenshot be found again on the measurement.
+        secax = ax.secondary_xaxis("top")
+        secax.xaxis.set_major_formatter(
+            FuncFormatter(lambda v, _pos: _clock_at(v)))
+        secax.set_xlabel(
+            ("local clock (UTC%+g)" % utc_off) if utc_off is not None
+            else "clock (UTC)", fontsize=8)
+        secax.tick_params(colors="#bbbbbb", labelsize=7)
+        secax.xaxis.label.set_color("#cccccc")
+        for sp in secax.spines.values():
+            sp.set_color("#555555")
+
+        # The meridian flip as a vertical marker in BOTH panels, stamped
+        # with its clock time — the planner shows "⚠ Flip 00:55" and now
+        # the measurement shows the same line, so a step or an 'ingress'
+        # can be checked against it by eye instead of by arithmetic.
+        flip_jd = r.get("flip_jd_utc")
+        if (r.get("flip_deg", 0.0) >= FLIP_ROTATION_DEG
+                and flip_jd is not None and np.isfinite(flip_jd)):
+            xf = (flip_jd + bjd_off - t0_ref) * 24.0
+            for a in (ax, axr):
+                a.axvline(xf, color="#ff8844", linewidth=1.0,
+                          linestyle="--", alpha=0.75)
+            ax.text(xf, 0.97, f" flip {_clock_at(xf)}",
+                    transform=ax.get_xaxis_transform(), color="#ff8844",
+                    fontsize=8, ha="left", va="top")
+
         # The same per-point sigma the fit weights with and the CSV
         # carries as err_mag — drawn as whiskers UNDER the points, thin
         # and translucent, so a long run does not turn into a picket
@@ -6550,8 +6878,17 @@ class LightCurvePlot(FigureCanvas):
             ax.plot(mx, my, "-", color=colour, linewidth=1.6, label=label)
             half = fit["duration_d"] * 24.0 / 2.0
             c = (fit["t0"] - t0_ref) * 24.0
-            ax.axvspan(c - half, c + half, color="#ffffff", alpha=0.04)
-            ax.axvline(c, color=colour, linewidth=0.8, linestyle="--", alpha=0.7)
+            # Mid-transit line and window shading ONLY for a claimed
+            # detection.  An unclaimed fit keeps its curve (honestly
+            # labelled), but dressing its T0 in detection markers made a
+            # 0.0σ fit that latched onto the meridian-flip step look
+            # like a second flip line standing right beside the real
+            # one — a dashed line in this chart must mean exactly one
+            # thing.
+            if fit["detected"]:
+                ax.axvspan(c - half, c + half, color="#ffffff", alpha=0.04)
+                ax.axvline(c, color=colour, linewidth=0.8,
+                           linestyle="--", alpha=0.7)
 
             # The measured duration, as a double arrow spanning first to
             # last contact, parked a little BELOW the transit floor
@@ -6582,35 +6919,46 @@ class LightCurvePlot(FigureCanvas):
             # through the same limb darkening), archive duration when it
             # has one.  Drawn only on BJD_TDB — against JD_UTC the
             # horizontal offset would be the 8-minute time-system error
-            # wearing an O−C costume.  When both curves lie on top of
-            # each other, the night CONFIRMS the ephemeris; a visible
-            # shift IS the O−C, readable straight off the plot.
+            # wearing an O−C costume.  Drawn WHETHER OR NOT the fit
+            # claimed a transit: on a detection the shift between the two
+            # curves IS the O−C, and on a non-detection the prediction is
+            # the more valuable half — it answers "was a transit even due
+            # in this window?", which a TOI-3540.01 run asked and the
+            # first cut could not answer.  The epoch comes from the
+            # window's centre, not from the fitted T0, so a fit that
+            # wandered off cannot drag the prediction with it.
             eph = r.get("ephemeris") or {}
-            if (fit["detected"] and r.get("time_system") == "BJD_TDB"
+            depth_pct = eph.get("depth_pct")
+            if (r.get("time_system") == "BJD_TDB" and depth_pct
                     and eph.get("period_d") and eph.get("t0_bjd")):
-                drift, epoch = o_minus_c(float(fit["t0"]),
-                                         float(eph["t0_bjd"]),
-                                         float(eph["period_d"]))
-                depth_pct = eph.get("depth_pct")
-                if drift is not None and depth_pct:
-                    t0_pred = (float(eph["t0_bjd"])
-                               + epoch * float(eph["period_d"]))
-                    dur_pred = ((float(eph["duration_h"]) / 24.0)
-                                if eph.get("duration_h")
-                                else float(fit["duration_d"]))
-                    rp_exp = math.sqrt(float(depth_pct) / 100.0)
-                    b = float(fit.get("impact_b") or 0.0)
-                    u1 = float(fit.get("ld_u1", LD_U1))
-                    u2 = float(fit.get("ld_u2", LD_U2))
-                    dflux = ld_central_depth(rp_exp, b, u1, u2)
-                    if dflux and 0.0 < dflux < 1.0:
-                        dmag = -2.5 * math.log10(1.0 - dflux)
-                        tmpl = ld_template(rp_exp, b, u1, u2)
-                        tt = np.linspace(float(np.min(jd)),
-                                         float(np.max(jd)), 400)
-                        em = (fit["baseline"]
-                              + dmag * ld_shape(tt, t0_pred, dur_pred,
-                                                tmpl))
+                period = float(eph["period_d"])
+                t_center = 0.5 * (float(np.min(jd)) + float(np.max(jd)))
+                epoch = int(round((t_center - float(eph["t0_bjd"]))
+                                  / period))
+                t0_pred = float(eph["t0_bjd"]) + epoch * period
+                dur_pred = ((float(eph["duration_h"]) / 24.0)
+                            if eph.get("duration_h")
+                            else float(fit["duration_d"]))
+                rp_exp = math.sqrt(float(depth_pct) / 100.0)
+                b = float(fit.get("impact_b") or 0.0)
+                u1 = float(fit.get("ld_u1", LD_U1))
+                u2 = float(fit.get("ld_u2", LD_U2))
+                dflux = ld_central_depth(rp_exp, b, u1, u2)
+                if dflux and 0.0 < dflux < 1.0:
+                    dmag = -2.5 * math.log10(1.0 - dflux)
+                    tmpl = ld_template(rp_exp, b, u1, u2)
+                    tt = np.linspace(float(np.min(jd)),
+                                     float(np.max(jd)), 400)
+                    em = (fit["baseline"]
+                          + dmag * ld_shape(tt, t0_pred, dur_pred, tmpl))
+                    in_window = (t0_pred + dur_pred / 2.0
+                                 > float(np.min(jd))
+                                 and t0_pred - dur_pred / 2.0
+                                 < float(np.max(jd)))
+                    if fit["detected"]:
+                        drift, _ep = o_minus_c(float(fit["t0"]),
+                                               float(eph["t0_bjd"]),
+                                               period)
                         sig_min = (fit["t0_sigma_s"] / 60.0
                                    if np.isfinite(fit.get("t0_sigma_s",
                                                           np.nan))
@@ -6618,11 +6966,48 @@ class LightCurvePlot(FigureCanvas):
                         oc = (f"O−C {drift:+.1f} ± {sig_min:.1f} min"
                               if np.isfinite(sig_min)
                               else f"O−C {drift:+.1f} min")
-                        ax.plot((tt - t0_ref) * 24.0, em * 1000.0, "-",
-                                color="#55bbcc", linewidth=1.2, alpha=0.9,
-                                label=("expected (archive)\n"
-                                       f"T0 {t0_pred:.5f}, "
-                                       f"Rp/R★ {rp_exp:.4f}\n{oc}"))
+                        label = ("expected (archive)\n"
+                                 f"T0 {t0_pred:.5f}, "
+                                 f"Rp/R★ {rp_exp:.4f}\n{oc}")
+                    elif in_window:
+                        # The prediction says a transit crossed this run;
+                        # the fit could not claim one.  Both facts belong
+                        # in the picture.
+                        label = ("expected (archive)\n"
+                                 f"T0 {t0_pred:.5f}, "
+                                 f"Rp/R★ {rp_exp:.4f}\n"
+                                 "(no transit claimed by the fit)")
+                    else:
+                        dh = (t0_pred - t_center) * 24.0
+                        label = ("expected (archive): no transit "
+                                 "predicted in this window\n"
+                                 f"nearest mid-transit {t0_pred:.4f} "
+                                 f"({dh:+.1f} h from this run)")
+                    ax.plot((tt - t0_ref) * 24.0, em * 1000.0, "-",
+                            color="#55bbcc", linewidth=1.2, alpha=0.9,
+                            label=label)
+                    # The predicted contact times as clock stamps along
+                    # the bottom — start/mid/end, exactly the trio the
+                    # planning tool prints under its transit dip.  Only
+                    # the ones that fall inside the run are drawn: a
+                    # label pinned to the axes edge would claim a time
+                    # the chart does not cover.
+                    xmin = (float(np.min(jd)) - t0_ref) * 24.0
+                    xmax = (float(np.max(jd)) - t0_ref) * 24.0
+                    for tc, tag in (
+                            (t0_pred - dur_pred / 2.0, "start"),
+                            (t0_pred, "mid"),
+                            (t0_pred + dur_pred / 2.0, "end")):
+                        xc = (tc - t0_ref) * 24.0
+                        if xmin <= xc <= xmax:
+                            ax.axvline(xc, color="#55bbcc",
+                                       linewidth=0.7, linestyle=":",
+                                       alpha=0.45)
+                            ax.text(xc, 0.03,
+                                    f"{tag} {_clock_at(xc)}",
+                                    transform=ax.get_xaxis_transform(),
+                                    color="#55bbcc", fontsize=7,
+                                    ha="center", va="bottom", alpha=0.9)
             # Same pairing as the overlay: y is detrended, so the model
             # subtracted here must be transit-only — baseline + shape,
             # never the trend a second time.
@@ -6678,7 +7063,12 @@ class LightCurvePlot(FigureCanvas):
         axr.axhline(0.0, color="#555555", linewidth=0.8)
         axr.invert_yaxis()
         axr.set_ylabel("resid [mmag]")
-        axr.set_xlabel(f"hours from JD {t0_ref:.0f} (UTC)")
+        # Name the ACTUAL time system of the axis — the values are
+        # BJD_TDB whenever the conversion ran, and now that a clock axis
+        # sits on top, a bottom label claiming UTC for BJD values would
+        # be a visible self-contradiction of about eight minutes.
+        axr.set_xlabel(f"hours from JD {t0_ref:.0f} "
+                       f"({(r.get('time_system') or 'UTC').replace('_', ' ')})")
 
         # constrained layout handles the shared-x subplots that
         # tight_layout warns about and lays out incorrectly.
@@ -8063,6 +8453,17 @@ reference itself when it can).</li>
 than using your number directly. A position two pixels off the centroid
 puts the aperture off-centre for the whole run, and the flux it loses
 changes with the seeing — which is exactly the shape of a fake trend.</p>
+<p><b>TESS candidates are a different table.</b> A target named
+<tt>TOI-3540.01</tt> is a <i>candidate</i> designation the archive's
+confirmed-planet table cannot know. When the planet lookup misses and
+the name matches the TOI pattern, the archive's own <tt>toi</tt> list
+is asked instead — ppm depth and hour duration converted to the units
+the rest of the run speaks. The TFOPWG disposition is said, not
+swallowed: PC/CP/KP/APC are informational, <b>FP/FA get a red
+warning</b> that a "transit" matching this ephemeris is most likely
+not a planet — repeated on cache hits, because a cached false positive
+is still a false positive. A bare <tt>TOI-3540</tt> with several
+candidates lists them and asks which one.</p>
 
 <h2 style='color:#88aaff'>Calibration</h2>
 <p><b>Nothing has to be prepared, and you need not navigate.</b> Point at
@@ -8323,6 +8724,57 @@ and "the tool crashed" should not look the same.</p>
 <p>Three sigma is the textbook floor for claiming a detection. ExoClock and
 AAVSO submissions want five or more — but that is a decision for the
 submission, not for the fit.</p>
+""")
+
+        _tab("Reading the chart", """
+<h2 style='color:#88aaff'>The chart carries the whole result</h2>
+<p>The legend quotes <b>T0 and Rp/R★ with their errors</b> and names
+the detrending bases, so a screenshot is a complete measurement.
+Spike-rejected points appear as <b>red crosses</b> ("N outlier(s), not
+fitted") instead of silently vanishing — judge for yourself that it
+was a satellite, not an egress. Per-point <b>error bars</b> have an
+on/off switch, off by default: a long run turns into a picket fence.
+The residual panel's corner reports its STD and the <b>lag-1
+autocorrelation</b> with a verdict (white-noise-like / mild structure /
+structure left) — the red-noise tell that separates clean noise from a
+leftover systematic.</p>
+
+<h2 style='color:#88aaff'>The expected transit from the archive</h2>
+<p>Beside the fitted model, the <b>expected transit</b> from the
+archive ephemeris is drawn in cyan — <i>whether or not the fit claimed
+anything</i>. Three cases, all in the legend:</p>
+<ul>
+<li><b>Detection</b> — the shift between the two curves IS the O−C,
+quoted in minutes with its error.</li>
+<li><b>No detection, transit due</b> — "(no transit claimed by the
+fit)": both facts in one picture.</li>
+<li><b>No detection, no transit due</b> — the nearest mid-transit is
+named in hours from your run, so you know whether the night missed the
+transit or the transit missed the night.</li>
+</ul>
+<p>Its epoch comes from the window's centre, never from the fitted T0,
+so a fit that wandered off cannot drag the prediction with it. Drawn
+only on BJD_TDB times — against JD_UTC the offset would be the
+8-minute time-system error wearing an O−C costume.</p>
+
+<h2 style='color:#88aaff'>Your planning tool's language</h2>
+<p>A night is planned in wall-clock time ("start 21:50 … flip 00:55")
+and measured in Julian Dates. The bridge: a <b>clock axis</b> across
+the top in HH:MM — <i>local</i> time when the frames carry N.I.N.A.'s
+<tt>DATE-LOC</tt> (the DATE-OBS/DATE-LOC pair yields the site's UTC
+offset, daylight saving included), UTC otherwise, and the axis says
+which. The predicted <b>start/mid/end contacts</b> are stamped along
+the bottom in the same clock time, and the <b>meridian flip</b> is
+drawn as a dashed marker in both panels at the moment the field
+turned — check by eye whether a step or an "ingress" coincides with
+it. Clock labels take the BJD_TDB correction off again first; a clock
+reading in barycentric time would be minutes wrong.</p>
+<p>One grammar throughout: <b>orange dashed is the flip, cyan dotted
+are the predicted contacts, and a dashed mid-transit line exists only
+for a claimed detection</b>. An unclaimed fit keeps its honestly
+labelled curve but wears no detection markers — a 0.0σ fit that
+latches onto the flip step must not stand a second dashed line beside
+the real one.</p>
 """)
 
         _tab("Getting good data", """

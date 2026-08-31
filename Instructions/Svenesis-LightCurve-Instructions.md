@@ -1,6 +1,6 @@
 # Svenesis LightCurve — User Instructions
 
-**Version 1.0.3** | Siril Python Script for Exoplanet Transit Photometry
+**Version 1.0.4** | Siril Python Script for Exoplanet Transit Photometry
 
 > *A folder of sub-exposures in, a light curve out — and an honest answer to the only question that matters: is there a transit in it?*
 
@@ -188,6 +188,8 @@ Give the planet a **name** — from `OBJECT` in the lights, or the *Target* box 
 It also **cross-checks** the position. Agreement is reported; a disagreement is *reported, not resolved*:
 
 > *The headers and the archive disagree by 340" about where WASP-75 b is. The headers win — they came with these frames — but check the OBJECT name, because that gap means the two are describing different things.*
+
+**TESS candidates are a different table.** A target named `TOI-3540.01` is a *candidate* designation — the archive's confirmed-planet table cannot know it, and losing the whole ephemeris (expected curve, O−C, transit window) to that was a spelling nobody got wrong. When the planet lookup misses and the name matches the TOI pattern, the archive's own `toi` list is asked instead; its ppm depth and hour duration are converted to the units the rest of the run speaks. The **TFOPWG disposition is said, not swallowed**: PC/CP/KP/APC are informational, FP/FA get a red warning that a "transit" matching this ephemeris is most likely *not* a planet — and that warning repeats on cache hits, because a cached false positive is still a false positive. A bare `TOI-3540` with several candidates lists them and asks which one, the same contract as a multi-planet system.
 
 Without a connection you lose the O−C and nothing else. The position came from your files.
 
@@ -544,7 +546,15 @@ Everything lands in a `lightcurve/` folder next to your subs:
 
 **RMS** is robust (MAD-based), so a single satellite streak does not inflate it. Compare it to the depth you are hunting: a 15 mmag transit at 5 mmag scatter is comfortable; at 15 mmag it needs the whole night to stack up.
 
-**The residual panel** shows what the model missed. Flat noise is what you want; structure means something is left in there.
+**The residual panel** shows what the model missed. Flat noise is what you want; structure means something is left in there. Its corner reports the residual STD and the **lag-1 autocorrelation** with a verdict (white-noise-like / mild structure / structure left) — the red-noise tell that separates clean noise from a leftover systematic.
+
+![Svenesis LightCurve — a non-detection told honestly](https://github.com/sramuschkat/Siril-Scripts/raw/main/screenshots/Svenesis_LightCurve_1_0_4.jpg)
+
+*Everything below in one picture (TOI-3540.01, a non-detection): the wall-clock axis on top, the cyan expected transit with its contact stamps, the flip marker at 00:57 — and the unclaimed 0.0σ fit that latched onto the flip step, with no detection markers to dress it up.*
+
+**The chart carries the whole result.** The legend quotes T0 and Rp/R★ with their errors and names the detrending bases, so a screenshot is a complete measurement, not a teaser. Spike-rejected points appear as red crosses ("N outlier(s), not fitted") instead of silently vanishing — you judge for yourself that it was a satellite, not an egress. Per-point **error bars** have an on/off switch (off by default; a long run turns into a picket fence). Beside the fitted model, the **expected transit from the archive ephemeris** is drawn in cyan — *whether or not the fit claimed anything*. On a detection the shift between the two curves **is** the O−C, quoted in the legend in minutes with its error. On a non-detection the prediction is the more valuable half: an in-window prediction says "(no transit claimed by the fit)" — both facts in one picture — and a prediction outside the window names the nearest mid-transit in hours from your run, so you know whether the night missed the transit or the transit missed the night. Its epoch comes from the window's centre, never from the fitted T0, so a fit that wandered off cannot drag the prediction with it.
+
+**The chart speaks your planning tool's language.** A night is planned in wall-clock time ("start 21:50 … flip 00:55") but measured in Julian Dates, so a second time axis across the top shows HH:MM — in *local* time when your frames carry N.I.N.A.'s `DATE-LOC` keyword (the `DATE-OBS`/`DATE-LOC` pair yields the site's UTC offset, daylight saving included, nothing to configure), in UTC otherwise, and the axis says which. The predicted transit's start/mid/end contacts are stamped along the bottom in the same clock time, and a meridian flip is drawn as a dashed marker in both panels at the moment the field turned — so you can check by eye whether a step or an "ingress" coincides with it. Clock labels take the BJD_TDB correction off again first; a clock reading in barycentric time would be minutes wrong. The vertical lines follow one grammar: **orange dashed is the flip, cyan dotted are the predicted contacts, and a coloured dashed mid-transit line exists only for a claimed detection** — an unclaimed fit keeps its honestly-labelled curve but wears no detection markers, because a 0.0σ fit that latches onto the flip step would otherwise stand a second dashed line right beside the real one.
 
 **Binning is presentation only.** The fit always sees every point — binning first would throw away the very scatter the significance test needs in order to be honest about itself.
 

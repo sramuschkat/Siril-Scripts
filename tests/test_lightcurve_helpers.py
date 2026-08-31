@@ -2965,6 +2965,89 @@ check('if self.opts.get("site_name"):' in src,
       "and the title appends it only when the frames state one — "
       "typed-in coordinates carry no name")
 
+print("\n8v0) TESS candidates resolve through the TOI list")
+# The fixture row is the archive's REAL answer for TOI-3540.01 (fetched
+# 2026-08-31): depth in ppm, duration in hours, disposition CP.
+_TOI_CSV = ("toi,tid,tfopwg_disp,ra,dec,pl_orbper,pl_tranmid,pl_trandurh,"
+            "pl_trandep,st_teff,st_logg,st_tmag\n"
+            '"3540.01",17865622,"CP",328.9113710,28.1795000,3.1198404,'
+            "2459826.7364280,1.7646723,8016.8009531,6011.2000000,,"
+            "10.9541000\n")
+_toi_calls = []
+
+
+def _toi_fake(url, timeout=None):
+    _toi_calls.append(url)
+    return _Resp(_TOI_CSV)
+
+
+llt = ns["looks_like_toi"]
+for raw, want in (("TOI-3540.01", True), ("toi 3540.01", True),
+                  ("TOI-3540", True), ("TOI3540.1", True),
+                  ("WASP-75 b", False), ("HAT-P-32", False), ("", False)):
+    check(llt(raw) is want, f"looks_like_toi({raw!r}) is {want}")
+
+toi_eph, toi_note = ns["toi_lookup"]("TOI-3540.01", opener=_toi_fake)
+check(toi_eph is not None and not toi_note,
+      "TOI-3540.01 resolves from the toi table", toi_note)
+check("toi+where+toi+%3D+3540.01" in _toi_calls[-1].replace("%20", "+")
+      or "toi = 3540.01" in __import__("urllib.parse", fromlist=["parse"])
+      .unquote_plus(_toi_calls[-1]),
+      "the WHERE clause is built from parsed integers, numerically")
+check(abs(toi_eph["depth_pct"] - 0.80168) < 0.001,
+      f"8016.8 ppm becomes {toi_eph['depth_pct']:.4f} % — the unit the "
+      "rest of the script speaks")
+check(abs(toi_eph["duration_h"] - 1.76467) < 0.001,
+      "the duration stays in hours, which the toi table already uses")
+check(toi_eph["disposition"] == "CP"
+      and toi_eph["name"] == "TOI-3540.01",
+      "disposition and name ride along")
+
+_two = ('toi,tid,tfopwg_disp,ra,dec,pl_orbper,pl_tranmid,pl_trandurh,'
+        'pl_trandep,st_teff,st_logg,st_tmag\n'
+        '"3540.01",1,"PC",1,1,1,1,1,1,1,1,1\n'
+        '"3540.02",1,"PC",1,1,1,1,1,1,1,1,1\n')
+e2, n2 = ns["toi_lookup"]("TOI-3540",
+                          opener=lambda u, timeout=None: _Resp(_two))
+check(e2 is None and "2 candidates" in n2 and "TOI-3540.02" in n2,
+      "a bare TOI number with several candidates lists them and asks "
+      "which — the multi-planet contract")
+
+_resolver_src = src[src.index("def _lookup(pl, src):"):]
+_resolver_src = _resolver_src[:_resolver_src.index("eph, note = _lookup")]
+check("looks_like_toi(pl)" in _resolver_src
+      and "toi_lookup(pl)" in _resolver_src,
+      "the worker falls back to the TOI list only when the planet "
+      "lookup misses AND the name is a candidate designation")
+check('disp in ("FP", "FA")' in _resolver_src
+      and "NOT a planet" in _resolver_src,
+      "a false-positive disposition gets a red warning, not a quiet "
+      "green ephemeris")
+check('hit.get("disposition")' in _resolver_src,
+      "and the warning repeats on cache hits — a cached false positive "
+      "is still a false positive")
+
+print("\n8w) the expected curve no longer needs a detection")
+# On the TOI-3540.01 run the fit claimed nothing and the expected curve
+# vanished with it — exactly backwards: on a non-detection the
+# prediction is the more valuable half, answering "was a transit even
+# due in this window?".
+check('fit["detected"] and r.get("time_system")' not in _render2,
+      "the curve's gate is the ephemeris and BJD_TDB, not the fit's "
+      "verdict")
+check("int(round((t_center" in _render2,
+      "the epoch comes from the window's centre — a wandering fit "
+      "cannot drag the prediction with it")
+check('if fit["detected"]:' in _render2 and "O−C {drift:+.1f}" in _render2,
+      "the O−C line appears only when there is a fitted T0 to compare")
+check("(no transit claimed by the fit)" in _render2,
+      "an in-window prediction without a detection states both facts")
+check("predicted in this window" in _render2
+      and "nearest mid-transit" in _render2
+      and "h from this run" in _render2,
+      "and a prediction outside the window says so, naming the nearest "
+      "mid-transit in hours from the run")
+
 print("\n8v) the measured duration is drawn as a time arrow")
 check('arrowstyle="<->"' in _render2
       and "xy=(c - half, y_arrow)" in _render2
@@ -2977,6 +3060,97 @@ check('fit["detected"] and np.isfinite(fit.get("duration_h"' in _render2,
       "non-detection is noise wearing a number")
 check("hh, mm = hh + 1, 0" in _render2,
       "and 59.6 minutes rounds to the next hour, not to '1 h 60 min'")
+
+print("\n8x) the chart speaks the planning tool's language — wall "
+      "clock, contacts, flip")
+# The user plans the night in astro-pm ("start 21:50 … flip 00:55",
+# local time); the measurement must let them find those anchors again.
+
+uoh = ns["utc_offset_hours"]
+check(uoh("2026-08-31T05:23:11", "2026-08-31T00:23:11") == -5.0,
+      "DATE-OBS vs DATE-LOC yields the site's UTC offset (Texas CDT)")
+check(uoh("2026-08-31T05:23:11", "2026-08-31T10:53:11") == 5.5,
+      "half-hour zones survive the quarter-hour rounding")
+check(uoh("2026-08-31T05:23:11", "2026-08-31T00:23:10") == -5.0,
+      "one second of write skew between the stamps rounds away")
+check(uoh("", "") is None and uoh("garbage", "junk") is None,
+      "no DATE-LOC (or unreadable stamps) means None, never a guess")
+check(uoh("2026-08-31T20:00:00", "2026-09-01T20:00:00") is None,
+      "a 24 h difference is no time zone on Earth — refused")
+
+chh = ns["clock_hhmm"]
+check(chh(2451545.0) == "12:00",
+      "JD 2451545.0 is J2000 NOON — the +0.5 convention is right")
+check(chh(2451545.5) == "00:00", "and the half day later is midnight")
+check(chh(2451545.0, -5.0) == "07:00",
+      "the UTC offset shifts the reading to local time")
+check(chh(2451545.5 - 29.0 / 86400.0) == "00:00",
+      "23:59:31 rounds to 00:00, not 24:00 — the modulo after rounding")
+check(chh(float("nan")) == "" and chh(None) == "",
+      "an unknown time prints as nothing, not as a wrong clock")
+
+
+class _H:
+    def __init__(self, h00, h10):
+        self.h00, self.h10 = h00, h10
+
+
+fbi = ns["flip_boundary_index"]
+check(fbi([_H(1, 0), _H(1, 0), _H(-1, 0), _H(-1, 0)]) == 2,
+      "the boundary is the FIRST frame on the far side of the flip")
+check(fbi([_H(1, 0)] * 5) is None, "no flip, no boundary")
+check(fbi([None, _H(0, 0), _H(1, 0), _H(-1, 0)]) == 3,
+      "unset registrations are skipped, and the base is the first "
+      "READABLE frame")
+check(fbi([_H(1, 0), _H(math.cos(math.radians(10)),
+                        math.sin(math.radians(10)))]) is None,
+      "10° of genuine field rotation is not called a flip")
+check(fbi([]) is None and fbi(None) is None,
+      "empty input answers None instead of raising")
+
+check('"date_loc"' in src and '"DATE-LOC"' in src,
+      "inspect_frame captures N.I.N.A.'s DATE-LOC next to DATE-OBS")
+check('"utc_offset_h"' in src and '"flip_jd_utc"' in src,
+      "the result dict carries the offset and the flip time to the "
+      "chart")
+check("flip_boundary_index(homs)" in src,
+      "the flip TIME is measured in the same pass that measures the "
+      "flip ANGLE")
+check('secondary_xaxis("top")' in _render2,
+      "a second time axis sits across the top of the chart")
+check("- bjd_off" in _render2 and 'r.get("jd_utc")' in _render2,
+      "clock labels take the BJD_TDB correction OFF again — a clock "
+      "reading in barycentric time would be minutes wrong")
+check('else "clock (UTC)"' in _render2 and "local clock (UTC" in _render2,
+      "the axis SAYS whether it shows local time or UTC")
+check("flip {_clock_at(xf)}" in _render2
+      and "FLIP_ROTATION_DEG" in _render2,
+      "the flip marker is stamped with its clock time and drawn only "
+      "for a real flip")
+check('(t0_pred, "mid")' in _render2 and '"start"' in _render2
+      and '"end"' in _render2,
+      "predicted start/mid/end contacts are labelled like the planner's")
+check("xmin <= xc <= xmax" in _render2,
+      "contact labels outside the run are dropped, not pinned to the "
+      "edge")
+check('(r.get(\'time_system\') or \'UTC\').replace' in _render2
+      or '(r.get("time_system") or "UTC").replace' in _render2,
+      "the bottom axis names the ACTUAL time system of its values")
+_seg = _render2[_render2.index("ax.plot(mx, my"):]
+_seg = _seg[:_seg.index("axvline")]
+check('if fit["detected"]:' in _seg and "axvspan" in _seg,
+      "an unclaimed fit gets no mid-transit line or window shading — a "
+      "dashed line in this chart must mean exactly one thing")
+_help2 = src[src.index("def _show_help"):src.index("def closeEvent")]
+check('_tab("Reading the chart"' in _help2,
+      "the in-app help grew a chart tab — the features exist where the "
+      "user looks for them, not only in the manual")
+check("TESS candidates are a different table." in _help2,
+      "and the help covers the TOI fallback with its FP warning")
+check("no transit claimed by the" in _help2
+      and "mid-transit line exists only" in _help2,
+      "the help states the three expected-curve cases and the dashed-"
+      "line grammar")
 
 print()
 if fails:

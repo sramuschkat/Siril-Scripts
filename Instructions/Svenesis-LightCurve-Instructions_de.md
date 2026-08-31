@@ -1,6 +1,6 @@
 # Svenesis LightCurve — Anleitung
 
-**Version 1.0.3** | Siril Python-Skript für Exoplaneten-Transitphotometrie
+**Version 1.0.4** | Siril Python-Skript für Exoplaneten-Transitphotometrie
 
 > *Ein Ordner Subs hinein, eine Lichtkurve heraus — und eine ehrliche Antwort auf die einzige Frage, die zählt: steckt da ein Transit drin?*
 
@@ -188,6 +188,8 @@ Gib dem Planeten einen **Namen** — aus `OBJECT` in den Lights oder aus dem Fel
 Sie ist außerdem die **Gegenprobe** zur Position. Übereinstimmung wird gemeldet; ein Widerspruch wird *gemeldet, nicht aufgelöst*:
 
 > *The headers and the archive disagree by 340" about where WASP-75 b is. The headers win — they came with these frames — but check the OBJECT name.*
+
+**TESS-Kandidaten stehen in einer anderen Tabelle.** Ein Ziel namens `TOI-3540.01` ist eine *Kandidaten*-Bezeichnung — die Tabelle der bestätigten Planeten kann sie nicht kennen, und daran die ganze Ephemeride zu verlieren (Expected-Kurve, O−C, Transitfenster) war ein Rechtschreibfehler, den niemand gemacht hat. Wenn der Planeten-Lookup leer ausgeht und der Name dem TOI-Muster entspricht, wird stattdessen die `toi`-Liste des Archivs gefragt; ihre ppm-Tiefe und Stunden-Dauer werden in die Einheiten übersetzt, die der Rest des Laufs spricht. Die **TFOPWG-Disposition wird gesagt, nicht verschluckt**: PC/CP/KP/APC sind informativ, FP/FA bekommen eine rote Warnung, dass ein „Transit" auf dieser Ephemeride höchstwahrscheinlich *kein* Planet ist — und diese Warnung wiederholt sich bei Cache-Treffern, denn ein gecachter False Positive ist immer noch ein False Positive. Ein bloßes `TOI-3540` mit mehreren Kandidaten listet sie auf und fragt, welcher gemeint ist — derselbe Vertrag wie bei einem Mehrplanetensystem.
 
 Ohne Verbindung verlierst du das O−C und sonst nichts. Die Position kam aus deinen Dateien.
 
@@ -537,7 +539,15 @@ Alles landet in einem Ordner `lightcurve/` neben deinen Subs:
 
 **RMS** ist robust (MAD-basiert), eine einzelne Satellitenspur bläht ihn also nicht auf. Vergleiche ihn mit der gesuchten Tiefe: 15 mmag Transit bei 5 mmag Streuung ist komfortabel, bei 15 mmag braucht es die ganze Nacht.
 
-**Das Residuenfeld** zeigt, was das Modell verfehlt hat. Flaches Rauschen ist das Ziel; Struktur heißt, da ist noch etwas drin.
+**Das Residuenfeld** zeigt, was das Modell verfehlt hat. Flaches Rauschen ist das Ziel; Struktur heißt, da ist noch etwas drin. In seiner Ecke stehen die Residuen-STD und die **Lag-1-Autokorrelation** mit Urteil (white-noise-like / mild structure / structure left) — der Rot-Rausch-Indikator, der sauberes Rauschen von einer übrig gebliebenen Systematik trennt.
+
+![Svenesis LightCurve — eine ehrlich erzählte Nicht-Detektion](https://github.com/sramuschkat/Siril-Scripts/raw/main/screenshots/Svenesis_LightCurve_1_0_4.jpg)
+
+*Alles Folgende in einem Bild (TOI-3540.01, eine Nicht-Detektion): die Uhrzeit-Achse oben, der türkise erwartete Transit mit seinen Kontaktzeiten, der Flip-Marker bei 00:57 — und der nicht beanspruchte 0,0σ-Fit, der sich an die Flip-Stufe klammert, ohne Detektionsmarker, die ihn aufhübschen.*
+
+**Das Diagramm trägt das ganze Ergebnis.** Die Legende nennt T0 und Rp/R★ mit Fehlern und die Detrending-Basen — ein Screenshot ist damit eine vollständige Messung, kein Appetithappen. Vom Spike-Filter verworfene Punkte erscheinen als rote Kreuze („N outlier(s), not fitted"), statt still zu verschwinden — du beurteilst selbst, dass es ein Satellit war und kein Egress. Die **Fehlerbalken** pro Punkt haben einen Ein/Aus-Schalter (aus als Vorgabe; ein langer Lauf wird sonst zum Lattenzaun). Neben dem gefitteten Modell wird der **erwartete Transit aus der Archiv-Ephemeride** in Türkis gezeichnet — *ob der Fit etwas behauptet oder nicht*. Bei einer Detektion **ist** der Versatz zwischen beiden Kurven das O−C, in der Legende in Minuten mit Fehler beziffert. Bei einer Nicht-Detektion ist die Vorhersage die wertvollere Hälfte: Eine Vorhersage im Fenster sagt „(no transit claimed by the fit)" — beide Fakten in einem Bild —, und eine Vorhersage außerhalb nennt den nächsten Transitmittelpunkt in Stunden Abstand zu deinem Lauf. So weißt du, ob die Nacht den Transit verpasst hat oder der Transit die Nacht. Die Epoche kommt aus der Fenstermitte, nie aus dem gefitteten T0 — ein davongelaufener Fit kann die Vorhersage nicht mitziehen.
+
+**Das Diagramm spricht die Sprache deines Planungstools.** Eine Nacht wird in Uhrzeit geplant („Start 21:50 … Flip 00:55"), aber in Julianischen Daten gemessen — deshalb zeigt eine zweite Zeitachse oben HH:MM: in *Lokalzeit*, wenn deine Frames N.I.N.A.s `DATE-LOC`-Keyword tragen (das Paar `DATE-OBS`/`DATE-LOC` liefert den UTC-Versatz des Standorts, Sommerzeit inklusive, nichts zu konfigurieren), sonst in UTC — und die Achse sagt, was von beidem. Die vorhergesagten Kontaktzeiten des Transits (Start/Mitte/Ende) stehen unten als Uhrzeiten, und ein Meridian-Flip wird als gestrichelte Markierung in beiden Feldern genau dort gezeichnet, wo das Feld gedreht hat — so prüfst du mit bloßem Auge, ob eine Stufe oder ein „Ingress" mit ihm zusammenfällt. Die Uhrzeit-Beschriftungen ziehen zuerst die BJD_TDB-Korrektur wieder ab; eine Uhrzeit in baryzentrischer Zeit wäre um Minuten falsch. Die vertikalen Linien folgen einer Grammatik: **Orange gestrichelt ist der Flip, türkis gepunktet sind die vorhergesagten Kontakte, und eine farbige gestrichelte Mittransit-Linie gibt es nur bei einer beanspruchten Detektion** — ein nicht beanspruchter Fit behält seine ehrlich beschriftete Kurve, trägt aber keine Detektionsmarker, weil ein 0,0σ-Fit, der sich an die Flip-Stufe klammert, sonst eine zweite gestrichelte Linie direkt neben die echte stellen würde.
 
 **Binning ist nur Darstellung.** Der Fit sieht immer jeden Punkt — vorher zu binnen würde genau die Streuung wegwerfen, die der Signifikanztest braucht, um ehrlich über sich selbst zu sein.
 
