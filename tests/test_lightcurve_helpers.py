@@ -3152,6 +3152,28 @@ check("no transit claimed by the" in _help2
       "the help states the three expected-curve cases and the dashed-"
       "line grammar")
 
+print("\n8y) a ranking key never prints as an SNR")
+# The Stars tab and the report showed "SNR 2, 1, 1, 1, 1" on a run whose
+# log had just said "no SNR from findstar" — the third tuple field was
+# -Δmag, the brightness RANKING key, dressed up as a measurement.
+c_blind, _rb, _nb = choose(blind, (500, 500), 5, fwhm_px=1.91,
+                           min_snr=20.0)
+check(len(c_blind) == 5
+      and all(not np.isfinite(c[2]) for c in c_blind),
+      "with no findstar SNR the chosen tuples carry NaN — the table and "
+      "the report both render that as '—', never as a number")
+_snr_field = [_Star(500, 500, 300), _Star(900, 100, 250),
+              _Star(100, 100, 120), _Star(700, 300, 60)]
+c_snr, _rs, _ns2 = choose(_snr_field, (500, 500), 5, fwhm_px=3.0,
+                          min_snr=20.0)
+check(all(np.isfinite(c[2]) and c[2] >= 20.0 for c in c_snr),
+      "with a real SNR it is passed through untouched")
+check('"SNR —" if not np.isfinite(snr)' in src,
+      "the text report guards the NaN instead of printing 'SNR nan'")
+check("survivors.sort(key=lambda r: r[2], reverse=True)" in src,
+      "the ranking still happens on the raw score BEFORE the NaN "
+      "replacement — order is preserved, only the label is honest")
+
 print()
 if fails:
     print(f"{len(fails)} FAILURE(S)")

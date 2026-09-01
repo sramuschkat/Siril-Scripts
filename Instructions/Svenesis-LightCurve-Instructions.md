@@ -1,6 +1,6 @@
 # Svenesis LightCurve — User Instructions
 
-**Version 1.0.4** | Siril Python Script for Exoplanet Transit Photometry
+**Version 1.0.5** | Siril Python Script for Exoplanet Transit Photometry
 
 > *A folder of sub-exposures in, a light curve out — and an honest answer to the only question that matters: is there a transit in it?*
 

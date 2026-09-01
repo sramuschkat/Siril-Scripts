@@ -497,7 +497,7 @@ Reads the current plate-solved image from Siril, identifies the main astronomica
 
 ## Svenesis LightCurve
 
-**File:** `Svenesis-LightCurve.py` (v1.0.4) — **[Detailed Instructions](Instructions/Svenesis-LightCurve-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-LightCurve-Instructions_de.md)**
+**File:** `Svenesis-LightCurve.py` (v1.0.5) — **[Detailed Instructions](Instructions/Svenesis-LightCurve-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-LightCurve-Instructions_de.md)**
 
 Exoplanet transit photometry inside Siril, in the spirit of [EXOTIC](https://github.com/rzellem/EXOTIC) (NASA's Exoplanet Watch pipeline) and [HOPS](https://github.com/ExoWorldsSpies/hops) — and tested against EXOTIC on its own sample data, with matching results. Point it at the folder holding one night's sub-exposures of an exoplanet host star. It measures how that star's brightness changed relative to other stars in the same field, removes the systematic trends it can account for, fits a transit — and tells you whether the dip is real.
 

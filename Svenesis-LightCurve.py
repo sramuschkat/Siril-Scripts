@@ -1,6 +1,6 @@
 """
 Svenesis LightCurve
-Script Version: 1.0.4
+Script Version: 1.0.5
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -90,6 +90,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.0.5 - A ranking key no longer prints as an SNR
+      - On runs where findstar carries no SNR the comp selection ranks
+        by instrumental magnitude, and the ranking key (-dmag) rode
+        along in the tuple — the Stars tab and the report then showed
+        "SNR 2, 1, 1, 1, 1" on the very run whose log had just said
+        "no SNR from findstar": a ranking artefact dressed as a
+        measurement.  The score now becomes NaN outside the ranking,
+        which both displays render as "—".  The order of the chosen
+        comps is unchanged; only the label stops lying.
 1.0.4 - TESS candidates get their ephemeris from the TOI list
       - A target named TOI-XXXX.NN is a CANDIDATE designation, which the
         archive's confirmed-planet tables cannot know — the run on
@@ -285,7 +294,7 @@ from matplotlib.ticker import FuncFormatter
 
 from sirilpy import LogColor
 
-VERSION = "1.0.4"
+VERSION = "1.0.5"
 
 # The full manual on GitHub, linked from the help dialog.  The in-app
 # tabs are the quick reference; the manual carries the measurements
@@ -4216,8 +4225,14 @@ def choose_comparison_stars(stars, target_xy, n_wanted: int,
                  if chosen_r >= ladder[0][0] else
                  f"neighbour {near:.0f} px away, closer than the "
                  f"{chosen_r:.0f} px this crowded field could afford"))
-    scored = [(x, y, sc) for x, y, sc, near in survivors]
-    scored.sort(key=lambda r: r[2], reverse=True)
+    # Sort on the 4-tuples FIRST: when findstar carried no SNR the score
+    # is -Δmag, a RANKING key and nothing else.  Handing it onward would
+    # print "SNR 2" in the Stars tab and the report — a ranking artefact
+    # dressed as a measurement, on the very runs whose log just said "no
+    # SNR from findstar".  Downstream a NaN already renders as "—".
+    survivors.sort(key=lambda r: r[2], reverse=True)
+    scored = [(x, y, sc if have_snr else float("nan"))
+              for x, y, sc, near in survivors]
     keep = max(0, int(n_wanted))
     # The stars that passed every filter and were simply not needed are
     # listed too.  Without them the tally does not add up: a run reported
@@ -8064,7 +8079,8 @@ class SvenesisLightCurveWindow(QMainWindow):
         if r.get("n_clipped"):
             A(f"Outliers          {r['clip_note']}")
         for i, (x, y, snr) in enumerate(r["comps"], start=1):
-            A(f"   comp {i:<2d}       ({x:8.2f}, {y:8.2f})  SNR {snr:.0f}")
+            A(f"   comp {i:<2d}       ({x:8.2f}, {y:8.2f})  "
+              + ("SNR —" if not np.isfinite(snr) else f"SNR {snr:.0f}"))
         for x, y, why in r["rejected"]:
             A(f"   rejected       ({x:8.2f}, {y:8.2f})  {why}")
         A(f"Median FWHM       {r['fwhm_px']:.2f} px")
