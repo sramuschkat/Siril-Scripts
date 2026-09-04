@@ -30,6 +30,7 @@ src = open(SRC).read()
 tree = ast.parse(src)
 
 ns = {"np": np, "math": math, "re": re, "datetime": datetime, "os": os,
+      "subprocess": __import__("subprocess"), "pickle": __import__("pickle"),
       "csv": __import__("csv"), "shutil": __import__("shutil"),
       "io": __import__("io"), "json": __import__("json"),
       "urllib": __import__("urllib.request").request and
@@ -357,7 +358,7 @@ stars = [
     _Star(100, 100, 120),               # good
     _Star(700, 300, 60),                # good
 ]
-chosen, rejected, note = choose(stars, (500, 500), 5, fwhm_px=3.0,
+chosen, _res, rejected, note = choose(stars, (500, 500), 5, fwhm_px=3.0,
                                min_snr=20.0)
 reasons = " | ".join(r[2] for r in rejected)
 print(f"   chose {len(chosen)}, rejected {len(rejected)}: {reasons}")
@@ -379,7 +380,7 @@ check("SNR" in note, "and it says it ranked by SNR", note)
 blind = [_Star(500, 500, 0.0, mag=-9.0)]                      # target
 blind += [_Star(100 + 40 * i, 900, 0.0, mag=-8.0) for i in range(6)]
 blind += [_Star(100 + 40 * i, 1400, 0.0, mag=-2.0) for i in range(20)]
-c2, r2, note2 = choose(blind, (500, 500), 5, fwhm_px=1.91, min_snr=20.0)
+c2, _res2, r2, note2 = choose(blind, (500, 500), 5, fwhm_px=1.91, min_snr=20.0)
 print(f"   SNR unpopulated: chose {len(c2)}, rejected {len(r2)}")
 print(f"   {note2}")
 check(len(c2) == 5, "an unmeasured SNR field does not empty the ensemble",
@@ -400,7 +401,7 @@ check(any("were needed" in r[2] for r in r2),
 # saturation risk the flag does not always catch.
 glare = [_Star(500, 500, 0.0, mag=-4.0)] + \
         [_Star(100 + 40 * i, 900, 0.0, mag=-12.0) for i in range(6)]
-c3, r3, _ = choose(glare, (500, 500), 5, fwhm_px=1.91, min_snr=20.0)
+c3, _res3, r3, _ = choose(glare, (500, 500), 5, fwhm_px=1.91, min_snr=20.0)
 check(len(c3) == 0 and all("brighter" in r[2] for r in r3),
       "and a far brighter star is refused too")
 
@@ -696,11 +697,13 @@ check(abs(off.mean()) > 100.0,
       f"{off.mean():.1f} s")
 
 # Refusing is fine; refusing SILENTLY is not.  Every failure names itself.
-for args, what in (((jd, None, None, 50.0, 8.0), "no target coordinates"),
-                   ((jd, 342.0, -10.0, None, 8.0), "no site latitude"),
+out, why = tob(jd, None, None, 50.0, 8.0)
+check(out is None and why, "no target coordinates is refused with a stated reason", why)
+for args, what in (((jd, 342.0, -10.0, None, 8.0), "no site latitude"),
                    ((jd, 342.0, -10.0, 50.0, None), "no site longitude")):
     out, why = tob(*args)
-    check(out is None and why, f"{what} is refused with a stated reason", why)
+    check(out is not None and "geocentric" in why,
+          f"{what} falls back to a geocentric conversion and says so", why)
 
 print("\n8f) a comparison star must be alone in its aperture")
 # The radius is Siril's own geometry, not taste: `-autoring` sets the outer
@@ -721,7 +724,7 @@ pair = [_Star(500, 500, 0.0, mag=-9.0),          # target
         _Star(1420, 1400, 0.0, mag=-8.5),        # ...mutually, so both go
         _Star(2000, 2000, 0.0, mag=-8.0),        # brighter star 50 px away
         _Star(2050, 2000, 0.0, mag=-8.6)]        # ...but that is not a fault
-cc, rr, _ = choose(pair, (500, 500), 5, fwhm_px=FW, min_snr=20.0)
+cc, _resc, rr, _ = choose(pair, (500, 500), 5, fwhm_px=FW, min_snr=20.0)
 why = {(r[0], r[1]): r[2] for r in rr}
 kept = [(c[0], c[1]) for c in cc]
 print(f"   chose {len(cc)} of 5 candidates")
@@ -746,7 +749,7 @@ xy = rng.uniform(0, 3008, size=(864, 2))
 dense = [_Star(500, 500, 0.0, mag=-9.0)]
 dense += [_Star(float(a), float(b), 0.0, mag=-8.0 - float(rng.uniform(0, 1)))
           for a, b in xy]
-c4, r4, _ = choose(dense, (500, 500), 5, fwhm_px=1.95, min_snr=20.0)
+c4, _res4, r4, _ = choose(dense, (500, 500), 5, fwhm_px=1.95, min_snr=20.0)
 survivors = len(c4) + sum(1 for r in r4 if "were needed" in r[2])
 print(f"   real-density field: {survivors} of 864 stay isolated")
 check(len(c4) == 5, "a field of real density still fills the ensemble")
@@ -1143,7 +1146,7 @@ check(not offenders,
       "NameError here does not crash, it makes a guard quietly do nothing",
       "; ".join(offenders) if offenders else "all clean")
 probe_src = src[src.index("envelope = getattr(self, \"_drift\", None)"):]
-probe_src = probe_src[:probe_src.index("comps, rejected, how_ranked")]
+probe_src = probe_src[:probe_src.index("comps, comp_reserves, rejected, how_ranked")]
 check("drift filter is" in probe_src and "OFF for this run" in probe_src,
       "and if the frame size cannot be read the run SAYS the filter is off "
       "— a guard that quietly does not run is worse than no guard")
@@ -1249,7 +1252,7 @@ class _S2:
         self.has_saturated = False
 pool = [_S2(371, 323, 10.0), _S2(51, 232, 10.2), _S2(645, 120, 10.3),
         _S2(400, 250, 10.4), _S2(450, 300, 10.5), _S2(500, 200, 10.6)]
-kept, rej, _n = ccs2(pool, (371, 323), 5, 1.84,
+kept, _resk, rej, _n = ccs2(pool, (371, 323), 5, 1.84,
                      frame_wh=(650, 500), envelope=ENV)
 why = {(int(r[0]), int(r[1])): r[2] for r in rej}
 check("drifts" in why.get((51, 232), "") and "drifts" in why.get((645, 120), ""),
@@ -1313,7 +1316,7 @@ def _field(n, w=650, h=500):
 # to run is worse than running with a stated compromise.
 for n, expect_relaxed in ((400, False), (1500, True)):
     stars = _field(n)
-    got, _rej, note = ccs(stars, (stars[0].xpos, stars[0].ypos), 5, FW)
+    got, _resg, _rej, note = ccs(stars, (stars[0].xpos, stars[0].ypos), 5, FW)
     relaxed = "isolation relaxed" in note
     print(f"   {n:5d} stars in 650x500 -> {len(got)} comps"
           + ("  (relaxed)" if relaxed else "  (full radius)"))
@@ -1327,7 +1330,7 @@ for n, expect_relaxed in ((400, False), (1500, True)):
           "that simply has fewer good stars than asked for",
           note.split(";")[-1].strip()[:50] if relaxed else "full radius")
 stars = _field(1500)
-_g, _r, note = ccs(stars, (stars[0].xpos, stars[0].ypos), 5, FW)
+_g, _res_g, _r, note = ccs(stars, (stars[0].xpos, stars[0].ypos), 5, FW)
 check("isolation relaxed to" in note and "survived a field this crowded" in note,
       "the compromise is NAMED with its radius and its reason — a silently "
       "loosened criterion is a measurement nobody can weigh", note[-60:])
@@ -2807,8 +2810,9 @@ check(abs(_lcd(_fitC["rprs"], _fitC["impact_b"]) * 100.0
 # (depth, duration, shape, points, RMS) sat INSIDE the
 # `if time_system != BJD_TDB` warning branch — every run with CORRECT
 # timestamps saved a report without its own depth.
-check('\n        A(f"   depth          ' in src,
-      "the text report prints the depth at function level, not inside "
+check('\n            A(f"   depth          ' in src
+      and '\n                A(f"   depth          ' not in src,
+      "the text report prints the depth in the detected branch, not inside "
       "the wrong-time-system warning branch")
 check('"engine": "native" if native is not None else "siril"' in src,
       "the results dict records which engine measured")
@@ -2881,7 +2885,7 @@ check("self.chk_errbars.toggled.connect(self._redraw)" in src,
       "the checkbox redraws immediately, like the binning control")
 check("self.chk_errbars.setChecked(False)" in src,
       "and defaults to off — a few hundred whiskers bury the transit")
-check("self.chk_errbars.isChecked())" in
+check("self.chk_errbars.isChecked()" in
       src[src.index("def _redraw"):src.index("def _redraw") + 400],
       "_redraw passes the switch through to render")
 
@@ -3053,13 +3057,14 @@ check('arrowstyle="<->"' in _render2
       and "xy=(c - half, y_arrow)" in _render2
       and "xytext=(c + half, y_arrow)" in _render2,
       "a double arrow spans first to last contact of the FITTED transit")
-check("transit {hh} h {mm:02d} min" in _render2,
+check("transit {dur_hhmm(dur_h)}" in _render2,
       "labelled with the measured duration in hours and minutes")
 check('fit["detected"] and np.isfinite(fit.get("duration_h"' in _render2,
       "drawn only for a claimed detection — the duration of a "
       "non-detection is noise wearing a number")
-check("hh, mm = hh + 1, 0" in _render2,
-      "and 59.6 minutes rounds to the next hour, not to '1 h 60 min'")
+check("hh, mm = hh + 1, 0" in src,
+      "and 59.6 minutes rounds to the next hour, not to '1 h 60 min' — "
+      "the rollover now lives in the shared dur_hhmm formatter")
 
 print("\n8x) the chart speaks the planning tool's language — wall "
       "clock, contacts, flip")
@@ -3148,15 +3153,20 @@ check('_tab("Reading the chart"' in _help2,
 check("TESS candidates are a different table." in _help2,
       "and the help covers the TOI fallback with its FP warning")
 check("no transit claimed by the" in _help2
-      and "mid-transit line exists only" in _help2,
-      "the help states the three expected-curve cases and the dashed-"
-      "line grammar")
+      and "first and last contact — exist only" in _help2
+      and "contact by\ncontact" in _help2,
+      "the help states the three expected-curve cases, the dashed-line "
+      "grammar and the contact-by-contact comparison")
+check("Clipping is not variability." in _help2
+      and "promoted from the selection's reserve" in _help2,
+      "the help covers the 1.0.6 guards — headroom drop, reserve "
+      "promotion, clip counts and the frame accounting")
 
 print("\n8y) a ranking key never prints as an SNR")
 # The Stars tab and the report showed "SNR 2, 1, 1, 1, 1" on a run whose
 # log had just said "no SNR from findstar" — the third tuple field was
 # -Δmag, the brightness RANKING key, dressed up as a measurement.
-c_blind, _rb, _nb = choose(blind, (500, 500), 5, fwhm_px=1.91,
+c_blind, _resb, _rb, _nb = choose(blind, (500, 500), 5, fwhm_px=1.91,
                            min_snr=20.0)
 check(len(c_blind) == 5
       and all(not np.isfinite(c[2]) for c in c_blind),
@@ -3164,7 +3174,7 @@ check(len(c_blind) == 5
       "the report both render that as '—', never as a number")
 _snr_field = [_Star(500, 500, 300), _Star(900, 100, 250),
               _Star(100, 100, 120), _Star(700, 300, 60)]
-c_snr, _rs, _ns2 = choose(_snr_field, (500, 500), 5, fwhm_px=3.0,
+c_snr, _ress, _rs, _ns2 = choose(_snr_field, (500, 500), 5, fwhm_px=3.0,
                           min_snr=20.0)
 check(all(np.isfinite(c[2]) and c[2] >= 20.0 for c in c_snr),
       "with a real SNR it is passed through untouched")
@@ -3173,6 +3183,1027 @@ check('"SNR —" if not np.isfinite(snr)' in src,
 check("survivors.sort(key=lambda r: r[2], reverse=True)" in src,
       "the ranking still happens on the raw score BEFORE the NaN "
       "replacement — order is preserved, only the label is honest")
+
+print("\n8z) measured against expected, contact by contact")
+# The chart drew the measured duration arrow and the predicted contact
+# stamps, but the COMPARISON still had to be done by eye: no duration
+# arrow on the expected dip, no numbers between the differing contacts.
+dh = ns["dur_hhmm"]
+check(dh(3.4) == "3 h 24 min", "3.4 h formats as 3 h 24 min")
+check(dh(1.99999) == "2 h 00 min",
+      "1.99999 h rolls over to 2 h 00 min, never '1 h 60 min'")
+check(dh(0.5) == "0 h 30 min", "sub-hour durations keep the 0 h prefix")
+check(dh(float("nan")) == "" and dh(None) == "" and dh(-1.0) == "",
+      "unknowable durations format as nothing, not as a wrong number")
+check('f"transit {dur_hhmm(dur_h)}"' in _render2
+      and "dur_hhmm(dur_pred * 24.0)" in _render2,
+      "measured and expected arrows speak through the SAME formatter — "
+      "they can never round differently")
+check("xy=(xs_p, y_exp)" in _render2 and "xytext=(xe_p, y_exp)" in _render2,
+      "the expected dip carries its own duration double arrow")
+check("y_exp = y_arrow + 4.5" in _render2,
+      "which is nudged clear when the two arrows would overlap")
+check('exp_txt += f"  (Δ {d_dur:+.0f} min)"' in _render2
+      and 'fit["detected"] and np.isfinite(' in _render2,
+      "the duration delta is quoted on the expected label, and only "
+      "when a measured duration exists to subtract")
+_meas = _render2[_render2.index("The MEASURED first and last contact"):]
+_meas = _meas[:_meas.index("The EXPECTED transit")]
+check('(c - half, "start"), (c + half, "end")' in _meas
+      and "_clock_at(xc)" in _meas and "x_lo <= xc <= x_hi" in _meas,
+      "the measured contacts get dashed lines and clock stamps, clipped "
+      "to the run like the predicted ones")
+check('if fit["detected"]:' in _meas,
+      "and only for a claimed detection — the dashed-line grammar holds")
+check('ax.text(xc, 0.085' in _meas,
+      "the measured stamp row sits ABOVE the cyan predicted row (0.03), "
+      "never on top of it")
+check('(c - half, xs_p, "start")' in _render2
+      and '(c + half, xe_p, "end")' in _render2
+      and "d_min = (xm - xp) * 60.0" in _render2,
+      "grey spans connect each predicted contact to its measured "
+      "counterpart, in minutes, measured minus predicted — the O−C "
+      "sign convention")
+check('f"Δ{tag} {d_min:+.1f} min"' in _render2
+      and 'fit["detected"] and in_window' in _render2,
+      "each span is labelled Δstart/Δend and drawn only when both "
+      "endpoints exist")
+
+print("\n8aa) the legend moves above the plot, the prediction gets a "
+      "switch")
+_r3 = src[src.index("def render(self, r: dict"):]
+_r3 = _r3[:_r3.index("\n    def save_png")]
+check('loc="outside upper right"' in _r3 and 'loc="best"' in _r3,
+      "the legend is a figure legend ABOVE the axes — 'best' still has "
+      "to pick a corner with data under it — with the old in-axes "
+      "placement as the fallback for an older matplotlib")
+check(_r3.index('set_layout_engine("constrained")')
+      < _r3.index('loc="outside'),
+      "constrained layout is switched on BEFORE the legend is created — "
+      "'outside' is refused otherwise, and only on the FIRST render")
+check("show_expected: bool = True" in _r3
+      and "if (show_expected" in _r3,
+      "one switch gates the WHOLE prediction — curve, contacts, arrow "
+      "and Δ spans together; half a comparison would look like a claim")
+check("self.chk_expected = QCheckBox" in src
+      and "self.chk_expected.setChecked(True)" in src
+      and "self.chk_expected.toggled.connect(self._redraw)" in src,
+      "the switch is a checkbox above the chart, on by default, "
+      "redrawing immediately")
+check("self.chk_expected.isChecked()" in
+      src[src.index("def _redraw"):src.index("def _redraw") + 400],
+      "_redraw passes it through to render")
+check('self.tabs.addTab(self.plot_page, "Light curve")' in src
+      and "setCurrentWidget(self.plot_page)" in src,
+      "the chart tab is now a page (control bar + canvas), and the "
+      "done-handler fronts the page, not the bare canvas")
+
+print("\n8ab) no frame vanishes from the curve without a name")
+# The first flat-calibrated run lost 73 of 223 frames silently: comps
+# clipped against Siril's [0,1] clamp, the scatter check called that
+# variability, and the ensemble-NaN frames were counted by nobody.
+_eng = src[src.index("def _native_photometry"):]
+_eng = _eng[:_eng.index("def _run_light_curve")]
+check("tgt_lost_cen" in _eng and "tgt_lost_ap" in _eng
+      and "comp_clips[si] += 1" in _eng,
+      "the engine counts target centroid losses, target aperture "
+      "failures and per-comp clipped frames — none of them silent now")
+check("ens_lost = int(np.sum(np.isfinite(flux[r_best][0])" in _eng
+      and "& ~np.isfinite(mag)))" in _eng,
+      "frames where the target measured but the whole ensemble was "
+      "missing are counted as their own loss category")
+check("every " in _eng and "kept comp was missing or clipped there"
+      in _eng,
+      "and the measured-points line names that category out loud")
+check("clipped in " in _eng and "of {n_frames} frame(s)." in _eng,
+      "each comp that clipped is listed with its clip count — "
+      "intermittent clipping no longer wears a variable star's costume")
+check("COMP_CLIP_HEADROOM = 0.7" in src
+      and "COMP_CLIP_HEADROOM * sat_adu" in _eng,
+      "the headroom guard drops a comp whose reference peak already "
+      "sits at 70% of the clip level")
+check("if n_dropped and len(kept_stars) >= 3:" in _eng
+      and "fewer than two" in _eng,
+      "but never below two surviving comps — a thin field keeps its "
+      "ensemble and relies on the accounting instead")
+# The flat-calibrated run showed ALL five chosen comps at 102% of the
+# clip level while 532 usable stars sat unused — the guard must promote
+# replacements from the ranked reserve, not capitulate to the originals.
+check("reserves = [(x, y) for x, y, _sc in scored[keep:]]" in src
+      and "return scored[:keep], reserves, rejected, note" in src,
+      "the comp selection hands its ranked surplus back as a reserve "
+      "list instead of throwing the ranking away")
+check("comps, comp_reserves, rejected, how_ranked" in src
+      and "fwhm, comp_reserves)" in src,
+      "and the caller threads that reserve through to the native engine")
+check("promoted " in _eng and "from the reserve: peak at " in _eng
+      and "next ranked star with headroom" in _eng,
+      "a dropped comp is replaced by the next ranked reserve star that "
+      "clears the headroom bar, announced with its peak percentage")
+check("if len(kept_stars) - 1 >= n_want:" in _eng
+      and "break" in _eng,
+      "promotion stops as soon as the ensemble is back to the wanted "
+      "size — the reserve is a bench, not a second ensemble")
+check("reserve of {len(reserves)} is exhausted" in _eng,
+      "an exhausted reserve is said out loud, with the counts")
+
+print("\n8ac) the Save results button writes a HOPS-format results.txt")
+# The layout is pylightcurve 4.1's per-observation writer, ported so a
+# pipeline that parses a HOPS fitting folder parses this file unchanged.
+_sw = ns["shapiro_wilk_w"]
+_classic = np.array([148, 154, 158, 160, 161, 162, 166, 170, 182, 195,
+                     236], float)
+check(abs(_sw(_classic) - 0.7888147) < 1e-6,
+      "Shapiro-Wilk W matches scipy on the classic 11-point sample "
+      "(0.788815) — pure numpy, no scipy dependency")
+check(abs(_sw(np.array([2.1, -0.7, 0.3, 1.9, -1.2, 0.05, 0.6, -0.4]))
+          - 0.9344630549) < 1e-6
+      and abs(_sw(np.array([1.0, 1.0, 1.0, 5.0, 9.0, 9.0, 9.0]))
+              - 0.7593550048) < 1e-6,
+      "and on an even-n and a tie-heavy sample, both against scipy")
+check(abs(_sw(np.array([1.0, 2.0, 3.0])) - 1.0) < 1e-9
+      and not np.isfinite(_sw(np.array([1.0, 2.0]))),
+      "n=3 is exact and n<3 refuses with NaN instead of inventing a W")
+_vtp = ns["hops_values_to_print"]
+check(_vtp(0.15412, 0.0059, 0.0059) == ("0.1541", "0.0059", "0.0059")
+      and _vtp(2461284.7097, 0.0028, 0.0031)
+      == ("2461284.7097", "0.0028", "0.0031")
+      and _vtp(12.83, 2.5, 2.5) == ("12.8", "2.5", "2.5"),
+      "values_to_print rounds exactly like pylightcurve — width from "
+      "the smaller error's exponent minus one")
+check(_vtp(5.0, float("inf"), float("inf")) == ("5.0", "NaN", "NaN"),
+      "and infinite errors print value-at-2-decimals with NaN bars, "
+      "the original's own degenerate branch")
+_hn = 60
+_hjd = 2461284.55 + np.linspace(0, 0.19, _hn)
+_htmpl = ns["ld_template"](0.12, 0.5, 0.5, 0.2)
+_hshape = ns["ld_shape"](_hjd, 2461284.7097, 3.0 / 24.0, _htmpl)
+_htrend = 0.002 * (_hjd - _hjd.mean()) * 24.0
+_hrng = np.random.default_rng(5)
+_hmag = 0.0178 * _hshape + _htrend + _hrng.normal(0, 0.011, _hn)
+_hfit = {"t0": 2461284.7097, "t0_sigma_d": 244.0 / 86400.0,
+         "rprs": 0.1174, "rprs_sigma": 0.0085,
+         "ld_u1": 0.5, "ld_u2": 0.2,
+         "baseline": 0.0003, "bases": ["airmass", "fwhm"],
+         "basis_coeffs": [-0.0042, 0.0011],
+         "coeff_sigmas": [0.0004, 0.0009, 0.0008],
+         "model_mag": _htrend + 0.0178 * _hshape, "trend": _htrend,
+         "detrended": _hmag - _htrend}
+_hr = {"fit": _hfit, "jd": _hjd, "mag": _hmag,
+       "err": np.full(_hn, 0.011), "n_clipped": 1, "filter": "R",
+       "ephemeris": {"period_d": 3.860855, "t0_bjd": 2459740.36526}}
+_htxt = ns["hops_results_text"](_hr)
+_hlines = _htxt.split("\n")
+check(_hlines[0].startswith("# variable")
+      and "fix/fit" in _hlines[0] and "uncertainty" in _hlines[0]
+      and "min.allowed" in _hlines[0] and "max.allowed" in _hlines[0],
+      "the table header carries HOPS's seven column names")
+_tbl = [ln for ln in _hlines if ln and not ln.startswith("#") or
+        ln.startswith("# variable")]
+check(len({len(ln) for ln in _hlines[:8]}) == 1,
+      "every table row is padded to the same width — HOPS pads each "
+      "column to its widest cell and joins with two spaces")
+check("mid_time" in _htxt and "-0.0028 +0.0028" in _htxt
+      and "rp_over_rs  fit" in _htxt and "ldc_1" in _htxt
+      and "period" in _htxt,
+      "the rows carry this script's model in HOPS's parameter names, "
+      "with real covariance error bars on the fitted ones")
+check("#Filter: R" in _htxt and "#Epoch: 400" in _htxt
+      and "#Number of outliers removed: 1" in _htxt
+      and "#Uncertainties scale factor: 1.0" in _htxt,
+      "the #Filter/#Epoch/#outliers/#scale block matches the original "
+      "line for line, epoch computed from the archive ephemeris")
+for _blk in ("#Residuals:", "#Detrended Residuals:"):
+    _at = _htxt.index(_blk)
+    _seg = _htxt[_at:_at + 400]
+    check(all(k in _seg for k in
+              ("#Mean:", "#STD:", "#RMS:", "#Chi squared:",
+               "#Reduced chi squared:", "#Max auto-correlation:",
+               "#Max auto-correlation flag:", "#Shapiro test:",
+               "#Shapiro test flag:")),
+          f"the {_blk} block carries all nine statistics keys in "
+          "HOPS's wording")
+check('"results.txt")' in src and "hops_results_text(self._result)" in src
+      and 'os.path.dirname(path), "report.txt"' in src,
+      "the button saves results.txt in HOPS format AND the full "
+      "narrative report next to it — the rename must not silently "
+      "lose the comps, rejections and method")
+_c1, _res1, _rej1, _ = choose(_snr_field, (500, 500), 1, fwhm_px=3.0,
+                              min_snr=20.0)
+check(len(_c1) == 1 and _res1 == [(100.0, 100.0), (700.0, 300.0)],
+      "the reserve carries the usable surplus in ranked order — the "
+      "promotion walk lands on the best star with headroom, not a "
+      "random one")
+check("float_normalised" in _eng
+      and "clamped to [0, 1]" in _eng
+      and "max(3, n_frames // 20)" in _eng,
+      "normalised-float runs that rack up clipped cores get the clamp "
+      "warning, with a floor so one stray clip does not cry wolf")
+
+print("8ad) HOPS-compatible mode: orbit, occultation, sampler, fit, table")
+_pp = ns["planet_position"]
+_x, _y, _z = _pp(3.5, 9.0, 0.15, 87.5, 120.0, 0.0,
+                 np.array([-0.15, -0.075, 0.0, 0.075, 0.15]))
+check(np.allclose(np.sqrt(_y ** 2 + _z ** 2),
+                  [2.740161864, 1.419561255, 0.339623211, 1.417430019,
+                   2.734694169], atol=2e-9) and np.all(_x > 0),
+      "an eccentric orbit (e=0.15, ω=120°) reproduces pylightcurve's "
+      "planet_orbit to 1e-9 — Kepler's equation, the periastron passage "
+      "and the axis conventions all agree")
+_x, _y, _z = _pp(2.150008, 6.05, 0.0, 88.9, 90.0, 0.0,
+                 np.array([0.0, 1.075004]))
+check(abs(math.hypot(_y[0], _z[0]) - 6.05 * math.cos(math.radians(88.9)))
+      < 1e-12 and _x[1] < 0,
+      "circular: at mid-transit the distance is the impact parameter "
+      "a·cos i, and half a period later the planet is behind the star")
+_pd = ns["projected_distance"](2.150008, 6.05, 0.0, 88.9, 90.0, 0.0,
+                               np.array([1.075004]), 0.15)
+check(abs(_pd[0] - 2.5) < 1e-12,
+      "behind the star the projected distance is parked at 1 + 10 rp, so "
+      "a secondary eclipse can never look like a transit")
+_of = ns["occulted_fraction"]
+_claret = [0.7, -0.5, 0.9, -0.4]
+_f = 1 - _of(np.array([0.0, 0.4, 0.65, 0.9, 1.2]), 0.12, "claret",
+             _claret, 400)
+check(np.allclose(_f, [0.982901319, 0.9834994, 0.98472611, 0.988325207,
+                       1.0], atol=1e-5),
+      "the Claret-4 occultation matches pylightcurve's transit_flux_drop "
+      "to 1e-5 at the fit's 400 rings (rp = 0.12)")
+_f = 1 - _of(np.array([0.0, 0.4, 0.65, 0.9, 1.2]), 0.15, "quad",
+             [0.35, 0.23], 4000)
+check(np.allclose(_f, [0.973425662, 0.974270572, 0.976116795,
+                       0.983010086, 1.0], atol=3e-7),
+      "and the quadratic law to 3e-7 at 4000 rings — the integrator "
+      "converges on the reference, it does not merely approach it")
+_mu = np.linspace(0.0, 1.0, 101)
+check(np.max(np.abs(ns["ld_intensity"](_mu, "quad", (0.35, 0.23))
+                    - ns["ld_intensity"](_mu, "claret",
+                                         ns["quad_to_claret"](0.35, 0.23))))
+      < 1e-12,
+      "quad_to_claret is exact: a2 = u1 + 2u2, a4 = −u2 reproduce the "
+      "quadratic law at every μ")
+_geom = {"period_d": 2.150008, "a_rs": 6.05, "ecc": 0.0, "inc_deg": 88.9,
+         "peri_deg": 90.0}
+_fx = ns["hops_transit_flux"](np.array([-0.07, 0.0]), 0.1541, 0.0, _geom,
+                              "claret", _claret, 400)
+check(abs(_fx[1] - 0.9719078) < 2e-6 and _fx[0] == 1.0,
+      "HAT-P-32 b's curve: 0.9719078 at mid-transit as pylightcurve "
+      "computes it, and exactly 1 outside first contact")
+_dur = ns["transit_duration_days"](0.1541, 2.150008, 6.05, 0.0, 88.9, 90.0)
+check(abs(_dur * 24.0 - 3.137) < 0.01,
+      "the analytic first-to-fourth-contact duration (3.14 h for "
+      "HAT-P-32 b) is what HOPS derives from the same orbit")
+check(math.isnan(ns["transit_duration_days"](0.1, 3.0, 8.0, 0.0, 80.0,
+                                             90.0)),
+      "an orbit that misses the disc returns NaN, not a duration")
+_rng = np.random.default_rng(3)
+_mu0, _sg = np.array([1.0, -2.0]), np.array([0.5, 2.0])
+_chain, _acc = ns["ensemble_sampler"](
+    lambda th: -0.5 * float(np.sum(((th - _mu0) / _sg) ** 2)),
+    _mu0 + _rng.normal(0, 0.1, (12, 2)), 3000, _rng)
+_flat = _chain[600:].reshape(-1, 2)
+check(np.allclose(_flat.mean(0), _mu0, atol=0.08)
+      and np.allclose(_flat.std(0), _sg, rtol=0.06) and 0.3 < _acc < 0.9,
+      "the stretch-move sampler recovers a 2-D Gaussian's means and "
+      "widths (Goodman–Weare, the algorithm emcee implements)")
+_t = np.linspace(-0.11, 0.11, 160) + 2460000.0
+_truth = ns["hops_transit_flux"](_t, 0.1541, 2460000.002, _geom, "claret",
+                                 _claret, 400)
+_am = 1.15 + 0.9 * ((_t - _t.mean()) / 0.11) ** 2
+_fl = (_truth * (1 + 0.03 * (_am - _am.min()))
+       * (1 + np.random.default_rng(11).normal(0, 0.0025, _t.size)))
+_fl[40] *= 1.02
+_res = ns["hops_mode_fit"](_t, -2.5 * np.log10(_fl),
+                           np.full(_t.size, 0.0025 * 1.0857), _geom,
+                           _claret, {"airmass": _am - _am.min()},
+                           2460000.0, 0.14, iterations=500, seed=1)
+_rp_sig = 0.5 * (_res["rp_m"] + _res["rp_p"])
+check(abs(_res["rp"] - 0.1541) < 3 * _rp_sig
+      and abs(_res["mid_time"] - 2460000.002) * 1440 < 2.0,
+      "a synthetic HAT-P-32 with a 3 % airmass ramp comes back with "
+      "Rp/R★ within 3σ of the truth and the mid-time within 2 min")
+check(_res["outliers"] == 1 and not _res["keep_mask"][40],
+      "HOPS's iterative 3σ filter removes the injected 2 % outlier and "
+      "nothing else")
+check(0.7 < _res["scale_factor"] < 1.3,
+      "the uncertainty scale factor sits near 1 when the error bars are "
+      "honest")
+_names = [row[0] for row in _res["rows"]]
+check(_names == ["n", "airmass", "a_1", "a_2", "a_3", "a_4", "rp_over_rs",
+                 "period", "sma_over_rs", "eccentricity", "inclination",
+                 "periastron", "mid_time"],
+      "the parameter table carries HOPS's names in HOPS's order")
+check(all(row[1] == "fix" for row in _res["rows"]
+          if row[0] in ("a_1", "period", "sma_over_rs", "eccentricity",
+                        "inclination", "periastron"))
+      and all(row[1] == "fit" for row in _res["rows"]
+              if row[0] in ("n", "airmass", "rp_over_rs", "mid_time")),
+      "and marks fixed and fitted parameters as HOPS does")
+check(_res["rows"][-1][6] >= 2460000.0 - 0.2 - 1e-9
+      and _res["rows"][-1][7] <= 2460000.0 + 0.2 + 1e-9
+      and _res["rows"][-1][5] == 2460000.0,
+      "the mid-time prior is ±0.2 d around the predicted epoch, HOPS's "
+      "own window, starting from the prediction")
+_ph, _sh = _res["template"]
+check(abs(_sh.max() - 1.0) < 1e-12 and _sh[0] < 1e-4 and _sh[-1] < 1e-4,
+      "the chart template is 1 at the deepest point and zero at first "
+      "and fourth contact — ld_shape draws it like any other")
+_r = {"fit": {"t0": _res["mid_time"], "hops": {
+          "rows": _res["rows"], "outliers": 1,
+          "scale_factor": _res["scale_factor"], "flux": _res["flux"],
+          "flux_err": _res["flux_err"], "trend_flux": _res["trend_flux"],
+          "model_flux": _res["model_flux"],
+          "transit_flux": _res["transit_flux"]}},
+      "ephemeris": {"period_d": 2.150008, "t0_bjd": 2460000.0
+                    - 3 * 2.150008}, "filter": "V"}
+_txt = ns["hops_results_text"](_r)
+check(re.search(r"^rp_over_rs +fit +[\d.]+ +-[\d.]+ \+[\d.]+ +0\.14 ",
+                _txt, re.M) is not None
+      and re.search(r"^sma_over_rs +fix +6\.05 +-- --", _txt, re.M)
+      is not None,
+      "results.txt in HOPS mode prints asymmetric posterior bars and "
+      "the fixed orbit rows in HOPS's columns")
+check("#Epoch: 3" in _txt and "#Number of outliers removed: 1" in _txt
+      and f"#Uncertainties scale factor: {float(_res['scale_factor'])}"
+      in _txt,
+      "with the real outlier count and scale factor, not placeholders")
+check("#WARNING" not in _txt, "no coverage warning line when both contacts lie inside the run")
+_r["fit"]["hops"]["coverage_warning"] = "the fitted transit runs from +2.93 h to +5.14 h after the first point, but the data cover 0 to 3.94 h."
+check("#WARNING: the fitted transit runs from +2.93 h" in ns["hops_results_text"](_r),
+      "a partial-coverage HOPS fit carries its warning into results.txt, not only into the log")
+del _r["fit"]["hops"]["coverage_warning"]
+_rcs = float(re.search(r"#Reduced chi squared: ([\d.]+)", _txt).group(1))
+check(0.8 < _rcs < 1.25,
+      "and residuals in relative flux against the SCALED errors, so the "
+      "reduced χ² sits near 1 as it does in HOPS's own file")
+_pl = ns["parse_claret_ldc"]
+check(_pl("0.7, -0.5, 0.9, -0.4") == [0.7, -0.5, 0.9, -0.4]
+      and _pl("0.7 -0.5 0.9 -0.4") == [0.7, -0.5, 0.9, -0.4]
+      and _pl("") is None and _pl("1, 2, 3") is None
+      and _pl("a, b, c, d") is None,
+      "the Claret field takes four numbers with commas or spaces and "
+      "refuses anything else — a typo cannot become a different star")
+_hm = None
+for _node in tree.body:
+    if isinstance(_node, ast.ClassDef) and _node.name == "LightCurveWorker":
+        for _m in _node.body:
+            if isinstance(_m, ast.FunctionDef) and _m.name == "_hops_mode":
+                _hm = ast.get_source_segment(src, _m)
+check(_hm is not None, "the worker owns a _hops_mode method")
+
+
+class _LC:
+    SALMON, GREEN = "s", "g"
+
+
+class _Prog:
+    def emit(self, *_a):
+        pass
+
+
+class _FakeWorker:
+    def __init__(self, opts):
+        self.opts, self.progress, self.log = opts, _Prog(), []
+
+    def _emit(self, msg, color=None):
+        self.log.append(msg)
+
+
+_hns = dict(ns)
+_hns["LogColor"] = _LC
+exec(textwrap.dedent(_hm), _hns)
+_FakeWorker._hops_mode = _hns["_hops_mode"]
+_w = _FakeWorker({"fit_mode": "hops", "hops_detrend": "airmass",
+                  "hops_iterations": 300})
+_blind = {"significance": 9.0, "detected": True, "rprs": 0.15,
+          "bases": ["airmass"], "duty_cycle": 0.5}
+check(_w._hops_mode(_t, -2.5 * np.log10(_fl), np.full(_t.size, 0.0027),
+                    _blind, _am, {"name": "x"}, "BJD_TDB") is None
+      and "needs the planet's period" in _w.log[-1],
+      "no period in the archive: HOPS mode declines, says why, and the "
+      "blind fit stands")
+_w = _FakeWorker({"fit_mode": "hops", "hops_detrend": "airmass",
+                  "hops_iterations": 300})
+_eph = {"period_d": 2.150008, "t0_bjd": 2460000.0 - 5 * 2.150008,
+        "duration_h": 3.14, "depth_pct": 2.37}
+_fit = _w._hops_mode(_t, -2.5 * np.log10(_fl), np.full(_t.size, 0.0027),
+                     _blind, None, _eph, "BJD_TDB")
+check(_fit is not None and "derived from the archive's duration"
+      in _fit["hops"]["geom_note"] and _fit["hops"]["detrend"] == "linear"
+      and any("fell back to Linear" in m for m in _w.log),
+      "no a/R★ and no airmass series: the orbit is derived from the "
+      "duration (b = 0) and the detrending falls back to Linear, both "
+      "announced")
+check(_fit["mode"] == "hops" and _fit["baseline"] == 0.0
+      and _fit["detected"] is True and _fit["significance"] == 9.0
+      and "template" in _fit and _fit["hops"]["rows"][-1][5]
+      == 2460000.0,
+      "the returned fit speaks the blind fit's vocabulary, keeps the "
+      "blind verdict, carries the chart template and the predicted "
+      "epoch as the mid-time start")
+_shape = ns["ld_shape"](_t, _fit["t0"], _fit["duration_d"],
+                        _fit["template"])
+check(np.nanmax(np.abs(_fit["model_mag"] - _fit["trend"]
+                       - _fit["depth_mag"] * _shape)) < 1e-4,
+      "trend + depth × template reproduces the model the fit used, so "
+      "the chart's overlay and its residual panel are the same curve")
+check('self.opts.get("fit_mode") == "hops"' in src
+      and 'fit.get("template") or ld_template(' in src
+      and "HOPS-compatible — ephemeris-locked" in src
+      and '"hops_ldc": parse_claret_ldc(' in src
+      and 'st.setValue("fit_mode"' in src
+      and "pl_ratdor,pl_orbincl,pl_orbeccen,pl_orblper,pl_ratror" in src
+      and '"a_rs": _num("pl_ratdor")' in src,
+      "the mode is wired end to end: worker switch, chart hook, "
+      "dropdown, options, settings, archive orbit columns")
+check("HOPS-compatible mode" in src[src.index("def _show_help"):]
+      and "HOPS-compatible mode (ephemeris-locked fit)" in src,
+      "the help and the report describe the mode")
+
+print("8ae) HOPS mode: exposure integration, HOPS photometry, HOPS LDC fetch")
+_tt = np.array([2460000.0 - 0.06, 2460000.0 - 0.055, 2460000.0])
+_f0 = ns["hops_transit_flux"](_tt, 0.1541, 2460000.0, _geom, "claret",
+                              _claret, 400)
+_f60 = ns["hops_transit_flux"](_tt, 0.1541, 2460000.0, _geom, "claret",
+                               _claret, 400, 60.0)
+_e = 60.0 / 86400.0
+_offs = np.arange(-_e / 2 + _e / 7 / 2, _e / 2, _e / 7)[:7]
+_man = np.array([np.mean(ns["hops_transit_flux"](_x + _offs, 0.1541,
+                                                  2460000.0, _geom, "claret",
+                                                  _claret, 400))
+                 for _x in _tt])
+check(np.allclose(_f60, _man, atol=1e-12) and _offs.size == 7
+      and abs(_f60[2] - _f0[2]) < 1e-6 and abs(_f60[0] - _f0[0]) > 1e-6,
+      "a 60 s exposure is averaged over int(60/10)+1 = 7 sub-steps exactly "
+      "as HOPS lays them out — flat at mid-transit, smoothed on the ingress")
+_r60 = ns["hops_mode_fit"](_t, -2.5 * np.log10(_fl),
+                           np.full(_t.size, 0.0025 * 1.0857), _geom, _claret,
+                           {"airmass": _am - _am.min()}, 2460000.0, 0.14,
+                           iterations=300, seed=1, exp_s=60.0)
+check(_r60 is not None and _r60["sub_steps"] == 7 and _r60["exp_s"] == 60.0
+      and abs(_r60["rp"] - 0.1541) < 3 * 0.5 * (_r60["rp_m"] + _r60["rp_p"]),
+      "the fit carries the exposure through every model evaluation and "
+      "still recovers the synthetic planet")
+_rel, _rerr = ns["hops_relative_flux"](
+    np.array([100.0, 100.0, 100.0]),
+    [np.array([50.0, 50.0, np.nan]), np.array([30.0, 30.0, 30.0])],
+    np.array([10.0, 10.0, 10.0]),
+    [np.array([7.0, 7.0, 7.0]), np.array([5.0, 5.0, 5.0])])
+check(abs(_rel[0] - 1.25) < 1e-12
+      and abs(_rerr[0] - math.sqrt((10 / 100) ** 2
+                                   + (math.sqrt(74) / 80) ** 2) * 1.25)
+      < 1e-12 and np.isnan(_rel[2]),
+      "HOPS's light curve: target over the RAW comp sum with HOPS's error "
+      "propagation, and NaN where any comp is missing")
+_hf = ns["hops_filter_name"]
+check(_hf("R") == "COUSINS_R" and _hf(" rc ") == "COUSINS_R"
+      and _hf("r'") == "sdss_r" and _hf("rp") == "sdss_r"
+      and _hf("V") == "JOHNSON_V" and _hf("L") == "luminance"
+      and _hf("Clear") == "clear" and _hf("Halpha") is None,
+      "the filter table speaks HOPS's own spellings and refuses what HOPS "
+      "would refuse")
+check(_hf("RED") == "COUSINS_R" and _hf("Green") == "JOHNSON_V" and _hf("blue") == "JOHNSON_B"
+      and _hf("Sloan r") == "sdss_r" and _hf("SDSS_g") == "sdss_g" and _hf("Cousins-R") == "COUSINS_R"
+      and _hf("Red (Baader)") == "COUSINS_R" and _hf("L-Pro") == "luminance" and _hf("") == "clear"
+      and _hf("Ha") is None and _hf("OIII") is None and _hf("SomethingElse") is None,
+      "RGB, survey and bracketed spellings map to the nearest passband; narrowband and nonsense stay None")
+_hn = ns["hops_filter_note"]; _nb = ns["is_narrowband_filter"]
+check("Cousins R" in _hn("RED") and _hn("R") == "" and _hn("Sloan r") == "",
+      "an approximated passband carries its caveat; an exact spelling carries none")
+check(_nb("Ha") and _nb("H-alpha") and _nb("OIII") and _nb("S II") and not _nb("R") and not _nb("Red"),
+      "narrowband names are recognised so the dialog can say why there is no table")
+_w = _FakeWorker({"fit_mode": "hops"})
+_w._hops_photometry = {"rel": np.array([1.0, 1.1, np.nan, 0.9, 1.0, 1.05]),
+                       "rel_err": np.full(6, 0.01), "n_comps": 3}
+_hp_src = None
+for _node in tree.body:
+    if isinstance(_node, ast.ClassDef) and _node.name == "LightCurveWorker":
+        for _m in _node.body:
+            if (isinstance(_m, ast.FunctionDef)
+                    and _m.name == "_apply_hops_photometry"):
+                _hp_src = ast.get_source_segment(src, _m)
+exec(textwrap.dedent(_hp_src), _hns)
+_FakeWorker._apply_hops_photometry = _hns["_apply_hops_photometry"]
+_jd6 = np.arange(6.0)
+_j, _m, _e = _w._apply_hops_photometry(_jd6, np.zeros(6), np.full(6, 0.02))
+check(_j.size == 5 and 2.0 not in _j
+      and abs(_m[1] - _m[0] - (-2.5 * math.log10(1.1))) < 1e-12
+      and abs(_e[0] - 2.5 / math.log(10) * 0.01) < 1e-12
+      and "1 frame(s) dropped" in _w._hops_phot_note,
+      "in HOPS mode the worker swaps in HOPS's series: magnitudes from the "
+      "ratio, errors converted, the NaN frame dropped and counted")
+_w2 = _FakeWorker({"fit_mode": "hops"})
+_j2, _m2, _e2 = _w2._apply_hops_photometry(_jd6, np.zeros(6), np.full(6, 0.02))
+check(_j2.size == 6 and np.all(_m2 == 0) and "unavailable" in _w2.log[-1],
+      "without the native engine the ensemble series stands, said aloud")
+check('self.opts.get("fit_mode") == "hops":\n                jd, mag, err = self._apply_hops_photometry(jd, mag, err)'
+      in src and "self._hops_photometry = {" in _eng
+      and "Compute Claret (Phoenix)" in src
+      and "class _LdcComputeThread(QThread)" in src
+      and "exp_s=exp_s" in src and "find_hops_python" not in src,
+      "photometry swap, engine capture, compute button, compute thread "
+      "and exposure hand-over are all wired, the HOPS-python bridge gone")
+
+check("TARGET_CACHE_SCHEMA = 2" in src
+      and 'hit.get("schema") != TARGET_CACHE_SCHEMA' in src
+      and 'found["schema"] = TARGET_CACHE_SCHEMA' in src
+      and "the older cached ephemeris (no orbit columns)" in src,
+      "a cached ephemeris from before the orbit columns is refreshed, "
+      "not trusted — the first HAT-P-32 HOPS run derived a/R* from the "
+      "duration with the archive's value one query away")
+
+print("8af) Claret coefficients from Phoenix models (ExoTETHyS's method)")
+for _node in tree.body:
+    if isinstance(_node, ast.ClassDef) and _node.name in ("_SafeUnpickler", "_PlainUnpickler"):
+        exec(compile(ast.Module([_node], []), "<c>", "exec"), ns)
+_pk = __import__("pickle")
+ns["http"] = __import__("http.client")
+_tmp = tempfile.mkdtemp()
+_good = os.path.join(_tmp, "good.pickle")
+with open(_good, "wb") as _fh:
+    _pk.dump({"mu": np.linspace(0.1, 1, 5), "x": np.float64(2.0)}, _fh)
+_bad = os.path.join(_tmp, "bad.pickle")
+
+
+class _Evil:
+    def __reduce__(self):
+        return (os.system, ("echo pwned",))
+
+
+with open(_bad, "wb") as _fh:
+    _pk.dump(_Evil(), _fh)
+_g = ns["safe_unpickle"](_good)
+try:
+    ns["safe_unpickle"](_bad)
+    _blocked = False
+except _pk.UnpicklingError:
+    _blocked = True
+check(_blocked and np.allclose(_g["mu"], np.linspace(0.1, 1, 5)),
+      "the model-file unpickler admits numpy arrays and refuses "
+      "os.system — a downloaded pickle cannot run code on load")
+_xml = ("<TABLE><DATA><TABLEDATA><TR><TD>5400.0</TD><TD>0.0</TD></TR>"
+        "<TR><TD>5450.0</TD><TD>0.5</TD></TR><TR><TD>5500.0</TD><TD>1.0"
+        "</TD></TR></TABLEDATA></DATA></TABLE>")
+_w, _tr = ns["parse_svo_votable"](_xml)
+check(np.allclose(_w, [5400, 5450, 5500]) and np.allclose(_tr, [0, 0.5, 1]),
+      "an SVO VOTable parses into wavelength and transmission")
+try:
+    ns["parse_svo_votable"]("<html>error</html>")
+    _raised = False
+except ValueError:
+    _raised = True
+check(_raised, "and an error page is refused, not read as an empty filter")
+_par, _nm = ns["phoenix_grid_params"](
+    ["teff06000_logg4.00_MH0.0.pickle", "teff06100_logg4.50_MH-0.5.pickle",
+     "junk.txt"])
+check(_par.shape == (2, 3) and _par[1].tolist() == [6100.0, 4.5, -0.5]
+      and _nm == ["teff06000_logg4.00_MH0.0.pickle",
+                  "teff06100_logg4.50_MH-0.5.pickle"],
+      "model file names parse into Teff, log g, [M/H] — the dot before "
+      "the extension no longer swallows the metallicity")
+_grid = np.array([[t_, g_, 0.0] for t_ in (5900, 6000, 6100, 6200)
+                  for g_ in (4.0, 4.5, 5.0)])
+_nb = ns["phoenix_neighbours"](6001.0, 4.22, 0.0, _grid)
+check(_nb is not None and [tuple(_grid[i][:2]) for i in _nb]
+      == [(6100.0, 4.5), (6100.0, 4.5), (6100.0, 4.0), (6100.0, 4.0),
+          (6000.0, 4.5), (6000.0, 4.5), (6000.0, 4.0), (6000.0, 4.0)],
+      "the eight neighbours come in ExoTETHyS's order: Teff above then "
+      "below, log g above then below, [M/H] pairs repeated on a grid line")
+check(ns["phoenix_neighbours"](6000.0, 4.5, 0.0, _grid).count(
+          int(np.where((_grid[:, 0] == 6000) & (_grid[:, 1] == 4.5))[0][0]))
+      == 8 and ns["phoenix_neighbours"](7000.0, 4.5, 0.0, _grid) is None,
+      "a star on a grid point gets that point eight times; outside the "
+      "grid there is no answer rather than an extrapolation")
+_P = [[6100, 4.5, 0], [6100, 4.5, 0], [6100, 4.0, 0], [6100, 4.0, 0],
+      [6000, 4.5, 0], [6000, 4.5, 0], [6000, 4.0, 0], [6000, 4.0, 0]]
+_f = lambda t_, g_: [0.4 + 1e-4 * (t_ - 6000) + 0.1 * (g_ - 4.0), 0.0, 0.0, 0.0]
+_C = [_f(p[0], p[1]) for p in _P]
+_c, _wr = ns["interp_ldc8"](6001.0, 4.22, 0.0, _P, _C, [1e-5] * 8)
+check(abs(_c[0] - _f(6001.0, 4.22)[0]) < 1e-12 and abs(_wr - 1e-5) < 1e-18,
+      "trilinear interpolation between the neighbours is exact on a "
+      "linear field")
+_mu = np.linspace(0.05, 1.0, 40)
+_truth = [0.45, -0.004, 0.535, -0.279]
+_ints = ns["ld_intensity"](_mu, "claret", _truth)
+_cf, _res = ns["claret4_fit"](_mu, _ints, np.ones_like(_mu))
+check(np.allclose(_cf, _truth, atol=1e-9) and _res < 1e-9,
+      "the weighted least-squares fit recovers a Claret-4 profile to "
+      "1e-9 — the exact minimum of ExoTETHyS's objective")
+_bad_ints = 1.0 + 0.5 * (1.0 - _mu)     # brightening limb: inadmissible
+_cf2, _res2 = ns["claret4_fit"](_mu, _bad_ints, np.ones_like(_mu))
+check(ns["claret4_ok"](_cf2) and np.isfinite(_res2),
+      "a profile the constraints forbid falls back to the constrained "
+      "Nelder-Mead and still returns an admissible law")
+_nm = ns["nelder_mead"](lambda x: (x[0] - 1) ** 2 + 3 * (x[1] + 2) ** 2,
+                        np.array([0.3, 0.3]), xatol=1e-8, fatol=1e-10)
+check(np.allclose(_nm[0], [1, -2], atol=1e-6),
+      "Nelder-Mead as scipy runs it converges on a quadratic")
+_mw = np.arange(5000.0, 7001.0, 1.0)
+_mi = np.column_stack([np.exp(-((_mw - 6000) / 800) ** 2) * s_
+                       for s_ in (0.6, 0.8, 1.0)])
+_pw = np.array([5400.0, 5600.0, 6000.0, 6400.0, 6800.0])
+_pt = np.array([0.0, 0.8, 1.0, 0.7, 0.0])
+_ex = ns["passband_integrated_intensities"](_mw, _mi, _pw, _pt)
+_fine = np.linspace(5400, 6800, 400001)
+_ref = np.array([np.trapz(np.interp(_fine, _mw, _mi[:, k])
+                          * np.interp(_fine, _pw, _pt) * _fine, _fine)
+                 for k in range(3)])
+check(np.allclose(_ex, _ref, rtol=1e-9),
+      "the passband integral on the union grid equals a 400 000-point "
+      "trapezoid to 1e-9 — exact for the piecewise-linear product")
+_rad = np.linspace(0.0, 1.0, 60)
+_mu2 = np.sqrt(1 - _rad ** 2)[::-1]                  # ascending mu, mu=1 last
+_prof = ns["ld_intensity"](np.clip(_mu2, 0, 1), "claret", _truth)
+_prof[:6] = 0.02                                     # the spherical drop-off
+_rm, _ri, _rw = ns["phoenix_rescale_weights"](_mu2, _prof)
+check(_rm.size < _mu2.size and _rm[-1] == 1.0 and np.all(_rw > 0)
+      and abs(_rw.sum() - 1.0) < 1e-12 and np.all(np.sqrt(1 - _rm ** 2)
+                                                  <= ns["PHOENIX_R_CUT"]),
+      "the Phoenix rescaling drops the outer drop-off, cuts at r = 0.99623 "
+      "and weights the radius axis to unit sum")
+_r0, _n0 = ns["claret_from_phoenix"](6000.0, 4.4, "no_such_band", cache_dir=_tmp)
+check(_r0 is None and "no public transmission curve" in _n0,
+      "a filter without a public curve anywhere says so instead of guessing")
+__import__("shutil").rmtree(_tmp, ignore_errors=True)
+check("PHOENIX_INDEX_URL" in src and "SVO_FPS_URL" in src
+      and 'claret_from_phoenix(teff, logg, self._band' in src
+      and "_SafeUnpickler(fh).load()" in src,
+      "the compute thread calls the Phoenix path and every pickle goes "
+      "through the restricted unpickler")
+
+print("9a) review fixes: comparison ranking, aperture scan, clipping, chi2")
+_rng = np.random.default_rng(21)
+_nf = 300
+_tt = np.linspace(0, 1, _nf)
+_slow = 0.020 * np.sin(2 * np.pi * _tt)                    # 20 mmag variable
+
+
+def _comp_set(fluxes, var_index):
+    out = []
+    for k, f0 in enumerate(fluxes):
+        m = _rng.normal(0, 0.004, _nf) + (_slow if k == var_index else 0)
+        out.append(f0 * 10 ** (-0.4 * m))
+    return out
+
+
+_rank = ns["rank_comps_by_scatter"]
+_k1, _s1 = _rank(_comp_set([100000, 15000, 10000, 8000, 7000], 0))
+check(_k1 == [False, True, True, True, True],
+      "a 20 mmag variable that carries 71 % of the ensemble flux is "
+      "dropped — the one-pass ratio was capped at 1/w and kept it")
+_k2, _s2 = _rank(_comp_set([10000] * 5, 2))
+check(_k2 == [True, True, False, True, True],
+      "five equal comps, one variable: the variable one goes")
+_k3, _s3 = _rank(_comp_set([50000, 20000, 20000], 0))
+check(_k3 == [False, True, True],
+      "with only two peers (each reference held the suspect at w = 0.5) "
+      "the suspect is still found")
+_false = 0
+for _trial in range(20):
+    _k, _ = _rank(_comp_set([60000, 30000, 20000, 15000, 10000], -1))
+    _false += (not all(_k))
+check(_false == 0,
+      "twenty clean ensembles of five: nothing is dropped")
+_k4, _ = _rank(_comp_set([10000, 10000], 0))
+check(_k4 == [True, True], "two comps are never judged — no ensemble to judge against")
+check("point_to_point_sigma(mag) * 1000.0 if jd.size >= 5" in src
+      and "len(kept) < len(comps) - 1" not in src,
+      "the Siril-fallback aperture scan scores point-to-point noise, and "
+      "its variability screen no longer spares the last-listed comp")
+_clip = ns["sigma_clip_series"]
+_hits = 0
+_scales = []
+for _trial in range(40):
+    _y = _rng.normal(0, 0.005, 400)
+    _keep, _nb, _note = _clip(np.arange(400.0), _y, kappa=4.0)
+    _hits += _nb
+check(_hits <= 5,
+      "at kappa = 4 on 16 000 white-noise points one or two are clipped "
+      f"(got {_hits}; the old in-window median clipped seven times as many)")
+_y = _rng.normal(0, 0.005, 400)
+_y[200] += 0.030
+_keep, _nb, _ = _clip(np.arange(400.0), _y, kappa=4.0)
+check(_nb == 1 and not _keep[200],
+      "a 6-sigma spike still goes")
+_c2 = ns["chi2_per_dof"]
+_vals = []
+for _trial in range(400):
+    _r = _rng.normal(0, 1.0, 200)
+    _m = np.ones(200, dtype=bool)
+    _m[60:140] = False
+    _vals.append(_c2(_r, 6, _m))
+_vals_fd = [_c2(_rng.normal(0, 1.0, 200), 6, None) for _ in range(400)]
+check(0.97 < np.mean(_vals) < 1.03 and 0.97 < np.mean(_vals_fd) < 1.03,
+      f"chi2/nu averages 1 on white noise by either noise floor "
+      f"({np.mean(_vals):.3f} OOT-MAD, {np.mean(_vals_fd):.3f} first "
+      "differences) — the estimator bias is divided out")
+
+print("9b) review fixes: Rp/R* bar, beta, collinearity, BJD, coordinates, dates")
+_tb = np.linspace(2460000.0, 2460000.25, 240)
+_tmpl = ns["ld_template"](0.12, 0.3)
+_mag_b = 0.0186 * ns["ld_shape"](_tb, 2460000.125, 0.1, _tmpl) + _rng.normal(0, 0.004, 240)
+_fb = ns["fit_transit"](_tb, _mag_b)
+_dflux = 1.0 - 10 ** (-0.4 * _fb["depth_mag"])
+_r0 = ns["rprs_from_depth"](_dflux, b=0.0); _r5 = ns["rprs_from_depth"](_dflux, b=0.5)
+_dsg = _fb["depth_sigma_mmag"] / 1000.0
+_bar_only = 0.5 * abs(ns["rprs_from_depth"](1.0 - 10 ** (-0.4 * (_fb["depth_mag"] + _dsg)), b=0.0)
+                      - ns["rprs_from_depth"](1.0 - 10 ** (-0.4 * (_fb["depth_mag"] - _dsg)), b=0.0))
+check(_fb["rprs_sigma"] >= math.hypot(_bar_only, 0.5 * abs(_r5 - _r0)) * 0.98
+      and _fb["rprs_sigma"] > _bar_only * 1.05,
+      "the Rp/R* bar is the depth bar and half the impact-parameter spread in quadrature — "
+      f"{_fb['rprs_sigma']:.4f} vs depth-only {_bar_only:.4f} and spread/2 {0.5 * abs(_r5 - _r0):.4f}")
+_betas = []
+for _trial in range(300):
+    _bb, _rows = ns["red_noise_beta"](_tb, _rng.normal(0, 0.004, 240), 0.1)
+    _betas.append(_bb)
+_betas = np.array(_betas)
+check(1.0 <= np.mean(_betas) < 1.13 and np.percentile(_betas, 90) < 1.36,
+      f"beta on white noise: mean {np.mean(_betas):.3f}, 90th pct "
+      f"{np.percentile(_betas, 90):.3f} — the documented scatter of a "
+      "Pont estimator on 4-18 bins, conservative by construction")
+_ar = np.zeros(240); _e = _rng.normal(0, 0.004, 240)
+for _i in range(1, 240):
+    _ar[_i] = 0.8 * _ar[_i - 1] + _e[_i]
+check(ns["red_noise_beta"](_tb, _ar, 0.1)[0] > 1.5,
+      "and still flags AR(1) rho = 0.8 noise as red (beta well above 1.5; "
+      "mean 2.6 over 100 draws)")
+_am_b = np.linspace(1.0, 2.0, 240)
+_X, _names, _note, _o, _sc = ns["build_design"](240, {"airmass": _am_b, "sky": 3.0 * _am_b + _rng.normal(0, 0.01, 240), "fwhm": _rng.normal(2.5, 0.2, 240)})
+check(_names == ["airmass", "fwhm"] and "sky (collinear with airmass, r = " in _note,
+      "a basis that copies another (sky tracking airmass at r > 0.95) is "
+      "dropped and named — its coefficient and bar were meaningless "
+      "(duplicates only: r > 0.995)")
+_bjd_site, _n1 = ns["to_bjd_tdb"](np.array([2461000.0]), 31.04, 46.69, 31.5, -99.4)
+_bjd_geo, _n2 = ns["to_bjd_tdb"](np.array([2461000.0]), 31.04, 46.69, None, None)
+check(_bjd_geo is not None and abs(_bjd_geo[0] - _bjd_site[0]) * 86400 < 0.03
+      and "geocentric" in _n2 and abs(_bjd_geo[0] - 2461000.0) * 86400 > 60,
+      "without a site the BJD conversion runs geocentrically (within 30 ms "
+      "of the topocentric value) instead of throwing away minutes")
+_hr = ns["header_target_radec"]
+check(abs(_hr([{"objctra": "339.16", "objctdec": "+71.5"}])[0] - 339.16) < 1e-9
+      and abs(_hr([{"objctra": "22 36 38.4", "objctdec": "+71 30 00"}])[0]
+              - (22 + 36 / 60 + 38.4 / 3600) * 15) < 1e-9
+      and abs(_hr([{"objctra": "12.5", "objctdec": "+10"}])[0] - 187.5) < 1e-9
+      and _hr([{"objctra": "400", "objctdec": "+10"}])[0] is None,
+      "OBJCTRA: sexagesimal is hours, a bare decimal above 24 is degrees, "
+      "above 360 is refused — 339.16 no longer becomes 5087")
+_jd = ns["_jd_from_dateobs"]
+_ref = _jd("2026-08-15T07:26:29.500000")
+check(all(abs(_jd(_s) - _ref) < 1e-9 for _s in
+          ("2026-08-15T07:26:29.5", "2026-08-15T07:26:29.50",
+           "2026-08-15T07:26:29.5000", "2026-08-15T07:26:29.50000"))
+      and abs(_jd("2026-08-15T07:26:29.5000004") - _ref) < 1e-9,
+      "1 to 5 fraction digits parse on every Python, and 7 digits are "
+      "truncated, not refused")
+_sx = ns["_sexagesimal"]
+check(abs(_sx("12h34m56.7s") - (12 + 34 / 60 + 56.7 / 3600)) < 1e-12
+      and abs(_sx("+45d30m10s") - 45.502777777) < 1e-8
+      and abs(_sx("-45°30'10\"") + 45.502777777) < 1e-8
+      and abs(_sx("12:34:56.7") - _sx("12h34m56.7s")) < 1e-12,
+      "h/m/s, d/m/s and degree-sign notation parse as the GUI promises")
+
+print("9c) review fixes: report, expected curve, guards, flip, saturation")
+_rep_src = None
+for _node in tree.body:
+    if isinstance(_node, ast.ClassDef):
+        for _m in _node.body:
+            if isinstance(_m, ast.FunctionDef) and _m.name == "_report_text":
+                _rep_src = ast.get_source_segment(src, _m)
+exec(textwrap.dedent(_rep_src), _hns)
+_base_r = {"folder": "/x", "calib_note": "", "n_points": 12, "n_files": 12,
+           "target_xy": (1, 2), "target_how": "h", "comps": [], "rejected": [],
+           "comp_rows": [], "aperture_px": None, "fwhm_px": 3.0, "yield_note": "",
+           "refined": False, "multi_used": [], "multi_note": "", "airmass_note": "",
+           "slope": None, "intercept": None, "time_system": "JD_UTC",
+           "time_note": "", "engine": "native", "n_frames": 12, "rms_mmag": 2.0,
+           "raw_rms_mmag": 3.0, "flip_deg": 0.0, "out_dir": "/x", "dat_path": "",
+           "ref_path": "", "utc_offset_h": 0, "site_lat_deg": None,
+           "site_lon_deg": None, "target_saturated": False,
+           "detrended": np.zeros(12), "clip_note": "", "n_clipped": 0,
+           "jd": np.zeros(12), "ephemeris": {}, "fit": None}
+try:
+    _txt0 = _hns["_report_text"](None, _base_r)
+    _ok0 = "not attempted" in _txt0 and "T0 " not in _txt0
+except Exception:                                          # noqa: BLE001
+    _ok0 = False
+check(_ok0, "the report survives a run with no fit — Save results used to "
+      "raise on fit.get")
+_nd = dict(_base_r)
+_nd["fit"] = dict(_fb, detected=False, significance=2.1)
+_txt1 = _hns["_report_text"](None, _nd)
+check("NOT CLAIMED" in _txt1 and "   T0 " not in _txt1 and "O-C" not in _txt1
+      and "chi2/nu" not in _txt1,
+      "an unclaimed fit prints depth and duration only — no T0, O-C or "
+      "chi2/nu under a caveat that says they are not a measurement")
+check('eph.get("rprs_archive")' in src.split("def render")[1][:20000]
+      if "def render" in src else 'float(eph["rprs_archive"]) if eph.get("rprs_archive")' in src,
+      "the expected curve is seeded with the archive's Rp/R* when it has "
+      "one, not the square root of a limb-darkened depth")
+check("SUBPIXEL_GRID = 16" in src, "aperture edges are subsampled 16 x 16")
+_cw = ns["circle_weights"]
+_areas = [float(_cw((21, 21), 10.0 + dx, 10.0 + dy, 1.5).sum())
+          for dx in np.linspace(-0.5, 0.5, 7) for dy in np.linspace(-0.5, 0.5, 7)]
+check(np.std(_areas) / np.mean(_areas) < 0.002,
+      f"the r = 1.5 px aperture area wobbles {100 * np.std(_areas) / np.mean(_areas):.2f} % "
+      "with sub-pixel centre (was 0.6 % at 8 x 8)")
+check("self._flip_jd_utc = 0.5 * (j_at + j_before)" in src and 'out["datamax"] = float(h[key])' in src
+      and "frame_max in (4095.0, 16383.0)" in src
+      and "peak_scale = min(4.0, max(1.0, (fw0 / fw_min) ** 2))" in src
+      and "elif n_dropped and n_promoted:" in src
+      and "(len(stars) > 3 or reserves)" in src,
+      "flip marker at the gap's midpoint, DATAMAX/SATURATE and the 12/14-bit "
+      "ceiling as clip level, the headroom peak scaled to the sharpest "
+      "frame, reserves consulted with three comps, promotions kept")
+check("treat the depth as a lower bound" not in src
+      and "~700x the" in src,
+      "the stale lower-bound warning and the false-alarm comment are gone")
+
+print("9d) a flip step is a basis, not a transit")
+_ts = np.linspace(2460000.0, 2460000.16, 60)
+_tr = 0.015 * ns["ld_shape"](_ts, 2460000.08, 0.09, _tmpl)
+_stepb = (_ts > 2460000.10).astype(float)
+_ys = _tr + 0.030 * _stepb + _rng.normal(0, 0.004, 60)
+_f_no = ns["fit_transit"](_ts, _ys)
+_f_fl = ns["fit_transit"](_ts, _ys, bases={"flip": _stepb})
+check("flip" in _f_fl["bases"] and abs(_f_fl["depth_mmag"] - 15.0) < 4.0
+      and abs(_f_no["depth_mmag"] - 15.0) > abs(_f_fl["depth_mmag"] - 15.0),
+      f"with the step as a basis the 15 mmag transit comes back at "
+      f"{_f_fl['depth_mmag']:.1f} mmag beside a 30 mmag flip offset "
+      f"(without it: {_f_no['depth_mmag']:.1f} mmag)")
+check('bases["flip"] = step' in src and "No transit claimed: the best template reaches" in src,
+      "the worker adds the step basis on a detected flip and logs the "
+      "reached significance when nothing is claimed")
+
+_wf = _FakeWorker({"fit_mode": "hops", "hops_detrend": "linear", "hops_iterations": 300})
+_wf._flip_jd_utc = 2460000.10
+_ys2 = _tr + 0.030 * _stepb + _rng.normal(0, 0.004, 60)
+_hf = _wf._hops_mode(_ts, _ys2, np.full(60, 0.0043), {"significance": 2.0, "detected": False,
+                     "rprs": 0.12, "bases": [], "duty_cycle": 0.5, "depth_mmag": 27.0, "duration_h": 1.0},
+                     None, {"period_d": 2.150008, "t0_bjd": 2460000.08 - 3 * 2.150008, "duration_h": 2.16,
+                            "depth_pct": 1.5, "a_rs": 6.05, "inc_deg": 88.9, "ecc": 0.0, "peri_deg": 90.0},
+                     "BJD_TDB", flip_bases=_stepb)
+check(_hf is not None and "flip" in _hf["hops"]["names"]
+      and abs(_hf["rprs"] - 0.1225) < 0.02 and _hf["blind_depth_mmag"] == 27.0,
+      "HOPS mode takes the flip step as a detrending coefficient and keeps "
+      f"the blind fit's numbers for the log (Rp/R* {_hf['rprs']:.3f} beside a 30 mmag step)")
+
+_wc = _FakeWorker({"fit_mode": "hops", "hops_detrend": "linear", "hops_iterations": 300})
+_short = _ts[:30]                                     # ends before egress
+_hc = _wc._hops_mode(_short, _ys2[:30], np.full(30, 0.0043),
+                     {"significance": 2.0, "detected": False, "rprs": 0.12, "bases": [], "duty_cycle": 0.5,
+                      "depth_mmag": 27.0, "duration_h": 1.0}, None,
+                     {"period_d": 2.150008, "t0_bjd": 2460000.08 - 3 * 2.150008, "duration_h": 2.16,
+                      "depth_pct": 1.5, "a_rs": 6.05, "inc_deg": 88.9, "ecc": 0.0, "peri_deg": 90.0}, "BJD_TDB")
+check(_hc is not None and any("one contact outside the run" in m for m in _wc.log),
+      "an ephemeris-locked fit whose transit runs past the data's end is "
+      "flagged as degenerate with a baseline offset")
+
+_ci = [{"date_obs": "2026-01-01T00:%02d:00" % m, "path": "f%d" % k} for k, m in enumerate([0, 10, 20, 5, 30])]
+_chron = ns["chronological_frames"]
+_cs, _cm = _chron(_ci)
+check([i["path"] for i in _cs] == ["f0", "f3", "f1", "f2", "f4"] and _cm == 1,
+      "frames are re-sequenced by DATE-OBS; one misfiled frame counts as ONE moved, not as everything behind it")
+_cb = [{"date_obs": "2026-01-01T00:%02d:00" % m, "path": "b%d" % k} for k, m in enumerate(list(range(0, 40, 2)) + [1, 3, 5])]
+check(_chron(_cb)[1] == 3, "three late-named frames from the start of the run count as three moved")
+check(_chron(_ci[:3])[1] == 0, "an already chronological run moves nothing")
+_ci[2]["date_obs"] = ""
+_cs, _cm = _chron(_ci)
+check([i["path"] for i in _cs] == ["f0", "f3", "f1", "f4", "f2"],
+      "a frame without a readable DATE-OBS goes last; the dated frames still sort by time")
+_cn = [{"date_obs": "2026-01-01T00:%02d:00" % m, "path": "x%d" % k} for k, m in enumerate([0, 5])]
+_cn.append({"date_obs": "", "path": "x_undated"}); _cn.append({"date_obs": "2026-01-01T00:07:00", "path": "x2"})
+check([i["path"] for i in _chron(_cn)[0]] == ["x0", "x1", "x2", "x_undated"],
+      "the same with the undated frame in the middle of the file order")
+
+print("\n9e) learnt from pylightcurve 4: analytic occultation, numeric contacts, time stamps")
+_ofa, _ofr = ns["occulted_fraction"], ns["occulted_fraction_rings"]
+_rng = np.random.default_rng(7)
+_worst = 0.0
+for _law, _co in (("claret", [0.6, -0.2, 0.3, -0.1]), ("quad", [0.35, 0.23]), ("claret", [0.3, 0.4, -0.1, 0.05])):
+    for _rp in (0.02, 0.1541, 0.3, 0.6):
+        _z = np.abs(np.concatenate([_rng.uniform(0, 1.3 + _rp, 1500), [0.0, _rp, 1 - _rp, 1 + _rp, 1.0]]))
+        _worst = max(_worst, float(np.max(np.abs(_ofa(_z, _rp, _law, _co) - _ofr(_z, _rp, _law, _co, 1500)))))
+check(_worst < 1e-5, f"the analytic occultation reproduces the ring integration for the Claret and quadratic laws (worst {_worst:.1e})")
+check(abs(_ofa(np.array([0.0]), 0.1, "linear", [0.5])[0] - _ofa(np.array([0.0]), 0.1, "claret", [0.0, 0.5, 0.0, 0.0])[0]) < 1e-12
+      and abs(_ofa(np.array([0.3]), 0.1, "quad", [0.35, 0.23])[0] - _ofa(np.array([0.3]), 0.1, "claret", ns["quad_to_claret"](0.35, 0.23))[0]) < 1e-12,
+      "the linear and quadratic laws go through the same Claret route exactly")
+_big = _ofa(np.array([0.0, 0.1, 0.2, 0.5, 1.0, 2.1, 2.3]), 1.2, "quad", [0.3, 0.2])
+check(np.all(_big[:3] == 1.0) and 0 < _big[3] < 1 and 0 < _big[4] < 1 and _big[5] > 0 and _big[6] == 0.0,
+      "a planet larger than the star covers it whole out to z = rp - 1 (the case split's missing row) and partially beyond")
+check(_ofa(np.array([1.5]), 0.1, "quad", [0.3, 0.2])[0] == 0.0 and _ofa(np.array([0.5]), 0.0, "quad", [0.3, 0.2])[0] == 0.0,
+      "no planet or no overlap blocks nothing")
+_td = ns["transit_duration_days"]
+check(abs(_td(0.1, 3.0, 10.0, 0.0, 88.0, 90.0) * 24 - 2.39659) < 2e-4, "circular orbit: the contacts agree with the closed formula")
+check(abs(_td(0.1, 3.0, 10.0, 0.4, 88.0, 270.0) * 24 - 3.4585) < 2e-3 and abs(_td(0.1, 3.0, 10.0, 0.4, 88.0, 45.0) * 24 - 1.7689) < 2e-3,
+      "eccentric orbits: the contacts are found on the orbit itself (the formula alone is 0.2 min off at e = 0.4)")
+check(math.isnan(_td(0.1, 3.0, 8.0, 0.0, 80.0, 90.0)), "a planet that misses the disc still yields NaN")
+_mj, _tdg = ns["mid_exposure_jd"], ns["timestamp_diagnosis"]
+_j0 = ns["_jd_from_dateobs"]("2026-09-01T22:14:46.5")
+check(abs((_mj("2026-09-01T22:14:46.5", 290.0)[0] - _j0) * 86400 - 145.0) < 1e-3 and _mj("2026-09-01T22:14:46.5", 290.0)[1] == "DATE-OBS+exp/2",
+      "without a mid stamp, DATE-OBS is the start and half the exposure is added")
+check(abs((_mj("2026-09-01T22:14:46.5", 290.0, "2026-09-01T22:17:11.5")[0] - _j0) * 86400 - 145.0) < 1e-3
+      and _mj("2026-09-01T22:14:46.5", 290.0, "2026-09-01T22:17:11.5")[1] == "DATE-AVG",
+      "a DATE-AVG stamp is taken as the mid-exposure time as it is")
+check(abs((_mj("2026-09-01T22:14:46.5", 290.0, "", "2026-09-01T22:19:36.5")[0] - _j0) * 86400 - 145.0) < 1e-3
+      and _mj("", 0.0)[1] == "" and not np.isfinite(_mj("", 0.0)[0]) and _mj("2026-09-01T22:14:46.5", 0.0)[1] == "DATE-OBS",
+      "DATE-END gives the midpoint; nothing readable gives NaN; no exposure adds nothing")
+_ti = [{"date_obs": "2026-09-01T22:%02d:00" % m, "date_avg": "2026-09-01T22:%02d:30" % m, "exp_s": 60.0} for m in range(5)]
+check(_tdg(_ti)[0] == "start" and "START" in _tdg(_ti)[1], "DATE-AVG half an exposure after DATE-OBS confirms the start convention")
+check(_tdg([dict(i, date_avg=i["date_obs"]) for i in _ti])[0] == "mid",
+      "DATE-AVG equal to DATE-OBS reveals a program that stamps mid-exposure")
+check(_tdg([dict(i, date_avg="2026-09-01T22:%02d:10" % m) for m, i in enumerate(_ti)])[0] == "odd",
+      "an offset that is neither is reported as odd, and DATE-AVG still wins")
+_tu = _tdg([{"date_obs": i["date_obs"], "exp_s": 60.0} for i in _ti])
+check(_tu[0] == "unchecked" and "30 s late" in _tu[1], "DATE-OBS alone: the assumption is stated with its cost in seconds")
+check(_tdg([{"date_obs": i["date_obs"], "date_end": "2026-09-01T22:%02d:00" % (m + 1), "exp_s": 60.0} for m, i in enumerate(_ti)])[0] == "end",
+      "DATE-END alone is reported as the midpoint source")
+_fi = ns["inspect_frame"]("x.fit", {"IMAGETYP": "Light", "DATE-OBS": "2026-09-01T22:14:46.5", "DATE-AVG": "2026-09-01T22:17:11.5", "DATE-END": "2026-09-01T22:19:36.5", "EXPTIME": 290.0})
+check(_fi["date_avg"] == "2026-09-01T22:17:11.5" and _fi["date_end"] == "2026-09-01T22:19:36.5", "inspect_frame carries DATE-AVG and DATE-END")
+
+print("\n9f) second review: time pairing, NaN airmass, outlier sigma, clipper ends, filters, chi2 bar")
+_mj = ns["mid_exposure_jd"]
+_jo = ns["_jd_from_dateobs"]("2026-09-01T22:00:00")
+check(_mj("2026-09-01T22:00:00", 60.0, "2026-09-02T01:00:30")[1] == "DATE-OBS+exp/2",
+      "a DATE-AVG hours away from DATE-OBS is ignored for that frame")
+check(_mj("2026-09-01T22:00:00", 60.0, "2026-09-01T22:00:30")[1] == "DATE-AVG",
+      "a DATE-AVG inside the exposure is still taken as it is")
+_tdg = ns["timestamp_diagnosis"]
+_short = [{"date_obs": "2026-09-01T22:%02d:00" % m, "date_avg": "2026-09-01T22:%02d:00" % m, "exp_s": 1.0} for m in range(5)]
+check(_tdg(_short)[0] == "mid", "at a 1 s exposure a mid-stamping program is still recognised as such")
+_short2 = [{"date_obs": "2026-09-01T22:%02d:00" % m, "date_avg": "2026-09-01T22:%02d:00.5" % m, "exp_s": 1.0} for m in range(5)]
+check(_tdg(_short2)[0] == "start", "and a start-stamping one at 1 s as start")
+_endb = [{"date_obs": "2026-09-01T22:%02d:00" % m, "date_end": "2026-09-01T21:%02d:00" % m, "exp_s": 60.0} for m in range(5)]
+check(_tdg(_endb)[0] == "unchecked", "a DATE-END before DATE-OBS does not count as an end stamp")
+_hf = ns["hops_filter_name"]
+check(_hf("exoplanets_bb") == "exoplanets_bb" and _hf("Astrodon Exoplanet-BB") == "exoplanets_bb",
+      "HOPS's own 'exoplanets_bb' and 'astrodon exoplanet-bb' spellings match after key normalisation")
+_scs = ns["sigma_clip_series"]
+_tc = np.linspace(0, 1, 60); _yc = _rng.normal(0, 0.004, 60); _yc[0] += 0.1; _yc[-1] -= 0.1
+_kc, _nc, _ = _scs(_tc, _yc)
+check(_nc == 2 and not _kc[0] and not _kc[-1], "spikes on the first and last point are clipped against neighbours only")
+_cs = ns["chi2_nu_scatter"]
+check(abs(_cs(200, 6, 120) - math.sqrt(2 / 194 + 5.4 / 120)) < 1e-12 and _cs(40, 6, 12) > 0.6,
+      "the chi2/nu scatter bar grows as the noise-floor sample shrinks (0.7 at 12 OOT points)")
+check(ns["CHI2_MIN_OOT"] >= 30, "the out-of-transit noise floor needs at least 30 points")
+_hf2 = ns["hops_mode_fit"]
+_tsn = np.linspace(2460000.0, 2460000.16, 60)
+_geo = {"period_d": 2.150008, "a_rs": 6.05, "ecc": 0.0, "inc_deg": 88.9, "peri_deg": 90.0}
+_fl = 1.0 - 0.02 * (np.abs(_tsn - 2460000.08) < 0.03) + _rng.normal(0, 0.003, 60)
+_mg = -2.5 * np.log10(_fl); _am = np.linspace(1.0, 1.6, 60); _am[3] = np.nan
+_rn = _hf2(_tsn, _mg, np.full(60, 0.0033), _geo, [0.0, 0.5, 0.0, -0.1], {"airmass": _am},
+           2460000.08, rp_initial=0.14, iterations=300, seed=3, law="claret")
+check(_rn is not None and _rn.get("n_nonfinite") == 1 and abs(_rn["rp"] - 0.14) < 0.02,
+      "a NaN airmass value drops that point instead of aborting the HOPS fit")
+_hd = ns["header_target_radec"]([{"objctra": "12.5", "objctdec": "+30.0"}])
+check(abs(_hd[0] - 187.5) < 1e-9 and "read as HOURS" in _hd[2],
+      "a bare-decimal OBJCTRA below 24 is read as hours and the note says so")
+
+print("\n9g) third review: raw column alignment, Siril time shift, TOI expected depth")
+_tdg3 = ns["timestamp_diagnosis"]
+_mid3 = [{"date_obs": "2026-09-01T22:%02d:00" % m, "date_avg": "2026-09-01T22:%02d:00" % m, "exp_s": 120.0} for m in range(5)]
+check(_tdg3(_mid3)[0] == "mid" and abs(_tdg3(_mid3)[2] + 60.0) < 1e-9,
+      "a mid-stamping program yields a -exp/2 correction for Siril's DATE-OBS + EXPTIME/2 times")
+_st3 = [{"date_obs": "2026-09-01T22:%02d:00" % m, "date_avg": "2026-09-01T22:%02d:60" % m if False else "2026-09-01T22:%02d:00" % m, "exp_s": 120.0} for m in range(5)]
+_st3 = [{"date_obs": "2026-09-01T22:%02d:00" % m, "date_avg": "2026-09-01T22:%02d:00" % (m + 1) if m + 1 < 60 else "", "exp_s": 120.0} for m in range(5)]
+check(_tdg3(_st3)[0] == "start" and _tdg3(_st3)[2] == 0.0,
+      "a start-stamping program needs no correction")
+_odd3 = [{"date_obs": "2026-09-01T22:%02d:00" % m, "date_avg": "2026-09-01T23:%02d:00" % m, "exp_s": 60.0} for m in range(5)]
+check(_tdg3(_odd3)[0] == "odd" and _tdg3(_odd3)[2] == 0.0 and "IGNORED" in _tdg3(_odd3)[1],
+      "a DATE-AVG an hour away is reported as ignored, with no correction")
+_odd4 = [{"date_obs": "2026-09-01T22:%02d:00" % m, "date_avg": "2026-09-01T22:%02d:45" % m, "exp_s": 60.0} for m in range(5)]
+check(_tdg3(_odd4)[0] == "odd" and abs(_tdg3(_odd4)[2] - 15.0) < 1e-3,
+      "an unexplained but plausible DATE-AVG offset becomes the measured correction")
+_rfd = ns["rprs_from_depth"]; _lcd = ns["ld_central_depth"]
+_k = 0.08; _spoc = _lcd(_k, 0.0, 0.35, 0.23)
+check(abs(_rfd(_spoc, 0.0, 0.35, 0.23) - _k) < 1e-6 and math.sqrt(_spoc) > _k * 1.05,
+      "inverting a limb-darkened depth returns the true Rp/R* where the square root overstates it by ~9 %")
+check("rp_exp = rprs_from_depth(float(depth_pct) / 100.0, b, u1, u2)" in src,
+      "the expected curve inverts the TOI depth through the limb-darkened model")
+
+print("\n9h) HOPS's clear/luminance passbands from pylightcurve's database")
+import zipfile as _zf, io as _io, tempfile as _tf
+_pu = ns["_PlainUnpickler"]
+_okp = _pu(_io.BytesIO(_pk.dumps({"4.1": {"photometry": "https://x"}}))).load()
+check(_okp == {"4.1": {"photometry": "https://x"}}, "the container-only unpickler reads a dict of strings")
+try:
+    _pu(_io.BytesIO(_pk.dumps(np.float64(1.0)))).load(); _refused = False
+except Exception:                                          # noqa: BLE001
+    _refused = True
+check(_refused, "and refuses anything that is not a plain container or scalar")
+_td = _tf.mkdtemp()
+_zp = os.path.join(_td, "plc_photometry.zip")
+with _zf.ZipFile(_zp, "w") as _z:
+    _z.writestr("photometry/clear.pass", "3050 0.0\n3100 0.5\n7000 1.0\n8900 0.0\n")
+_w, _t = ns["pass_from_zip"](_zp, "clear")
+check(_w.tolist() == [3050.0, 3100.0, 7000.0, 8900.0] and _t[2] == 1.0, "a .pass entry is read from the archive")
+_w2, _t2 = ns["plc_passband"]("clear", cache_dir=_td)
+check(os.path.isfile(os.path.join(_td, "passband_plc_clear.txt")) and _w2.tolist() == _w.tolist(),
+      "with the archive cached no network is touched and the curve is cached as text")
+_w3, _t3 = ns["plc_passband"]("clear", cache_dir=_td)
+check(_w3.tolist() == _w.tolist(), "the text cache is read back on the next call")
+check(ns["PLC_PASSBANDS"] == {"clear": "clear", "luminance": "luminance", "exoplanets_bb": "exoplanets_bb"}
+      and ns["SVO_FILTER_IDS"].get("clear") is None,
+      "clear, luminance and exoplanets_bb route to pylightcurve, not SVO")
 
 print()
 if fails:

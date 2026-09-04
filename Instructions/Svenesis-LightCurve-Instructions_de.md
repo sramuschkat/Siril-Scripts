@@ -1,6 +1,6 @@
 # Svenesis LightCurve — Anleitung
 
-**Version 1.0.5** | Siril Python-Skript für Exoplaneten-Transitphotometrie
+**Version 1.0.7** | Siril Python-Skript für Exoplaneten-Transitphotometrie
 
 > *Ein Ordner Subs hinein, eine Lichtkurve heraus — und eine ehrliche Antwort auf die einzige Frage, die zählt: steckt da ein Transit drin?*
 
@@ -38,7 +38,7 @@ Die Arbeitsteilung ist bewusst gewählt und erklärt den größten Teil des Desi
 
 **Dieses Skript misst den Fluss selbst**, so wie EXOTIC und HOPS es tun — jeder Stern pro Frame neu zentriert, Subpixel-Aperturen, sigma-geclippter Himmel, die Apertur nach Punkt-zu-Punkt-Rauschen gewählt, Vergleichssterne nach ihrer *gemessenen* Streuung behalten (§4a erklärt jedes Teil samt der Messung dahinter). Sirils `light_curve` bleibt als lauter Fallback intakt: misst die Engine unter 30 % der Frames, sagt sie es und übergibt. Und das Skript macht, worüber keine Pixel entscheiden: welcher Stern das Ziel ist, wie man die Airmass-Rampe entfernt, ohne die Transittiefe mitzunehmen, wie man das Ereignis fittet — und vor allem, ob überhaupt etwas behauptet werden darf.
 
-**Gegen EXOTIC an dessen eigenen Beispieldaten validiert** (HAT-P-32 b): Rp/R★ = 0,1525 ± 0,0064 gegen EXOTICs publizierte 0,1541 ± 0,0033 — 0,2 σ auseinander, bei gleicher Residuenstreuung (0,58 % vs 0,55 %).
+**Gegen EXOTIC an dessen eigenen Beispieldaten validiert** (HAT-P-32 b): Rp/R★ = 0,1554 ± 0,0059 gegen EXOTICs publizierte 0,1541 ± 0,0033 — 0,2 σ auseinander (Stand v1.0.6).
 
 ### Der Ablauf
 
@@ -63,6 +63,34 @@ Die Arbeitsteilung ist bewusst gewählt und erklärt den größten Teil des Desi
 **Was ist Airmass?** Wie viel Atmosphäre im Strahlengang liegt. Senkrecht oben 1,0; nahe am Horizont 3 oder mehr, und der Stern wird entsprechend schwächer. Differentielle Photometrie kürzt das größtenteils weg — aber nicht ganz: Ziel und Vergleichssterne haben unterschiedliche Farben und dimmen daher unterschiedlich schnell. Übrig bleibt eine glatte Rampe, und sie zu entfernen, ohne den Transit mitzunehmen, ist ein großer Teil dessen, was dieses Skript tut (§8).
 
 **Was ist eine Magnitude?** Eine logarithmische Helligkeitsskala, bei der *größer schwächer bedeutet*. Eine Millimagnitude (mmag) ist ein Tausendstel. Alle Diagramme hier haben eine invertierte y-Achse, damit oben heller heißt — deshalb liest sich ein Transit als Delle.
+
+### Kleines Wörterbuch
+
+Diese Begriffe tauchen im Rest der Anleitung immer wieder auf. Wer sie kennt, kann den Abschnitt überspringen; alle anderen finden hier die Kurzfassung.
+
+| Begriff | Bedeutung |
+|---|---|
+| **Sub / Light** | Eine einzelne Aufnahme der Nacht. Hundert Subs à 72 s ergeben zwei Stunden Zeitreihe — hier wird nichts gestackt, jedes Sub wird ein Messpunkt |
+| **Apertur** | Der Messkreis um einen Stern. Alles Licht darin wird aufsummiert — das ist die Helligkeitsmessung |
+| **Himmelsring (Annulus)** | Ein Ring um die Apertur, der nur Himmel enthält. Sein Mittelwert wird von der Apertur abgezogen, damit Mondlicht und Dämmerung nicht als Sternhelligkeit zählen |
+| **FWHM** | „Full Width at Half Maximum" — wie breit ein Stern im Bild ist, in Pixeln. Das praktische Maß für Fokus und Seeing: kleiner ist schärfer |
+| **Seeing** | Das Flimmern der Atmosphäre. Es verschmiert Sterne unterschiedlich stark durch die Nacht — und alles, was mit dem Seeing wandert, kann einen Trend in die Kurve schreiben |
+| **Zentroid** | Der Lichtschwerpunkt eines Sterns, auf Bruchteile eines Pixels genau. „Neu zentrieren" heißt: die Apertur pro Frame exakt auf diesen Schwerpunkt setzen |
+| **Registrierung** | Die Ausrichtung aller Frames aufeinander. Hier wird dabei **kein Bild neu berechnet** — nur gespeichert, wohin jeder Stern gewandert ist |
+| **Plate Solve** | Das Bild mit einem Sternkatalog abgleichen, sodass jeder Stern echte Himmelskoordinaten (RA/Dec) bekommt |
+| **Ingress / Egress** | Der Eintritt bzw. Austritt des Planeten vor der Sternscheibe — die abfallende und die ansteigende Flanke der Delle. Die vier Eckpunkte heißen **Kontakte**: erster Kontakt = Beginn des Ingress, letzter Kontakt = Ende des Egress |
+| **Baseline** | Die Helligkeit des Sterns *außerhalb* des Transits. Jede Aussage über die Tiefe der Delle ist ein Vergleich mit ihr — deshalb ist Messzeit vor und nach dem Transit so wertvoll |
+| **Detrend** | Das Entfernen langsamer Trends (Airmass, Seeing, Himmel), die nicht vom Stern kommen, bevor man die Delle beurteilt |
+| **MAD** | „Median Absolute Deviation" — ein Streuungsmaß, das ein einzelner Ausreißer (Satellit, Cosmic) nicht aufblähen kann. Wird hier überall statt der gewöhnlichen Standardabweichung benutzt |
+| **σ (Signifikanz)** | Wie viele „Rauschbreiten" ein Signal über dem Rauschen liegt. 1σ passiert ständig zufällig; ab 4,5σ nennt dieses Skript eine Delle einen Transit (§10 erklärt, warum genau dieser Wert) |
+| **χ²/ν** | Ein Gütemaß des Fits: ≈ 1 heißt, das Modell beschreibt die Daten im Rahmen ihres Rauschens; deutlich größer heißt, es fehlt etwas |
+| **Randverdunkelung** | Ein echter Stern ist am Scheibenrand dunkler als in der Mitte. Deshalb ist ein Transitboden *rund*, nicht flach — und ein Modell ohne Randverdunkelung misst die Tiefe systematisch falsch (§9) |
+| **Ephemeride** | Der veröffentlichte Fahrplan eines Planeten: Umlaufperiode, Referenz-Transitzeit, erwartete Tiefe und Dauer. Kommt hier von der NASA Exoplanet Archive |
+| **T0** | Die gemessene Transitmitte, als Zeitpunkt |
+| **O−C** | „Observed minus Calculated": gemessene minus vorhergesagte Transitmitte, in Minuten. Die Zahl, die Ephemeriden aktuell hält — der eigentliche wissenschaftliche Beitrag einer Amateurnacht |
+| **BJD_TDB** | Das Zeitsystem der Profis: baryzentrisch (auf den Schwerpunkt des Sonnensystems bezogen, ±8 Minuten je nach Jahreszeit) und in TDB-Zeit. Alle Archiv-Ephemeriden stehen darin |
+| **Sättigung / Klipping** | Ein Pixel am Anschlag. Ein „geclippter" Sternkern kann nicht mehr heller werden, skaliert also nicht mehr mit der Transparenz — und verfälscht damit jede Differenzmessung, in der er steckt |
+| **Ensemble** | Die Gruppe der Vergleichssterne, gegen die das Ziel gemessen wird. Je stabiler das Ensemble, desto glaubwürdiger die Kurve |
 
 ---
 
@@ -99,6 +127,8 @@ Oder direkt auf `LIGHT/2026-08-14/LUMINOS/` — dann werden die Flats trotzdem g
 | Absicherung | Warum |
 |---|---|
 | **Eigene Ordner ausgespart** | In `_lightcurve/` und `lightcurve/` wird nie hineingegangen — ein zweiter Lauf würde sonst die gestagten Symlinks und konvertierten Frames des ersten wieder als Subs einlesen |
+| **Zeitstempel-Konvention geprüft** | DATE-OBS ist per Konvention der Belichtungs*anfang*, die halbe Belichtung wird addiert. Ein `DATE-AVG` (N.I.N.A.) oder `DATE-END` im Header entscheidet das, statt es anzunehmen: eine Software, die die Belichtungsmitte stempelt, wird erkannt, ihre halbe Belichtung nicht addiert, und das Log nennt die Stempel, aus denen die Zeiten stammen. Ein `DATE-AVG` mehr als eine Belichtung plus eine Minute von `DATE-OBS` entfernt ist kein Mittenstempel und wird ignoriert. Die Zeiten des Siril-Rückfalls (DATE-OBS + EXPTIME/2 nach Sirils Konvention) bekommen dieselbe Korrektur, damit beide Engines auf denselben Zeiten landen. Eine falsche Konvention wäre eine halbe Belichtung auf jeder Zeit, 145 s bei 290-s-Subs |
+| **Frames nach Zeit sortiert** | Die Sequenz wird in `DATE-OBS`-Reihenfolge gebaut, nicht nach Dateinamen. Ein TOI-4033-Lauf hatte fünf Frames mit den Nummern 43–47, deren Zeitstempel 1–3 h vor Frame 42 lagen; in Dateireihenfolge sahen sie wie ein zweiter Meridian-Flip und ein 60-mmag-Sprung aus. Eine Logzeile nennt, wie viele Frames verschoben wurden |
 | **Doppelte Aufnahmen verworfen** | Ein wiederholtes `DATE-OBS` ist eine Kopie, keine Aufnahme. Auf die harte Tour gefunden: ein liegengebliebener Arbeitsordner machte aus 178 Subs 534 — jede Dublette wäre als eigenständiger Punkt in die Kurve eingegangen und hätte jeden Fehlerbalken grundlos um √3 geschrumpft. Wird mit Anzahl gemeldet, nie stillschweigend |
 | **Ein Filter, eine Belichtungszeit** | Ein Filter- oder Belichtungswechsel mitten im Lauf sind *zwei* Serien, keine längere. Die größte Menge wird behalten, der Rest benannt |
 
@@ -142,7 +172,13 @@ Der erste Lauf dauert einige Minuten; das Registrieren einiger hundert Subs ist 
 
 > *Read from the first 30 header(s): OBJECT = 'WASP-75b'; OBJCTRA/OBJCTDEC = 342.38750, −10.67556 (25 light frames agree to 0.0").*
 
-**Die Felder folgen den Frames.** Sie werden aus der letzten Sitzung wiederhergestellt, zeigen nach einem Zielwechsel also noch das *vorige* Ziel — genau so lief ein WASP-75-b-Datensatz einmal unter HAT-P-32s Ephemeride. Deshalb: Ein Name, der ein *anderes* Ziel bezeichnet als `OBJECT`, wird ersetzt (jede Schreibweise *desselben* Ziels — `WASP-75b`, `wasp75`, mit oder ohne Planetenbuchstaben — bleibt exakt wie getippt), Koordinaten weiter als ~2′ von den Headern werden durch die Header-Position ersetzt, und wechselt der Zielname, während die neuen Header keine Position tragen, werden die veralteten Koordinaten geleert, damit das Archiv sie liefern kann. Jede Ersetzung wird geloggt; nichts wird still getauscht. Um einen Stern anzupeilen, der *nicht* das Header-Objekt ist: **nach** der Ordnerwahl eintippen — nichts liest erneut. Kalibrierframes werden vorher aussortiert, ein Ordner voller Flats kann das Ziel also nicht von einer geparkten Montierung vorbelegen. Auch Header, die nichts sagen, bekommen eine Zeile: Schweigen liest sich dort als *nichts zu tun*, gemeint ist *tipp den Namen ein*.
+**Die Felder folgen den Frames.** Die Formularfelder werden aus der letzten Sitzung wiederhergestellt — nach einem Zielwechsel zeigen sie also noch das *vorige* Ziel. Genau so lief ein WASP-75-b-Datensatz einmal unter HAT-P-32s Ephemeride. Deshalb gelten drei Regeln:
+
+- Ein Name, der ein *anderes* Ziel bezeichnet als `OBJECT`, wird ersetzt. Jede Schreibweise *desselben* Ziels — `WASP-75b`, `wasp75`, mit oder ohne Planetenbuchstaben — bleibt exakt so stehen, wie du sie getippt hast.
+- Koordinaten, die weiter als ~2′ von den Headern abweichen, werden durch die Header-Position ersetzt.
+- Wechselt der Zielname und die neuen Header tragen keine Position, werden die veralteten Koordinaten geleert, damit das Archiv frische liefern kann.
+
+Jede Ersetzung wird geloggt; nichts wird still getauscht. Willst du einen Stern anpeilen, der *nicht* das Header-Objekt ist: **nach** der Ordnerwahl eintippen — danach liest nichts mehr neu ein. Kalibrierframes werden vor dem Lesen aussortiert, ein Ordner voller Flats kann das Ziel also nicht mit einer geparkten Montierung vorbelegen. Und auch Header, die nichts hergeben, bekommen eine eigene Log-Zeile — denn Schweigen läse sich dort als „nichts zu tun", gemeint ist aber „tipp den Namen ein".
 
 Alles, was über *welchen Stern* entscheidet, liegt jetzt an einer Stelle — **Gruppe 3 · Target star** — und der erste Modus **From the frames** ist die Vorgabe:
 
@@ -183,7 +219,7 @@ Eine Koordinate, die weiter als etwa zwei Bogenminuten davon entfernt ist, ist d
 
 Die Schreibweise ist nicht dein Problem: Bindestriche und Leerzeichen werden auf **beiden** Seiten entfernt, `HATP-32`, `HAT-P-32`, `hatp32b` und `HAT-P-32 b` landen also beim selben Eintrag — und der **Hostname** wird mitgesucht, denn ein Name ohne Planetenbuchstaben ist das, was ein Header üblicherweise trägt. Ein System mit mehreren bekannten Planeten wird abgelehnt und die Auswahl genannt, weil sich ihre Ephemeriden unterscheiden.
 
-Gib dem Planeten einen **Namen** — aus `OBJECT` in den Lights oder aus dem Feld *Target* in Gruppe 6 — und der Lauf holt die veröffentlichte **Ephemeride** von der NASA Exoplanet Archive. `WASP-75b` wird unterwegs zu `WASP-75 b`; ein fehlendes Leerzeichen ist der ganze Unterschied zwischen Treffer und stillem Danebengreifen.
+Gib dem Planeten einen **Namen** — aus `OBJECT` in den Lights oder aus dem Feld *Target* in Gruppe 3 — und der Lauf holt die veröffentlichte **Ephemeride** von der NASA Exoplanet Archive. `WASP-75b` wird unterwegs zu `WASP-75 b`; ein fehlendes Leerzeichen ist der ganze Unterschied zwischen Treffer und stillem Danebengreifen.
 
 Sie ist außerdem die **Gegenprobe** zur Position. Übereinstimmung wird gemeldet; ein Widerspruch wird *gemeldet, nicht aufgelöst*:
 
@@ -205,7 +241,14 @@ Ein korrekter Header wird **bestätigt**, nicht gedreht. Ohne Höhe zum Prüfen 
 
 **Das Feld, das vom Sensor wandert.** Siril verschiebt jedes Messfenster mit den Registrierungsdaten. Ein Vergleichsstern, der im Referenzbild bequem drinliegt, kann später den Chip verlassen — und wenn das passiert, scheitert der *ganze* `light_curve`-Befehl mit `generic error`, nach einer Warnung, die ein Bild nennt und nie den Stern. Der Driftbereich wird aus der Registrierung gemessen, und Sterne, die hinauswandern würden, fallen mit genau dieser Begründung raus. Verlässt das **Ziel** das Bild, hält der Lauf an: keine Blende folgt einem Stern vom Sensor.
 
-**Wie der Fluss gemessen wird.** Die Arbeitsteilung folgt dem, was jede Seite nachweislich gut kann. Siril übernimmt Staging, Kalibrierung, Zwei-Pass-Registrierung, Sternerkennung, Plate-Solve und die Frame-Qualität — die Flussmessung macht dieses Skript selbst, so wie EXOTIC und HOPS es tun: Jedes Frame wird einmal gelesen, jeder Stern von seiner registrierungs-vorhergesagten Position aus **neu zentriert** (das „Follow Star", das Sirils `light_curve` fehlt — ein Zentroid, das weiter als 6 px wandert, hat sich auf einen Nachbarn eingerastet und wird verworfen), und der Fluss in einer subpixel-gewichteten Kreisblende gegen einen sigma-geclippten Himmelsring summiert. Mehrere Blenden werden im selben Durchgang gemessen; es gewinnt die mit dem geringsten **Punkt-zu-Punkt**-Rauschen — ein Maß, das ein Transit kaum bewegt, während eine gewöhnliche Standardabweichung sich verdreifachen würde: Eine nach Standardabweichung gewählte Blende bevorzugt, was den Transit auswäscht. Vergleichssterne werden je auf ihren eigenen Median normiert (einer, der ein Frame verpasst, kann das Ensemble so nicht stufen — die Stufe einer rohen Summe ist exakt die Form eines Ingress) und nach ihrer **Gesamt**-Streuung gegen ihre Nachbarn behalten oder verworfen, denn gerade ein langsam veränderlicher Vergleichsstern schreibt dem Ziel einen falschen Transit hinein. Die Fehler kommen aus der CCD-Gleichung, jeder Term gemessen, keiner angenommen.
+**Wie der Fluss gemessen wird.** Die Arbeitsteilung folgt dem, was jede Seite nachweislich gut kann: Siril übernimmt Staging, Kalibrierung, Zwei-Pass-Registrierung, Sternerkennung, Plate-Solve und die Frame-Qualität. Die eigentliche Helligkeitsmessung macht dieses Skript selbst, so wie EXOTIC und HOPS es tun — in vier Schritten pro Frame:
+
+1. **Neu zentrieren.** Die Registrierung sagt, wo der Stern ungefähr steht; der Lichtschwerpunkt in einem kleinen Fenster liefert die exakte Position. Das ist das „Follow Star", das Sirils `light_curve` fehlt. Wandert der gefundene Schwerpunkt weiter als 6 px von der Vorhersage weg, hat er sich auf einen Nachbarstern eingerastet — die Messung wird verworfen statt verfälscht.
+2. **Messen.** Der Fluss wird in einer Kreis-Apertur mit Subpixel-Kantengewichtung aufsummiert; der Himmel kommt aus einem sigma-geclippten Ring darum (Ausreißer im Ring — etwa ein schwacher Stern — werden vor der Mittelung entfernt).
+3. **Die Apertur wählen.** Mehrere Aperturgrößen werden im selben Durchgang mitgemessen; es gewinnt die mit dem geringsten **Punkt-zu-Punkt-Rauschen** — der Streuung aufeinanderfolgender Differenzen. Ein Transit ist langsam und bewegt dieses Maß kaum; eine gewöhnliche Standardabweichung dagegen enthält die Transittiefe selbst, und eine danach gewählte Apertur würde bevorzugen, was den Transit *auswäscht*.
+4. **Das Ensemble bilden.** Jeder Vergleichsstern wird auf seinen eigenen Median normiert — verpasst einer ein Frame, fehlt dem Ensemble nur sein Anteil, statt dass die Summe eine Stufe macht (und eine Stufe hat exakt die Form eines Ingress). Danach wird jeder an seiner Gesamt-Streuung gegen die Kollegen gemessen und bei Auffälligkeit verworfen, denn gerade ein langsam veränderlicher Vergleichsstern schreibt dem Ziel einen falschen Transit hinein.
+
+Die Fehlerbalken kommen aus der CCD-Gleichung — Photonenrauschen des Sterns plus gemessenes Himmelsrauschen — mit jedem Term gemessen, keinem angenommen.
 
 An demselben driftenden 142-Frame-Lauf gemessen: Dieser Kern behält 140 Punkte bei 7,2 mmag Punkt-zu-Punkt, wo Sirils `light_curve` 67 behielt. Misst der Kern weniger als 30 % der Frames, sagt er es, und Sirils `light_curve` übernimmt — der ganze alte Weg bleibt als Rückfall intakt, einschließlich allem Folgenden.
 
@@ -248,14 +291,16 @@ Still danebenzielen kann hier nichts.
 
 ## 5. Die Oberfläche
 
-**Linkes Panel**, vier nummerierte Gruppen in der Reihenfolge der Benutzung:
+**Linkes Panel**, sechs nummerierte Gruppen in der Reihenfolge der Benutzung:
 
 | Gruppe | Inhalt |
 |---|---|
 | **1 · Subs** | Ordnerwahl, Symlink/Kopie |
-| **3 · Zielstern** | Auswahlmodus (startet auf *From the frames*), Planetenname, Archivabfrage, Pixel- oder RA/Dec-Felder |
-| **3 · Photometry** | Anzahl Vergleiche, SNR-Grenze, Kanal, automatische Ringradien |
-| **4 · Analysis** | Airmass-Detrend, Standort, Binning |
+| **2 · Calibration** | Kalibrierung ein/aus, Library-Ordner für Darks/Bias, CFA-Schalter (§3a) |
+| **3 · Target star** | Auswahlmodus (startet auf *From the frames*), Planetenname, Archivabfrage, Pixel- oder RA/Dec-Felder |
+| **4 · Photometry** | Anzahl Vergleiche, SNR-Grenze, Kanal, automatische Ringradien, Aperturwahl |
+| **5 · Analysis** | Fit-Modus (blinder Nachweis oder HOPS-kompatibel), HOPS-Detrending, Iterationen, Claret-Koeffizienten mit *Compute Claret (Phoenix)*, Airmass-Detrend, Standort, Binning |
+| **6 · Submission** | Beobachtercode und Filter für die AAVSO-Datei |
 
 **Rechtes Panel**, vier Reiter: **Light curve** (Kurve, Fit, Residuen), **Result** (alles in Worten), **Stars** (Ziel und Vergleiche mit SNR), **Log** (jedes Kommando und jede Ablehnung).
 
@@ -276,6 +321,8 @@ RA wird als **Stunden** gelesen, wenn Doppelpunkte oder Leerzeichen vorkommen (`
 ---
 
 ## 7. Die Vergleichssterne
+
+Die ganze Messung ist eine Division: Zielstern geteilt durch Vergleichssterne. Alles, was die Atmosphäre beiden gleichermaßen antut, kürzt sich dabei weg — aber nur, wenn die Vergleichssterne selbst stabil sind. Ein schlechter Vergleichsstern schreibt seine eigenen Probleme *invertiert* in die Zielkurve: wird er schwächer, sieht das Ziel heller aus, und umgekehrt. Deshalb wird hier bei der Auswahl gesiebt.
 
 Vier Filter entscheiden, jeder gegen ein anderes Versagen:
 
@@ -312,9 +359,9 @@ Die übliche Reparatur, ein Sigma-Clip mit derselben Gerade als Startwert, ist i
 
 ### Gemessen, nicht behauptet
 
-Synthetische Läufe mit bekannter 30-mmag/Airmass-Rampe und 15-mmag-Transit, 15 Rauschrealisierungen je Punkt — mittlerer Fehler der rekonstruierten Steigung:
+Synthetische Läufe mit bekannter 30-mmag/Airmass-Rampe und 15-mmag-Transit, 15 Rauschrealisierungen je Punkt — mittlerer Fehler der rekonstruierten Steigung. „Transit-Anteil" ist der Bruchteil des Laufs, den der Transit belegt: 25 % heißt viel ungestörte Baseline, 75 % heißt, der Transit füllt fast die ganze Nacht und lässt kaum Baseline übrig:
 
-| Duty Cycle | einfacher Fit | nur Durchgang 1 | mit Durchgang 2 |
+| Transit-Anteil | einfacher Fit | nur Durchgang 1 | mit Durchgang 2 |
 |---|---|---|---|
 | 25 % | 6,2 % | 0,9 % | 0,8 % |
 | 50 % | 10,1 % | 1,0 % | 1,0 % |
@@ -353,7 +400,7 @@ Gemessen an einem synthetischen Lauf mit eingespieltem Seeing- und Himmelstrend:
 
 ### Ein randverdunkeltes Modell — und warum das Trapez weichen musste
 
-Das Trapez wurde hier damit verteidigt, dass beide bei Amateurpräzision ununterscheidbar seien. **Das war falsch, und zwar messbar.** An einen echten randverdunkelten Transit gefittet:
+Die einfachste Transit-Form ist ein **Trapez**: schräg hinein, flacher Boden, schräg hinaus. Ein echter Stern ist aber am Scheibenrand dunkler als in der Mitte (**Randverdunkelung**) — der Planet deckt beim Ingress dunklen Rand ab und in der Mitte helles Zentrum, der Boden der Delle ist deshalb *rund*, nicht flach. Frühere Versionen fitteten trotzdem ein Trapez, mit dem Argument, bei Amateurpräzision seien beide ununterscheidbar. **Das war falsch, und zwar messbar.** Ein Trapez, an einen echten randverdunkelten Transit gefittet:
 
 | Rp/R★ | wahre Tiefe | Trapez | **Bias** | χ²/ν |
 |---|---|---|---|---|
@@ -363,7 +410,7 @@ Das Trapez wurde hier damit verteidigt, dass beide bei Amateurpräzision ununter
 
 Systematisch 5–6 % zu flach — und **χ²/ν bleibt bei 1,0**, nichts in der Ausgabe hätte es je gesagt. Ein echter Stern ist am Rand dunkler, ein Transit hat also einen *runden* Boden; ein Trapez teilt die Differenz und verliert dabei Tiefe.
 
-Die gesuchten Formen sind jetzt echte Geometrien: vier Planet-Stern-Radienverhältnisse mal zwei Stoßparameter — genau die acht Varianten, die vorher die acht Ingress-Anteile lieferten. Der Bias beträgt **+0,6 / −0,0 / −0,2 / +0,1 %**.
+Die gesuchten Formen sind jetzt echte Geometrien: vier Planet-Stern-Radienverhältnisse mal zwei Stoßparameter (der **Stoßparameter** sagt, wie mittig der Planet über die Sternscheibe zieht — mittig gibt einen runden Boden, streifend eine V-Form) — genau die acht Varianten, die vorher die acht Ingress-Anteile lieferten. Der Bias beträgt **+0,6 / −0,0 / −0,2 / +0,1 %**.
 
 **Sonst ändert sich nichts.** Jede Form ist eine *Schablone* auf normierter Phase, einmal gebaut und pro Knoten interpoliert — das Modell bleibt **linear in der Tiefe**, der geschlossene Löser, der Determinismus und die Zusicherung „kein Optimierer" überleben alle drei. Ein physikalisch freies Rp/R★ würde Tiefe und Form koppeln und alle drei kosten. (Die Bedeckung wird *radial* integriert — der vom Planeten überdeckte Bogen bei Radius r hat eine geschlossene Form — also keine elliptischen Integrale, keine neue Abhängigkeit, und gegen eine unabhängige 2-D-Integration verifiziert.)
 
@@ -381,7 +428,7 @@ Rp/Rs      0.1525 ± 0.0064
 (Rp/Rs)^2  2.33 ± 0.19 %      <- DIESE Zahl mit EXOTIC/HOPS/AIJ und dem Archiv vergleichen
 ```
 
-An EXOTICs HAT-P-32-Beispieldaten liest sich das als 0,1525 ± 0,0064 gegen EXOTICs 0,1541 ± 0,0033 — 0,2 σ auseinander.
+An EXOTICs HAT-P-32-Beispieldaten liest sich das als 0,1554 ± 0,0059 gegen EXOTICs 0,1541 ± 0,0033 — 0,2 σ auseinander.
 
 ### Alles wird gleichzeitig gefittet
 
@@ -428,13 +475,33 @@ Diese Messung deckte noch etwas auf. Das grobe Suchgitter quantisierte T0 auf (0
 
 Um 1 heißt, das Modell beschreibt die Daten. Deutlich über 1 heißt, es tut es nicht — Systematik oder eine Form, die die Schablonenfamilie nicht kann. Deutlich unter 1 heißt, die Rauschschätzung ist zu groß, meist weil im Out-of-Transit-Fenster noch ein Teil des Ereignisses steckt.
 
-Der Rauschboden ist bewusst **modellunabhängig**: die Residuenstreuung eines Fits kann diesen Fit nicht beurteilen — teilt man Residuen durch ihr eigenes RMS, kommt 1 heraus, egal ob das Modell stimmt. Er kommt daher aus dem MAD der Out-of-Transit-Residuen, ersatzweise aus dem MAD der ersten Differenzen ÷ √2. Gemessen: 1,0 auf reinem Rauschen, 3,1 mit einem nicht modellierten 20-mmag-Buckel.
+Der Rauschboden ist bewusst **modellunabhängig**: die Residuenstreuung eines Fits kann diesen Fit nicht beurteilen — teilt man Residuen durch ihr eigenes RMS, kommt 1 heraus, egal ob das Modell stimmt. Er kommt daher aus dem MAD der Out-of-Transit-Residuen, ersatzweise aus dem MAD der ersten Differenzen ÷ √2. Gemessen: 1,0 auf reinem Rauschen, 3,1 mit einem nicht modellierten 20-mmag-Buckel. Der Out-of-Transit-Boden braucht mindestens 32 Punkte (darunter greift die Differenzenmethode): die Biaskorrektur für kleine Stichproben gilt erst ab etwa 80, bei 12 Punkten liest ein Viertel sauberer Nächte über 1,5. Die Zahl wird mit ihrem eigenen Weißrausch-Streubalken gedruckt (√(2/ν) in Quadratur mit dem Fehler der Rauschschätzung), damit 1,4 ± 0,4 aus einem kurzen Lauf nicht als gescheitertes Modell gelesen wird. Im HOPS-kompatiblen Modus ist das χ²/ν des Reports mit den Fehlern *vor* HOPS' Skalierung gerechnet und sagt das; `results.txt` nennt den skalierten Wert, ≈ 1 per Konstruktion.
+
+### HOPS-kompatibler Modus: die andere Frage
+
+Alles oben beantwortet die Frage *gibt es einen Transit?* HOPS — die Pipeline von ExoWorldsSpies, mit der ExoClock-Beobachter arbeiten — beantwortet eine andere: *Gegeben den Planeten aus dem Katalog: wie tief war der Transit und wann war die Mitte?* Beide Fragen sind berechtigt; es ist nur nicht derselbe Fit. Seit Version 1.0.7 lässt das Dropdown **Fit mode** in der Gruppe Analysis wählen. **Svenesis — blind detection** ist die Vorgabe, und dieses Kapitel beschreibt sie. **HOPS-compatible — ephemeris-locked** bildet HOPS' Modell und Konventionen auf derselben Photometrie nach:
+
+| Element | Blinder Nachweis | HOPS-kompatibel |
+|---|---|---|
+| Dauer und Form | Frei — über ein Gitter von Schablonen gesucht | Durch die **Bahn** des Planeten aus dem Archiv festgelegt (a/R★, Inklination, Exzentrizität, Periastron); fehlt a/R★ im Archiv, wird es aus der Archivdauer mit zentralem Transit abgeleitet, und das Log sagt es |
+| Freie Parameter | T0, Dauer, Formvariante, Tiefe, Grundlinie, Systematiken | Rp/R★, Transitmitte (innerhalb ±0,2 d um die vorhergesagte Epoche), eine Normierung, die Detrending-Koeffizienten |
+| Randverdunkelung | Quadratisches Gesetz (u1, u2) | **Claret-Gesetz mit vier Koeffizienten.** HOPS bezieht seine Koeffizienten aus ExoTETHyS: Intensitäten eines Phoenix-2018-Modells über den Filter integriert, der Randabfall des sphärischen Modells abgeschnitten, ein gewichteter Fit, zwischen den Gitternachbarn des Sterns interpoliert. **Compute Claret (Phoenix)** macht genau das hier — ohne HOPS — für Teff und log g des benannten Planeten aus dem Archiv und den Filter aus Gruppe 6, mit der Filterkurve vom SVO Filter Profile Service. Der Filtername darf HOPS' Schreibweise sein (R, V, r', …), ein Johnson/Cousins/Sloan/SDSS/2MASS-Name oder das, was ein RGB-Rad schreibt (RED, GREEN, BLUE — als Cousins R, Johnson V, Johnson B genommen und neben den Koeffizienten als Näherung gekennzeichnet); Schmalbandfilter haben keine Tabelle und werden mit Begründung abgelehnt. Ein ungefilterter Lauf (Filterfeld leer, *clear*, *luminance* oder Astrodon ExoPlanet-BB) nimmt HOPS' eigenes gemessenes Passband aus pylightcurves Photometrie-Datenbank (MIT-Lizenz), zur Laufzeit über die Links geholt, die pylightcurve veröffentlicht, und neben den SVO-Kurven gecacht. Gegen ExoTETHyS' eigene Ausgabe auf 10⁻⁷ verifiziert, an drei Sternen und fünf Filtern. Der erste Aufruf pro Stern lädt rund vier Modelldateien à 21 MB von den Links, die ExoTETHyS veröffentlicht, nach `~/.svenesis`; nichts wird mitgeliefert. Sonst trage deine a₁..a₄ ein, oder lass das Feld leer: dann wird das quadratische Gesetz *exakt* in Claret-Koeffizienten umgeschrieben (a₂ = u1 + 2u2, a₄ = −u2) |
+| Photometrie | Das Ziel gegen ein median-normiertes, Poisson-gewichtetes Vergleichs-**Ensemble** (NaN-robust) | Das Ziel geteilt durch die **Rohsumme** der Vergleichssterne, Fehler propagiert wie bei HOPS, aus denselben Sternflüssen bei derselben Apertur — die Fehlerformel je Stern √(F/g + Fläche·σ²_Himmel) war schon HOPS' Formel. Ein Frame, in dem ein Vergleichsstern fehlt, fällt weg und wird im Log gezählt |
+| Belichtung | Modell zur Belichtungsmitte | Modell **über jede Belichtung gemittelt** in 10-s-Teilschritten, exakt HOPS' Regel, mit der Belichtungszeit aus den Headern |
+| Detrending | Additiv in Magnituden, an den Punkten außerhalb des Transits verankert | HOPS' drei Wahlmöglichkeiten — Luftmasse, linear in der Zeit, quadratisch in der Zeit — **multiplikativ** im Flussmodell, mit HOPS' Reihennamen — plus die **Meridian-Flip-Stufe**, wenn ein Flip erkannt wurde, damit der Versatz zwischen den beiden Sensorbereichen mit dem Transit gefittet wird, statt als Transit gelesen zu werden |
+| Ausreißer | Spike-Ausschluss vor dem Fit | HOPS' iterativer Filter: Punkte jenseits 3 σ der normierten Residuen werden entfernt und der Fit wiederholt, bis keiner mehr übrig ist |
+| Fehlerbalken | Kovarianz × Rotrausch-Faktor | So skaliert, dass χ²/ν = 1, dann wird die Posterior-Verteilung mit einem affin-invarianten Ensemble-Sampler **abgetastet** (der Goodman–Weare-Stretch-Move, den emcee implementiert): drei Walker pro Parameter, die ersten 20 % verworfen, Werte und asymmetrische Balken bei den Perzentilen 16/50/84 |
+| `results.txt` | Das Modell dieses Skripts in HOPS' Layout | **HOPS' eigene Parametertabelle** — n, die Detrending-Koeffizienten, a₁..a₄, rp_over_rs, period, sma_over_rs, eccentricity, inclination, periastron, mid_time — mit der echten Zahl entfernter Ausreißer, dem Skalierungsfaktor und Residuen im relativen Fluss; eine `#WARNING:`-Zeile, wenn ein gefitteter Kontakt außerhalb des Laufs liegt |
+
+Bahn und Bedeckungsmodell sind gegen pylightcurves eigene `planet_orbit` und `transit_flux_drop` verifiziert (1e-14 auf der Bahn; das Bedeckungsintegral ist **analytisch** — pylightcurves Formulierung, Sektor plus Lunen mit geschlossenen Radialintegralen und einer 30-Punkt-Gauß-Legendre-Quadratur für den Bogenterm — und reproduziert pylightcurves eigene Funktion auf 1e-15 und die als Referenz behaltene Ring-Integration auf 3e-6, bei einem Viertel der Kosten; die Transitdauer sucht die Kontakte per Bisektion auf der tatsächlichen Bahn, was die Kreisbahnformel bei e = 0,4 um 0,2 min verfehlt), der Sampler gegen eine bekannte Gaußverteilung und synthetische Transits. Der ganze Modus lief anschließend **Kopf an Kopf** gegen pylightcurves eigene Fitting-Klasse mit emcee auf denselben Daten: Ausreißerzahl und Skalierungsfaktor identisch, n, der Luftmassen-Koeffizient, Rp/R★ und die Transitmitte innerhalb 0,1 σ, Fehlerbalken auf wenige Prozent gleich. Die Priors sind HOPS' eigene (Mitte ±0,2 d, Rp/R★ innerhalb eines Faktors 10 um den Katalogwert, Normierung aus dem Flussbereich). Anders als bei HOPS ist der Sampler **geseedet**: ein zweiter Lauf liefert dieselben Zahlen. Das Feld Iterationen steht auf 2000 (HOPS: 5000) — Balken auf wenige Prozent stabil, in deutlich unter einer Minute.
+
+**Was sich nicht ändert.** Der blinde Signifikanztest läuft weiterhin zuerst und entscheidet allein, ob ein Transit *beansprucht* wird. Der HOPS-Modus misst den Planeten aus dem Katalog; er prüft nicht, ob er da ist, und das Log sagt das bei jedem Lauf. Hat der blinde Test die Schwelle nicht erreicht, sind die HOPS-Zahlen die Vermessung eines Transits, den in deinen Daten niemand nachgewiesen hat. Die Logzeile *no transit claimed* nennt die Zahlen des Blindtests, nicht die des HOPS-Fits. Und liegt ein gefitteter Kontakt **außerhalb des Laufs**, sagen Log, `results.txt` (`#WARNING:`) und Report, dass Transit und Basislinienversatz dort dieselbe Kurve sind — die Zahlen des HOPS-Modus messen diesen Planeten nicht. Gesehen an einem TOI-4033-Lauf, dessen Meridian-Flip im vorhergesagten Fenster lag: der ephemeridengebundene Fit wanderte 127 min auf die Stufe.
 
 ---
 
 ## 10. Ist es echt?
 
-Die Signifikanz ist der In/Out-Kontrast über seinem eigenen Standardfehler:
+Die entscheidende Frage lautet: Ist die Delle größer, als das Rauschen sie zufällig hätte erzeugen können? Die **Signifikanz** beantwortet das, indem sie den Helligkeitsunterschied zwischen „im Transit" und „außerhalb" durch seine eigene Unsicherheit teilt — herauskommt eine Zahl in „Rauschbreiten" (σ):
 
 ```
 (Mittel_in − Mittel_out) / σ × √(N_in·N_out / (N_in+N_out))
@@ -496,6 +563,20 @@ Die Schwelle ist ein **Verhältnis zum Ensemble-Median**, keine absolute Millima
 
 Kein Katalog, kein Netz. Ein Veränderlichkeits-Flag aus dem AAVSO-VSX wäre besser, wo es existiert — aber der Stern muss *im* Katalog stehen, und die, die eine Amateur-Lichtkurve ruinieren, stehen meist nicht drin.
 
+### Klipping ist keine Variabilität — und kein Frame verschwindet unbenannt
+
+Ein Pixel, das am Anschlag klebt, kann nicht mehr heller werden. Ein Vergleichsstern, dessen Kern *manchmal* am Anschlag klebt — in den Frames mit gutem Seeing drüber, sonst knapp drunter —, streut deshalb genau so, wie ein veränderlicher Stern streuen würde. Der Streuungs-Check kann die beiden nicht auseinanderhalten, und in den Frames, in denen gleich das ganze Ensemble klippte, verschwanden die Messpunkte früher wortlos aus der Kurve.
+
+Genau das ist beim ersten Lauf mit Flats passiert: Siril klemmt kalibrierte Frames auf den Wertebereich [0, 1], und die Flat-Division hob Sterne am Bildrand in diese Decke, die ihre Rohframes nie berührt hatten. 73 von 223 Punkten fehlten ohne ein Wort — gefunden nur, weil zwei Läufe von Hand verglichen wurden. Derselbe Lauf zeigte danach, dass auch auf den *Rohdaten* die hellsten Vergleichssterne längst am 16-bit-Anschlag standen und Tiefe wie Transitzeit unbemerkt verbogen hatten.
+
+Dagegen stehen jetzt drei Wächter:
+
+- **Der Headroom-Wächter.** Ein Vergleichsstern, dessen hellstes Pixel im Referenzframe schon bei 70 % der Klipp-Grenze liegt, ist nur einen Gutwetter-Frame vom Anschlag entfernt. Er wird vorab verworfen — und an seiner Stelle rückt der nächstbeste Stern aus der Reserve der Auswahl nach, der genug Luft zur Decke hat. Das Ensemble bleibt in voller Stärke; nur wenn auch die Reserve leerläuft, werden die Originale behalten (nie unter zwei Vergleichssterne), und das Log sagt es.
+- **Der Klipp-Zähler.** Jeder Vergleichsstern, der trotzdem in einzelnen Frames klippt, wird mit der Anzahl gelistet: „clipped in 3 of 223 frame(s)". Intermittierendes Klipping trägt kein Veränderlichen-Kostüm mehr.
+- **Die Frame-Bilanz.** Die Zeile „N points measured" benennt jeden fehlenden Frame mit seinem Grund: geclippter Zielkern, verlorener Zentroid, unmessbare Apertur, komplett ausgefallenes Ensemble, unlesbare Datei. Nichts verschwindet mehr unbenannt.
+
+Häufen sich geclippte Kerne auf kalibrierten Float-Daten, nennt das Log auch die Ursache: Flat-Division in einen geklemmten Wertebereich kostet Dynamikumfang genau dort, wo das Flat eigentlich helfen sollte. Die Abhilfe steht daneben — schwächere Vergleichssterne, oder eine Kalibrierung, die Werte über 1 zulässt.
+
 ### Ein Satellit darf nicht den Nachweis kosten
 
 Es gab überhaupt keine Ausreißer-Rejektion, und das wog schwerer, als es aussieht. Gemessen an einem echten 12-mmag-Transit bei 4 mmag pro Punkt:
@@ -535,7 +616,8 @@ Alles landet in einem Ordner `lightcurve/` neben deinen Subs:
 |---|---|
 | `lightcurve.csv` | Jeder Punkt: JD, roh, zentriert, detrended, Fehler, Airmass |
 | `lightcurve.png` | Das Diagramm, wenn du es speicherst |
-| `report.txt` | Der ganze Lauf als Text — Vergleiche, Ablehnungen, Methode, Ergebnis |
+| `results.txt` | Der Fit im exakten Layout von HOPS' eigener `results.txt` — die spaltenbündige Parametertabelle (das Modell dieses Skripts in HOPS' Parameternamen, Kovarianz-Fehlerbalken an jedem gefitteten Wert), der `#Filter`/`#Epoch`-Block und beide Residuen-Statistikblöcke (Mittel, STD, RMS, χ², reduziertes χ², max. Autokorrelation, Shapiro-Wilk-W, je mit Flag). Was einen HOPS-Fitting-Ordner parst, parst diese Datei unverändert. Im HOPS-kompatiblen Modus (§9) ist die Tabelle HOPS' eigene — a₁..a₄, sma_over_rs, inclination, asymmetrische Posterior-Balken, echte Ausreißerzahl und Skalierungsfaktor, dazu eine `#WARNING:`-Zeile, wenn ein gefitteter Kontakt außerhalb des Laufs liegt |
+| `report.txt` | Der ganze Lauf als Text — Vergleiche, Ablehnungen, Methode, Ergebnis. Wird im selben Klick neben `results.txt` geschrieben |
 
 **RMS** ist robust (MAD-basiert), eine einzelne Satellitenspur bläht ihn also nicht auf. Vergleiche ihn mit der gesuchten Tiefe: 15 mmag Transit bei 5 mmag Streuung ist komfortabel, bei 15 mmag braucht es die ganze Nacht.
 
@@ -545,9 +627,24 @@ Alles landet in einem Ordner `lightcurve/` neben deinen Subs:
 
 *Alles Folgende in einem Bild (TOI-3540.01, eine Nicht-Detektion): die Uhrzeit-Achse oben, der türkise erwartete Transit mit seinen Kontaktzeiten, der Flip-Marker bei 00:57 — und der nicht beanspruchte 0,0σ-Fit, der sich an die Flip-Stufe klammert, ohne Detektionsmarker, die ihn aufhübschen.*
 
-**Das Diagramm trägt das ganze Ergebnis.** Die Legende nennt T0 und Rp/R★ mit Fehlern und die Detrending-Basen — ein Screenshot ist damit eine vollständige Messung, kein Appetithappen. Vom Spike-Filter verworfene Punkte erscheinen als rote Kreuze („N outlier(s), not fitted"), statt still zu verschwinden — du beurteilst selbst, dass es ein Satellit war und kein Egress. Die **Fehlerbalken** pro Punkt haben einen Ein/Aus-Schalter (aus als Vorgabe; ein langer Lauf wird sonst zum Lattenzaun). Neben dem gefitteten Modell wird der **erwartete Transit aus der Archiv-Ephemeride** in Türkis gezeichnet — *ob der Fit etwas behauptet oder nicht*. Bei einer Detektion **ist** der Versatz zwischen beiden Kurven das O−C, in der Legende in Minuten mit Fehler beziffert. Bei einer Nicht-Detektion ist die Vorhersage die wertvollere Hälfte: Eine Vorhersage im Fenster sagt „(no transit claimed by the fit)" — beide Fakten in einem Bild —, und eine Vorhersage außerhalb nennt den nächsten Transitmittelpunkt in Stunden Abstand zu deinem Lauf. So weißt du, ob die Nacht den Transit verpasst hat oder der Transit die Nacht. Die Epoche kommt aus der Fenstermitte, nie aus dem gefitteten T0 — ein davongelaufener Fit kann die Vorhersage nicht mitziehen.
+**Das Diagramm trägt das ganze Ergebnis.** Die Legende nennt T0 und Rp/R★ mit Fehlern und die Detrending-Basen — ein Screenshot ist damit eine vollständige Messung, kein Appetithappen. Im Einzelnen:
 
-**Das Diagramm spricht die Sprache deines Planungstools.** Eine Nacht wird in Uhrzeit geplant („Start 21:50 … Flip 00:55"), aber in Julianischen Daten gemessen — deshalb zeigt eine zweite Zeitachse oben HH:MM: in *Lokalzeit*, wenn deine Frames N.I.N.A.s `DATE-LOC`-Keyword tragen (das Paar `DATE-OBS`/`DATE-LOC` liefert den UTC-Versatz des Standorts, Sommerzeit inklusive, nichts zu konfigurieren), sonst in UTC — und die Achse sagt, was von beidem. Die vorhergesagten Kontaktzeiten des Transits (Start/Mitte/Ende) stehen unten als Uhrzeiten, und ein Meridian-Flip wird als gestrichelte Markierung in beiden Feldern genau dort gezeichnet, wo das Feld gedreht hat — so prüfst du mit bloßem Auge, ob eine Stufe oder ein „Ingress" mit ihm zusammenfällt. Die Uhrzeit-Beschriftungen ziehen zuerst die BJD_TDB-Korrektur wieder ab; eine Uhrzeit in baryzentrischer Zeit wäre um Minuten falsch. Die vertikalen Linien folgen einer Grammatik: **Orange gestrichelt ist der Flip, türkis gepunktet sind die vorhergesagten Kontakte, und eine farbige gestrichelte Mittransit-Linie gibt es nur bei einer beanspruchten Detektion** — ein nicht beanspruchter Fit behält seine ehrlich beschriftete Kurve, trägt aber keine Detektionsmarker, weil ein 0,0σ-Fit, der sich an die Flip-Stufe klammert, sonst eine zweite gestrichelte Linie direkt neben die echte stellen würde.
+- **Verworfene Punkte bleiben sichtbar.** Was der Ausreißer-Filter entfernt hat, erscheint als rotes Kreuz („N outlier(s), not fitted") statt still zu verschwinden — ob das ein Satellit war oder doch ein Egress, beurteilst du selbst.
+- **Fehlerbalken sind zuschaltbar** (aus als Vorgabe — ein langer Lauf wird sonst zum Lattenzaun).
+- **Die Vorhersage ist als Ganzes zuschaltbar.** Eine Checkbox über dem Chart blendet die erwartete Kurve mitsamt Kontaktstempeln, Dauer-Pfeil und Δ-Strecken gemeinsam aus. Absichtlich alles zusammen: ein halber Vergleich auf dem Bildschirm sähe wie eine Behauptung aus.
+- **Die Legende sitzt über dem Plot**, nie auf deinen Datenpunkten.
+
+Neben dem gefitteten Modell wird immer der **erwartete Transit aus der Archiv-Ephemeride** in Türkis gezeichnet — *ob der Fit etwas behauptet oder nicht*. Bei einer Detektion ist der Versatz zwischen beiden Kurven das O−C, in der Legende in Minuten mit Fehler beziffert. Bei einer Nicht-Detektion ist die Vorhersage die wertvollere Hälfte: Liegt sie im Messfenster, steht „(no transit claimed by the fit)" daneben — beide Fakten in einem Bild. Liegt sie außerhalb, nennt das Diagramm den nächsten Transit in Stunden Abstand — so weißt du, ob die Nacht den Transit verpasst hat oder der Transit die Nacht. Die Epoche der Vorhersage kommt aus der Fenstermitte, nie aus dem gefitteten T0 — ein davongelaufener Fit kann die Vorhersage nicht mitziehen. Ihre Tiefe ist das Rp/R★ des Archivs, wo es eines gibt; bei einem TESS-Kandidaten, dessen gelistete Tiefe SPOCs randverdunkelte Modelltiefe ist, wird diese Tiefe durch dasselbe randverdunkelte Modell invertiert, das die Kurve zeichnet — eine Wurzel würde Rp/R★ um ~9 % und die gezeichnete Delle um ~18 % überschätzen (1,42 % als 1,68 % gezeichnet).
+
+**Das Diagramm spricht die Sprache deines Planungstools.** Eine Nacht wird in Uhrzeit geplant („Start 21:50 … Flip 00:55"), aber in Julianischen Daten gemessen. Die Brücke:
+
+- **Eine zweite Zeitachse oben zeigt HH:MM** — in *Lokalzeit*, wenn deine Frames N.I.N.A.s `DATE-LOC`-Keyword tragen (das Paar `DATE-OBS`/`DATE-LOC` liefert den UTC-Versatz des Standorts, Sommerzeit inklusive, nichts zu konfigurieren), sonst in UTC. Die Achse sagt, was von beidem gilt. Die Beschriftungen ziehen vorher die BJD_TDB-Korrektur wieder ab — eine Uhrzeit in baryzentrischer Zeit wäre um Minuten falsch.
+- **Die vorhergesagten Kontaktzeiten** (Start/Mitte/Ende) stehen unten als Uhrzeiten.
+- **Ein Meridian-Flip** wird als gestrichelte Markierung genau dort gezeichnet, wo das Feld gedreht hat — so prüfst du mit bloßem Auge, ob eine Stufe oder ein vermeintlicher Ingress mit ihm zusammenfällt.
+
+Die vertikalen Linien folgen einer festen Grammatik: **Orange gestrichelt ist der Flip, türkis gepunktet sind die vorhergesagten Kontakte — und farbige gestrichelte Linien (Transitmitte, erster und letzter Kontakt) gibt es nur bei einer beanspruchten Detektion.** Ein nicht beanspruchter Fit behält seine ehrlich beschriftete Kurve, trägt aber keine Detektionsmarker: ein 0,0σ-Fit, der sich an die Flip-Stufe klammert, würde sonst eine zweite gestrichelte Linie direkt neben die echte stellen.
+
+Bei einer Detektion wird der Vergleich Kontakt für Kontakt ausbuchstabiert: Gemessener Start und Ende bekommen eigene Uhrzeit-Stempel in einer Zeile über den türkisen vorhergesagten; die erwartete Delle trägt ihren eigenen Dauer-Pfeil mit Δ-Dauer in Minuten; und graue Δ-Strecken verbinden jeden vorhergesagten Kontakt mit seinem gemessenen Gegenstück („Δstart −16,4 min"), durchgehend als *gemessen minus vorhergesagt* — die O−C-Vorzeichenkonvention. Der Nutzen: eine verschobene Ephemeride (beide Δ gleich groß, gleiches Vorzeichen) liest sich auf einen Blick anders als eine falsche Dauer (Δ mit entgegengesetztem Vorzeichen).
 
 **Binning ist nur Darstellung.** Der Fit sieht immer jeden Punkt — vorher zu binnen würde genau die Streuung wegwerfen, die der Signifikanztest braucht, um ehrlich über sich selbst zu sein.
 
