@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.7.15
+Script Version: 1.7.16
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.7.15
+# Script Version: 1.7.16
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +97,83 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.7.16 - Three places that described the wrong thing, a greying that
+        never greyed, and an import nobody used
+      - THE FRAME-DROP MESSAGE NAMED THE WRONG CAUSE.  A run with the
+        quality filters on reported "Registration dropped 15 of 74
+        frame(s) ... Frames without enough detectable stars (clouds,
+        haze) cannot be aligned" -- while the same log said "74 images
+        successfully platesolved out of 74 included".  Nothing had
+        failed to align.  The 15 were removed by `-filter-wfwhm=90%
+        -filter-round=90%`, which the user had switched on, on frames
+        that were fine.  `n_reg` counts what seqapplyreg exported, and
+        that is already after the filters -- the comment under the
+        message said so, the message did not.  `_qf_decision` already
+        records whether the filters fired, so the two causes are now
+        told apart, and the filtered case names the flags it was given.
+        Measured on one NGC 6946 run: 41 of 210 frames across three
+        filters, every one of them reported as weather.
+      - AND THE SHORT-CHANNEL WARNING COULD NOT FIRE FOR THE CASE IT
+        WAS WRITTEN FOR.  "Only N frame(s) ... too few for outlier
+        rejection to mean much" sat INSIDE the drop message, so it
+        needed frames to have been lost.  A filter that STARTED below
+        MIN_STACK_FRAMES and lost none was never warned, while one that
+        fell to the same count was -- the same diagnosis hanging off the
+        wrong condition as the bullet above.  It is now its own check on
+        the number going into the stack, and "left" is gone from the
+        wording with the nesting.  Found on an IC 1805 run: SII stacked
+        4 frames, one above the floor, in silence.
+      - AND THE SPCC PANEL SHOWED THE HALF IT DOES NOT USE.  On a SHO
+        run the three broadband filter boxes sat there enabled and
+        filled with "Antlia R / G / B", while `_spcc_args` calibrated by
+        wavelength and ignored them entirely -- and said so only in the
+        Log, after the start.  Which mode applies is not a choice the
+        user makes: the palette decides it, so a switch of its own would
+        just be a second place to disagree with that table.  The panel
+        now follows the palette.  Broadband names grey out for a
+        narrowband palette and the bandwidth greys out for a broadband
+        one, and the narrowband half spells out what will really be
+        sent, read from the same table `_spcc_args` builds its command
+        line from: "Ha 656.3 nm -> G", "OIII 500.7 nm -> B", "SII
+        671.6 nm -> R" for SHO.  Greyed rather than hidden, for the
+        reason the calibration tables already do it.  "Auto" leaves both
+        halves live: which one applies is not knowable before the
+        filters are found, and guessing would be the same mistake one
+        step earlier.
+      - ONE BANDWIDTH BECAME THREE, ONE PER LINE.  Siril's own SPCC
+        dialog offers a bandwidth per COLOUR CHANNEL, and this script
+        offered a single one for all three -- both are wrong for the
+        same reason.  Bandwidth is a property of the FILTER: HOO maps
+        one OIII filter to green AND blue, so a per-channel box lets one
+        piece of glass be given two different passbands, and one shared
+        box cannot describe a mixed set (3 nm Ha with 6.5 nm OIII is a
+        normal rig).  The rows are keyed by emission line, and the
+        palette decides which channels each one feeds -- HOO sends the
+        OIII width to `-gbw` and `-bbw` both.  A line the palette does
+        not use greys out.  Wavelengths stay derived rather than
+        editable, which is where Siril's dialog cannot help itself: it
+        does not know which line is in which channel, and this does.
+        The old single `nb_bandwidth` setting seeds all three on first
+        load, so an upgrade keeps sending what it sent before.
+      - AND THE GREYING ITSELF WAS INVISIBLE.  A Qt stylesheet rule
+        that names `color` applies in EVERY state unless a :disabled
+        rule overrides it, and the shared dark theme has one only for
+        QPushButton.  So all nineteen setEnabled(False) calls in this
+        file changed nothing on screen -- the calibration tables that
+        1.7.15 describes as turning grey when a kind is switched off,
+        and the SPCC panel one bullet up, included.  The theme is
+        EXTENDED rather than edited, because it is copied verbatim
+        between the Svenesis scripts: DISABLED_STYLESHEET adds the
+        missing states for QLabel, QCheckBox, QLineEdit, QComboBox and
+        the spin boxes, in the palette the button rule already used.
+        The eight hint labels needed a second fix: a per-widget
+        stylesheet naming `color` outranks the global :disabled rule, so
+        they now carry both states (HINT_STYLE).  The other seven
+        scripts in the suite have the same gap -- 86 further
+        setEnabled calls -- and are not touched here.
+      - The unused `QSizePolicy` import is gone.  It was the only thing
+        pyflakes still had to say about this file.
+
 1.7.15 - A logic audit, what a real run said, and the solution the
         colour calibration asked for
       The full entries, with the measurements behind them, are
@@ -231,7 +308,7 @@ from astropy.io import fits
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout,
     QWidget, QLabel, QPushButton, QMessageBox, QGroupBox,
-    QCheckBox, QComboBox, QSpinBox, QDoubleSpinBox, QSizePolicy,
+    QCheckBox, QComboBox, QSpinBox, QDoubleSpinBox,
     QDialog,
     QLineEdit, QTextEdit, QTextBrowser, QTabWidget, QScrollArea,
     QProgressBar,
@@ -245,7 +322,7 @@ from PyQt6.QtGui import QColor, QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.7.15"
+VERSION = "1.7.16"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -565,6 +642,32 @@ QScrollBar::handle:vertical{background:#555555;border-radius:4px;min-height:20px
 QScrollBar::handle:vertical:hover{background:#666666}
 QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0}
 """
+
+# Extends the shared theme instead of editing it: DARK_STYLESHEET is copied
+# verbatim between the Svenesis scripts, so a rule added inside it would
+# drift the moment one of them is updated on its own.
+#
+# Without these, setEnabled(False) is INVISIBLE.  A stylesheet rule that
+# names `color` applies in every state unless a :disabled rule overrides
+# it, and the shared theme has one only for QPushButton -- so nineteen
+# places in this file greyed nothing out, including the "what is switched
+# off stays listed and turns grey" tables of 1.7.15.  Same palette as the
+# button rule, so the two states look like one decision.
+DISABLED_STYLESHEET = """
+QLabel:disabled{color:#666666}
+QCheckBox:disabled{color:#666666}
+QCheckBox::indicator:disabled{background:#333333;border-color:#444444}
+QLineEdit:disabled{background-color:#333333;color:#666666;border-color:#444444}
+QComboBox:disabled{background-color:#333333;color:#666666;border-color:#444444}
+QSpinBox:disabled,QDoubleSpinBox:disabled{background-color:#333333;color:#666666;border-color:#444444}
+"""
+
+# A hint line under a control.  BOTH states are spelled out because a
+# per-widget stylesheet naming `color` beats every global rule, the
+# :disabled one included -- which is how eight of these stayed fully lit
+# while the control they describe went grey.
+HINT_STYLE = ("QLabel{color:#888888;font-size:9pt}"
+              "QLabel:disabled{color:#555555}")
 
 
 # ---------------------------------------------------------------------------
@@ -3607,7 +3710,9 @@ class StackWorker(QThread):
 
                 # Registration itself can drop frames -- a sub with no
                 # detectable stars (clouds, a passing veil) simply fails to
-                # match and Siril excludes it.  Counting the files it really
+                # match and Siril excludes it -- and so can the quality
+                # filters, which run inside seqapplyreg.  Both land in the
+                # same count.  Counting the files it really
                 # exported is the only reliable number: everything after
                 # this point (rejection tier, weighting, the report) must be
                 # based on what is actually going into the stack, not on
@@ -3623,16 +3728,40 @@ class StackWorker(QThread):
                         filt, os.path.join(work, "process"), seq)
                 if n_reg and n_reg < n_linked:
                     lost = n_linked - n_reg
-                    self._emit(
-                        f"  Registration dropped {lost} of {n_linked} "
-                        f"frame(s) — {n_reg} will be integrated. Frames "
-                        "without enough detectable stars (clouds, haze) "
-                        "cannot be aligned.", LogColor.SALMON)
-                    if n_reg < MIN_STACK_FRAMES:
+                    # Which of the two causes it was decides the
+                    # sentence.  Blaming cloud for a filter the user
+                    # switched on describes a data problem where there is
+                    # none -- and with the filters on that is the common
+                    # case, so it is the one that has to be right.
+                    _n, fired = self._qf_decision.get(
+                        filt, (n_linked, False))
+                    flags = (" ".join(self._quality_filter_args(n_linked))
+                             if fired else "")
+                    if flags:
                         self._emit(
-                            f"  Only {n_reg} frame(s) left for {filt}: too "
-                            "few for outlier rejection to mean much. Treat "
-                            "this channel as provisional.", LogColor.SALMON)
+                            f"  {lost} of {n_linked} frame(s) removed by "
+                            f"the quality filters ({flags}) — {n_reg} will "
+                            "be integrated. A frame that could not be "
+                            "aligned would count here too.", LogColor.SALMON)
+                    else:
+                        self._emit(
+                            f"  Registration dropped {lost} of {n_linked} "
+                            f"frame(s) — {n_reg} will be integrated. Frames "
+                            "without enough detectable stars (clouds, haze) "
+                            "cannot be aligned.", LogColor.SALMON)
+                # A channel can be short without having lost anything.
+                # This check used to sit INSIDE the drop message above, so a
+                # filter that STARTED below the floor was never warned while
+                # one that fell to the same count was -- the same diagnosis
+                # hanging off the wrong condition.  What matters is how many
+                # frames go into the stack, not how it got to that number.
+                # "left" is gone with the nesting: nothing need have been
+                # lost for this to fire.
+                if n_reg and n_reg < MIN_STACK_FRAMES:
+                    self._emit(
+                        f"  Only {n_reg} frame(s) for {filt}: too few for "
+                        "outlier rejection to mean much. Treat this "
+                        "channel as provisional.", LogColor.SALMON)
                 # `n_reg` counts what seqapplyreg EXPORTED, which is
                 # already after the quality filters -- they run there, not
                 # at stack time.  Passing it through
@@ -5800,15 +5929,23 @@ class StackWorker(QThread):
             #
             # Wavelengths are physics, not preference.  Bandwidth depends on
             # the user's filter set, so that one is configurable.
-            bw = float(self._opts.get("nb_bandwidth")
-                       or DEFAULT_NB_BANDWIDTH)
             # Which line sits in which colour channel is exactly what
             # the palette table says -- so a new palette cannot be added
-            # with the wrong wavelengths sent to SPCC.
-            r, g, b = (_LINE_NM[role] for role in _NB_PALETTES[palette])
+            # with the wrong wavelengths sent to SPCC.  The bandwidth is
+            # looked up by LINE for the same reason it is entered that
+            # way: HOO maps OIII to two channels, and both must carry
+            # that one filter's passband.
+            bws = self._opts.get("nb_bandwidths") or {}
+
+            def _bw(role: str) -> float:
+                return float(bws.get(role) or DEFAULT_NB_BANDWIDTH)
+
+            rr, gg, bb = _NB_PALETTES[palette]
             args += ["-narrowband",
-                     f"-rwl={r:g}", f"-gwl={g:g}", f"-bwl={b:g}",
-                     f"-rbw={bw:g}", f"-gbw={bw:g}", f"-bbw={bw:g}"]
+                     f"-rwl={_LINE_NM[rr]:g}", f"-gwl={_LINE_NM[gg]:g}",
+                     f"-bwl={_LINE_NM[bb]:g}",
+                     f"-rbw={_bw(rr):g}", f"-gbw={_bw(gg):g}",
+                     f"-bbw={_bw(bb):g}"]
             if not sensor:
                 self._emit(
                     "  SPCC: no sensor name given, so Siril will use "
@@ -7074,6 +7211,26 @@ _LINE_NM = {"ha": HA_NM, "oiii": OIII_NM, "sii": SII_NM}
 _ROLE_LABEL = {"ha": "Ha", "oiii": "OIII", "sii": "SII", "red": "R",
                "green": "G", "blue": "B", "lum": "L"}
 
+def _nb_line_targets(palette: str) -> dict:
+    """Which colour channels each emission line feeds, for this palette.
+
+    SHO gives ``{"ha": "G", "oiii": "B", "sii": "R"}``; HOO puts the same
+    OIII filter in two, ``{"ha": "R", "oiii": "G, B", "sii": ""}``.  An
+    empty string means the palette does not use that line.
+
+    Line-first on purpose.  Bandwidth is a property of the FILTER, not of
+    the channel: HOO sends one OIII passband to both `-gbw` and `-bbw`,
+    and per-channel boxes -- which is how Siril's own dialog does it --
+    would let one filter be given two different widths.  Read from
+    `_NB_PALETTES`, the table `_spcc_args` builds its command line from,
+    so the panel cannot describe a mapping the run will not use.
+    """
+    roles = _NB_PALETTES.get(palette) or ()
+    return {line: ", ".join(ch for ch, role in zip("RGB", roles)
+                            if role == line)
+            for line in _LINE_NM}
+
+
 _ROLE_WORDS = {"ha": "an Ha filter", "oiii": "an OIII filter",
                "sii": "an SII filter", "red": "a Red filter",
                "green": "a Green filter", "blue": "a Blue filter",
@@ -7285,7 +7442,7 @@ class ImageMonoTrainWindow(QMainWindow):
         layout.addWidget(self._left_panel)
         layout.addWidget(self._build_right_panel(), 1)
         self.setWindowTitle("Svenesis ImageMono Train")
-        self.setStyleSheet(DARK_STYLESHEET)
+        self.setStyleSheet(DARK_STYLESHEET + DISABLED_STYLESHEET)
         self.resize(1400, 900)
 
     # ---- LEFT PANEL ---------------------------------------------------
@@ -7356,7 +7513,7 @@ class ImageMonoTrainWindow(QMainWindow):
 
         self.lbl_folder = QLabel("No folder selected.")
         self.lbl_folder.setWordWrap(True)
-        self.lbl_folder.setStyleSheet("color:#888888;font-size:9pt;")
+        self.lbl_folder.setStyleSheet(HINT_STYLE)
         layout.addWidget(self.lbl_folder)
 
         # Picking a folder analyses it, so this button is only ever the
@@ -7423,7 +7580,7 @@ class ImageMonoTrainWindow(QMainWindow):
 
         # Carries the Details column's value while every filter shares it.
         self.lbl_uniform = QLabel("")
-        self.lbl_uniform.setStyleSheet("color:#888888;font-size:9pt;")
+        self.lbl_uniform.setStyleSheet(HINT_STYLE)
         self.lbl_uniform.setVisible(False)
         layout.addWidget(self.lbl_uniform)
 
@@ -7436,7 +7593,7 @@ class ImageMonoTrainWindow(QMainWindow):
         self.lbl_flats_none = QLabel(
             "Analyze a folder to see the flats found next to the lights.")
         self.lbl_flats_none.setWordWrap(True)
-        self.lbl_flats_none.setStyleSheet("color:#888888;font-size:9pt;")
+        self.lbl_flats_none.setStyleSheet(HINT_STYLE)
         layout.addWidget(self.lbl_flats_none)
 
         self.chk_use_flats = QCheckBox("Use flats and dark-flats")
@@ -7500,7 +7657,7 @@ class ImageMonoTrainWindow(QMainWindow):
 
         self.lbl_library = QLabel("No library folder set.")
         self.lbl_library.setWordWrap(True)
-        self.lbl_library.setStyleSheet("color:#888888;font-size:9pt;")
+        self.lbl_library.setStyleSheet(HINT_STYLE)
         layout.addWidget(self.lbl_library)
 
         self.chk_use_darks = QCheckBox("Use darks and bias")
@@ -8110,7 +8267,7 @@ class ImageMonoTrainWindow(QMainWindow):
         self.lbl_spcc = QLabel(
             "     Mono sensor and filters (pre-filled; clear them to use "
             "Siril's own SPCC settings):")
-        self.lbl_spcc.setStyleSheet("color:#888888;font-size:9pt;")
+        self.lbl_spcc.setStyleSheet(HINT_STYLE)
         self.lbl_spcc.setWordWrap(True)
         layout.addWidget(self.lbl_spcc)
 
@@ -8131,6 +8288,13 @@ class ImageMonoTrainWindow(QMainWindow):
             "actually uses and says in the Log if it does not match.\n"
             "Leave everything blank to use Siril's own SPCC configuration.")
         layout.addWidget(self.edit_spcc_sensor)
+
+        # Which half of this panel is live follows the PALETTE, not a
+        # switch of its own -- see _refresh_spcc_mode for why.
+        self.lbl_spcc_bb = QLabel("     Broadband filter names:")
+        self.lbl_spcc_bb.setStyleSheet(HINT_STYLE)
+        self.lbl_spcc_bb.setWordWrap(True)
+        layout.addWidget(self.lbl_spcc_bb)
 
         frow = QHBoxLayout()
         self.edit_spcc_r = QLineEdit(DEFAULT_SPCC_RFILTER)
@@ -8155,30 +8319,56 @@ class ImageMonoTrainWindow(QMainWindow):
             frow.addWidget(w, 1)
         layout.addLayout(frow)
 
-        nrow = QHBoxLayout()
-        nrow.addWidget(QLabel("     Narrowband filter bandwidth:"))
-        # Fractional bandwidths are the norm, not the exception: 3.5, 4.5
-        # and 6.5 nm are all common filter specs, so an integer box would
-        # make them unenterable.
-        self.spin_nb_bw = QDoubleSpinBox()
-        self.spin_nb_bw.setDecimals(1)
-        self.spin_nb_bw.setSingleStep(0.5)
-        self.spin_nb_bw.setRange(0.5, 50.0)
-        self.spin_nb_bw.setValue(DEFAULT_NB_BANDWIDTH)
-        self.spin_nb_bw.setSuffix(" nm")
-        self.spin_nb_bw.setFixedWidth(85)
-        self.spin_nb_bw.setToolTip(
-            "The bandwidth of your Ha / OIII / SII filters, used by SPCC's "
-            "narrowband mode.  Typical values are 3, 3.5, 4.5, 6 or 7 nm — "
-            "take it from your filter's spec sheet.  Pre-filled with 4.5 "
-            "for the Antlia Edge SHO set.\n"
-            "Siril has no named entries for narrowband filters, so this "
-            "number plus the fixed line wavelengths (Ha 656.3, OIII 500.7, "
-            "SII 671.6 nm) IS the whole filter description.")
-        _nofocus(self.spin_nb_bw)
-        nrow.addWidget(self.spin_nb_bw)
-        nrow.addStretch()
-        layout.addLayout(nrow)
+        self.lbl_spcc_nb = QLabel("")
+        self.lbl_spcc_nb.setStyleSheet(HINT_STYLE)
+        self.lbl_spcc_nb.setWordWrap(True)
+        layout.addWidget(self.lbl_spcc_nb)
+
+        # One row per emission LINE, not per colour channel.  Bandwidth
+        # belongs to the FILTER: HOO maps OIII to both G and B, and the
+        # one filter has one passband -- per-channel boxes (which is how
+        # Siril's own dialog does it) would let it be given two widths.
+        # Fractional values are the norm, not the exception: 3.5, 4.5 and
+        # 6.5 nm are all common specs, so an integer box would make them
+        # unenterable.
+        self._nb_bw: dict = {}
+        self.lbl_nb_line: dict = {}
+        for _role in _LINE_NM:
+            _row = QHBoxLayout()
+            _lab = QLabel("")
+            _lab.setStyleSheet(HINT_STYLE)
+            _lab.setMinimumWidth(260)
+            self.lbl_nb_line[_role] = _lab
+            _row.addWidget(_lab)
+            _sp = QDoubleSpinBox()
+            _sp.setDecimals(1)
+            _sp.setSingleStep(0.5)
+            _sp.setRange(0.5, 50.0)
+            _sp.setValue(DEFAULT_NB_BANDWIDTH)
+            _sp.setSuffix(" nm")
+            _sp.setFixedWidth(85)
+            _sp.setToolTip(
+                f"The bandwidth of your {_ROLE_LABEL[_role]} filter, used "
+                "by SPCC's narrowband mode.  Typical values are 3, 3.5, "
+                "4.5, 6 or 7 nm — take it from the spec sheet.  "
+                "Pre-filled with 4.5 for the Antlia Edge set.\n"
+                "Siril has no named entries for narrowband filters, so "
+                "this number plus the fixed line wavelength "
+                f"({_ROLE_LABEL[_role]} {_LINE_NM[_role]:g} nm) IS the "
+                "whole filter description.\n"
+                "Entered per line rather than per channel because that is "
+                "what it describes: a palette that maps one line to two "
+                "channels sends this same number to both.")
+            _nofocus(_sp)
+            self._nb_bw[_role] = _sp
+            _row.addWidget(_sp)
+            _row.addStretch()
+            layout.addLayout(_row)
+        # Named attributes as well: the preset export maps a settings key
+        # to one widget and type-switches on it.
+        (self.spin_nb_bw_ha, self.spin_nb_bw_oiii,
+         self.spin_nb_bw_sii) = (self._nb_bw["ha"], self._nb_bw["oiii"],
+                                 self._nb_bw["sii"])
 
         self.chk_finish_stretch = QCheckBox("     + save stretched preview")
         self.chk_finish_stretch.setChecked(False)
@@ -8271,7 +8461,9 @@ class ImageMonoTrainWindow(QMainWindow):
             "bg_rbf": self.chk_bg_rbf,
             "bg_smooth": self.spin_bg_smooth,
             "use_spcc": self.chk_spcc,
-            "nb_bandwidth": self.spin_nb_bw,
+            "nb_bw_ha": self.spin_nb_bw_ha,
+            "nb_bw_oiii": self.spin_nb_bw_oiii,
+            "nb_bw_sii": self.spin_nb_bw_sii,
             # Rig-specific, not machine-specific: exactly what someone would
             # want to hand over together with the rest of the recipe.
             "spcc_sensor": self.edit_spcc_sensor,
@@ -8458,9 +8650,72 @@ class ImageMonoTrainWindow(QMainWindow):
         self.chk_finish_stretch.setEnabled(fin)
         self.chk_spcc.setEnabled(fin)
         spcc = fin and self.chk_spcc.isChecked()
-        for w in (self.lbl_spcc, self.edit_spcc_sensor, self.edit_spcc_r,
-                  self.edit_spcc_g, self.edit_spcc_b, self.spin_nb_bw):
+        for w in (self.lbl_spcc, self.edit_spcc_sensor):
             w.setEnabled(spcc)
+        # The sensor applies in both modes; everything below it does not.
+        self._refresh_spcc_mode()
+
+    def _refresh_spcc_mode(self) -> None:
+        """Enable only the half of the SPCC panel the palette actually uses.
+
+        Which mode applies is not a choice the user makes: `_spcc_args`
+        sends filter NAMES for a broadband palette and WAVELENGTHS for a
+        narrowband one, and the palette alone decides which.  A separate
+        "narrowband" checkbox here would be a second place to disagree
+        with that table.
+
+        Until now the block was enabled as a whole, so a SHO run showed
+        three filled-in RGB filter boxes that the run then ignored -- and
+        said so only in the Log, after the start.  The same class of
+        defect as a message naming the wrong cause: the panel stated
+        something that was not true for the chosen palette.
+
+        Greying rather than hiding, for the reason the calibration tables
+        already do it: a field that vanishes raises the question whether
+        the setting still exists.
+
+        "Auto" leaves both halves live.  Which one will apply is not
+        knowable before the filters are found, and guessing here would be
+        the same mistake one step earlier.
+        """
+        palette = self.cmb_palette.currentText()
+        spcc = self.chk_spcc.isEnabled() and self.chk_spcc.isChecked()
+        nb = palette in _NB_PALETTES
+        auto = palette == "Auto"
+        for w in (self.lbl_spcc_bb, self.edit_spcc_r, self.edit_spcc_g,
+                  self.edit_spcc_b):
+            w.setEnabled(spcc and (auto or not nb))
+        self.lbl_spcc_nb.setEnabled(spcc and (auto or nb))
+        # A line the palette does not use greys out on its own: with HOO
+        # there is no SII filter in the recipe, so asking for its
+        # bandwidth would be asking about equipment this run never reads.
+        targets = _nb_line_targets(palette)
+        for _role, _sp in self._nb_bw.items():
+            _live = spcc and (auto or nb) and (bool(targets[_role]) or not nb)
+            _sp.setEnabled(_live)
+            _lab = self.lbl_nb_line[_role]
+            _lab.setEnabled(_live)
+            if nb and not targets[_role]:
+                _lab.setText(f"        {_ROLE_LABEL[_role]} — not used "
+                             f"by {palette}")
+            else:
+                _arrow = f"  →  {targets[_role]}" if nb else ""
+                _lab.setText(f"        {_ROLE_LABEL[_role]} "
+                             f"{_LINE_NM[_role]:g} nm{_arrow}")
+        self.lbl_spcc_bb.setText(
+            f"     Broadband filter names — not used by {palette}:"
+            if nb else "     Broadband filter names:")
+        if nb:
+            self.lbl_spcc_nb.setText(
+                f"     Narrowband — {palette} calibrates by wavelength, "
+                "not by filter name:")
+        elif auto:
+            self.lbl_spcc_nb.setText(
+                "     Narrowband — applies only once the filters found "
+                "give a narrowband palette.")
+        else:
+            self.lbl_spcc_nb.setText(
+                f"     Narrowband — not used by {palette}.")
 
     def _populate_compose_combos(self) -> None:
         """Refill the channel combos with the discovered filters."""
@@ -8480,6 +8735,8 @@ class ImageMonoTrainWindow(QMainWindow):
         is_hargb = self.cmb_palette.currentText() == "HaRGB"
         self.lbl_ha.setVisible(is_hargb)
         self.spin_ha.setVisible(is_hargb)
+        # The palette decides which half of the SPCC panel is live.
+        self._refresh_spcc_mode()
 
     def _apply_palette_mapping(self) -> None:
         """Set the channel combos from the selected/auto palette."""
@@ -8531,7 +8788,7 @@ class ImageMonoTrainWindow(QMainWindow):
 
         self.lbl_out = QLabel("Output: <target folder>/output")
         self.lbl_out.setWordWrap(True)
-        self.lbl_out.setStyleSheet("color:#888888;font-size:9pt;")
+        self.lbl_out.setStyleSheet(HINT_STYLE)
         layout.addWidget(self.lbl_out)
 
         self.chk_align_filters = QCheckBox("Align filters to each other (LRGB)")
@@ -8717,7 +8974,9 @@ class ImageMonoTrainWindow(QMainWindow):
                          ("spcc_rfilter", DEFAULT_SPCC_RFILTER),
                          ("spcc_gfilter", DEFAULT_SPCC_GFILTER),
                          ("spcc_bfilter", DEFAULT_SPCC_BFILTER),
-                         ("nb_bandwidth", DEFAULT_NB_BANDWIDTH)):
+                         ("nb_bw_ha", DEFAULT_NB_BANDWIDTH),
+                         ("nb_bw_oiii", DEFAULT_NB_BANDWIDTH),
+                         ("nb_bw_sii", DEFAULT_NB_BANDWIDTH)):
             st.setValue(key, val)
         st.setValue("spcc_seeded", True)
 
@@ -8750,8 +9009,16 @@ class ImageMonoTrainWindow(QMainWindow):
                 str(st.value("spcc_gfilter", DEFAULT_SPCC_GFILTER)))
             self.edit_spcc_b.setText(
                 str(st.value("spcc_bfilter", DEFAULT_SPCC_BFILTER)))
-            self.spin_nb_bw.setValue(
-                float(st.value("nb_bandwidth", DEFAULT_NB_BANDWIDTH)))
+            # One box became three in 1.7.16.  A settings file written
+            # before that has only the old key, so it seeds all three --
+            # the value the user last entered, not a default that would
+            # silently change what their next run sends.
+            _legacy = float(st.value("nb_bandwidth", DEFAULT_NB_BANDWIDTH))
+            self.spin_nb_bw_ha.setValue(float(st.value("nb_bw_ha", _legacy)))
+            self.spin_nb_bw_oiii.setValue(
+                float(st.value("nb_bw_oiii", _legacy)))
+            self.spin_nb_bw_sii.setValue(
+                float(st.value("nb_bw_sii", _legacy)))
             # Mode BEFORE the values: it decides the spin boxes' range, and a
             # percentage restored into a k-sigma range would be clamped to 10.
             self.cmb_filter_mode.setCurrentText(
@@ -8849,7 +9116,9 @@ class ImageMonoTrainWindow(QMainWindow):
         st.setValue("spcc_rfilter", self.edit_spcc_r.text().strip())
         st.setValue("spcc_gfilter", self.edit_spcc_g.text().strip())
         st.setValue("spcc_bfilter", self.edit_spcc_b.text().strip())
-        st.setValue("nb_bandwidth", float(self.spin_nb_bw.value()))
+        st.setValue("nb_bw_ha", float(self.spin_nb_bw_ha.value()))
+        st.setValue("nb_bw_oiii", float(self.spin_nb_bw_oiii.value()))
+        st.setValue("nb_bw_sii", float(self.spin_nb_bw_sii.value()))
         st.setValue("f_wfwhm_val", int(self.spin_keep.value()))
         st.setValue("filter_mode", self.cmb_filter_mode.currentText())
         st.setValue("f_wfwhm_on", self.chk_f_wfwhm.isChecked())
@@ -9898,7 +10167,8 @@ class ImageMonoTrainWindow(QMainWindow):
             "spcc_rfilter": self.edit_spcc_r.text().strip(),
             "spcc_gfilter": self.edit_spcc_g.text().strip(),
             "spcc_bfilter": self.edit_spcc_b.text().strip(),
-            "nb_bandwidth": float(self.spin_nb_bw.value()),
+            "nb_bandwidths": {r: float(s.value())
+                              for r, s in self._nb_bw.items()},
             "filter_mode": self.cmb_filter_mode.currentText(),
             "f_wfwhm_on": self.chk_f_wfwhm.isChecked(),
             "f_wfwhm_val": int(self.spin_keep.value()),

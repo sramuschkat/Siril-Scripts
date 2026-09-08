@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.7.15** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.7.16** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.7.15](#17-neu-in-1715)
+17. [Neu in 1.7.16](#17-neu-in-1716)
 
 ---
 
@@ -914,7 +914,29 @@ Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.7.15
+## 17. Neu in 1.7.16
+
+Fünf Dinge, die echte Läufe zutage gefördert haben — vier davon Meldungen oder Bedienelemente, die etwas anderes beschrieben als das, was tatsächlich geschah, und die letzte Beanstandung, die pyflakes an dieser Datei hatte.
+
+- **Die Frame-Verlust-Meldung nannte die falsche Ursache.** Ein Lauf mit eingeschalteten Qualitätsfiltern meldete *„Registration dropped 15 of 74 frame(s) … Frames without enough detectable stars (clouds, haze) cannot be aligned"* — während dasselbe Log vier Sekunden früher *„74 images successfully platesolved out of 74 included"* sagte. **Kein einziger Frame war an der Ausrichtung gescheitert.** Die 15 wurden von `-filter-wfwhm=90% -filter-round=90%` entfernt, bewusst eingeschaltet, an Frames, die in Ordnung waren. `n_reg` zählt, was `seqapplyreg` exportiert hat, und das ist bereits nach den Filtern — der Kommentar direkt unter der Meldung sagte genau das, die Meldung nicht. `_qf_decision` hält ohnehin fest, ob die Filter gegriffen haben; die beiden Ursachen werden jetzt auseinandergehalten, und der Filterfall nennt die Flags, die er bekommen hat. Gemessen an einem NGC-6946-Lauf: 41 von 210 Frames über drei Filter, jeder einzelne als Wetter gemeldet.
+- **Und die Warnung für kurze Kanäle konnte für den Fall, für den sie geschrieben wurde, gar nicht auslösen.** *„Only N frame(s) … too few for outlier rejection to mean much"* stand **innerhalb** der Verlust-Meldung, brauchte also verlorene Frames. Ein Filter, der **von Anfang an** unter `MIN_STACK_FRAMES` lag und keinen verlor, wurde nie gewarnt — einer, der auf dieselbe Zahl fiel, schon. Dieselbe Diagnose an der falschen Bedingung wie im Punkt darüber. Sie ist jetzt eine eigene Prüfung auf die Zahl, die in den Stack geht, und *„left"* ist mit der Verschachtelung aus dem Wortlaut verschwunden. Gefunden an einem IC-1805-Lauf: SII stackte 4 Frames, einen über der Untergrenze, ohne ein Wort.
+- **Und das SPCC-Panel zeigte die Hälfte, die es gar nicht benutzt.** Bei einem SHO-Lauf standen die drei Breitband-Felder aktiv da, gefüllt mit *Antlia R / G / B*, während der Lauf über Wellenlängen kalibrierte und sie komplett ignorierte — und das erst im Log sagte, nach dem Start. Welcher Modus gilt, ist keine Wahl: die Palette entscheidet es, ein eigener *Schmalband*-Schalter wäre nur eine zweite Stelle, die dieser Tabelle widersprechen kann. Das Panel folgt jetzt der Palette. Für SHO steht dort:
+
+```
+Broadband filter names — not used by SHO:      (ausgegraut)
+Narrowband — SHO calibrates by wavelength, not by filter name:
+    Ha    656.3 nm  →  G          [ 4.5 nm ]
+    OIII  500.7 nm  →  B          [ 4.5 nm ]
+    SII   671.6 nm  →  R          [ 4.5 nm ]
+```
+
+  **Die Bandbreite wird je Emissionslinie eingegeben, nicht je Farbkanal** — und hier weicht das Skript bewusst von Sirils eigenem SPCC-Dialog ab, der eine je Kanal anbietet. Die Bandbreite beschreibt den *Filter*: HOO legt einen OIII-Filter auf Grün **und** Blau, ein Feld je Kanal ließe also einem Stück Glas zwei verschiedene Durchlassbereiche geben. Ein einzelnes gemeinsames Feld, wie dieses Skript es bis jetzt hatte, kann ein gemischtes Set ebenso wenig beschreiben (3 nm Hα mit 6,5 nm OIII ist eine normale Ausrüstung). Eine Linie, die die Palette nicht benutzt, graut aus. Wellenlängen bleiben abgeleitet statt editierbar — Siril *muss* sie editierbar machen, weil es nicht weiß, welche Linie in welchem Kanal sitzt; dieses Skript weiß es. Eine ältere Einstellungsdatei füllt alle drei Felder aus ihrem einen alten Wert, ein Upgrade sendet also weiter dasselbe wie zuvor.
+
+  Die Zuordnung wird aus denselben zwei Tabellen gelesen, aus denen die Kommandozeile gebaut wird — das Panel kann also keine Wellenlänge versprechen, die der Lauf nicht sendet. Ausgegraut statt versteckt, aus demselben Grund wie bei den Kalibriertabellen. *Auto* lässt beide Hälften aktiv: welche gilt, ist vor dem Finden der Filter nicht bekannt.
+- **Und das Ausgrauen selbst war unsichtbar.** Eine Qt-Stylesheet-Regel, die `color` nennt, gilt in **jedem** Zustand, solange keine `:disabled`-Regel sie überschreibt — und das gemeinsame dunkle Thema hat eine solche nur für `QPushButton`. Alle neunzehn `setEnabled(False)`-Aufrufe dieser Datei änderten am Bildschirm also nichts, die Kalibriertabellen eingeschlossen, die §17 von 1.7.15 als *grau werdend* beschreibt. Das Thema wird **erweitert, nicht bearbeitet**, weil es wortgleich zwischen den Svenesis-Skripten kopiert wird. Die acht grauen Hinweiszeilen brauchten obendrein eine zweite Korrektur: ein Stylesheet am Widget selbst schlägt die globale Regel, also nennen sie jetzt beide Zustände. Die anderen sieben Skripte der Suite haben dieselbe Lücke — 86 weitere `setEnabled`-Aufrufe — und bleiben unangetastet.
+- **Der unbenutzte `QSizePolicy`-Import ist weg.** Er war das Letzte, was pyflakes zu dieser Datei noch zu sagen hatte.
+
+## Was neu war in 1.7.15
 
 Der Composite bekommt die astrometrische Lösung, nach der die Farbkalibrierung verlangt — und die sich als **nicht** die Ursache der schwachen Farblösung herausstellte.
 

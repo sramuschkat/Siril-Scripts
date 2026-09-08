@@ -185,8 +185,19 @@ def _keys(fn, pat):
 save = _keys("_save_settings", r'st\.setValue\("(\w+)"')
 load = _keys("_load_settings", r'st\.value\("(\w+)"')
 print(f"   {len(save)} saved, {len(load)} loaded")
-check(save == load, "every saved setting is loaded and vice versa",
-      f"only saved={sorted(save - load)} only loaded={sorted(load - save)}")
+# Read but no longer written: a one-way migration from an older layout.
+# 1.7.16 split the single narrowband bandwidth into one per emission line,
+# so a settings file written before that carries only the old key and it
+# seeds all three.  Listed by name rather than allowed by pattern, so
+# deleting the migration shows up here instead of passing quietly.
+LEGACY_READ = {"nb_bandwidth"}
+check(load >= LEGACY_READ,
+      "the pre-1.7.16 bandwidth key is still read, for migration",
+      str(sorted(LEGACY_READ - load)))
+check(save == load - LEGACY_READ,
+      "every saved setting is loaded and vice versa",
+      f"only saved={sorted(save - load)} "
+      f"only loaded={sorted(load - save - LEGACY_READ)}")
 
 widgets = _keys("_all_setting_widgets", r'"(\w+)":')
 presets = _keys("_preset_widgets", r'"(\w+)":')

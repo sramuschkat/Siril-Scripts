@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.7.15** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.7.16** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.7.15](#17-whats-new-in-1715)
+17. [What's New in 1.7.16](#17-whats-new-in-1716)
 
 ---
 
@@ -914,7 +914,29 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.7.15
+## 17. What's New in 1.7.16
+
+Five things real runs turned up — four of them messages or controls that described something other than what was actually happening, and the last complaint pyflakes had about the file.
+
+- **The frame-drop message named the wrong cause.** A run with the quality filters on reported *"Registration dropped 15 of 74 frame(s) … Frames without enough detectable stars (clouds, haze) cannot be aligned"* — while the same log, four seconds earlier, said *"74 images successfully platesolved out of 74 included"*. **Nothing had failed to align.** The 15 were removed by `-filter-wfwhm=90% -filter-round=90%`, switched on deliberately, on frames that were fine. `n_reg` counts what `seqapplyreg` exported, and that is already after the filters — the comment directly under the message said exactly that; the message did not. `_qf_decision` already records whether the filters fired, so the two causes are now told apart, and the filtered case names the flags it was given. Measured on one NGC 6946 run: 41 of 210 frames across three filters, every one of them reported as weather.
+- **And the short-channel warning could not fire for the case it was written for.** *"Only N frame(s) … too few for outlier rejection to mean much"* sat **inside** the drop message, so it needed frames to have been lost. A filter that **started** below `MIN_STACK_FRAMES` and lost none was never warned, while one that fell to the same count was — the same diagnosis hanging off the wrong condition as the bullet above. It is now its own check on the number going into the stack, and *"left"* is gone from the wording along with the nesting. Found on an IC 1805 run: SII stacked 4 frames, one above the floor, in silence.
+- **And the SPCC panel showed the half it does not use.** On a SHO run the three broadband filter boxes sat there enabled and filled with *Antlia R / G / B*, while the run calibrated by wavelength and ignored them entirely — and said so only in the Log, after the start. Which mode applies is not a choice you make: the palette decides it, so a *narrowband* switch of its own would just be a second place to disagree with that. The panel now follows the palette. For SHO it reads:
+
+```
+Broadband filter names — not used by SHO:      (greyed)
+Narrowband — SHO calibrates by wavelength, not by filter name:
+    Ha    656.3 nm  →  G          [ 4.5 nm ]
+    OIII  500.7 nm  →  B          [ 4.5 nm ]
+    SII   671.6 nm  →  R          [ 4.5 nm ]
+```
+
+  **The bandwidth is entered per emission line, not per colour channel** — and here the script deliberately differs from Siril's own SPCC dialog, which offers one per channel. Bandwidth describes the *filter*: HOO maps one OIII filter to green **and** blue, so a per-channel box would let one piece of glass be given two different passbands. A single shared box, which this script had until now, cannot describe a mixed set either (3 nm Ha with 6.5 nm OIII is a normal rig). A line the palette does not use greys out. Wavelengths stay derived rather than editable — Siril must make them editable because it does not know which line sits in which channel; this script does. An older settings file seeds all three boxes from its single old value, so an upgrade keeps sending what it sent before.
+
+  The mapping is read from the same two tables the command line is built from, so the panel cannot promise a wavelength the run will not send. Greyed rather than hidden, for the reason the calibration tables already are. *Auto* leaves both halves live — which one applies is not knowable before the filters are found.
+- **And the greying itself was invisible.** A Qt stylesheet rule that names `color` applies in **every** state unless a `:disabled` rule overrides it — and the shared dark theme has one only for `QPushButton`. All nineteen `setEnabled(False)` calls in this file therefore changed nothing on screen, the calibration tables that §17 of 1.7.15 describes as *turning grey* included. The theme is **extended, not edited**, because it is copied verbatim between the Svenesis scripts. The eight grey hint lines needed a second fix on top: a per-widget stylesheet naming `color` outranks the global rule, so they now spell out both states. The other seven scripts in the suite have the same gap — 86 further `setEnabled` calls — and are untouched.
+- **The unused `QSizePolicy` import is gone.** It was the only thing pyflakes still had to say about this file.
+
+## What was new in 1.7.15
 
 The composite is given the astrometric solution the colour calibration asks for — which turned out **not** to be what was wrong with the colour fit.
 

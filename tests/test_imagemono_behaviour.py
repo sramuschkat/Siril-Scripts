@@ -1113,6 +1113,122 @@ check(_W(use_spcc=True)._photometry_planned("HOO") is True,
 check(_W(use_spcc=False)._photometry_planned("RGB") is True,
       "and SPCC off on broadband still falls through to PCC")
 
+print("\n27) 1.7.16 — a drop is blamed on what actually caused it")
+# A run with the quality filters on said "Frames without enough detectable
+# stars (clouds, haze) cannot be aligned" about 15 frames, four seconds
+# after the same log reported "74 images successfully platesolved out of
+# 74 included".  Nothing had failed to align; the filters the user asked
+# for had removed them.  Both causes still land in the same count, so the
+# only honest fix is to say which one it was.
+seg = src[src.index("Registration itself can drop frames"):]
+seg = seg[:seg.index("_effective_frame_count")]
+check("self._qf_decision.get(" in seg,
+      "the message asks whether the quality filters fired")
+check("removed by " in seg and "the quality filters ({flags})" in seg,
+      "and names them as the cause when they did")
+check("A frame that could not be " in seg
+      and "aligned would count here too" in seg,
+      "without claiming the other cause is impossible")
+check("clouds, haze" in seg,
+      "the weather wording survives for the case it was written for")
+check(seg.index("if flags:") < seg.index("clouds, haze"),
+      "and it is the fallback, not the default")
+check("self._quality_filter_args(n_linked)" in seg,
+      "the flags shown are the ones registration was actually given")
+# ...and the short-channel warning used to hang off the same condition:
+# it sat inside the drop branch, so a filter that STARTED below the floor
+# and lost nothing was never warned.
+short = seg[seg.index("MIN_STACK_FRAMES"):]
+check(seg.index("if n_reg and n_reg < MIN_STACK_FRAMES:")
+      > seg.index("cannot be aligned"),
+      "the short-channel warning stands on its own, after the drop branch")
+check("Only {n_reg} frame(s) for {filt}" in short,
+      'and no longer says "left" — nothing need have been lost')
+check(seg.count("                if n_reg") == 2,
+      "both checks are top-level: neither is nested inside the other")
+
+print("\n28) 1.7.16 — the SPCC panel shows the half the palette uses")
+# A SHO run displayed three filled-in RGB filter boxes and calibrated by
+# wavelength anyway; that the names were unused was said only in the Log,
+# after the start.  Asserted here: the panel reads the SAME table the
+# command line is built from, so the two cannot drift.
+nsm: dict = {}
+exec(src[src.index("HA_NM = "):src.index("# UI label")], nsm)
+exec(src[src.index("_NB_PALETTES = {"):src.index("_ROLE_WORDS = {")], nsm)
+_tg, _pal = nsm["_nb_line_targets"], nsm["_NB_PALETTES"]
+check(_tg("SHO") == {"ha": "G", "oiii": "B", "sii": "R"},
+      "SHO puts SII in red, Ha in green, OIII in blue", str(_tg("SHO")))
+check(_tg("HOO")["oiii"] == "G, B" and _tg("HOO")["sii"] == "",
+      "HOO sends ONE OIII filter to two channels and uses no SII",
+      str(_tg("HOO")))
+check(all(sorted("".join(_tg(p).values()).replace(", ", ""))
+          == sorted("RGB") for p in _pal),
+      f"every channel of all {len(_pal)} narrowband palettes is accounted "
+      "for exactly once")
+check(not any(_tg("LRGB").values()) and not any(_tg("Auto").values()),
+      "a broadband palette claims no line at all")
+
+# Bandwidth belongs to the FILTER: the same OIII passband must reach both
+# channels HOO maps it to.  Checked on the real command line, not on the
+# source that builds it.
+nsa = dict(nsm, DEFAULT_NB_BANDWIDTH=4.5,
+           LogColor=type("L", (), {"SALMON": 0, "GREEN": 1, "BLUE": 2}))
+exec(textwrap.dedent(_cls_method("StackWorker", "_spcc_args")), nsa)
+
+
+class _SP:
+    _opts = {"spcc_sensor": "Sony IMX411/455/461/533/571",
+             "nb_bandwidths": {"ha": 4.5, "oiii": 6.5, "sii": 3.0}}
+    def _check_spcc_name(self, *a):
+        pass
+    def _emit(self, *a, **k):
+        pass
+    _spcc_args = nsa["_spcc_args"]
+
+
+_line = " ".join(_SP()._spcc_args("HOO"))
+check("-gbw=6.5" in _line and "-bbw=6.5" in _line,
+      "HOO gives green and blue the one OIII bandwidth", _line)
+check("-rbw=4.5" in _line, "...and red the Ha one, independently")
+_sho = " ".join(_SP()._spcc_args("SHO"))
+check("-rbw=3" in _sho and "-gbw=4.5" in _sho and "-bbw=6.5" in _sho,
+      "SHO carries three different widths through to three channels",
+      _sho)
+check(src.count('"nb_bandwidth"') == 1
+      and '_legacy = float(st.value("nb_bandwidth"' in src,
+      "the old single-value key survives in exactly one place: the "
+      "migration that seeds the three new ones")
+
+rf = _cls_method("ImageMonoTrainWindow", "_refresh_spcc_mode")
+check("_NB_PALETTES" in rf and "spcc and (auto or not nb)" in rf,
+      "the two halves are enabled by palette, not by one flat switch")
+check("_nb_line_targets(palette)" in rf and "targets[_role]" in rf,
+      "and a line the palette does not use greys out on its own")
+check('palette == "Auto"' in rf,
+      "Auto leaves both live — which applies is not knowable yet")
+check("_refresh_spcc_mode()" in _cls_method("ImageMonoTrainWindow",
+                                            "_on_palette_changed"),
+      "a palette change refreshes the panel")
+
+# ...and the greying itself was invisible.  A stylesheet rule naming
+# `color` applies in every state unless a :disabled rule overrides it, and
+# the shared theme has one only for QPushButton -- so every setEnabled
+# (False) in this file changed nothing on screen.
+nsd: dict = {}
+exec(src[src.index("DISABLED_STYLESHEET = "):src.index("# A hint line")], nsd)
+dis = nsd["DISABLED_STYLESHEET"]
+for _w in ("QLabel", "QCheckBox", "QLineEdit", "QComboBox", "QSpinBox"):
+    check(f"{_w}:disabled" in dis, f"{_w} has a disabled state to render")
+check("setStyleSheet(DARK_STYLESHEET + DISABLED_STYLESHEET)" in src,
+      "and the window applies the extension")
+theme = src[src.index("DARK_STYLESHEET = "):
+            src.index("QScrollBar::sub-line:vertical{height:0}")]
+check(":disabled" not in theme.replace("QPushButton:disabled", ""),
+      "the shared theme is extended, not edited — it is copied verbatim "
+      "between the Svenesis scripts")
+check('setStyleSheet("color:#888888' not in src,
+      "and no hint label keeps a bare colour that would outrank :disabled")
+
 print()
 if fails:
     print(f"{len(fails)} FAILURE(S)")
