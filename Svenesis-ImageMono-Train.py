@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.7.12
+Script Version: 1.7.15
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.7.12
+# Script Version: 1.7.15
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +97,38 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.7.15 - A logic audit, what a real run said, and the solution the
+        colour calibration asked for
+      The full entries, with the measurements behind them, are
+      section 17 of both manuals in Instructions/.
+      - The composite is re-solved with distortions before the
+        photometric calibration: `platesolve -force -noflip -order=3`.
+        Siril asks for it twice per finish, and the registered frames
+        carry a linear WCS by construction (`seqapplyreg` undistorts).
+        It does NOT fix the weak colour fit: sigma(R/G) 2.2497 ->
+        2.2481.  Still open -- sigma(B/G) is 0.17 on the same stars,
+        apertures and WCS, so the cause is specific to that ratio.
+      - `-framing=min` was accepted and never applied on the
+        astrometric path: 3008x3008 subs, master 3060x3128 -- the
+        union, not the intersection.  The exported frames are now
+        measured directly, and a channel without its crop says so in
+        the log and in the report, with the two causes told apart.
+      - An inherited astrometric solution is no longer logged as new
+        work: the header is asked before `platesolve` is credited.
+      - Calibration panel rebuilt.  Darks and flats are separate
+        switches; what is switched off stays listed and turns grey;
+        the Dark-Flats column shows the job, not the IMAGETYP keyword;
+        the master switch is gone; session and library have a box
+        each; the Lights table gained a NIGHTS column.  A switch now
+        changes the label and not the record, and "100 biass" is
+        "100 bias".
+      - Logic audit, eleven findings: the quality-filter value resets
+        in both directions, the presets name the mode their numbers
+        are in, the observing night is the frame's own (noon-to-noon
+        from DATE-OBS), the flat map uses the size most of the night
+        agrees on, GESDT falls back to the band below it, a channel
+        dropped by the alignment says why, the grid check reads the
+        files rather than a flag, and four smaller guards.
 1.7.12 - Two silent failures the first 1.7.11 run exposed
       - FITS READS SURVIVE ASTROPY'S MEMMAP REFUSAL.  astropy declines
         to memory-map an image whose header carries BZERO/BSCALE/BLANK
@@ -127,1293 +159,10 @@ CHANGELOG:
         level reports it once, with the recovery spelled out: restart
         Siril, run again, finished masters are picked up by 'Reuse
         existing masters'.
-1.7.11 - The flat-comparison statistics audited, and three smaller fixes
-      - THE NOISE FLOOR OF THE FLAT-ON-FLAT CHECK IS NOW SCALED TO THE
-        COMPARISON IT JUDGES.  The floor comes from splitting the
-        reference night in half, and each half averages FEWER frames
-        than the maps in the real night-vs-night comparison -- so the
-        raw half spread overstated the true comparison noise by a
-        measured factor of 1.415 (sqrt 2, 300 simulated runs) at equal
-        frame counts.  "No shape difference detectable" then covered
-        real flat differences as large as the noise itself, and the old
-        docstring called that "noise beyond doubt" -- the opposite
-        direction of certainty.  `_floor_rescale` now maps the half
-        spread onto the actual frame counts (per-map variance ~ 1/n,
-        ratio variances add); when both halves already hit the
-        FLAT_COMPARE_MAX_FRAMES cap the factor is 1, because then the
-        halves carry the same noise as the full maps.
-      - `_rebin_mean` honours its "long side at most target" contract.
-        Floor division left a 650 px frame at 325 px and anything
-        between target and 2*target entirely unbinned, so small sensors
-        were compared on a finer, noisier grid against thresholds that
-        assume the ~250 px scale.  The factor is now the ceiling.
-      - Flats of a different image size are no longer dropped silently
-        from the night comparison.  `_flat_shape` reports used/skipped
-        counts and the check names them -- a mixed-binning night once
-        compared as if it were clean, on a map quietly built from a
-        fraction of its frames.
-      - No more false "your values were reset" line on startup.  With
-        k-sigma stored, restoring the settings applies the mode first
-        (it sets the spin ranges); the mode handler then announced that
-        the constructor defaults it replaced "were percentages", one
-        moment before the user's real sigmas were restored.  The
-        message is now silenced while settings or a preset are being
-        applied -- a live mode switch still reports it.
-      - `_align_pairs_warn` uses the module's own `_median` instead of
-        hand-rolling a second one.
-1.7.10 - The HaRGB blend made linear, and two guards that did not guard
-      - HaRGB screen-blended Ha into Red: `1-(1-R)*(1-k*Ha)`, which
-        expands to `R + k*Ha - k*R*Ha`.  That cross term is quadratic in
-        flux.  On faint nebulosity it is invisible -- which is why it
-        stood, and the manuals even measured it -- but at R=0.8 with
-        k*Ha=0.4 it returns 0.88 against 1.2, a 27% compression of exactly
-        the stars and nebula cores that get stretched afterwards.
-        Non-linear, in other words: the one property this file promises
-        about every composite it writes, and the same objection that took
-        `rmgreen` out of the finish in 1.7.4
-      - It is now `(R + k*Ha)/(1+k)`, a weighted sum.  Linear, bounded in
-        [0,1] without a rescale, and it never discards R: the slider runs
-        from plain R at 0% to an even mix at 100%, where the screen
-        blend's 100% had a strength that depended on the data.  The log
-        prints the two weights it used
-      - And the help tab that lists the output files claimed all of them
-        were "calibrated and linear", `_HaRGB` included, while a second
-        tab correctly said HaRGB is excluded from photometric calibration.
-        It was wrong on both counts for that one file; it now names the
-        exception where the files are listed
-      - The MIN_STACK_FRAMES floor is applied to the COMBINATION of the
-        quality filters, not to each one alone.  Siril keeps the frames
-        passing every filter given, so the survivors are an intersection:
-        four 60% cuts on 20 frames each cleared a per-filter check while
-        projecting to 2 survivors against a floor of 4.  The running
-        estimate multiplies the shares, which assumes independence the
-        metrics do not have -- so it errs towards keeping frames, the
-        right direction for a floor whose purpose is to leave rejection
-        something to work with.  Ordinary settings are untouched: three
-        90% cuts on 30 frames still all apply
-      - k-sigma had no floor at all, and cannot have one -- how many
-        frames lie beyond k sigma is a property of the data.  Rather than
-        invent a number, that mode now caps how many cuts are combined
-        (FILTER_MAX_KSIGMA = 2)
-      - A mixed-exposure channel's integration time is marked as the
-        estimate it is.  Scaling by the frame ratio assumes every frame is
-        the same length; nothing records WHICH frames were dropped, so the
-        average length stands in, and on 20x300s + 10x120s that can be
-        eight minutes out.  The figure now carries a tilde and the
-        footnote says why
-      - NOT changed, after checking: `_seq_quality` drops zeros from its
-        quality medians with a truthiness test, which looks like a
-        statistical bug and is not.  sirilpy documents roundness as "0
-        when uninit, ]0, 1] when set", an FWHM of zero does not exist, and
-        a frame with no stars cannot be registered so it never reaches
-        `included`.  The obvious repair -- `is not None` -- would pull
-        uninitialised frames into the median and make it worse.  The
-        reasoning is now in the code so the next reader stops sooner
-
-1.7.9 - The log readers stop depending on a diagnosis
-      - 1.7.8 repaired one way the star-pair counts go missing: a refused
-        transfer laundered into an empty string.  The very next run failed
-        the SAME reader for the OTHER reason -- the log came back fine,
-        the anchor simply was not in it.
-      - Siril's log is not the clean append-only stream both snapshot
-        paths assume.  stderr from other processes lands in it too, and
-        on that run a relaunched multiprocessing resource tracker wrote a
-        PermissionError traceback into the middle of the step being
-        measured.  Rather than keep diagnosing the buffer, `_log_delta`
-        now takes a `scope`: a line the STEP ITSELF logs before anything
-        worth reading, tried last and depending on neither snapshot.
-        Alignment anchors on the directory `register` announces; colour
-        calibration on `Running command: <cmd>`, taken from the command
-        list rather than split out of a display label that is free to be
-        reworded
-      - Replayed against the real log, tracebacks included, both recover
-        1376 and 1392 star pairs with OIII as the reference -- the numbers
-        that sat two lines above the failure message.  The case where
-        Siril hands back nothing at all still reports nothing, which is
-        the one honest answer left
-      - The warn-once flag is now per diagnostic instead of per run.  One
-        shared boolean meant the first reader to fail silenced the second
-        one's message too: on that run it swallowed an SPCC fit with
-        sigma 5.5 and 6.7 against a limit of 1.0
-      - The calibration-rejection change from 1.7.7 is confirmed on real
-        data.  It needed `output/calib` cleared first -- the runs before
-        it reused every cached master and never exercised it.  With the
-        cache cleared Siril echoes all four bands: linear fit 5/4 for the
-        442-frame darkflat set, sigma 3/3 for the five- and ten-frame
-        per-night flats, winsorized 3/3 for the twenty-frame pooled one
-
-CHANGELOG:
-1.7.8 - A weighting taken back out, and the log reader fixed at its root
-      - It never ran.  `get_image_stats` returns None for a freshly
-        loaded image when Siril has no statistics cached for it, so
-        `_master_snr` read a noise of 0, refused it, and every run fell
-        back to the equal-weight average.  The fallback did its job --
-        the log said so on the first real run -- but the feature was dead
-      - Repairing the measurement would not have helped, because the
-        formula is wrong for these inputs.  w ~ s/n**2 is NOT invariant
-        under a per-channel rescale (scale a channel by `a` and its
-        weight is divided by `a`), and by the time this runs every master
-        has been through `-output_norm`, which rescales each one affinely
-        by its OWN extremes, and possibly `linear_match` on top.  Those
-        factors are arbitrary, so the weights follow them, not the sky
-      - Measured on one M 16 run rather than argued: a k-sigma-clipped
-        background sigma computed here disagreed with Siril's own
-        `bgnoise` by 1.1x to 4.0x across the three masters -- worst
-        exactly where nebulosity fills the frame -- and squaring that
-        error put Ha at 3.7% of an SHO luminance.  Ha is the strongest
-        line in M 16
-      - So the average is back, and this time it is DESCRIBED rather than
-        implied to be optimal.  Tooltip, log line, report and both
-        manuals now say "equal-weight average", say that a much fainter
-        channel pulls the result down, and say to hold it against the
-        strongest channel before building on it
-      - A scale-invariant rule (w ~ s/n) fed by Siril's own `bgnoise`
-        would be defensible.  It is not built, and the docstring records
-        what it would take, so the next attempt starts from the reason
-        rather than from the idea
-      - And the log reader was fixed at its root.  `get_siril_log()`
-        returns None WITHOUT raising on two paths inside sirilpy -- a
-        NONE status, and a response too short to carry the shared-memory
-        handle -- both meaning "Siril declined the transfer".  Three
-        call sites turned that into "" with an `or ""`, which reads
-        downstream as a log fetched successfully that happens to be
-        empty.  `_log_delta` then anchored on an empty string, found
-        nothing, and the run announced that the log had scrolled past its
-        buffer.  It had not: on the M 16 run the two star-pair counts
-        (1393 and 1377) sat two lines above that message in Siril's own
-        console.  Nothing had been read at all
-      - Falsy now means unreadable, everywhere, and the snapshot retries
-        once -- the refusal is momentary, and the previous call in the
-        same step had succeeded.  The warning names WHICH of the three
-        things went wrong (transfer refused / earlier snapshot missing /
-        buffer really did scroll) instead of printing one guess for all
-        of them, which is how a wrong explanation survived two releases
-
-      - The calibration-rejection change from 1.7.7 is untouched.  Note
-        that cached masters are reused, so an existing `output/calib` has
-        to be cleared before the new bands take effect -- the first run
-        after 1.7.7 reused every master and never exercised them
-
-CHANGELOG:
-1.7.7 - Two places where the arithmetic did not match the reasoning
-      - Calibration masters were stacked with a bare `rej 3 3`.  A bare
-        `rej` is Siril's DEFAULT, and the default is winsorized -- the
-        band `_rejection_args` reserves for 11-30 frames.  It was being
-        applied to both ends of the range: a per-night master flat of
-        five frames, where winsorizing estimates sigma from five points
-        and replaces outliers with their own neighbours, and a library
-        dark of four hundred, where a linear fit models the trend across
-        the stack that winsorizing cannot see
-      - Calibration masters now go through the SAME frame-count bands as
-        the light stacks, GESDT retry included.  On the M 16 run that
-        moves the five- and ten-frame per-night flats to sigma 3/3 and
-        the 442-frame darkflat to linear fit 5/4; the twenty-frame pooled
-        flat keeps winsorized, which it should have had all along
-      - Rejection stays ON for calibration masters whatever the light
-        stacks were told.  The switch in front of the user is about
-        integrating his frames; one cosmic left in a master flat reaches
-        every light that master divides
-      - The synthetic luminance averaged its channels with equal weight
-        while claiming "the combined signal-to-noise".  An unweighted
-        mean is SNR-optimal only when the inputs carry comparable signal,
-        and in SHO they do not.  With signals 20 / 2 / 1 at equal noise
-        the average gives SNR 13.3 where Ha alone gives 20 -- the
-        luminance came out WORSE than the best channel in it.  Narrowband
-        normalisation made it worse still, because `linear_match` scales
-        the weak channel's noise up with its signal first
-      - It now uses the matched-filter weights, w ~ s/n**2, measured on
-        each master through Siril's own statistics: `bgnoise` is the
-        noise, and the structure is what is left of the total standard
-        deviation after removing the noise in quadrature.  Same example:
-        87% / 9% / 4% and SNR 20.1.  Weights are named in the log and in
-        the report, and a channel carrying over 80% is called out
-      - Equal weights remain as the fallback when the statistics cannot
-        be read, and the run says so.  `get_image_stats` joined
-        OPTIONAL_API so a sirilpy without it is named at startup
-
-1.7.6 - The flat-on-flat check was measuring shot noise, not the optics
-      - It divided ONE flat of one night by ONE flat of another, per
-        pixel, and read the standard deviation.  Two subs of the SAME
-        night -- where the shape difference is zero by construction --
-        come out at 1.78% on a real 24 000 ADU flat.  The limit it was
-        judged against is 0.30%.  So the check reported "a real
-        mismatch", six times over, on every dataset it has ever seen,
-        and advised switching on an option to cure a difference that was
-        not there.  With the option already on, it printed the same
-        number as the justification for the split
-      - The thresholds come from Carlo Mollicone's Flat On Flat Analyzer,
-        and they were adopted without the two things that tool does
-        before it measures: it compares master flats, not subs, and it
-        block-averages the map to ~250 px on the long side first.  On a
-        3008 px frame that is 12x12 binning.  Together the two steps take
-        roughly a factor of 27 out of the noise
-      - Both are now done here.  Every frame of a night is averaged to
-        stand in for the master that does not exist yet at that point,
-        and `_rebin_mean` reproduces the reference tool's binning
-      - The check also measures its own noise floor, by splitting the
-        reference night in half and comparing it with itself: two halves
-        of one night differ by nothing but noise, so whatever that
-        returns is the error bar.  Below it, the run says no difference
-        is detectable instead of naming a number that means nothing.
-        Each half averages half as many frames as the night-to-night
-        comparison, which makes the floor conservative on purpose
-      - On the M 16 run this moves all three filters from "a real
-        mismatch" at 1.78% to agreement at 0.06-0.08%, against a floor of
-        0.06%.  The per-night masters of that run agree to 0.027%
-      - Per-night flat calibration is unaffected and still recommended --
-        it guards against an optical train that really did move.  What
-        changed is that its report no longer invents evidence for itself
-
-1.7.5 - Two claims corrected against Siril's source
-      - "Output normalization" was described as normalising "the final
-        integrated frame's background level".  It does not.  On 32-bit
-        output Siril applies
-        `fit->fdata[i] = (fit->fdata[i] - mini) / (maxi - mini)`
-        (src/stacking/median_and_mean.c) with mini/maxi taken from THAT
-        master's own darkest and brightest pixel: an affine transform,
-        per channel, anchored on single extreme pixels
-      - Which makes the run note wrong too.  It told the user that
-        switching off 'Normalize narrowband channels' "leaves the
-        physical line ratio intact for SPCC to calibrate" -- but the
-        three masters had already left the stack on three unrelated
-        scales.  The note now names both options, and only when output
-        normalisation is actually on.  The default is unchanged: for a
-        picture it is harmless, and SPCC absorbs a per-channel factor.
-        What changed is that the user can now find that out
-      - The report says it too, where it used to print the bare phrase
-        "output-normalized"
-      - The SECOND interpolation is documented.  `seqapplyreg` runs twice
-        on the way to a channel -- over the sub-frames, then over the
-        finished masters -- and each resampling softens the image.  The
-        single-resample alternative would need one shared reference
-        carrying enough stars for the sparsest narrowband channel, which
-        is the frame least likely to have them, and would give up the
-        per-filter reference.  A deliberate trade, now written down
-        instead of only lived with
-
-1.7.4 - SCNR removed from the finish; the combination checked at source
-      - `rmgreen` ran on EVERY composite, unconditionally.  Siril computes
-        it as `green = min(green, 0.5 * (red + blue))`
-        (src/filters/scnr.c).  On a broadband image that is its proper
-        use -- nothing in the sky is genuinely green, so a cast is colour
-        noise.  On an ASSIGNMENT palette the green channel carries a real
-        emission line: in SHO that is Ha, and the expression cuts it back
-        to the mean of SII and OIII wherever it dominates.  Measured from
-        one M 16 run's own numbers (linear_match gave OIII 1.45x and SII
-        0.94x of Ha, SPCC then applied K = 0.952 / 1.000 / 0.722), the
-        clip came to about 3% of Ha on average and far more in the bright
-        pillars
-      - It is also non-linear and per-pixel, so it contradicted the line
-        two steps below it: "Saved the ... still-LINEAR composite".  The
-        manual already refused `invert -> rmgreen -> invert` for the
-        magenta stars on exactly this ground; the same reasoning now
-        applies to plain SCNR.  todo.md carries it in BOTH branches --
-        for broadband as the ordinary cure it is, for narrowband with the
-        formula spelled out so the cost is visible before it runs
-      - The combination itself was read against both reference tools.
-        Cyril Richard's PalettePicker and Franklin Marek's Perfect Palette
-        Picker assemble the RGB exactly as this script does (`new` +
-        `set_image_pixeldata`), both require STRETCHED input -- "Inputs
-        must be non-linear (already stretched)" -- and therefore neither
-        colour-calibrates, extracts a background, or runs SCNR.  Working
-        linear is what buys SPCC, and the order stands: align ->
-        normalise -> combine -> plate-solve -> background -> calibrate.
-        Their closing `rgb / rgb.max()` stays unadopted, as in 1.7.0
-      - `_spcc_names_via_command` still tested the log with
-        `after.startswith(before)` -- the third place making the
-        assumption 1.7.2 corrected in two.  On a long session the SPCC
-        name check therefore reported "database not found" and let a
-        wrong filter name through, which is the one thing it exists to
-        catch.  It goes through `_log_delta` now
-
-1.7.3 - `merge` symlinks its sources, and we deleted them
-      - With "Delete _work/ when finished" ticked, EVERY filter failed at
-        registration: "FITS error: failed to find or open
-        merged_HA_00001.fit".  `_calibrate_in_parts` freed the calibrated
-        parts the moment the merge returned, on the assumption -- written
-        into `_drop_generation`'s own docstring -- that every step writes
-        a full copy of every frame.  Siril's `merge` does not: it wrote
-        30 frames in 4 ms, which no copy of 30 x 36 MB can, because it
-        SYMLINKS its sources.  The merged sequence was left pointing at
-        files that no longer existed
-      - The parts are recorded in `_part_cleanup` and freed by
-        `_drop_parts` after registration has written frames of its own.
-        Peak disk is unchanged -- still about two generations -- because
-        the merged sequence occupies no space of its own
-      - Latent for as long as the per-part path existed: it needed a
-        filter with MIXED EXPOSURES and the cleanup option on.  1.6.0
-        made every multi-night run take that path, which turned a corner
-        case into every run for anyone who ticks that box
-      - The regression test drives the real `_stack_all_filters` with
-        cleanup on and asserts the ORDER: nothing the merged sequence
-        points at may be freed before registration, and all of it must be
-        freed after.  Verified by putting the old deletion back and
-        watching four checks fail
-
-1.7.2 - Both log readers had quietly stopped working
-      - The alignment star-pair counts have never appeared on a real
-        three-filter run, and 1.7.1's colour-fit numbers did not either.
-        Both read Siril's log as the DELTA between a snapshot taken
-        before a step and one after, and both tested that delta with
-        `after.startswith(before)` -- which assumes the log only ever
-        grows.  It does not: the buffer is bounded, the oldest lines drop
-        off the front, and after that no earlier snapshot is a prefix
-        again.  `get_siril_log()` was working the whole time; the test on
-        its result was wrong
-      - `_log_delta` anchors on the TAIL of the snapshot (the last
-        LOG_ANCHOR_CHARS = 400 characters) instead of its head, which
-        survives a trimmed front.  Proved with a buffer whose first half
-        is dropped between the two snapshots
-      - And the silence was the reason it went unnoticed for so long: a
-        reader that gave up without a word is indistinguishable from one
-        that found nothing to report.  `_log_delta_or_warn` says it once
-        per run and names the consequence -- nothing about the image
-        changes, these are diagnostics
-
-1.7.1 - The colour solution's quality is no longer thrown away
-      - Siril prints how well SPCC fitted -- the SIGMA of each ratio, how
-        far the measured star colours scatter around the ones predicted
-        from catalogue spectra -- and the script dropped it.  "Colour
-        calibration done" read the same for a solution worth trusting and
-        one that was noise.  `output.md` now carries the sigmas, the star
-        counts and the applied white-balance factors, and a sigma above
-        SPCC_SIGMA_LIMIT (1.0) is flagged where it happens and again in
-        the report
-      - Siril's own "imprecise solution" warning does NOT separate those
-        cases: on two runs of the same 94 frames it fired on both, while
-        the sigmas differed by a factor of forty (6.16 / 5.39 against
-        0.149 / 0.239).  The sigma separates them
-      - With the caveat the report states itself: two channels on
-        neighbouring wavelengths -- Ha at 656.3 nm and SII at 671.6 nm --
-        give a ratio near 1 for every star, so that fit has almost no
-        lever arm and its sigma is small because the measurement is
-        INSENSITIVE, not because the solution is good.  Sigmas compare
-        runs of one palette, they do not rank palettes
-      - `_parse_spcc_fit` follows `_parse_align_pairs`: read-only, strips
-        Siril's timestamps, and yields {} on anything it does not
-        recognise, because a number nobody measured is worse than none.
-        Tested against both real logs verbatim
-      - The log snapshotting the two readers share became
-        `_log_snapshot()` instead of being inlined twice
-
-1.7.0 - The palette table, checked against its source
-      - Five more narrowband assignments: SOH, HHO, OOS, SHH, SOO.  The
-        table was read line by line against Franklin Marek's Perfect
-        Palette Picker in Seti Astro Suite Pro -- the source Cyril
-        Richard's PalettePicker adapted -- and SOH turned out to be the
-        one permutation of three different lines OUR table was missing,
-        with nothing behind its absence.  All six permutations and eight
-        two-line variants are offered now
-      - Adding them was five lines: the dropdown, `_palette_roles`, the
-        SPCC wavelengths, the channel messages and the help tab's own
-        table all derive from `_NB_PALETTES`.  That was the point of
-        keeping one table
-      - The Realistic1 / Realistic2 coefficients were verified against
-        the same source and match digit for digit -- a table we had only
-        second-hand.  Checked for a hidden divisor too (a summed channel
-        divided by the number of contributing images would be a silent
-        scale difference): there is none, only weighted sums
-      - The suite now derives its expectations from the table: every
-        palette must be NAMED after the channels it fills, all six
-        permutations must exist, and both manuals must list every
-        palette the code offers.  Proved by removing SOH and watching
-        two suites fail
-      - §9's account of the dynamic palettes is confirmed from the other
-        side.  Perfect Palette Picker's "Linear Input Data" checkbox does
-        not teach its `x ** (1.0 - x)` gate to read linear data: it
-        stretches first, `stretch_mono_image(img, target_median=0.25)`,
-        and builds the palette from the stretched copy.  0.25 is where
-        the gate has slope (0.25^0.75 = 0.35); at a linear 0.01 it
-        returns 0.0105, which is t ≈ x and the same as no gate at all.
-        Foraxx and Dynamic Inverse stay out, and the manuals now say why
-        with the reference implementation's own numbers
-      - Not adopted: the reference's closing `rgb / rgb.max()`.  It
-        normalises a display image to [0,1]; our output is linear 32-bit
-        and SPCC measures those levels straight after
-
-1.6.2 - Table sizing, and what the library gave
-      - The calibration summary says WHERE the frames came from --
-        "Next to the lights: 60 flats" / "From the library: 442 darks at
-        3s".  Choosing a library folder used to produce a path and no
-        visible consequence: the counts rose somewhere inside one line,
-        and a library that contributed nothing looked exactly like one
-        that contributed everything.  A chosen folder that gave the run
-        nothing now says so, in warning colour
-      - The table's height was computed from `sizeHintForRow`, which is
-        the CONTENT's ideal and counts neither the grid line nor the cell
-        padding: three filters came out a row and a half short, behind a
-        scroll bar over a table with nothing to scroll.  It sums the
-        rows' own section sizes and the frame now
-      - Hiding the Details column hid the STRETCHING section with it, so
-        its share of the width belonged to nobody and the table ended in
-        a blank panel.  The stretch moves to whichever column is last
-
-1.6.1 - The table says what will happen, not what was found
-      - The Discovered Filters table gained a CALIBRATION column in place
-        of the Flats one.  Counting flats answered a question the user
-        was not asking: on a rig with an automatic panel every filter
-        read the same "20 x 3s", while the fact that mattered -- these
-        300 s lights get NO DARK AT ALL -- appeared nowhere in the
-        window and once, mid-run, in the log.  The column now names the
-        masters that will really reach those lights ("Dark + Flat x3",
-        "Flat", "none") in the order Lc = (L - D) / (F - O) applies
-        them, and a warning-coloured ⚠ marks a filter with no dark
-      - `_dark_preview` mirrors the run's own rule -- `_signature_matches`
-        first, then the exposure alone inside DARK_EXPOSURE_TOLERANCE --
-        so the column cannot promise what the run will refuse.  Its
-        tooltip names the exposures the library DOES hold: "442 dark(s)
-        at 3s — none matches 300s lights"
-      - The calibration summary moved BELOW the switches it describes.
-        It sat above them, so flipping a box rewrote a sentence the eye
-        had already left behind
-      - and it shrank from four lines to one.  Per-filter prose ("→ 3s
-        dark" once per filter, "3 master(s)" once per filter) duplicated
-        the table row by row; it lives in the log now, where length is
-        free.  The label carries library-level facts only, plus the
-        no-dark gap in warning colour
-      - The table sizes itself to its rows.  A fixed 130 px minimum left
-        a hand's width of empty grid under a three-filter run
-      - The Details column (exposure / gain / setpoint) hides while every
-        filter shares one value and reappears the moment they differ.
-        Three identical cells spent width on nothing
-      - "Analyze Folder" became "Re-scan Folder": picking a folder has
-        analysed it for some time, so two stacked buttons looked like two
-        steps of a sequence, one of which had already run
-
-1.6.0 - Flat calibration that follows the panel, and the night
-      - "Match flats to the same night" now does what its label promises.
-        It used to drop flats from nights that had no lights -- which on
-        the data it was written for changed nothing at all, because every
-        night held both.  A run whose flats disagreed by 1.66% between
-        two nights was told to switch it on, and switching it on was a
-        no-op.  Now every night that has flats AND lights of a filter
-        gets its OWN master flat, and only that night's lights are
-        divided by it; the calibrated nights are merged again before
-        registration, so the filter still ends as one master
-      - The split that already existed for exposures was generalised
-        rather than duplicated.  Two masters bind part of the frames
-        instead of all of them -- the dark by exposure, the flat by
-        night -- they are independent, so the parts are their cross
-        product and a dimension with one value drops out of it.
-        `_exposure_split` became `_calib_split` and returns the night
-        alongside the exposure; `_calibrate_args` takes a night and
-        resolves the flat through it
-      - A light night whose flats are missing falls back to the pooled
-        master and is NAMED -- in the log, in the calibration panel and
-        in output.md.  A silent fallback would make a run look per-night
-        when half of it was not
-      - The pooled master is built even when every night has its own.
-        It is the fallback on two paths that are reached where stacking
-        one is no longer safe: that missing night, and a per-part
-        calibration that fails and drops back to a single pass.  The
-        first draft skipped it to save a stack, which would have
-        calibrated the fallback path with no flat at all
-      - The flat-agreement check no longer goes silent when the option
-        is on: the measurement is what shows the split is earning its
-        extra stack.  It stops being a warning instead.  And when the
-        option is on but cannot help -- only one imaged night has flats
-        -- it says that, rather than advising the user to switch on what
-        is already switched on
-      - Splitting trades flat NOISE for flat ACCURACY -- a pooled master
-        averages every night's frames, a per-night one only that night's
-        -- so a night under FLAT_THIN_SET (10) flats is named.  Not a
-        refusal: a thin flat describing the right optical train still
-        beats a thick one describing the wrong one.  The user can only
-        weigh that if the thin sets are said out loud
-      - The report names WHICH dimension split a channel ("exposures",
-        "nights", or both) and lists the master flat each night got.
-        `_split_filters` became a dict for it, so the sentence is
-        derived from what happened rather than assumed
-
-1.5.1 - Flat calibration that follows the panel
-      - `calibrate` was handed -flat= / -dark= / -bias= UNQUOTED, so a
-        target folder containing a space broke every calibrated run:
-        "Eagle Nebula" split the argument and Siril reported
-        "/Users/.../Eagle.[any_allowed_extension] not found".  The rule
-        learned for SPCC applies here too -- the quotes go around the
-        WHOLE argument, flag included.  The call-site quoting check could
-        not see these: they are built in _calibrate_args and splatted
-        into _cmd, so a second check now inspects the argument strings
-        themselves, and it was verified to fail when the bug is put back
-      - `load_seq` was asked for the bare sequence stem first and the
-        underscored name second, so every filter logged a failed command
-        and a swallowed CommandError before the retry succeeded -- three
-        alarming lines in a run that was going perfectly.  Siril writes
-        the file WITH the trailing underscore (`r_pp_lights_`) even
-        though `stack` takes the stem, so that form is tried first now.
-        The bare name stays as the fallback
-      - An em-dash in the Flats column meant three different things: no
-        flats at all, none for THIS filter, and "calibration is switched
-        off".  A user whose 60 flats were discovered and correctly grouped
-        read the first meaning and concluded the discovery was broken.
-        The column now answers what was FOUND -- a discovery fact -- and
-        shows the switch as a suffix: "20 x 3s (off)" instead of "—",
-        with a tooltip naming the checkbox that would use them.  The
-        calibration panel counts them too rather than saying only
-        "Calibration is switched off"
-      - The offset for a filter's flats must agree with them in CAMERA,
-        GAIN, BINNING, SIZE and TEMPERATURE, not only in exposure.  A
-        panel that sets a different gain per filter is exactly the case
-        this misses: 3 s at G0 and 3 s at G125 are the same exposure and
-        a different pedestal, and matching on exposure alone would have
-        subtracted the wrong one.  The same judge the dark matching uses
-        (`_signature_matches`, with the exposure overridden so its own
-        tolerance is not weighed twice), and a set that matches the
-        exposure but not the camera state is named in the log rather than
-        silently used.  The panel's preview applies the identical rule --
-        a preview that promised a match the run then refuses would be
-        worse than no preview
-      - The Discovered Filters table gained a Flats column: how many
-        flats that filter will use and at what exposure, with the nights
-        they come from and the offset they will be corrected with in the
-        tooltip.  It shows the number that will really be STACKED, so it
-        follows "Match flats to the same night" -- flipping that switch
-        redraws the table rather than leaving it describing a run that is
-        no longer going to happen.  A filter with no flats reads "—" in
-        warning colour, because that is the one thing in the table worth
-        spotting from across the room
-      - The regression suite lives in the repository now, under tests/.
-        It used to sit in a session scratch folder, which was wiped -- 48
-        checks gone with it.  Rebuilt as five suites (static sweeps, the
-        pure helpers executed on hostile input, the run itself against a
-        stubbed Siril, version and document consistency, the flat offset)
-        with a runner, `python3 tests/run_imagemono_tests.py`
-      - The frozen-CHANGELOG check had a hole: it skipped the comparison
-        when the working version EQUALED the released one -- which is
-        exactly the case where new bullets get appended to an entry that
-        already shipped.  It compares unconditionally now, and caught this
-        release doing it: the flat-offset work had been written into the
-        released 1.5.0 entry.  Moved here, 1.5.0 restored byte-identical
-      - The flats' offset is chosen PER FILTER.  An automatic flat panel
-        sets the exposure per filter to reach the same level -- a
-        narrowband flat runs seconds where Luminance runs a fraction of
-        one -- and the old code picked ONE offset for the whole run.
-        Worse, it gave up entirely the moment two filters differed
-        ("flats of mixed exposure: no single right answer") and fell back
-        to Siril's synthetic offset for every filter, including the ones
-        it could have served.  Now each filter gets, in order: a dark-flat
-        set for that filter, a DARK set within 20% of ITS flat exposure, the
-        master bias, the synthetic offset.  Masters are cached per source
-        group, so filters sharing an exposure stack it once
-      - The calibration panel previews that decision before the run: per
-        filter, how many flats at what exposure and what they will be
-        offset-corrected with.  A filter for which nothing in the library
-        matches is named, with the reason, instead of quietly getting the
-        synthetic offset -- which is what the old behaviour did for every
-        filter at once
-1.5.0 - Composition beyond SHO/HOO, and calibration that follows the exposure
-      - Audit fixes found by RUNNING the pure helpers on hostile input
-        rather than reading them.  _format_duration guarded ValueError and
-        TypeError but not OverflowError, which is what int(round(inf))
-        raises -- a corrupt EXPTIME reaching the report would have killed
-        the whole document, not just that row.  Every non-finite input now
-        gives an em-dash.  And _exp_tag promised a "Siril-safe" token
-        while formatting with "g", which switches to exponent notation
-        outside 1e-5..1e6: 1e+09 carries a plus that no dot-replacing
-        removes.  Real exposures never reach that, but a token generator
-        that is safe only for plausible input is not safe.  It writes the
-        digits out and falls back to "0s" on anything unusable
-      - Audit fixes on the measured statistics.  A registration value
-        Siril did not record (roundness, star count) was printed as 0.00
-        / 0 -- which reads as catastrophic trailing or an empty field,
-        when the truth is "not recorded".  Log and report now leave the
-        value out (em-dash in the table).  And in the flat consistency
-        check, an UNDATED flat could become the reference: "?" sorts
-        after every digit, so the plain sort crowned it "most recent
-        night" and the warning would have named "?" as a night.  Dated
-        nights rule; an undated set only ever compares
-      - Audit fix: the file contradicted itself about old sirilpy.  The
-        exception imports fell back to LOCALLY DEFINED stand-ins "for
-        older sirilpy" -- and a locally defined CommandError is never what
-        sirilpy raises, so all 28 `except CommandError, DataError,
-        SirilError` handlers would have missed and a Siril error would
-        have escaped as an unhandled exception, killing the run with a
-        traceback instead of falling back.  Twelve lines further down, the
-        new floor refuses to start below 1.0.0, where those exceptions
-        certainly exist.  The stand-ins are gone and the imports are
-        plain.  The floor itself now asks for check_module_version with
-        getattr: a module too old to have the checker is also too old for
-        the floor, and asking rather than calling keeps the answer a
-        sentence instead of a traceback
-      - A version floor and a capability report.  Every script in the
-        official repository declares a minimum sirilpy -- AutoBGE 0.7.41,
-        GraXpert-AI 0.8.6, RegistrationInspector 1.0.16, whose API this
-        script now uses -- and this one declared none.  It refuses to
-        start below 1.0.0 (what Siril 1.4 ships) with one sentence instead
-        of an AttributeError from inside a worker thread.  Above that
-        floor, five features need calls that older modules lack: measured
-        frame counts, composing in memory, the composite's WCS, reading
-        Siril's log, and finding its data directory.  All five are wrapped
-        already -- which was the problem, because the fallback was silent
-        and permanent.  They are now probed with hasattr (a capability, so
-        no version table has to be kept true), named once at startup, and
-        repeated in output.md with what each one changes.  The header
-        metadata also claimed "Python Module Version: 1.4.0", which is
-        Siril's version; there is no such sirilpy
-      - Audit fixes on the three additions above.  `_seq_quality` trusted
-        whatever sequence `load_seq` left current: if the load quietly
-        failed, `get_seq()` answered about an EARLIER one and its frame
-        count would have chosen the rejection band.  The count is now
-        cross-checked against the files on disk and a mismatch is "wrong
-        sequence, cannot tell"; both `<seq>` and `<seq>_` are tried,
-        because Siril writes the trailing underscore and scripts in the
-        wild load it both ways.  `_drop_generation` required a digit after
-        the underscore, so it deleted a sequence's frames and left
-        `<seq>_.seq` -- Siril's own sequence file -- behind.  And the
-        comment on _stacked_counts still described the old pairing after
-        its first element became the staged count
-      - The integrated frame count is MEASURED, not estimated.  Siril's
-        own registration data is read back through get_seq(): which frames
-        are still included, and their median FWHM, roundness and star
-        count, all of which now stand in the report as measurements.  This
-        also uncovered a real defect: the quality filters run at
-        seqapplyreg, so the count of exported frames already reflects them
-        -- and _effective_frame_count subtracted their share a SECOND
-        time, once for the report and once for the rejection tier.  A
-        channel of 34 exported frames was integrated as 30, which is a
-        different rejection band.  The estimate remains for the one case
-        it was written for: when the count cannot be read at all.  (From
-        RegistrationInspector by Cecile Melis and the Sequence Statistics
-        Analyzer by Carlo Mollicone.)
-      - Intermediates are freed one generation at a time.  The chain
-        lights -> pp_ -> bkg_ -> r_ writes a full copy of every frame at
-        each step, and keeping all of them until the master was written
-        made peak disk usage their SUM: about 3.6 GB per generation for a
-        hundred 3008x3008 subs.  Each predecessor is now deleted as soon
-        as its successor is complete, which holds the peak at roughly two.
-        Gated on the same option as _work/ itself, and the freed size is
-        measured with lstat, so the staged symlinks are not reported as
-        gigabytes that were never there.  (From Storage Friendly Stacking
-        by Quark-Coder, whose file watcher this replaces with a
-        deterministic step.)
-      - Flats pooled across nights are checked against each other first.
-        Dividing one night's flat by another's gives a uniform image when
-        the optical train did not move and shows the vignetting or dust
-        that did -- so each frame is normalised by its own median (a
-        brighter panel is not a disagreement) and the spread of the ratio
-        is measured.  Under 0.15% the nights agree, up to 0.3% is usable,
-        beyond that the report names the nights and points at "Match flats
-        to the same night".  Silent when that option is already on, when
-        there is only one night, or when nothing could be read.  (Method
-        and thresholds from the Flat On Flat Analyzer by Carlo Mollicone.)
-      - Audit fixes on the new palettes, all one root cause -- the channel
-        dropdowns can only show ONE source per channel, and a weighted
-        palette reads two.  Narrowband normalisation covered the three
-        mapped masters, so the line that had no dropdown went into the mix
-        unnormalised, at its raw level.  `_unfillable_channels` judged a
-        channel by the dominant source alone, so Realistic1 without an SII
-        filter looked perfectly fillable and the run refused at the very
-        end -- the exact failure HaRGB had in 1.4.0.  And
-        `_palette_filters` left the same master out, so "stack only the
-        filters this palette uses" would have skipped a channel the
-        composite then asked for.  All three now go through
-        `_palette_roles`, which reads the weights
-      - Audit fix: `synth_lum` sat in the preset widget map, where every
-        key is one of the three presets' seventeen.  Ticking it flipped
-        the preset combo to "Custom" although no preset value had changed.
-        Moved to the settings map, next to palette and quick_lrgb
-      - Audit fix: the comment above the compose chain claimed every step
-        used quoted absolute paths.  `_norm` still loads by basename,
-        because `linear_match` resolves its argument against the working
-        directory; the comment now says which is which
-      - Eleven more palettes: the narrowband ASSIGNMENTS HSO, HOS, OSS,
-        OHH, OSH, OHS and HSS, plus the weighted mixes Realistic1 and
-        Realistic2.  One table now drives the mapping, the dropdown, the
-        "which filter does this channel want" message, the SPCC
-        wavelengths and the manuals -- a palette cannot exist in one and
-        be missing from another, nor reach SPCC with the wrong lines.  The
-        weighted ones are mixed with `pm` and, like HaRGB, skip colour
-        calibration: a channel that is 70% Ha and 30% SII has no single
-        passband to model.  (From Cyril Richard's PalettePicker, adapted
-        there from Seti Astro Suite Pro.)
-      - The dynamic palettes (Foraxx and relatives) are deliberately NOT
-        included.  Their blend factor is t**(1-t) with t = Ha*OIII; on
-        linear data t is around 1e-6 and the expression collapses.  The
-        same arithmetic applies to our own Ha->Red blend, which is now
-        documented honestly: at linear levels 1-(1-R)*(1-k*Ha) and
-        R + k*Ha agree to better than 0.1%, so the slider adds a fraction
-        of Ha and the screen form only guarantees it cannot clip
-      - The composite is assembled in memory (`new` + set_image_pixeldata)
-        and rgbcomp became the fallback -- and stays the only route for
-        the -lum= combine, which is Siril's luminance transfer rather than
-        a channel copy.  rgbcomp does not honour quoted paths, which is
-        why composition used to cd into the masters folder and pass bare
-        basenames; that workaround is gone, and so is the pm staging for
-        HaRGB.  The planes are READ back through get_image_pixeldata and
-        written unchanged, so row order is a round trip rather than an
-        interpretation of ROWORDER.  `new` rather than a loaded mono
-        template: Siril stays in single-layer display state after loading
-        mono, and the pushed result then renders monochrome (PalettePicker
-        documents this).  The report names which route ran
-      - Optional synthetic luminance for narrowband: the emission-line
-        masters averaged into masters/TARGET_SynthL.fit.  It is NOT
-        combined into the colour image -- doing that on linear data lifts
-        the bright end before colour calibration, the same mistake Quick
-        linear LRGB makes -- and todo.md picks it up as Part B, after the
-        stretch.  Magenta stars in a three-line palette get a todo.md
-        entry with the invert/rmgreen/invert remedy for the same reason:
-        inverting linear data is not inverting stretched data
-      - Audit fixes: the colour composite is no longer built from masters
-        that are not on one pixel grid.  `_compose` states that its inputs
-        are identical in size, which -framing=min guarantees -- but only
-        when alignment ran; after a failed alignment the caller handed it
-        the unaligned masters anyway, and rgbcomp would either refuse them
-        or combine channels that do not overlay.  The sizes are now
-        compared first (only in that case, so a normal run reads no extra
-        headers) and composition is skipped with the reason
-      - Audit fixes: the HaRGB blend stages its two inputs under
-        PixelMath-safe names.  The expression 1-(1-$R$)*(1-k*$Ha$) refers
-        to images BY FILE NAME, and the full-frame master's new name
-        carries the sensor temperature -- "-10C" would put a hyphen inside
-        a subtraction.  The same was already true for a target called
-        NGC-7000.  Both inputs are copied to pm_R / pm_Ha in the helper
-        folder and the expression is evaluated there
-      - Audit fix: a filter whose every exposure went uncalibrated no
-        longer records a calibration note.  The per-exposure path wrote one
-        unconditionally, so the report would have printed a "Calibration"
-        step listing parts that read "uncalibrated"
-      - A filter that mixes exposures is now calibrated in parts.  A dark
-        removes the thermal signal that grew during ITS exposure, so one
-        dark on 120s and 300s subs is right for neither -- the script used
-        to pick a dark from one representative frame and merely warn.  Each
-        exposure is now staged and calibrated separately and the calibrated
-        parts are merged (`merge`) before registration, so the channel
-        still ends as ONE master.  Only the dark depends on exposure, so
-        nothing is split when the run has no darks; and a merge that fails
-        falls back to the old single pass, out loud.  (Third reading of
-        AMSP, which groups by (object, filter, exposure) throughout.)
-      - The full-frame master's name carries the recipe:
-        M16_HA_29x300s_G100_-10C_fullframe.  The frame count is the one
-        that survived registration, not the number staged, and a channel of
-        mixed exposures gets "40subs" rather than an NxT that would be true
-        for neither half.  Reuse matches the stable <TARGET>_<FILTER>_
-        prefix instead of a fixed filename -- otherwise reusing a master
-        would require stacking exactly the same frames again -- and the
-        bare name written by earlier versions still counts
-      - After alignment, each registered master is asked for its own FILTER
-        keyword before its name is written on it.  The index map that
-        connects Siril's frame numbers to filters is careful, but a channel
-        saved under the wrong name is the one error here that nothing
-        downstream can catch; a mismatch now drops the channel instead.  An
-        unreadable keyword proves nothing and is let through
-      - Help and both manuals catch up with the calibration this version
-        actually performs: the camera is part of the match key, the dark
-        exposure is a 5% band with the nearest one named in the log (not
-        an exact-or-skip rule), a plain DARK can stand in as a dark-flat,
-        only the darks a run can use are stacked, a missing IMAGETYP is
-        read from the frame's content, and the SPCC names fall back to
-        `spcc_list` and now auto-complete in the fields.  Each of those
-        was implemented without the documentation following it.  The
-        rejection bands now LINK Cyril Richard's AMSP rather than only
-        naming it -- and the help tabs became QTextBrowsers to make that
-        work: a QTextEdit draws <a href> as blue text and does nothing on
-        click, so every link in the help was dead
-      - Audit fixes: re-tiering the rejection bands left four documents
-        describing the old ones.  README and both manuals still listed
-        "5-20 Winsorized, 21-49 linear fit, GESDT from 50", and all three
-        said a 6-frame channel would have used Winsorized sigma when it
-        now uses plain sigma.  A comment above the constants still put the
-        GESDT crossover at "more than 50 images", directly above the
-        comment that sets it to 31.  And the example in
-        _effective_frame_count (21 frames -> 18) no longer crossed a band
-        edge at all, since both are Winsorized now -- it is 33 -> 29,
-        which crosses GESDT to Winsorized.  A test now checks the bands in
-        the code against every document that names them
-      - Audit fixes: the calibration signature now includes the camera.
-        Comparing INSTRUME while grouping without it was inconsistent --
-        two bodies of the same model share every other property, so their
-        frames landed in one group, were averaged into one master, and the
-        instrument test then judged a group that was already mixed.
-        INSTRUMENTS_WITHOUT_IMAGETYP was dead: the content inference runs
-        as a last resort for every file rather than being gated on a
-        device list, which is the more general behaviour and does not need
-        the list.  And _dark_as_darkflat binds its best-candidate variable
-        up front instead of relying on the guard alone
-      - Calibration masters are built on demand.  Every dark signature
-        found used to be stacked and every flat set with it, however
-        little the run could use: a library holding five exposures at
-        three setpoints is fifteen dark masters built to use one, and a
-        flat set for a filter with no lights this run produced a master
-        nothing opens.  The demand is judged with the SAME rule that
-        later picks a master, loose exposure tolerance included, so a
-        signature cannot be skipped here and wanted there -- and when
-        there is nothing to judge by, everything is built, because too
-        much is a cost while too little is a defect.  (Second reading of
-        AMSP, whose _get_active_requirements does the same.)
-      - A plain DARK at the flats' exposure is accepted as their offset
-        when no dark-flat or bias exists.  A dark-flat IS a dark taken at
-        the flat exposure, and plenty of capture software writes it as
-        IMAGETYP=DARK; refusing it over a label left the flats on a
-        synthetic offset with a measured one sitting right there.  20%
-        tolerance rather than the 5% used for lights: flat exposures are
-        short, so the same share is a far smaller absolute difference, and
-        so is the dark signal being corrected.  Nothing happens when the
-        flats have mixed exposures -- there is no single right answer then
-      - Seven things adopted from AMSP (Automatic Multi-Session
-        Processing) by **Cyril Richard**, the author of Siril, after
-        reading it side by side with this one.  With thanks -- see the
-        acknowledgement in the header for the link:
-          * The observing night is computed from DATE-OBS, noon to noon,
-            instead of read off a folder name.  A session running past
-            midnight is now ONE night, so "Match flats to the same night"
-            stops pairing half a session's lights with the wrong flats --
-            a problem this script previously answered by asking the user
-            to change their N.I.N.A. folder pattern
-          * Each filter's working tree is deleted once its master is
-            written, so peak disk is one channel rather than the sum of
-            all of them (six 3000x3000 32-bit channels is over a
-            gigabyte nothing reads again).  Bounded by "Delete _work/
-            when finished": keeping means keeping
-          * A dark whose exposure is not identical is no longer refused
-            outright.  After the exact match fails, the closest one
-            within 5% is used and said so; the thermal signal scales with
-            exposure, so 290s on 300s lights removes most of what 300s
-            would, while 60s does not.  Everything else -- camera, gain,
-            binning, size, temperature -- must still agree exactly
-          * INSTRUME now blocks a master from a different camera.  Image
-            size and binning were only a proxy: two cameras sharing a
-            sensor format would have calibrated each other
-          * CCDTEMP, TEMPERAT and CAMTCCD are read as well.  Missing a
-            spelling meant the temperature silently counted as unknown,
-            and a dark from another setpoint slipped through
-          * IMAGETYP can be inferred from the header content when the
-            keyword is absent (some capture software omits it): no
-            FILTER, no OBJECT and RA=DEC=0 is a dark, a FILTER and an
-            OBJECT is a light.  Flat and bias are never guessed -- a
-            wrong guess there corrupts the calibration instead of
-            skipping it
-          * The rejection band edges are his, and differ from ours in
-            three of five: plain sigma for 5-10, GESDT from 31 rather
-            than 50, and linear fit moved from the middle of the range to
-            the top (>300, at 5/4), where a long stack gives its trend
-            model enough data.  He implemented these algorithms in Siril,
-            so the thresholds are credited to him in the code, the help
-            and the report
-      - Audit fixes: the relative alignment warning compared against the
-        upper-middle value, which is not the median for an even number of
-        channels -- the report and this file both called it the median,
-        so it is one now.  Its blind spot is documented too: comparing
-        against the median assumes most channels aligned well, which is
-        the second reason the absolute floor exists.  A _plural() call
-        had the same word in both branches, implying a distinction
-        English does not make.  The star-pair table cannot print the
-        reference channel twice.  CALIB_TOKENS was dead: the
-        sibling-folder search became header-based and nothing ever read it
-      - The report says how many star pairs each channel was aligned on,
-        and flags the ones fitted on too few.  Siril logs that count and
-        the script used to throw it away, so the number that best predicts
-        colour fringing at the edges could only be found by reading
-        Siril's own log: on one M 16 run OIII matched on 12 pairs against
-        a Luminance reference and produced an SPCC R/G sigma of 5.76,
-        while the same data aligned among its own kind matched on 1165
-        and came out at 2.73.  Read back through get_siril_log() over the
-        alignment step only.  Two rules flag a channel -- an absolute
-        floor of 30 pairs (a judgement about what a similarity fit needs,
-        not a measurement) and a quarter of the run's median, which
-        catches a channel that had the stars available and still did not
-        match them.  Diagnostic only: nothing about the image changes,
-        and an unrecognised log format prints nothing at all
-      - The SPCC name fields complete as you type, from Siril's own
-        lists.  The names come from the JSON tables, which cost nothing
-        to read and stay out of the log; `spcc_list` is asked only when
-        those cannot be found -- it is Siril's own answer, and therefore
-        always right, but it prints the whole list.  Read back via
-        get_siril_log(), whose existence had been wrongly ruled out
-        earlier.  The fields stay free text: clearing them still means
-        "use Siril's own SPCC configuration", and an editable combo box
-        would have lost a hand-typed name on the next preset load, since
-        that loader drops combo values it cannot find in the list
-1.4.0 - Per-palette stacking, and a report that matches the run
-      - The Help dialog links the full manual (EN / DE) on GitHub.  The
-        tabs are a quick reference and stay that way; the link sits in a
-        QLabel because QTextEdit does not open links
-      - The Palettes tab now says what the four dropdowns are -- the
-        channel mapping, not a list of filters the palette uses.  Both
-        misreadings that follow are named: RGB / SHO / HOO leave L empty,
-        and HaRGB blends Ha into Red instead of mapping it, so it has no
-        dropdown at all.  HOO also explains its own "B/G = 1.0 + 0.0,
-        sigma 0.0" line, which looks like a failed fit and is simply the
-        consequence of Blue and Green being the same image
-      - HaRGB is checked for the filter that defines it.  Ha is blended
-        into Red rather than mapped to a channel, so the "can this palette
-        be filled?" test -- which looks at R/G/B -- reported an Ha-less
-        HaRGB as perfectly fillable.  The run then went all the way
-        through and quietly composed plain RGB.  Selecting HaRGB now says
-        either which filter will be blended, or that none carries an Ha
-        role.  The "Ha -> Red" tooltip explains why Ha has no dropdown of
-        its own
-      - "Finish: calibrated composite saved" was printed unconditionally,
-        two log entries after "colour calibration skipped for HaRGB
-        (Ha-boosted Red)".  The same claim went into the report as "Saved
-        the calibrated, still-LINEAR composite".  Both now key on the
-        success line, so a skipped or failed calibration reads as
-        "composite (uncalibrated)"
-      - Switching "Normalize narrowband channels" off while narrowband
-        SPCC is on is the recommended pairing, and `todo.md` was calling
-        it a defect: "the channels were **not** normalized ... re-run with
-        Normalize narrowband channels enabled" -- which would undo the
-        calibration the reader had just been advised to get.  That branch
-        now only fires when no narrowband SPCC ran.  Measured on two
-        M 16 runs differing only in that option: R/G sigma 2.64 with it
-        off against 2.73 with it on, and the fitted slope 1.209 against
-        1.251 (closer to 1 = less correction needed).  Real, but far
-        smaller than the alignment effect
-      - The "try another palette in seconds" tip contradicted the line
-        directly above it, which had just explained that the skipped
-        filters were never stacked and that another palette therefore
-        needs a full re-run.  It is now suppressed in exactly that case.
-        The narrowband version also offered to "try HOO" at the end of a
-        HOO run; it names the other narrowband palette instead
-      - A run that produces no composite no longer reads as if it had.
-        The report opened with "The script stacked each filter, aligned the
-        channels, and combined them into a colour image" three sections
-        above "No colour composite was produced this run", and section 4
-        called that absent image "this image".  In `todo.md` the
-        narrowband step told the reader to re-run with "Normalize
-        narrowband channels" enabled -- an option that was already on and
-        had nothing to do with it: normalization is part of the
-        composition, and there was none
-      - The stale-master warning no longer claims the leftovers share one
-        grid.  After four palette-only runs, `masters/` held HA, LUMINOS
-        and OIII from three different runs on three different canvases,
-        and the warning said "that run's grid" as if there were one
-      - Section 4 names the calibration that actually ran instead of
-        always saying "PCC", which contradicted the "Colour calibration:
-        SPCC" line three paragraphs above it
-      - "Quick linear LRGB" is now carried into both documents, not just
-        the log.  The report said "luminance baked in linearly" and then
-        "Colour calibration: SPCC" with nothing connecting them, and
-        todo.md claimed the script "keeps L separate automatically" --
-        the exact opposite of what the option had just done -- and told
-        the reader to leave the white balance alone.  Measured on two
-        M 16 runs over the same R/G/B masters, differing only in that
-        option: SPCC dropped 531 of 2597 stars as "pixel out of range"
-        with L baked in, against 68 of 2603 without.  1057 stars carried
-        the solution instead of 1484, and both fits came out worse
-        (R/G sigma 1.33 against 1.15, B/G 0.35 against 0.32)
-      - The stale-master warning is emitted after the LAST row of the
-        folder table, not after the `output.md` row.  A blockquote between
-        two rows ends a Markdown table, so `todo.md` and `qa/` were
-        rendered as loose text below it
-      - The skipped-filter messages agree in number.  A HaRGB run leaves
-        out exactly one channel and reported "OIII are not read by this
-        palette"; the log line, the report bullet, the stale-master
-        warning and both todo tips hard-coded the plural
-      - The two documents no longer describe work the palette skipped.
-        `output.md` said "For **every filter**, the raw lights were turned
-        into one master light" two lines above the note listing the four
-        filters it had not touched, claimed "all masters were pooled" for
-        an alignment over two of six, and credited plate-solving to every
-        master.  Its file table promised that `masters/*.fit` share one
-        grid while the folder still held four channels from an earlier
-        alignment on a different one -- now flagged, with the reason and
-        the way out.  `todo.md` told the reader to trust an SPCC baseline
-        that `output.md` flags as self-defeating, and offered a palette
-        swap "in seconds" from masters that were never built
-      - Full master reuse is refused when the aligned masters are not all
-        the same size.  `-framing=min` crops to the intersection of
-        whatever was in the alignment sequence, so a run that aligns a
-        subset (see the option below) leaves the other channels on the
-        previous grid; reusing the mix would hand `rgbcomp` channels of
-        different dimensions.  Partial reuse is unaffected -- the
-        fullframe masters it keeps predate alignment
-      - The run no longer opens with "Stacking N filter(s)" and then skips
-        four of them one line later.  It reports what was discovered, and
-        the worker -- the only part that knows -- reports what is stacked
-      - New option "Stack only the filters this palette uses" (off by
-        default).  An LRGB night processed as HOO stacked four masters the
-        composite never opened.  Besides the time, it cost quality: the
-        cross-filter alignment hands every master to Siril's two-pass
-        registration, which picks the reference itself -- `setref` cannot
-        override it, its help says -2pass exists to "find a good reference
-        image" -- and a star-rich broadband master wins.  The narrowband
-        channels then match a frame whose stars they do not share: on one
-        M 16 run OIII aligned on 12 star pairs and Ha on 22, against
-        188-476 for the broadband masters.  The set is derived from the
-        channel mapping rather than the palette name, so it cannot
-        disagree with what `_compose` reads; skipping is refused when the
-        palette has an unfillable channel anyway, and when no composite is
-        being made at all -- greying the box out with the rest of the
-        compose group is cosmetic, a saved preset can still arrive with
-        both set, and without a composite nothing reads a palette
-      - `register -2pass` and `seqapplyreg` no longer share one `try`.
-        They fail for unrelated reasons and only the first one is about
-        two-pass support: a frame the cloud-sync folder had not finished
-        materialising was reported as "2-pass registration unavailable"
-        although registration had just succeeded on all six frames, and
-        the retry then used a command that silently drops framing,
-        drizzle and every quality filter -- `register` alone accepts
-        neither -framing= nor any -filter-*.  Each failure now gets its
-        own message and its own fallback, what could not be honoured is
-        recorded per channel, and the report says which master was not
-        built the way the options describe
-      - SPCC sends the mono sensor in narrowband mode too.  Siril's help
-        says -narrowband makes it ignore "the previous filter arguments"
-        -- filters only -- and its usage grammar keeps -monosensor= in a
-        separate group, because the sensor's quantum efficiency at 656 and
-        501 nm is an independent factor.  Leaving it out never failed; it
-        silently used whatever sensor Siril's own dialog last held, which
-        on a fresh install is an OSC one.  The filter names are now
-        omitted there on purpose, and the log says so, because Siril
-        echoes its stored names on every run and they look like ours
-      - "Normalize narrowband channels" and SPCC's narrowband mode are
-        flagged when both are on.  They balance the same thing by opposite
-        means: linear_match flattens the Ha / OIII flux ratio on purpose,
-        and that ratio is precisely what SPCC measures against catalogue
-        spectra.  Observed on one HOO run: R/G fit sigma 5.8, against 1.4
-        for a broadband composite of the same night.  Log, report, tooltip
-        and help now say which one to switch off
-
-1.3.0 - Colour calibration, rejection and background modelling
-      - SPCC (Spectrophotometric Colour Calibration) replaces PCC as the
-        preferred method: it accounts for the sensor's and filters'
-        response curves, which plain PCC cannot.  Optional sensor / filter
-        names; blank falls back to Siril's own preferences
-      - SHO and HOO are colour-calibrated for the first time, via SPCC's
-        narrowband mode using each line's wavelength (Ha 656.3, OIII 500.7,
-        SII 671.6 nm) and a configurable filter bandwidth.  PCC is never
-        attempted there -- star photometry does not describe mapped
-        emission lines
-      - The whole chain degrades one step at a time and never aborts the
-        finish: SPCC with details -> bare SPCC -> PCC -> PCC with a local
-        Gaia catalog -> report it plainly.  HaRGB stays excluded (its Red
-        channel carries blended Ha)
-      - GESDT rejection from 50 frames, where Siril documents it as
-        outperforming linear-fit clipping.  Its parameters are NOT sigmas
-        (max rejected fraction / significance), and a build that does not
-        know the token falls back to linear fit instead of losing the stack
-      - Frame weighting is selectable: weighted FWHM (default), noise or
-        star count.  Noise is the better choice for narrowband, where
-        wFWHM penalises a sparse star field for the filter, not the frame
-      - Optional RBF background model for the masters and the composite --
-        it follows a gradient that changes direction across the frame,
-        which a degree-1 polynomial cannot.  The per-sub pass stays
-        polynomial, per Siril's guidance.  Falls back automatically
-      - Drizzle now warns when it runs on fewer than 40 frames: it needs
-        many dithered subs to fill the finer grid, and below that it adds
-        noise instead of resolution
-      - The report names the rejection algorithm that really ran, so a
-        fallback cannot hide behind the preferred one
-      - SPCC sensor and filter names are validated against the SPCC
-        database Siril itself uses.  A wrong name is not an error for
-        Siril -- it quietly substitutes something else, which is how a
-        real run calibrated a mono filter-wheel rig as one-shot colour:
-        "IMX533" exists only under osc_sensors, while the mono entry for
-        the same chip is "Sony IMX411/455/461/533/571".  The script now
-        reports a name that is missing from the mono table, names the OSC
-        trap, lists candidates, and recognises a loose match as such.  A
-        database it cannot find means "cannot check", never "invalid"
-      - The rig defaults are seeded into the stored settings once, because
-        a QSettings default only applies to a key that is ABSENT -- anyone
-        who had already run the script had these saved as empty strings,
-        so the new values would never have appeared.  Guarded by a flag, so
-        clearing the fields afterwards still means "use Siril's own SPCC
-        configuration"
-      - The SPCC rig fields ship pre-filled for a Player One Ares-M Pro
-        (IMX533 mono) with Antlia LRGB V-Pro and 4.5 nm Edge SHO filters,
-        as DEFAULT_SPCC_* constants near the top of the script.  A test
-        checks them against Siril's own database, so a typo there cannot
-        ship silently
-      - The narrowband bandwidth accepts fractional values.  It was an
-        integer box, which made the common 3.5 / 4.5 / 6.5 nm filter specs
-        impossible to enter -- an Antlia 4.5nm Edge set could not be
-        described at all.  .json presets learned the new widget type
-      - "Quick linear LRGB" is flagged when it runs into a photometric
-        calibration: baking L in lifts the bright end, so more stars
-        saturate and drop out of the fit (measured on one dataset:
-        1107 -> 1531 stars excluded, 69 -> 522 of them saturated, R/G fit
-        sigma 0.61 -> 0.77)
-      - The palette warning is logged after the filter list it refers to,
-        and no longer carries Markdown emphasis: the Log tab renders plain
-        text, so "**LRGB**" showed up with its asterisks
-      - A palette the discovered filters cannot fill is caught when it is
-        CHOSEN, not after a full run: picking SHO without an SII filter
-        used to stack, align and plate-solve everything and only then say
-        "no aligned master mapped to the RED channel" -- baffling wording
-        when a RED filter plainly exists, because SHO wants SII there.
-        The message now names what the palette expects and which palette
-        would work, and a run that was asked for a colour image and did
-        not produce one no longer reports "All done ... 0 failed"
-      - The SPCC database location is asked for via sirilpy
-        (get_siril_userdatadir) instead of only guessing per-platform
-        paths, which would miss a Flatpak / Snap / Store build entirely.
-        The guesses remain as a fallback, the read stays read-only, and a
-        database that cannot be found still means "cannot check"
-      - Stopping a run now really stops it.  The abort only ended the
-        stacking loop; alignment, plate-solving, colour composition and the
-        auto-finish then ran on regardless -- up to half a minute of work,
-        part of it against a photometry server, to build a colour image
-        from an incomplete channel set, immediately after announcing that
-        we were stopping.  Everything downstream is skipped, _work/ is
-        never deleted, and log, report, status line and dialog say
-        "stopped" instead of "All done"
-      - Fixes from a further audit pass:
-        * "did the quality filters fire?" is answered from what
-          registration was actually told, recorded before it runs.  Once
-          registration started dropping frames (see above), the report
-          re-derived the answer from the survivor count and could claim
-          they had not applied when they had -- 22 staged with filters,
-          19 surviving, and the threshold is 20.  -filter-included had the
-          same flaw
-        * an SPCC name matching several database entries lists all of
-          them instead of naming an arbitrary member of a set as "likely";
-          the message was not even stable between runs
-        * the Windows branch of the SPCC database search no longer builds
-          a relative path when LOCALAPPDATA is unset
-      - The report distinguishes an astrometric solution the composite
-        INHERITED from the plate-solved masters (rgbcomp copies their
-        header, so Siril's platesolve is then a no-op) from one that was
-        computed here.  It used to claim "Plate-solved the composite" in
-        both cases
-      - SPCC arguments are quoted as a WHOLE, flag included:
-        "-rfilter=Antlia R", not -rfilter="Antlia R".  sirilpy joins the
-        arguments into one command line and Siril re-splits it shell-style,
-        so quoting only the value splits inside it and the command aborts
-        with "Invalid argument IMX411/455/461/533/571"".  The spcc command
-        is echoed to the log, right above Siril's own line saying what it
-        ended up using
-      - Frames that REGISTRATION drops are now counted.  A sub without
-        enough detectable stars (clouds, haze) simply fails to align and
-        Siril excludes it -- the script kept using the staged count, so it
-        picked the rejection algorithm for frames that were not there.  A
-        real run lost 3 of 6 OIII frames and got winsorized sigma clipping
-        on the surviving 3, which rejected 0.000%; percentile clipping is
-        what 3 frames call for.  The count now comes from the files Siril
-        actually exported, and the log says how many were lost and why
-      - "Building calibration masters..." is no longer announced when no
-        calibration frames were found: the payload always carries its four
-        kind keys, so the old emptiness test was true even for an empty set
-      - Fixes found while auditing the above:
-        * the GESDT retry now fires for GESDT only.  As first written it
-          triggered on ANY stack failure, swapping percentile or winsorized
-          for linear fit on an unrelated error -- and, with rejection
-          switched off, silently turning it back on
-        * a palette that can only be calibrated by SPCC now reports
-          "not attempted" when SPCC is switched off, instead of "FAILED",
-          which blamed the tooling for a setting
-        * a failed plate-solve is reported once, not twice
-        * .json presets carry the SPCC sensor and filter names (they
-          describe the rig, not the machine), and a widget type the loader
-          cannot set counts as ignored instead of as applied
-1.2.0 - Calibration: darks, flats, dark-flats and bias
-      - Calibration frames are discovered alongside the lights instead of
-        being discarded: flats grouped per filter, darks and bias grouped
-        by signature (exposure, gain, temperature, binning, dimensions)
-      - Reusable DARK / BIAS library folder, remembered between runs;
-        session flats are found next to the lights, including the old
-        N.I.N.A. layout where they sit beside the target folder
-      - Masters are built automatically (a group of exactly one file is
-        adopted as a ready-made master), cached in output/calib/ under
-        descriptive header-derived names, and reused on later runs
-      - Flats are offset-corrected before stacking: real bias / dark-flat,
-        else Siril's synthetic offset, else raw -- never a hard failure
-      - Matching runs on FITS headers with exact exposure/gain/binning/size
-        and a +/-2 C temperature window; a non-matching dark is reported
-        and skipped rather than applied
-      - Bias is never applied together with a dark (the dark already
-        contains the offset): Lc = (L - D) / (F - O)
-      - Optional cosmetic correction (-cc=dark) and "match flats to the
-        same night" for rigs that were rebuilt between sessions
-      - The processing report lists every master used, per filter, and the
-        "no calibration" note is now only printed when that is true
-      - XISF files found during the scan are reported instead of silently
-        vanishing; .fts.fz added to the recognised FITS extensions
-      - Fixes found by auditing the calibration path:
-        * darks are grouped by temperature as well, so a -10 C and a -20 C
-          set can no longer be averaged into one physically wrong master
-          (bias stays unsplit -- it is temperature-independent)
-        * a library holding sets with and without a GAIN keyword no longer
-          crashes the run when the signatures are sorted
-        * master names now carry everything the grouping distinguishes
-          (binning, flat date restriction), so the cache cannot hand back
-          the wrong master; a remaining tie is broken and logged
-        * "match flats to the same night" is no longer silently ignored on
-          the second run
-        * a filter mixing two exposures is reported -- the dark matches
-          only one of them
-      - Colour composition needs two masters again instead of three, so an
-        Ha + OIII night can actually produce the HOO image it auto-detects
-      - Calibration folders beside the target (the classic N.I.N.A. layout)
-        are found again: the segment match was case-sensitive and never
-        matched N.I.N.A.'s upper-case FLAT / DARK folders
-      - Reporting and UI state, from a second audit pass:
-        * reused filters are shown as "reused" instead of being given a
-          frame count and a rejection algorithm from a run that never
-          happened this time
-        * frame counts the quality filters only predict are marked as
-          estimates
-        * clearing the library also drops what was found in it, instead of
-          quietly keeping those darks in play
-        * the library is scanned regardless of the "Apply calibration"
-          switch, so toggling it after an analysis cannot leave the set of
-          discovered masters incomplete
-        * a failed analysis no longer leaves the previous folder's
-          calibration frames and multiple-target warning behind
-        * loading a .json preset now updates the calibration sub-options'
-          enabled state
-      - Only calibration frames are taken from outside the target folder:
-        a light frame in the library or a neighbouring calibration folder
-        used to be stacked into the target (and to trigger a bogus
-        "several objects" warning).  It is now counted and reported
-      - The analysis states how many files came from the target and how
-        many from the library, instead of adding them all up under the
-        target's path
-      - The quality-filter spin boxes follow their mode: 1..100 for
-        "% best", 1..10 for k-sigma.  A percentage left behind after a mode
-        switch used to be read as a sigma multiple, which rejects nothing
-        while the panel looks armed
-      - The frame table in output.md only quotes a count for filters that
-        really produced a master this run: one that was skipped for too few
-        usable frames, that failed mid-pipeline, or that an abort never
-        reached used to be listed as fully stacked, with a rejection
-        algorithm that never ran.  A pipe inside a Siril error message no
-        longer tears the table apart
-      - k-sigma frame counts are marked as an upper bound (the number of
-        frames beyond k sigma is Siril's call and cannot be predicted),
-        instead of being printed as if nothing had been dropped
-      - "Did the quality filters fire?" is answered from the arguments that
-        were really emitted, not from a shrunken frame count: in k-sigma
-        mode the report claimed they had not run at all, and when they were
-        skipped because of the settings (100%, or too few frames left) it
-        blamed the frame count instead
-      - todo.md now describes what actually ran instead of the usual case:
-        it no longer claims the colour is "already PCC-calibrated" when
-        auto-finish was off or no photometry catalog was reachable, no
-        longer claims narrowband channels were normalised when that option
-        was off, and says plainly when no colour image was produced at all
-1.1.0 - Colour composition, reporting and robustness
-      - Colour composition via rgbcomp: LRGB / RGB / SHO / HOO / HaRGB,
-        with automatic palette detection and manual channel mapping
-      - Narrowband channels normalised to the Ha reference (linear_match)
-        before combining, so a SHO stack no longer comes out green
-      - LRGB luminance kept separate for the post-stretch combine (per
-        Siril's guidance); optional "quick" one-step linear LRGB
-      - HaRGB: Ha screen-blended into Red with an adjustable strength
-      - Auto-finish: plate-solve -> background -> PCC (broadband only,
-        with a local-Gaia fallback) -> save linear
-      - Cross-filter alignment onto a common grid (framing=min), so the
-        channels are pixel-identical for combination
-      - Adaptive pixel rejection by frame count, weighted-FWHM weighting,
-        quality filtering, optional rejection maps
-      - Per-channel background extraction on the linear masters
-      - Blank / black frame detection and rejection
-      - Option presets (Quick look / Balanced / Final)
-      - Full and partial reuse of existing masters
-      - Tidy output folder (masters/ + _work/) with a Markdown processing
-        report (output.md) and post-processing guide (todo.md)
-      - Total integration time per filter in the analysis
-      - Fixes: .fits.fz (Rice) extension handling; output folder no longer
-        re-ingested as light frames; rgbcomp/pm path handling for folders
-        containing spaces; worker/GUI thread separation for sirilpy access;
-        safe window close while a run is in progress
-1.0.0 - Initial release
-      - Recursive FITS-header discovery of LIGHT frames, grouped by FILTER
-      - N.I.N.A. folder-schema awareness with header-first fallback
-      - Per-filter pipeline: link/convert -> seqsubsky (optional) ->
-        register -2pass / plate-solve -> seqapplyreg -> stack
-      - Optional drizzle, background extraction, output normalisation
-      - Symlink or copy working set, tidy per-filter output naming
-      - Dark-themed PyQt6 GUI with live log and persistent settings
+1.7.11 - and earlier: section 17 of both manuals (Instructions/) carries
+        every entry back to 1.4.0, and `git log` has all of them.  They
+        were dropped from this docstring in 1.7.15, where it had grown
+        to 1581 lines -- an eighth of the file.
 """
 from __future__ import annotations
 
@@ -1496,7 +245,7 @@ from PyQt6.QtGui import QColor, QDesktopServices
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.7.12"
+VERSION = "1.7.15"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -1560,6 +309,16 @@ DARK_EXPOSURE_TOLERANCE = 0.05
 DARKFLAT_EXPOSURE_TOLERANCE = 0.20
 
 CALIB_TEMP_TOLERANCE_C = 2.0
+
+# SIP polynomial order for the plate solve that precedes photometric colour
+# calibration.  Siril asks for one in so many words -- "Found linear plate
+# solve data, you may need to solve your image with distortions to ensure
+# correct calibration of stars near image corners" -- and the order it
+# would otherwise use comes from its astrometry preferences, which is not
+# a setting this run can see.  Three describes a refractor's field
+# curvature without inventing structure a few thousand stars cannot
+# support; Siril accepts 1 to 5.
+SPCC_SIP_ORDER = 3
 
 # Placeholder for frames without a FILTER keyword (e.g. an OSC-style
 # capture accidentally dropped in, or a broadband run with no wheel).
@@ -1649,11 +408,20 @@ WEIGHT_TOKENS = {
 # the user changes any individual option, so the combo never lies about what
 # is actually set.  Only the options a profile cares about are listed; the
 # rest keep whatever the user chose.
+#
+# Every profile names `filter_mode` even though all three agree on it.  The
+# quality-filter values below are PERCENTAGES, and a preset that set them
+# without the mode handed a 90 to spin boxes that were in k-sigma range
+# (1..10), where Qt clamped it to 10 -- "reject beyond 10 sigma", which
+# rejects nothing.  Silently, and with the box reading a plausible number.
+# The mode is applied before the values (see `_apply_preset`), for the same
+# reason `_load_settings` does it in that order: the mode sets the ranges.
 PRESETS = {
     "Quick look": {
         # Fastest path to "does this data look good?" -- no QA extras, no
         # colour calibration, no frame filtering, keep every frame.
         "skip_blank": False, "rejection": True, "weighting": False,
+        "filter_mode": "% best",
         "f_wfwhm_val": 90, "f_wfwhm_on": False, "f_round_on": False,
         "f_stars_on": False, "f_bkg_on": False,
         "bg_master": False, "bg_extract": False,
@@ -1664,6 +432,7 @@ PRESETS = {
     "Balanced": {
         # The sensible default for a normal night.
         "skip_blank": True, "rejection": True, "weighting": True,
+        "filter_mode": "% best",
         "f_wfwhm_val": 90, "f_wfwhm_on": False, "f_round_on": False,
         "f_stars_on": False, "f_bkg_on": False,
         "bg_master": True, "bg_extract": False,
@@ -1674,6 +443,7 @@ PRESETS = {
     "Final": {
         # Everything on: quality filtering, QA artifacts, WCS in the masters.
         "skip_blank": True, "rejection": True, "weighting": True,
+        "filter_mode": "% best",
         "f_wfwhm_val": 90, "f_wfwhm_on": True, "f_round_on": True,
         "f_stars_on": False, "f_bkg_on": False,
         "bg_master": True, "bg_extract": False,
@@ -1865,6 +635,26 @@ def _has_wcs(path: str) -> bool:
     if header is None:
         return False
     return any(k in header for k in ("CTYPE1", "CRVAL1", "CD1_1"))
+
+
+def _has_sip(path: str) -> bool:
+    """True if the file's astrometry carries SIP distortion terms.
+
+    A WCS and a *distortion-aware* WCS are different facts, and only the
+    second is what SPCC asks for.  Siril writes the SIP convention, so the
+    order keywords are the honest test; the CTYPE suffix is checked too
+    because a header may carry "RA---TAN-SIP" from another writer.
+
+    Unreadable header -> False, i.e. "assume it is linear": re-solving an
+    image that was already solved with distortions costs seconds, while
+    skipping the solve on one that needs it costs the colour calibration.
+    """
+    header = _read_header(path)
+    if header is None:
+        return False
+    if any(k in header for k in ("A_ORDER", "B_ORDER")):
+        return True
+    return "-SIP" in str(header.get("CTYPE1", "")).upper()
 
 
 def _clean_token(value) -> str:
@@ -2076,7 +866,18 @@ FLAT_COMPARE_MAX_FRAMES = 8
 # one -- so it only ever produces a note when the nights are split.
 FLAT_THIN_SET = 10
 
-# Rows the Discovered Filters table shows before it starts scrolling.
+# The lights box names its target, so the box and the run cannot disagree
+# about which one is being stacked.  The name is appended to this.
+DISCOVERED_TITLE = "Lights, Flats, Dark-Flats for Target: "
+
+# Observing nights named individually in the Lights table before it gives
+# the count instead.  The left panel is a fixed 380 px: two ISO dates are
+# already 160 px of it, and at three the Details column beside them was
+# squeezed to a strip too narrow to read.  Hence two, and without the
+# year while they share one -- the full dates stay in the tooltip.
+NIGHTS_NAMED = 2
+
+# Rows each discovery table shows before it starts scrolling.
 # Eight covers every filter wheel worth the name; beyond that the table
 # would push the rest of the panel out of the window.
 FILTER_TABLE_MAX_ROWS = 8
@@ -2133,9 +934,15 @@ def _flat_shape(paths: list, limit: int = FLAT_COMPARE_MAX_FRAMES,
     another brightness -- does not count as disagreement.  What is left
     is the SHAPE: vignetting, dust, spacing.
 
-    A frame whose image size differs from the first one read is left out
-    (mixed binning or a second sensor inside one filter's flats).  Pass
-    ``stats`` to learn about it: the dict comes back with ``used`` and
+    A frame whose image size differs from the MAJORITY is left out (mixed
+    binning or a second sensor inside one filter's flats).  Majority, not
+    "differs from the first one read": with the odd frame at the head of
+    the list, that rule made the outlier the reference and discarded every
+    ordinary frame behind it, so an eight-frame night was compared on a
+    map built from the one frame that did not belong.  Ties go to the
+    larger image, which is the unbinned one.
+
+    Pass ``stats`` to learn about it: the dict comes back with ``used`` and
     ``skipped`` counts, so the caller can say a map was built from fewer
     frames than were offered -- silently thinning the sample was how a
     two-frame map once posed as an eight-frame one.
@@ -2153,8 +960,14 @@ def _flat_shape(paths: list, limit: int = FLAT_COMPARE_MAX_FRAMES,
         # the file being closed.
         return np.asarray(data, dtype=np.float32)
 
-    stack = None
-    used = skipped = 0
+    # One running sum PER image size, rather than a list of frames.  The
+    # majority cannot be known until every frame has been read, but
+    # keeping them all to find it would hold eight 3008x3008 float32
+    # planes at once -- ~290 MB inside Siril's own process, for a map a
+    # few hundred pixels across.  There is one accumulator in the normal
+    # case and two on the mixed night this rule exists for.
+    sums: dict = {}
+    read_total = 0
     for path in paths[:limit]:
         try:
             frame = _with_fits(path, read, ignore_missing_simple=True)
@@ -2165,14 +978,21 @@ def _flat_shape(paths: list, limit: int = FLAT_COMPARE_MAX_FRAMES,
             continue
         while frame.ndim > 2:               # (C, H, W) -> one plane
             frame = frame.mean(axis=0)
-        if stack is None:
-            stack = frame
-        elif stack.shape == frame.shape:
-            stack = stack + frame
-        else:
-            skipped += 1                    # a different sensor size, skip
-            continue
-        used += 1
+        read_total += 1
+        have = sums.get(frame.shape)
+        sums[frame.shape] = (frame if have is None else have[0] + frame,
+                             1 if have is None else have[1] + 1)
+    if stats is not None:
+        stats["used"], stats["skipped"] = 0, 0
+    if not sums:
+        return None
+    # The size most of the night agrees on -- not "the first one read".
+    # With the odd frame at the head of the list that rule made the
+    # outlier the reference and skipped every ordinary frame behind it.
+    # Ties go to the larger image, i.e. the unbinned one.
+    shape = max(sums, key=lambda sh: (sums[sh][1], sh[0] * sh[1]))
+    stack, used = sums[shape]
+    skipped = read_total - used
     if stats is not None:
         stats["used"], stats["skipped"] = used, skipped
     if stack is None or not used:
@@ -2351,6 +1171,47 @@ def _path_date(path: str) -> str:
         if _DATE_SEGMENT_RE.match(seg):
             return seg[:10]
     return ""
+
+
+def _short_nights(nights: list) -> list:
+    """ISO dates with a shared year dropped: 2026-09-05 -> 09-05.
+
+    The table lives in a fixed 380 px panel, where the year is four
+    characters of width repeated on every row and carrying nothing: a
+    target is not imaged across a new year often, and when it is, the
+    year comes back because it is no longer shared.  The tooltip always
+    holds the dates in full.
+    """
+    years = {n[:4] for n in nights if len(n) >= 10 and n[4] == "-"}
+    if len(years) != 1 or len(nights) != len([n for n in nights
+                                              if len(n) >= 10]):
+        return list(nights)
+    return [n[5:] for n in nights]
+
+
+def _night_of(path: str, nights: dict | None = None) -> str:
+    """The observing night a frame belongs to, best source first.
+
+    `_night_key` (noon-to-noon, from the frame's own DATE-OBS) is the
+    answer that survives a session running past midnight; `_path_date`
+    is the folder name, which splits exactly that session in two.  For
+    several releases the header key was computed for every frame during
+    discovery and then never read: every night decision in the run --
+    which flats belong to which lights, whether a filter is calibrated
+    per night, what the flat-consistency check compares -- went through
+    the folder date alone, so the fix `_night_key` exists for was inert.
+
+    Discovery records the header answer per path in `nights`; anything
+    it could not read (no DATE-OBS, unparseable, a file discovery never
+    inspected) falls back to the folder.  Both sides of every comparison
+    go through this function, so a mixed set degrades to the old
+    behaviour rather than to a mismatch.
+    """
+    if nights:
+        night = nights.get(path)
+        if night:
+            return night
+    return _path_date(path)
 
 
 def _calib_signature(info: dict, with_temp: bool = False) -> tuple:
@@ -2748,6 +1609,11 @@ class AnalyzeWorker(QThread):
             #   darks / bias      -> by signature (exp, gain, binning, dims)
             calib: dict[str, dict] = {KIND_FLAT: {}, KIND_DARKFLAT: {},
                                       KIND_DARK: {}, KIND_BIAS: {}}
+            # path -> observing night, from the frame's OWN DATE-OBS
+            # (noon-to-noon).  The header is read once here anyway, and
+            # this is what lets every later night decision use it instead
+            # of the folder name -- see `_night_of`.
+            nights: dict[str, str] = {}
             objects: set[str] = set()
             target = ""
             stray_lights = 0
@@ -2760,6 +1626,8 @@ class AnalyzeWorker(QThread):
                         f"Reading headers... {i + 1}/{total}")
                 info = _inspect(path)          # one header read per file
                 kind = info["kind"]
+                if info.get("night"):
+                    nights[path] = info["night"]
 
                 if kind in calib:
                     # Flats belong to a filter; darks/bias to a signature --
@@ -2770,8 +1638,7 @@ class AnalyzeWorker(QThread):
                                info, with_temp=(kind == KIND_DARK)))
                     grp = calib[kind].setdefault(
                         key, {"files": [], "info": info,
-                              "date": info.get("night")
-                              or _path_date(path)})
+                              "date": _night_of(path, nights)})
                     grp["files"].append(path)
                     continue
 
@@ -2797,7 +1664,10 @@ class AnalyzeWorker(QThread):
                      "by_exp": {}})
                 g["files"].append(path)
                 g["exp_total"] = g.get("exp_total", 0.0) + info["exp_s"]
-                g["dates"].add(_path_date(path))
+                # Through `_night_of` like every other night decision --
+                # one rule in one place, so the lights' nights and the
+                # flats' nights can never be derived differently.
+                g["dates"].add(_night_of(path, nights))
                 exp_key = round(float(info["exp_s"]), 3)
                 g["exps"].add(exp_key)
                 # Keep the frames of each exposure together.  A dark is only
@@ -2828,7 +1698,7 @@ class AnalyzeWorker(QThread):
                  "in_target": len(in_target), "outside": len(outside),
                  "stray_lights": stray_lights,
                  "objects": sorted(objects), "calib": calib,
-                 "unsupported": unsupported})
+                 "nights": nights, "unsupported": unsupported})
         except Exception as exc:      # worker must never crash the app
             self.failed.emit(f"{exc}\n\n{traceback.format_exc()}")
 
@@ -2844,10 +1714,15 @@ class StackWorker(QThread):
 
     def __init__(self, siril, groups: dict, target: str,
                  out_dir: str, ext: str, opts: dict,
-                 calib: dict | None = None):
+                 calib: dict | None = None, nights: dict | None = None):
         super().__init__()
         self.siril = siril
         self._groups = groups
+        # path -> observing night, taken from each frame's own DATE-OBS
+        # during discovery.  Every night decision below goes through
+        # `_night_of` with this map, so a session that runs past midnight
+        # stays ONE night instead of being split by the date folder.
+        self._nights = nights or {}
         self._target = target
         self._out_dir = out_dir
         self._ext = ext or ".fit"
@@ -2864,8 +1739,10 @@ class StackWorker(QThread):
         self._offset_cache: dict = {}
         # filter -> what its flats were offset-corrected with, for the report.
         self._flat_offset_note: dict = {}
-        # {filter: (spread, other_night, reference_night)} for flats that
-        # disagree across nights -- the report has to name them.
+        # {filter: (spread, other_night, reference_night, noise_floor)}
+        # for flats that disagree across nights -- the report has to name
+        # them.  The floor is the fourth member and may be None when it
+        # could not be measured; `_write_docs` unpacks all four.
         self._flat_warn: dict = {}
         # {filter: {night: master path}} when the flats are kept per night.
         # Empty means one pooled master per filter, the historical shape.
@@ -2936,8 +1813,23 @@ class StackWorker(QThread):
         # differs from what the options say, and the report must not
         # describe it as if they had run.
         self._reg_degraded: dict = {}
+        # filter -> WHY those options did not reach the master.  There are
+        # two causes and they need different words: Siril REFUSED the
+        # argument set (and a smaller retry ran), or Siril ACCEPTED it and
+        # did not apply it.  One shared sentence would be wrong for one of
+        # them.  Missing entry = the refusal, which is the older case.
+        self._reg_degraded_why: dict = {}
         # Set when drizzle ran on a set too small to fill its finer grid.
         self._drizzle_warned = False
+        # {filter: why} for channels that STACKED but did not survive the
+        # cross-filter alignment.  Without this the report fell through to
+        # "not reached -- the run was stopped" for a filter whose master is
+        # sitting complete in masters/, which is the opposite of true.
+        self._align_dropped: dict = {}
+        # Did the alignment really re-project onto the shared -framing=min
+        # grid?  The single-pass fallback registers without it, and the
+        # composition guard must not take "alignment ran" as "one grid".
+        self._align_framing_min = False
         # Siril's data directory, asked for once (None = not asked yet).
         self._spcc_root_cache: str | None = None
         # Set when the user stopped the run.  Everything downstream of
@@ -3235,6 +2127,78 @@ class StackWorker(QThread):
         except OSError as exc:
             _log_swallowed(exc)
             return 0
+
+    def _reg_frame_sizes(self, process_dir: str, seq: str) -> set:
+        """Image sizes of the frames a registration exported.
+
+        `-framing=min` re-projects every frame onto the shared
+        intersection, so ONE size means it applied and several mean it
+        did not.  Headers only (NAXIS1/NAXIS2), and it stops at the
+        first disagreement -- which is the answer worth having, and
+        makes the bad case cost two reads instead of two hundred.
+        """
+        pat = re.compile(re.escape(seq) + r"_\d+" + re.escape(self._ext)
+                         + "$", re.IGNORECASE)
+        try:
+            names = sorted(f for f in os.listdir(process_dir)
+                           if pat.match(f))
+        except OSError as exc:
+            _log_swallowed(exc)
+            return set()
+        sizes: set = set()
+        for name in names:
+            header = _read_header(os.path.join(process_dir, name))
+            if header is None:
+                continue
+            try:
+                sizes.add((int(header.get("NAXIS1", 0)),
+                           int(header.get("NAXIS2", 0))))
+            except (ValueError, TypeError):
+                continue
+            if len(sizes) > 1:
+                break                   # already answered
+        return sizes
+
+    def _check_framing(self, filt: str, process_dir: str, seq: str) -> None:
+        """Did ``-framing=min`` really put the frames on one canvas?
+
+        It does on the star-registration path.  On the ASTROMETRIC one
+        (`seqplatesolve` + `seqapplyreg`, i.e. "Register by plate
+        solving") Siril accepts the argument, raises nothing, and exports
+        frames of differing sizes anyway; `stack` then says so in its own
+        log -- "The sequence has different image sizes and registration
+        data. Forcing to maximize framing" -- and the master comes out
+        LARGER than any sub.  That is the union, not the intersection:
+        exactly the ragged, partly-exposed border `-framing=min` exists
+        to remove.  Measured on one NGC 6946 run: 3008x3008 subs,
+        registered frames from 3007x3008 to 3013x3014, master 3060x3128.
+
+        Nothing raised, so `_note_reg_degraded` never fired and the report
+        went on promising a crop that had not happened.  The frames are
+        therefore asked directly, and a channel that did not get its crop
+        says so -- in the log and in the report.
+
+        A filter already recorded as degraded is left alone: its cause is
+        the refusal, which is the more specific story and already told.
+        """
+        if filt in self._reg_degraded:
+            return
+        sizes = self._reg_frame_sizes(process_dir, seq)
+        if len(sizes) < 2:
+            return                      # one size, or nothing readable
+        shown = ", ".join(f"{w}\u00d7{h}" for w, h in sorted(sizes))
+        self._reg_degraded[filt] = ["-framing=min"]
+        self._reg_degraded_why[filt] = (
+            "Siril accepted the argument, raised nothing, and exported "
+            f"frames of different sizes anyway ({shown}…), so `stack` "
+            "fell back to maximising the framing")
+        self._emit(
+            f"  {filt}: -framing=min did not apply — the registered frames "
+            f"came back in different sizes ({shown}…), so `stack` will "
+            "maximise the framing and the master keeps the ragged, "
+            "partly-exposed edges the crop exists to remove.  This is the "
+            "plate-solve registration path; star alignment ('Register by "
+            "plate solving' off) does apply the crop.", LogColor.SALMON)
 
     def _register(self, seq: str, filt: str) -> str:
         """Register the sequence; return the resulting sequence name."""
@@ -3643,13 +2607,39 @@ class StackWorker(QThread):
             return
         c = self._calib
         self._masters = {KIND_BIAS: None, KIND_DARK: {}, KIND_FLAT: {}}
+        # The two kinds are switched independently: flats and darks fail
+        # for unrelated reasons, and a session with good flats and a
+        # library of darks that fit nothing (or the reverse) used to be an
+        # all-or-nothing choice.  A master that will not be applied is not
+        # stacked either -- the cost of one is minutes and hundreds of
+        # reads, and it is the whole point of switching it off.
+        use_flats = self._opts.get("use_flats", True)
+        use_darks = self._opts.get("use_darks", True)
+        if not use_flats:
+            self._emit("  Flats and dark-flats are switched off — no flat "
+                       "master is stacked, and the lights keep their "
+                       "vignetting.", LogColor.SALMON)
+        if not use_darks:
+            self._emit("  Darks and bias are switched off — no dark master "
+                       "is stacked, and dark current and hot pixels stay in "
+                       "the lights.", LogColor.SALMON)
 
         # 1) The bias first -- it is the last resort for every filter's
         #    flats, so it has to exist before the flat loop.  Dark-flats
         #    are NOT built here: `_flat_offset_for` picks and stacks the
         #    right one per filter, because the flat exposure differs per
         #    filter as soon as a panel sets it automatically.
-        groups = c.get(KIND_BIAS) or {}
+        #
+        #    It serves two roles, and only one of them is "darks and bias":
+        #    reaching the LIGHTS where no dark does, which `_calib_args`
+        #    gates.  As the flats' own offset it belongs to the flats, so
+        #    switching the darks off must not quietly downgrade every flat
+        #    to a synthetic offset.  Hence either switch can call for it.
+        groups = (c.get(KIND_BIAS) or {}) if (use_darks or use_flats) else {}
+        if groups and not use_darks:
+            self._emit("  bias: stacked as the flats' offset only — with "
+                       "darks and bias off it does not reach the lights.",
+                       LogColor.BLUE)
         if groups:
             key = sorted(groups, key=_sig_sort_key)[0]
             if len(groups) > 1:
@@ -3665,7 +2655,7 @@ class StackWorker(QThread):
         #    and only that night's lights are calibrated with it.  Off, one
         #    pooled master per filter covers the whole run.
         by_date = self._opts.get("flats_by_date", False)
-        for filt, grp in (c.get(KIND_FLAT) or {}).items():
+        for filt, grp in ((c.get(KIND_FLAT) or {}) if use_flats else {}).items():
             if filt not in self._groups:
                 # A flat set for a filter this run has no lights for.
                 # Stacking it costs the same as a useful one and produces
@@ -3675,7 +2665,8 @@ class StackWorker(QThread):
                     "stacked.", LogColor.BLUE)
                 continue
             lit = set((self._groups.get(filt) or {}).get("dates") or [])
-            per_night = self._flats_per_night(grp, lit) if by_date else {}
+            per_night = (self._flats_per_night(grp, lit, self._nights)
+                         if by_date else {})
             self._check_flat_consistency(filt, grp["files"], bool(per_night))
             # Per filter, because the panel gives each filter its own flat
             # exposure and the offset has to match THAT one.  The offset is
@@ -3728,7 +2719,8 @@ class StackWorker(QThread):
             # whichever was stacked first.
             night_tag = ""
             if by_date and lit:
-                kept = [p for p in grp["files"] if _path_date(p) in lit]
+                kept = [p for p in grp["files"]
+                        if _night_of(p, self._nights) in lit]
                 dropped = len(grp["files"]) - len(kept)
                 if kept and dropped:
                     use = dict(grp, files=kept)
@@ -3758,8 +2750,9 @@ class StackWorker(QThread):
         #    the same filename would share a cache entry, so the collision is
         #    broken deterministically (sorted order) instead of silently.
         claimed: dict = {}
-        wanted = self._darks_in_demand(c.get(KIND_DARK) or {})
-        for sig in sorted((c.get(KIND_DARK) or {}), key=_sig_sort_key):
+        darks = (c.get(KIND_DARK) or {}) if use_darks else {}
+        wanted = self._darks_in_demand(darks)
+        for sig in sorted(darks, key=_sig_sort_key):
             if sig not in wanted:
                 continue
             grp = c[KIND_DARK][sig]
@@ -3821,7 +2814,8 @@ class StackWorker(QThread):
         return best
 
     @staticmethod
-    def _flats_per_night(grp: dict, lit: set) -> dict:
+    def _flats_per_night(grp: dict, lit: set, nights: dict | None = None
+                         ) -> dict:
         """``{night: flat files}`` for the nights worth keeping apart.
 
         A night qualifies only when it holds flats AND lights of this
@@ -3832,10 +2826,17 @@ class StackWorker(QThread):
         Returns ``{}`` when fewer than two nights qualify: with one, the
         per-night master and the pooled one would hold the same frames,
         so splitting the run would buy nothing and cost a merge.
+
+        ``nights`` is discovery's path -> observing-night map (see
+        `_night_of`).  Both this and the caller's ``lit`` set must come
+        from it, or a session that ran past midnight is split by its date
+        folders and half its lights are paired with the wrong flats --
+        which is exactly what happened while `_night_key` was computed
+        and never read.
         """
         by_night: dict = {}
         for path in grp.get("files") or []:
-            night = _path_date(path)
+            night = _night_of(path, nights)
             if night and night in lit:
                 by_night.setdefault(night, []).append(path)
         return by_night if len(by_night) > 1 else {}
@@ -3874,7 +2875,8 @@ class StackWorker(QThread):
         """
         by_night: dict = {}
         for path in files:
-            by_night.setdefault(_path_date(path) or "?", []).append(path)
+            by_night.setdefault(
+                _night_of(path, self._nights) or "?", []).append(path)
         if len(by_night) < 2:
             return
         # "?" (undated) sorts AFTER every digit, so a plain sort would
@@ -4134,7 +3136,19 @@ class StackWorker(QThread):
                 if share <= DARK_EXPOSURE_TOLERANCE:
                     wanted.add(sig)
                     break
-        skipped = len(groups) - len(wanted)
+        # A set can be unwanted HERE and still have been stacked.  A dark
+        # at a flat's exposure is consumed as that filter's dark-flat
+        # (`_flat_offset`, case 2), and flats are built before darks, so its
+        # master already exists and sits in `_offset_cache`.  Counting it as
+        # "not stacked" would deny a master the log printed moments earlier
+        # -- 160 frames the run plainly used.  It stays out of `wanted`
+        # (stacking it again as a dark master would be the redundant one)
+        # and out of the count; why it is not in the dark list was already
+        # said, per filter, where the choice was made.
+        as_offset = [sig for sig in groups
+                     if sig not in wanted
+                     and self._offset_cache.get((KIND_DARK, sig))]
+        skipped = len(groups) - len(wanted) - len(as_offset)
         if skipped:
             self._emit(
                 f"  {skipped} dark set(s) do not match any filter's lights "
@@ -4216,7 +3230,8 @@ class StackWorker(QThread):
         # Bias goes to the lights ONLY when no dark is used: a master dark
         # already contains the offset, so subtracting bias as well would
         # remove it twice.  Lc = (L - D) / (F - O).
-        if not dark and self._masters.get(KIND_BIAS):
+        if (not dark and self._masters.get(KIND_BIAS)
+                and self._opts.get("use_darks", True)):
             bias = self._masters[KIND_BIAS]
             args.append(f'"-bias={bias}"')
             used.append(f"bias={os.path.basename(bias)}")
@@ -4316,7 +3331,7 @@ class StackWorker(QThread):
         for exp, files in by_exp.items():
             for path in files:
                 key = (exp if split_exp else base,
-                       _path_date(path) if split_night else "")
+                       _night_of(path, self._nights) if split_night else "")
                 parts.setdefault(key, []).append(path)
         out = []
         for (exp, night), files in sorted(
@@ -4526,6 +3541,20 @@ class StackWorker(QThread):
                         blank_mark = self._blank_skipped
                         n_linked = self._link_frames(files, lights_dir)
                         self._blank_skipped = blank_mark
+                        if n_linked < 2:
+                            # The "need at least 2" guard is above, and it
+                            # passed on the count of the PARTS.  Re-staging
+                            # can come back with fewer (a frame that went
+                            # missing since, a symlink that could not be
+                            # made), and running on into `link` would turn a
+                            # clean skip into a Siril error nobody can read.
+                            msg = (f"only {n_linked} usable frame(s) after "
+                                   "falling back from per-part calibration; "
+                                   "need at least 2 to register and stack.")
+                            self._emit(f"  Skipping {filt}: {msg}",
+                                       LogColor.SALMON)
+                            errors[filt] = msg
+                            continue
                 if seq is None:
                     self._cmd("cd", f'"{lights_dir}"')
                     self._cmd(conv, "lights", "-out=../process")
@@ -4585,6 +3614,13 @@ class StackWorker(QThread):
                 # what went in at the top.
                 n_reg = self._count_seq_frames(
                     os.path.join(work, "process"), seq)
+                # ...and, while those frames are there, whether the crop
+                # that was asked for actually reached them.  Siril accepts
+                # -framing=min on the astrometric path and ignores it, so
+                # only the frames themselves can answer this.
+                if self._opts.get("crop_edges", True):
+                    self._check_framing(
+                        filt, os.path.join(work, "process"), seq)
                 if n_reg and n_reg < n_linked:
                     lost = n_linked - n_reg
                     self._emit(
@@ -5267,7 +4303,12 @@ class StackWorker(QThread):
                       "actually got a matching dark.")
                 if opts.get("flats_by_date"):
                     A("    - Flats were matched **per night** (only flats "
-                      "from the same date folder as the lights were used).")
+                      "from the same observing night as the lights were "
+                      "used).  The night is taken from each frame's own "
+                      "`DATE-OBS`, counted noon to noon, so a session "
+                      "running past midnight stays one night instead of "
+                      "being split by its date folders; frames without a "
+                      "readable `DATE-OBS` fall back to the folder name.")
             if opts.get("bg_extract"):
                 A(N() + " **Per-sub background** — a gradient was removed "
                   "from every individual sub before registration "
@@ -5344,11 +4385,13 @@ class StackWorker(QThread):
                 # with the framing and filters described above, and lumping
                 # them together would understate those.
                 for f in sorted(self._reg_degraded):
+                    why = self._reg_degraded_why.get(
+                        f, "Siril refused the full argument set for this "
+                           "channel and it fell back to a smaller one")
                     A(f"    - \u26a0\ufe0f **{f}** was registered without "
                       + ", ".join(self._reg_degraded[f])
-                      + ".  Siril refused the full argument set for this "
-                      "channel and it fell back to a smaller one, so the "
-                      "line above does not describe this master.")
+                      + f".  {why} — the line above does not describe this "
+                      "master.")
             if self._drizzle_warned:
                 A(f"    - ⚠️ Drizzle ran on fewer than {DRIZZLE_MIN_FRAMES} "
                   "frames. It spreads each sub's flux over a finer grid, so "
@@ -5933,8 +4976,15 @@ class StackWorker(QThread):
                 filt: os.path.join(
                     mdir, f"{_safe(self._target)}_{self._tok(filt)}{self._ext}")
                 for filt in filters}
-            full_paths = {filt: self._find_fullframe(mdir, filt)
-                          for filt in filters}
+            # Only when reuse is actually on.  `reusable_full` below is
+            # consumed solely through `skip`, which stays empty without
+            # `want_reuse`, so on a fresh run this scan is work nothing
+            # reads -- and its one visible effect is a swallowed
+            # FileNotFoundError per filter for a masters/ directory that
+            # does not exist yet: four alarming lines before the run has
+            # done anything at all.
+            full_paths = ({filt: self._find_fullframe(mdir, filt)
+                           for filt in filters} if want_reuse else {})
             missing_aligned = [f for f, p in aligned_paths.items()
                                if not os.path.exists(p)]
             mixed = ({} if missing_aligned or not want_reuse
@@ -5964,6 +5014,11 @@ class StackWorker(QThread):
                 results = dict(aligned_paths)
                 final_paths = dict(aligned_paths)
                 did_align = True          # the reused masters are aligned
+                # `reuse_ok` already required `_mixed_grids` to be empty,
+                # so these came off one grid -- otherwise the composition
+                # guard below would explain a mismatch that cannot occur
+                # here with the single-pass fallback's wording.
+                self._align_framing_min = True
             else:
                 if want_reuse:
                     shown = ", ".join(missing_aligned[:4]) + (
@@ -6015,27 +5070,50 @@ class StackWorker(QThread):
                             "composition).", LogColor.BLUE)
                     aligned = self._align_masters(results)
                     if aligned:
+                        # A channel that stacked but did not survive the
+                        # alignment has to say so.  Without an entry here
+                        # the report falls through to "not reached -- the
+                        # run was stopped", which describes neither what
+                        # happened nor the finished master in masters/.
+                        for filt in results:
+                            if filt not in aligned:
+                                errors.setdefault(
+                                    filt,
+                                    self._align_dropped.get(filt)
+                                    or "excluded during cross-filter "
+                                       "alignment; the full-frame master "
+                                       "in masters/ is intact, but it is "
+                                       "not on the common grid and is not "
+                                       "in the composite")
                         final_paths = aligned
                         did_align = True
 
             want_compose = self._opts.get("compose", False)
-            if want_compose and not did_align and len(final_paths) >= 2:
-                # _compose states that its inputs are identical in size,
-                # which -framing=min guarantees -- but only if alignment
-                # actually ran.  When it failed, the masters are still on
-                # their own grids and rgbcomp would either refuse them or,
-                # worse, combine channels that do not overlay.
+            if want_compose and len(final_paths) >= 2:
+                # _compose states that its inputs are identical in size.
+                # -framing=min guarantees that -- but only when it really
+                # ran: the single-pass fallback inside _align_masters
+                # registers without it, and `did_align` is set either way.
+                # Gating this check on that flag therefore trusted a
+                # promise the fallback never made, so the sizes are read
+                # from the files instead.  A proper alignment run passes
+                # this in silence; it costs a header read per channel.
                 off = _mixed_grids(final_paths)
                 if off:
                     shown = ", ".join(f"{f} {w}\u00d7{h}"
                                       for f, (w, h) in sorted(off.items()))
+                    why = ("alignment ran, but without the -framing=min "
+                           "re-projection that puts them on one grid"
+                           if did_align and not self._align_framing_min
+                           else "alignment did not run" if not did_align
+                           else "they came out of the alignment on "
+                                "different grids")
                     self._emit(
                         "Colour composition skipped: the masters are not on "
-                        f"one pixel grid ({shown}) and alignment did not "
-                        "run. Combining them would misregister the "
-                        "channels. The per-filter masters are complete and "
-                        "can be composed after a successful alignment.",
-                        LogColor.SALMON)
+                        f"one pixel grid ({shown}) — {why}. Combining them "
+                        "would misregister the channels. The per-filter "
+                        "masters are complete and can be composed after a "
+                        "successful alignment.", LogColor.SALMON)
                     want_compose = False
 
             # Optional: plate-solve the final masters so they carry a WCS.
@@ -6722,7 +5800,8 @@ class StackWorker(QThread):
             #
             # Wavelengths are physics, not preference.  Bandwidth depends on
             # the user's filter set, so that one is configurable.
-            bw = float(self._opts.get("nb_bandwidth", 7))
+            bw = float(self._opts.get("nb_bandwidth")
+                       or DEFAULT_NB_BANDWIDTH)
             # Which line sits in which colour channel is exactly what
             # the palette table says -- so a new palette cannot be added
             # with the wrong wavelengths sent to SPCC.
@@ -6820,6 +5899,21 @@ class StackWorker(QThread):
             "will be ignored, and a name that only exists in the OSC tables "
             "makes SPCC calibrate as one-shot colour. Known entries include: "
             f"{sample}…", LogColor.SALMON)
+
+    def _photometry_planned(self, palette: str) -> bool:
+        """Will a *photometric* colour calibration actually run?
+
+        The distortion-aware solve exists to serve one, and costs seconds
+        on a palette where `_colour_calibrate` gives up before measuring a
+        single star.  It lives next to that method so the two cannot drift:
+        the palettes named here are the ones it refuses outright, and a
+        narrowband palette with SPCC switched off leaves no attempt at all,
+        because PCC assumes broadband star colours.
+        """
+        if palette == "HaRGB" or palette in _MIX_PALETTES:
+            return False
+        return bool(self._opts.get("use_spcc", True)
+                    or palette not in _NB_PALETTES)
 
     def _colour_calibrate(self, palette: str) -> None:
         """Colour-calibrate the loaded composite, best method first.
@@ -7011,9 +6105,16 @@ class StackWorker(QThread):
         # call is a no-op -- worth distinguishing, because "we solved it
         # here" and "it arrived solved" are different facts.
         inherited = _has_wcs(path)
-        solved = True
+        # An inherited solution is astrometry the image ALREADY carries.
+        # `solved` therefore starts from that fact, not from the outcome
+        # of the call below: a platesolve that refuses an image which is
+        # already solved used to set solved=False and skip the colour
+        # calibration -- over a WCS that was sitting in the header the
+        # whole time.
+        solved = inherited
         try:
             self._cmd("platesolve")
+            solved = True
             if inherited:
                 self._finish_steps.append(
                     "Astrometry (WCS) was inherited from the plate-solved "
@@ -7026,11 +6127,64 @@ class StackWorker(QThread):
         except (CommandError, DataError, SirilError) as exc:
             # Only note the failure here; the consequence is reported once,
             # below, so the two do not say the same thing twice.
-            solved = False
-            self._finish_steps.append("Plate-solve failed.")
-            self._emit(
-                f"  Finish: plate-solve failed ({exc}); skipping colour "
-                "calibration.", LogColor.SALMON)
+            if inherited:
+                self._finish_steps.append(
+                    "Plate-solve was refused, but the composite already "
+                    "carried the masters' astrometry (WCS) — colour "
+                    "calibration went ahead on that solution.")
+                self._emit(
+                    f"  Finish: plate-solve was refused ({exc}), but the "
+                    "composite already carries the masters' astrometry — "
+                    "continuing with colour calibration.", LogColor.BLUE)
+            else:
+                self._finish_steps.append("Plate-solve failed.")
+                self._emit(
+                    f"  Finish: plate-solve failed ({exc}); skipping colour "
+                    "calibration.", LogColor.SALMON)
+
+        # A WCS and a DISTORTION-AWARE WCS are different facts, and the
+        # photometric methods want the second: they measure each catalogue
+        # star through the solution, so a linear one is furthest from the
+        # truth exactly where the field is widest -- the corners.  Siril
+        # says so itself, twice per run: "Found linear plate solve data,
+        # you may need to solve your image with distortions to ensure
+        # correct calibration of stars near image corners."
+        #
+        # And linear is what the composite inherits, by construction:
+        # `seqapplyreg` undistorts every frame, so the registered frames
+        # carry a linear WCS, and the cross-filter alignment on top is a
+        # homography with no distortion model at all.  Inheriting a
+        # solution is still worth doing -- it is what makes the plate-solve
+        # above a no-op -- it is simply not the solution SPCC asked for.
+        #
+        # `-force` because the image is already solved and Siril would
+        # otherwise answer "Nothing will be done"; `-noflip` because a
+        # forced solve is allowed to flip an image it reads as upside-down,
+        # and the composite has to stay on the masters' grid.
+        palette = self._opts.get("compose_palette", "RGB")
+        if solved and not _has_sip(path) and self._photometry_planned(palette):
+            try:
+                self._cmd("platesolve", "-force", "-noflip",
+                          f"-order={SPCC_SIP_ORDER}")
+                self._finish_steps.append(
+                    "Re-solved the composite with distortions (SIP order "
+                    f"{SPCC_SIP_ORDER}) — the inherited solution is linear, "
+                    "and photometric colour calibration reads star positions "
+                    "through it.")
+                self._emit(
+                    "  Finish: re-solved with distortions (SIP order "
+                    f"{SPCC_SIP_ORDER}); the inherited solution was linear, "
+                    "which is what the colour calibration warns about.",
+                    LogColor.GREEN)
+            except (CommandError, DataError, SirilError) as exc:
+                self._finish_steps.append(
+                    "The distortion-aware solve was refused; colour "
+                    "calibration ran on the solution the image still "
+                    "carried.")
+                self._emit(
+                    f"  Finish: distortion-aware solve refused ({exc}); "
+                    "continuing with the solution the image still carries.",
+                    LogColor.SALMON)
 
         # Background / gradient extraction on the COMBINED image, before the
         # colour calibration.  Even with per-channel extraction, the freshly
@@ -7048,7 +6202,6 @@ class StackWorker(QThread):
                 f"  Finish: composite background extraction skipped ({exc}).",
                 LogColor.SALMON)
 
-        palette = self._opts.get("compose_palette", "RGB")
         if solved:
             self._colour_calibrate(palette)
         else:
@@ -7305,6 +6458,9 @@ class StackWorker(QThread):
                         f"  Alignment: master for {filt} is missing "
                         "— excluding it from the colour image.",
                         LogColor.SALMON)
+                    self._align_dropped[filt] = (
+                        "excluded from the cross-filter alignment — its "
+                        "master file was gone by the time alignment ran")
                     continue
                 seq_idx += 1
                 dst = os.path.join(
@@ -7323,6 +6479,7 @@ class StackWorker(QThread):
             # the delta belongs to this step -- and only if nothing else
             # wrote in between, which the prefix check below verifies.
             log_before = self._log_snapshot()
+            self._align_framing_min = False
             try:
                 self._cmd("register", "masters", "-2pass")
                 # -framing=min (intersection) so every aligned master comes
@@ -7330,9 +6487,19 @@ class StackWorker(QThread):
                 # edges -- required for direct LRGB / SHO channel combination.
                 # (max framing leaves per-channel canvases a few px apart.)
                 self._cmd("seqapplyreg", "masters", "-framing=min")
+                self._align_framing_min = True
             except (CommandError, DataError, SirilError):
-                # Fall back to single-pass global registration.
+                # Fall back to single-pass global registration.  It knows
+                # no -framing=, so nothing here guarantees the shared grid
+                # this step exists to produce -- recorded, because the
+                # composition guard used to trust "alignment ran" instead
+                # of checking the sizes it was promised.
                 self._cmd("register", "masters")
+                self._emit(
+                    "  Alignment: two-pass re-projection was refused; the "
+                    "single-pass fallback registered the masters but "
+                    "cannot apply -framing=min. The channel sizes are "
+                    "checked before composition.", LogColor.SALMON)
             self._read_align_pairs(
                 log_before, index_to_filter,
                 scope="Checking sequences in the directory: "
@@ -7357,6 +6524,11 @@ class StackWorker(QThread):
                         f"but was expected to be {filt} — excluding it "
                         "rather than saving a mislabelled channel.",
                         LogColor.RED)
+                    self._align_dropped[filt] = (
+                        f"excluded during cross-filter alignment — the "
+                        f"aligned frame carried FILTER={stamped}, so writing "
+                        f"it as {filt} would have mislabelled the channel. "
+                        "The full-frame master in masters/ is intact")
                     continue
                 out = os.path.join(
                     adir, f"{_safe(self._target)}_{self._tok(filt)}{self._ext}")
@@ -7389,7 +6561,20 @@ class StackWorker(QThread):
             return {}
 
     def _platesolve_file(self, path: str) -> None:
-        """Load a master, plate-solve it, and save the WCS back in place."""
+        """Load a master, plate-solve it, and save the WCS back in place.
+
+        A master registered through the plate-solve path already carries a
+        solution, and Siril answers "Image is already plate solved. Nothing
+        will be done." -- successfully.  Reporting that as "plate-solved"
+        credits this step with astrometry it inherited; the header is asked
+        first so the log says which of the two happened, the same
+        distinction `_finish_composite` makes for the composite.
+
+        The command still runs either way.  Whether an existing solution is
+        good enough is Siril's call, not this function's, and skipping on
+        the strength of three keywords would be second-guessing it.
+        """
+        inherited = _has_wcs(path)
         try:
             self._cmd("load", f'"{path}"')
             self._cmd("platesolve")
@@ -7399,8 +6584,14 @@ class StackWorker(QThread):
             ext = _fits_ext(path)
             base = path[:-len(ext)] if ext else path
             self._cmd("save", f'"{base}"')
-            self._emit(
-                f"  Plate-solved {os.path.basename(path)}", LogColor.GREEN)
+            if inherited:
+                self._emit(
+                    f"  {os.path.basename(path)} already carried an "
+                    "astrometric solution from registration — nothing to "
+                    "solve.", LogColor.BLUE)
+            else:
+                self._emit(f"  Plate-solved {os.path.basename(path)}",
+                           LogColor.GREEN)
         except (CommandError, DataError, SirilError) as exc:
             self._emit(
                 f"  Plate-solve of {os.path.basename(path)} failed: {exc}",
@@ -7761,10 +6952,20 @@ def _rejection_fallback(tokens: list) -> tuple[list[str], str] | None:
     retrying with a *different algorithm* would both mask the real error
     and, with rejection switched off, re-enable something the user
     deliberately turned off.
+
+    The retry is WINSORIZED, the band immediately below GESDT.  It used to
+    be linear fit, which contradicted both callers' own comments ("retry
+    with the tier below") and `_rejection_args`: GESDT covers 31-300
+    frames, and linear fit is the band ABOVE it, reserved for >300 because
+    that is where a trend across the stack has enough points to be modelled.
+    Handing a 35-frame stack to linear fit was reaching past the answer in
+    the wrong direction; winsorized is what `_rejection_args` itself gives
+    the frames just short of GESDT, and every Siril that refuses `g` knows
+    it.
     """
     if tokens[:2] != ["rej", "g"]:
         return None
-    return ["rej", "linear", "3", "3"], "linear fit 3/3"
+    return ["rej", "winsorized", "3", "3"], "winsorized 3/3"
 
 
 # ---------------------------------------------------------------------------
@@ -8063,6 +7264,11 @@ class ImageMonoTrainWindow(QMainWindow):
         # Calibration library folder (darks / bias) and the last scan result.
         self._library = ""
         self._calib: dict = {}
+        # path -> observing night, filled by the analysis from each frame's
+        # own DATE-OBS.  The previews and the run both read it through
+        # `_night_of`, so they cannot disagree about which night a frame
+        # belongs to.
+        self._nights: dict = {}
 
         self.init_ui()
         self._load_settings()
@@ -8168,24 +7374,50 @@ class ImageMonoTrainWindow(QMainWindow):
 
         parent_layout.addWidget(group)
 
+    @staticmethod
+    def _new_table(headers: list) -> QTableWidget:
+        """A read-only table built the way all three of them are built.
+
+        The lights, the flats and the darks are three views of one scan,
+        and a user comparing them should not have to notice that they were
+        written at different times.  The last column stretches; the rest
+        take the width their content needs.
+        """
+        tbl = QTableWidget(0, len(headers))
+        tbl.setHorizontalHeaderLabels(headers)
+        tbl.verticalHeader().setVisible(False)
+        tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        tbl.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        hdr = tbl.horizontalHeader()
+        for i in range(len(headers) - 1):
+            hdr.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(len(headers) - 1,
+                                 QHeaderView.ResizeMode.Stretch)
+        return tbl
+
     def _build_filters_group(self, parent_layout: QVBoxLayout) -> None:
-        group = QGroupBox("Discovered Filters")
+        """Everything the SESSION produced: lights, and the flats beside them.
+
+        One box, because they come from the same nights and the same
+        folder -- a flat belongs to the session that shot the lights, and
+        is never taken from the library.  The darks and bias, which are
+        library material reused across sessions, are the box below.
+
+        The target sits in the title rather than on a line of its own:
+        the box is about one target, and a label repeating it underneath
+        was a second place to keep in step.
+
+        Both flat switches sit UNDER their table.  The table is what the
+        eye reads first -- it is the finding -- and the switches are what
+        you do about it; put above, they separated the lights table from
+        the flats table it has nothing to do with.
+        """
+        self.grp_discovered = QGroupBox(DISCOVERED_TITLE + "—")
+        group = self.grp_discovered
         layout = QVBoxLayout(group)
 
-        self.tbl_filters = QTableWidget(0, 5)
-        self.tbl_filters.setHorizontalHeaderLabels(
-            ["Filter", "Lights", "Calibration", "Integration", "Details"])
-        self.tbl_filters.verticalHeader().setVisible(False)
-        self.tbl_filters.setEditTriggers(
-            QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.tbl_filters.setSelectionMode(
-            QAbstractItemView.SelectionMode.NoSelection)
-        hdr = self.tbl_filters.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.tbl_filters = self._new_table(
+            ["Filter", "Lights", "Nights", "Integration", "Details"])
         self._fit_table_height()
         layout.addWidget(self.tbl_filters)
 
@@ -8195,25 +7427,58 @@ class ImageMonoTrainWindow(QMainWindow):
         self.lbl_uniform.setVisible(False)
         layout.addWidget(self.lbl_uniform)
 
-        self.lbl_target = QLabel("Target: —")
-        self.lbl_target.setStyleSheet("color:#88aaff;font-weight:bold;")
-        layout.addWidget(self.lbl_target)
+
+        self.tbl_flats = self._new_table(
+            ["Filter", "Flats", "Dark-Flats", "Offset", "Nights"])
+        self._fit_table_height(self.tbl_flats)
+        layout.addWidget(self.tbl_flats)
+
+        self.lbl_flats_none = QLabel(
+            "Analyze a folder to see the flats found next to the lights.")
+        self.lbl_flats_none.setWordWrap(True)
+        self.lbl_flats_none.setStyleSheet("color:#888888;font-size:9pt;")
+        layout.addWidget(self.lbl_flats_none)
+
+        self.chk_use_flats = QCheckBox("Use flats and dark-flats")
+        self.chk_use_flats.setChecked(True)
+        self.chk_use_flats.setToolTip(
+            "Divide the lights by the master flat:  Lc = (L − D) / (F − O).\n"
+            "Corrects vignetting and dust shadows.  The dark-flat (or bias) "
+            "is the flat's own offset and follows this switch — it exists "
+            "only to calibrate the flats.\n"
+            "Off: no flat master is stacked at all, and the lights keep "
+            "their vignetting.")
+        _nofocus(self.chk_use_flats)
+        self.chk_use_flats.toggled.connect(self._on_calib_kind_toggled)
+        layout.addWidget(self.chk_use_flats)
+
+        self.chk_flats_by_date = QCheckBox("Match flats to the same night")
+        self.chk_flats_by_date.setChecked(False)
+        self.chk_flats_by_date.setToolTip(
+            "OFF: all flats of a filter are pooled into one master — correct "
+            "for a permanently mounted rig, and less noisy.\n"
+            "ON: every night gets its OWN master flat, and that night's "
+            "lights are divided by it. The calibrated nights are merged "
+            "again before registration, so the filter still ends as one "
+            "master.\n"
+            "Pick this when the optical train was touched between nights — "
+            "the log measures how far the nights disagree and says so.\n"
+            "A night whose flats are missing falls back to a pooled master, "
+            "and the log names it.")
+        _nofocus(self.chk_flats_by_date)
+        # It changes the flats table directly -- how many masters, from
+        # which nights -- so that table has to be redrawn with it.
+        self.chk_flats_by_date.toggled.connect(self._on_calib_kind_toggled)
+        layout.addWidget(self.chk_flats_by_date)
 
         parent_layout.addWidget(group)
 
     def _build_calibration_group(self, parent_layout: QVBoxLayout) -> None:
-        group = QGroupBox("Calibration")
+        # Named for what it now holds.  Flats moved out to their own group
+        # above; what is left is the material that comes from the library
+        # and is reused across sessions.
+        group = QGroupBox("Calibration with Darks and Bias")
         layout = QVBoxLayout(group)
-
-        self.chk_calibrate = QCheckBox("Apply calibration when frames exist")
-        self.chk_calibrate.setChecked(True)
-        self.chk_calibrate.setToolTip(
-            "Calibrate the lights before stacking:  Lc = (L − D) / (F − O).\n"
-            "Everything is optional and additive — whatever is found is used, "
-            "the rest is skipped.  Harmless when nothing is there.")
-        _nofocus(self.chk_calibrate)
-        self.chk_calibrate.toggled.connect(self._on_calibrate_toggled)
-        layout.addWidget(self.chk_calibrate)
 
         lrow = QHBoxLayout()
         self.btn_library = QPushButton("\U0001F4C1  Library…")
@@ -8238,6 +7503,34 @@ class ImageMonoTrainWindow(QMainWindow):
         self.lbl_library.setStyleSheet("color:#888888;font-size:9pt;")
         layout.addWidget(self.lbl_library)
 
+        self.chk_use_darks = QCheckBox("Use darks and bias")
+        self.chk_use_darks.setChecked(True)
+        self.chk_use_darks.setToolTip(
+            "Subtract the master dark from the lights, and use the master "
+            "bias where no dark applies:  Lc = (L − D) / (F − O).\n"
+            "Removes dark current, hot pixels and amp glow.  Bias reaches "
+            "the lights only when no dark does — a master dark already "
+            "carries the offset.\n"
+            "Off: no dark or bias master is stacked, and cosmetic "
+            "correction has nothing to read.")
+        _nofocus(self.chk_use_darks)
+        self.chk_use_darks.toggled.connect(self._on_calib_kind_toggled)
+        layout.addWidget(self.chk_use_darks)
+
+        self.tbl_darks = self._new_table(
+            ["Type", "Frames", "Exposure", "Details", "Applies to"])
+        self._fit_table_height(self.tbl_darks)
+        layout.addWidget(self.tbl_darks)
+
+        # Sits under the table it qualifies: a filter with no matching dark
+        # has no row up there, and silence is the one thing that must not
+        # stand for "nothing is wrong".
+        self.lbl_dark_gap = QLabel("")
+        self.lbl_dark_gap.setWordWrap(True)
+        self.lbl_dark_gap.setStyleSheet("color:#ffaa88;font-size:9pt;")
+        self.lbl_dark_gap.setVisible(False)
+        layout.addWidget(self.lbl_dark_gap)
+
         self.chk_cosmetic = QCheckBox("Cosmetic correction (hot pixels)")
         self.chk_cosmetic.setChecked(True)
         self.chk_cosmetic.setToolTip(
@@ -8247,21 +7540,6 @@ class ImageMonoTrainWindow(QMainWindow):
         _nofocus(self.chk_cosmetic)
         layout.addWidget(self.chk_cosmetic)
 
-        self.chk_flats_by_date = QCheckBox("Match flats to the same night")
-        self.chk_flats_by_date.setChecked(False)
-        self.chk_flats_by_date.setToolTip(
-            "OFF: all flats of a filter are pooled into one master — correct "
-            "for a permanently mounted rig, and less noisy.\n"
-            "ON: every night gets its OWN master flat, and that night's "
-            "lights are divided by it. The calibrated nights are merged "
-            "again before registration, so the filter still ends as one "
-            "master.\n"
-            "Pick this when the optical train was touched between nights — "
-            "the log measures how far the nights disagree and says so.\n"
-            "A night whose flats are missing falls back to a pooled master, "
-            "and the log names it.")
-        _nofocus(self.chk_flats_by_date)
-        layout.addWidget(self.chk_flats_by_date)
 
         # Last, because it describes the result of every switch above it.
         # It used to sit over them, so flipping a box rewrote a sentence
@@ -8280,16 +7558,32 @@ class ImageMonoTrainWindow(QMainWindow):
         sigma multiple where anything past ~5 already rejects nothing.  A
         value left over from the other mode is replaced by that mode's
         sensible default rather than silently reinterpreted.
+
+        The reset follows the MODE SWITCH, not the range.  Keying it on
+        "the old value no longer fits" only ever fired in one direction:
+        90 % does not fit 1..10, so % -> k-sigma reset correctly, while
+        k-sigma -> % left a 3 sitting in a box now labelled "3 %" -- a
+        filter that keeps the best three percent of the frames.  On a
+        200-frame set that is six survivors, and `_quality_filter_args`
+        emits it happily because six clears MIN_STACK_FRAMES; on a short
+        set the same value falls under the floor and the filter silently
+        does nothing at all.  Both readings are wrong, and neither is
+        what the box says.
         """
         k_sigma = mode == "k-sigma"
         hi, default = (10, 3) if k_sigma else (100, 90)
-        changed = False
+        previous = getattr(self, "_filter_mode_applied", None)
+        self._filter_mode_applied = mode
+        # None means this is the constructor's own call: there is no
+        # previous mode to have carried a value over from, and the
+        # defaults already belong to the mode being set.
+        changed = previous is not None and previous != mode
         for spin in getattr(self, "_filter_spins", ()):
-            old = spin.value()
+            # Range first: Qt clamps the current value into the new range,
+            # so setting the value afterwards is what actually sticks.
             spin.setRange(1, hi)
-            if old > hi:
+            if changed:
                 spin.setValue(default)
-                changed = True
             spin.setSuffix(" σ" if k_sigma else " %")
         # This also runs once during construction, before the Log tab
         # exists -- and there is nothing to report at that point anyway.
@@ -8309,17 +7603,18 @@ class ImageMonoTrainWindow(QMainWindow):
                 f"Filter mode is now '{mode}' — the values were reset to "
                 f"{default}%; they were sigma multiples.", LogColor.BLUE)
 
-    def _on_calibrate_toggled(self, on: bool) -> None:
-        for w in (self.btn_library, self.btn_library_clear,
-                  self.chk_cosmetic, self.chk_flats_by_date):
-            w.setEnabled(on)
-        # The summary line states what will be applied, so it has to follow
-        # the switch -- otherwise it keeps advertising masters that the run
-        # will now ignore (or claims calibration is off after it was
-        # switched back on).
-        if self._groups:
-            self._show_calib_summary()
-            self._refresh_filter_table()
+    def _calibration_on(self) -> bool:
+        """Is any calibration going to happen?
+
+        There used to be a third switch above these two, "Apply
+        calibration when frames exist".  Every one of its four gates was
+        about darks, flats or bias, so it said exactly what these two say
+        together -- and it could contradict them: off with both of these
+        on was a reachable state in which the panel showed two armed
+        switches and the run calibrated nothing.  The answer is derived
+        now, so it cannot disagree with the boxes it is derived from.
+        """
+        return self.chk_use_flats.isChecked() or self.chk_use_darks.isChecked()
 
     def _set_library(self, path: str) -> None:
         self._library = path or ""
@@ -8910,6 +8205,7 @@ class ImageMonoTrainWindow(QMainWindow):
             "skip_blank": self.chk_skip_blank,
             "rejection": self.chk_rejection,
             "weighting": self.chk_weighting,
+            "filter_mode": self.cmb_filter_mode,
             "f_wfwhm_on": self.chk_f_wfwhm,
             "f_wfwhm_val": self.spin_keep,
             "f_round_on": self.chk_f_round,
@@ -8929,7 +8225,9 @@ class ImageMonoTrainWindow(QMainWindow):
     def _connect_preset_watchers(self) -> None:
         """Any manual option change flips the preset combo to 'Custom'."""
         for w in self._preset_widgets().values():
-            if isinstance(w, QCheckBox):
+            if isinstance(w, QComboBox):
+                w.currentTextChanged.connect(self._mark_custom_preset)
+            elif isinstance(w, QCheckBox):
                 w.toggled.connect(self._mark_custom_preset)
             elif isinstance(w, QSpinBox):
                 w.valueChanged.connect(self._mark_custom_preset)
@@ -8957,7 +8255,8 @@ class ImageMonoTrainWindow(QMainWindow):
             "f_round_val": self.spin_f_round,
             "f_stars_val": self.spin_f_stars,
             "f_bkg_val": self.spin_f_bkg,
-            "calibrate": self.chk_calibrate,
+            "use_flats": self.chk_use_flats,
+            "use_darks": self.chk_use_darks,
             "cosmetic": self.chk_cosmetic,
             "flats_by_date": self.chk_flats_by_date,
             "crop_edges": self.chk_crop_edges,
@@ -9054,6 +8353,16 @@ class ImageMonoTrainWindow(QMainWindow):
             ordered = sorted(settings.items(),
                              key=lambda kv: kv[0] != "filter_mode")
             for key, value in ordered:
+                if key == "calibrate":
+                    # The master switch this key named is gone; the two
+                    # kind switches say the same thing.  Only the OFF case
+                    # carries information -- "on" is what they already are
+                    # unless the file also names them.
+                    if not value:
+                        self.chk_use_flats.setChecked(False)
+                        self.chk_use_darks.setChecked(False)
+                    applied += 1
+                    continue
                 w = widgets.get(key)
                 if w is None:
                     unknown += 1
@@ -9088,7 +8397,7 @@ class ImageMonoTrainWindow(QMainWindow):
             # clickable and the panel lying about what will run.
             self._on_compose_toggled(self.chk_compose.isChecked())
             self._on_palette_changed()
-            self._on_calibrate_toggled(self.chk_calibrate.isChecked())
+            self._on_calib_kind_toggled()
             self.chk_disto.setEnabled(self.chk_platesolve_reg.isChecked())
         finally:
             self._applying_preset = False
@@ -9107,16 +8416,29 @@ class ImageMonoTrainWindow(QMainWindow):
         self._log(f"Applied preset: {name}", LogColor.BLUE)
 
     def _apply_preset(self, name: str) -> None:
-        """Set every option a preset defines (without tripping 'Custom')."""
+        """Set every option a preset defines (without tripping 'Custom').
+
+        The combo boxes go FIRST, because one of them is the quality-filter
+        mode and that decides the spin boxes' range: a percentage applied
+        into a k-sigma range is clamped to 10, and the preset then silently
+        arms a filter that rejects nothing.  Same ordering rule as
+        `_load_settings`, for the same reason.
+        """
         preset = PRESETS.get(name)
         if not preset:
             return
         widgets = self._preset_widgets()
         self._applying_preset = True
         try:
-            for key, value in preset.items():
+            ordered = sorted(
+                preset.items(),
+                key=lambda kv: 0 if isinstance(widgets.get(kv[0]), QComboBox)
+                else 1)
+            for key, value in ordered:
                 w = widgets.get(key)
-                if isinstance(w, QCheckBox):
+                if isinstance(w, QComboBox):
+                    w.setCurrentText(str(value))
+                elif isinstance(w, QCheckBox):
                     w.setChecked(bool(value))
                 elif isinstance(w, QSpinBox):
                     w.setValue(int(value))
@@ -9467,13 +8789,22 @@ class ImageMonoTrainWindow(QMainWindow):
                 st.value("align_filters", True, type=bool))
             self.chk_platesolve_master.setChecked(
                 st.value("platesolve_master", False, type=bool))
-            self.chk_calibrate.setChecked(
-                st.value("calibrate", True, type=bool))
+            # A settings file written before the master switch was
+            # removed can still say "calibrate": false.  Honouring the two
+            # new keys alone would turn calibration back ON for anyone who
+            # had switched it off -- silently, on the next start.
+            legacy_off = not st.value("calibrate", True, type=bool)
+            self.chk_use_flats.setChecked(
+                False if legacy_off
+                else st.value("use_flats", True, type=bool))
+            self.chk_use_darks.setChecked(
+                False if legacy_off
+                else st.value("use_darks", True, type=bool))
             self.chk_cosmetic.setChecked(st.value("cosmetic", True, type=bool))
             self.chk_flats_by_date.setChecked(
                 st.value("flats_by_date", False, type=bool))
             self._set_library(str(st.value("calib_library", "")))
-            self._on_calibrate_toggled(self.chk_calibrate.isChecked())
+            self._on_calib_kind_toggled()
             self.chk_reuse.setChecked(
                 st.value("reuse_masters", False, type=bool))
             self.chk_load_result.setChecked(
@@ -9540,7 +8871,11 @@ class ImageMonoTrainWindow(QMainWindow):
         st.setValue("copy", self.chk_copy.isChecked())
         st.setValue("align_filters", self.chk_align_filters.isChecked())
         st.setValue("platesolve_master", self.chk_platesolve_master.isChecked())
-        st.setValue("calibrate", self.chk_calibrate.isChecked())
+        # Still written, so an older build of this script reading these
+        # settings keeps behaving as the two switches say.
+        st.setValue("calibrate", self._calibration_on())
+        st.setValue("use_flats", self.chk_use_flats.isChecked())
+        st.setValue("use_darks", self.chk_use_darks.isChecked())
         st.setValue("cosmetic", self.chk_cosmetic.isChecked())
         st.setValue("flats_by_date", self.chk_flats_by_date.isChecked())
         st.setValue("calib_library", self._library)
@@ -9728,8 +9063,11 @@ class ImageMonoTrainWindow(QMainWindow):
         # multiple-target warning.
         self._groups = {}
         self._calib = {}
+        self._nights = {}
         self._multi_target = []
         self.tbl_filters.setRowCount(0)
+        self._refresh_flats_table()
+        self._refresh_darks_table()
         self._set_left_enabled(False)
         self.lbl_header.setText(f"Analyzing: {self._root}")
         self._set_status("Scanning for light frames…")
@@ -9754,49 +9092,66 @@ class ImageMonoTrainWindow(QMainWindow):
         offset-correct MY flats with" is the question the calibration
         panel has to answer before the run, not after it.
         """
-        c = self._calib or {}
-        flats = c.get(KIND_FLAT) or {}
-        darkflats = c.get(KIND_DARKFLAT) or {}
-        darks = c.get(KIND_DARK) or {}
-        has_bias = bool(c.get(KIND_BIAS))
+        flats = (self._calib or {}).get(KIND_FLAT) or {}
         out = []
         for filt in sorted(flats):
             grp = flats[filt]
-            info = grp.get("info") or {}
-            want = float(info.get("exp_s") or 0.0)
-            if filt in darkflats and _signature_matches(
-                    dict(darkflats[filt].get("info") or {},
-                         exp_s=info.get("exp_s")), info):
-                offset = "dark-flat"
-            else:
-                # The same rule the run applies, camera state included --
-                # a preview that promised a match the run then refuses
-                # would be worse than no preview.
-                near = [float(g["info"]["exp_s"])
-                        for g in darks.values()
-                        if (g.get("info") or {}).get("exp_s")
-                        and want > 0
-                        and abs(float(g["info"]["exp_s"]) - want) / want
-                        <= DARKFLAT_EXPOSURE_TOLERANCE
-                        and _signature_matches(
-                            dict(g["info"], exp_s=info.get("exp_s")), info)]
-                if near:
-                    best = min(near, key=lambda e: abs(e - want))
-                    offset = f"{best:g}s dark"
-                elif has_bias:
-                    offset = "bias"
-                else:
-                    offset = "synthetic"
-            out.append((filt, len(grp["files"]), want, offset))
+            want = float((grp.get("info") or {}).get("exp_s") or 0.0)
+            label, _grp = self._flat_offset_pick(filt)
+            out.append((filt, len(grp["files"]), want, label))
         return out
 
-    def _refresh_filter_table(self) -> tuple:
-        """Draw the discovered-filters table; return (lights, seconds).
+    def _flat_offset_pick(self, filt: str):
+        """``(label, group)`` — what will offset-correct this filter's flats.
 
-        Split out of the analysis handler because the Calibration column
-        depends on switches the user can still flip afterwards, and a
-        table that kept the old answer would be describing a run that is
-        no longer going to happen.
+        The same order `_flat_offset_for` applies at run time: a real
+        DARK-FLAT set for this filter, then a DARK set at the flat
+        exposure, then the bias, then Siril's synthetic offset.
+
+        The GROUP is returned as well as the label, because a table that
+        only had the label could not say how much material is behind it.
+        The second case is the one that matters: a dark at the flat
+        exposure IS a dark-flat, whatever IMAGETYP calls it, and reading
+        the keyword instead of applying this rule made a filter with 160
+        usable frames look as though it had none.
+        """
+        c = self._calib or {}
+        grp = (c.get(KIND_FLAT) or {}).get(filt)
+        if not grp:
+            return "—", None
+        info = grp.get("info") or {}
+        want = float(info.get("exp_s") or 0.0)
+        df = (c.get(KIND_DARKFLAT) or {}).get(filt)
+        if df and _signature_matches(
+                dict(df.get("info") or {}, exp_s=info.get("exp_s")), info):
+            return "dark-flat", df
+        # The same rule the run applies, camera state included -- a
+        # preview that promised a match the run then refuses would be
+        # worse than no preview.
+        near = [g for g in (c.get(KIND_DARK) or {}).values()
+                if (g.get("info") or {}).get("exp_s")
+                and want > 0
+                and abs(float(g["info"]["exp_s"]) - want) / want
+                <= DARKFLAT_EXPOSURE_TOLERANCE
+                and _signature_matches(
+                    dict(g["info"], exp_s=info.get("exp_s")), info)]
+        if near:
+            best = min(near, key=lambda g: abs(float(g["info"]["exp_s"])
+                                               - want))
+            return f"{float(best['info']['exp_s']):g}s dark", best
+        bias = c.get(KIND_BIAS) or {}
+        if bias:
+            return "bias", bias[sorted(bias, key=_sig_sort_key)[0]]
+        return "synthetic", None
+
+    def _refresh_filter_table(self) -> tuple:
+        """Draw the Discovered Lights table; return (lights, seconds).
+
+        Lights only: what was shot, per filter.  What those frames will
+        be GIVEN is two tables further down, each next to the switch that
+        decides it — the Calibration column that used to sit here had to
+        be redrawn whenever one of those switches moved, and still could
+        not say which half of the answer the user had just changed.
         """
         filters = sorted(self._groups.keys())
         self.tbl_filters.setRowCount(len(filters))
@@ -9814,17 +9169,19 @@ class ImageMonoTrainWindow(QMainWindow):
                 v for v in (samp.get("exp"), samp.get("gain"),
                             samp.get("temp")) if v) or "—"
             details.append(detail)
+            # The observing nights these lights came from -- noon-to-noon,
+            # so a session running past midnight counts once.  Named while
+            # there are few enough to read; beyond that the count is the
+            # fact worth having, and the tooltip keeps the dates.
+            nights = sorted((g.get("dates") or set()))
+            n_text = (", ".join(_short_nights(nights))
+                      if 0 < len(nights) <= NIGHTS_NAMED
+                      else (f"{len(nights)} nights" if nights else "—"))
             self.tbl_filters.setItem(r, 0, QTableWidgetItem(filt))
             self.tbl_filters.setItem(r, 1, QTableWidgetItem(str(n)))
-            text, tip, warn = self._calib_cell(filt)
-            item = QTableWidgetItem(text)
-            item.setToolTip(tip)
-            if warn:
-                # A channel that will not be dark-corrected is the one
-                # thing in this table worth spotting from across the room.
-                item.setForeground(QColor("#ffaa88"))
-            elif text == "off":
-                item.setForeground(QColor("#888888"))
+            item = QTableWidgetItem(n_text)
+            if nights:
+                item.setToolTip("\n".join(nights))
             self.tbl_filters.setItem(r, 2, item)
             self.tbl_filters.setItem(
                 r, 3, QTableWidgetItem(_format_duration(exp_total)))
@@ -9847,7 +9204,7 @@ class ImageMonoTrainWindow(QMainWindow):
         self._fit_table_height()
         return total_lights, total_exp
 
-    def _fit_table_height(self) -> None:
+    def _fit_table_height(self, tbl=None) -> None:
         """Give the table the height its rows need, and no more.
 
         A fixed minimum left a hand's width of empty grid under a
@@ -9855,7 +9212,7 @@ class ImageMonoTrainWindow(QMainWindow):
         Capped, because a filter wheel with more slots than the cap is
         better scrolled than allowed to fill the window.
         """
-        tbl = self.tbl_filters
+        tbl = tbl or self.tbl_filters
         rows = tbl.rowCount()
         shown = min(max(rows, 1), FILTER_TABLE_MAX_ROWS)
         vh = tbl.verticalHeader()
@@ -9867,6 +9224,91 @@ class ImageMonoTrainWindow(QMainWindow):
                 else vh.defaultSectionSize())
         tbl.setFixedHeight(tbl.horizontalHeader().height() + body
                            + 2 * tbl.frameWidth())
+
+    @staticmethod
+    def _fill_table(tbl, rows: list, off: bool) -> None:
+        """Put `rows` into `tbl`; grey the lot when the switch is off.
+
+        The last element of a row is its tooltip, not a column.
+        """
+        tbl.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            tip = row[-1]
+            for col, text in enumerate(row[:-1]):
+                item = QTableWidgetItem(str(text))
+                item.setToolTip(tip)
+                if off:
+                    # Switched off is not a defect, so it is not a warning
+                    # colour -- but a table that looks identical either way
+                    # is how "found" came to be read as "used".
+                    item.setForeground(QColor("#888888"))
+                tbl.setItem(r, col, item)
+
+    def _refresh_flats_table(self) -> None:
+        """Draw the Flats and Dark-Flats table and its note."""
+        on = self.chk_use_flats.isChecked()
+        rows = self._flat_rows() if self._groups else []
+        self._fill_table(self.tbl_flats, rows, not on)
+        self.tbl_flats.setVisible(bool(rows))
+        self._fit_table_height(self.tbl_flats)
+        if not self._groups:
+            note = "Analyze a folder to see the flats found next to the lights."
+        elif not rows:
+            note = ("No flats or dark-flats found next to the lights. "
+                    "Vignetting and dust shadows will stay in every channel.")
+        elif not on:
+            note = ("Flats and dark-flats are switched off — found, listed, "
+                    "and not applied.")
+        else:
+            note = ""
+        self.lbl_flats_none.setText(note)
+        self.lbl_flats_none.setVisible(bool(note))
+
+    def _refresh_darks_table(self) -> None:
+        """Draw the darks-and-bias table and the missing-dark note."""
+        on = self.chk_use_darks.isChecked()
+        rows = self._dark_rows() if self._groups else []
+        self._fill_table(self.tbl_darks, rows, not on)
+        self.tbl_darks.setVisible(bool(rows))
+        self._fit_table_height(self.tbl_darks)
+        gaps = self._dark_gaps() if (self._groups and on) else []
+        if gaps:
+            first = gaps[0][1]
+            names = ", ".join(f for f, _ in gaps)
+            self.lbl_dark_gap.setText(
+                f"⚠ No dark for {names} — {first}")
+        elif self._groups and on and not rows:
+            self.lbl_dark_gap.setText(
+                "⚠ No darks or bias reach these lights.")
+        else:
+            self.lbl_dark_gap.setText("")
+        self.lbl_dark_gap.setVisible(bool(self.lbl_dark_gap.text()))
+
+    def _on_calib_kind_toggled(self, _on: bool = False) -> None:
+        """Either kind switch moved: both tables state what changed.
+
+        Both, not just the one that moved: the bias is listed under the
+        darks and is also the flats' offset, so switching the darks off
+        changes what the flats row says as well.
+
+        The dependent controls follow their OWN kind, which the removed
+        master switch could not do -- it greyed all of them together, so
+        "Match flats to the same night" went dead because the darks were
+        unusable.
+        """
+        darks, flats = (self.chk_use_darks.isChecked(),
+                        self.chk_use_flats.isChecked())
+        # The library holds darks and bias; cosmetic correction reads a
+        # master dark's statistics.  Neither means anything without them.
+        for w in (self.btn_library, self.btn_library_clear,
+                  self.chk_cosmetic):
+            w.setEnabled(darks)
+        self.chk_flats_by_date.setEnabled(flats)
+        self._refresh_flats_table()
+        self._refresh_darks_table()
+        if self._groups:
+            self._show_calib_summary(quiet=True)
+            self._refresh_filter_table()
 
     def _count_from(self, files: list, where: str) -> int:
         """How many of these frames sit inside the library ("lib") or
@@ -9898,17 +9340,128 @@ class ImageMonoTrainWindow(QMainWindow):
         lights are dark-corrected; naming the exposures says why they
         are not.
         """
+        sig, note = self._dark_for_filter(filt)
+        return sig is not None, note
+
+    @staticmethod
+    def _calib_detail(info: dict) -> str:
+        """Gain and setpoint of a calibration set, for the Details column."""
+        bits = []
+        gain = info.get("gain_v")
+        if gain is not None:
+            bits.append(f"gain {gain:g}" if isinstance(gain, (int, float))
+                        else f"gain {gain}")
+        temp = info.get("temp_v")
+        if temp is not None:
+            bits.append(f"{float(temp):g} °C")
+        binning = info.get("binning")
+        if binning and binning != 1:
+            bits.append(f"bin {binning}")
+        return ", ".join(bits) or "—"
+
+    def _flat_files(self, filt: str):
+        """``(files, per_night, lit)`` — the flats this filter WILL use.
+
+        The restriction "Match flats to the same night" applies, in one
+        place, so the count in the table, the nights beside it and the
+        tooltip cannot drift apart.
+        """
+        grp = ((self._calib or {}).get(KIND_FLAT) or {}).get(filt)
+        if not grp:
+            return [], {}, set()
+        files = grp["files"]
+        lit = set((self._groups.get(filt) or {}).get("dates") or [])
+        # The identical rule the run uses, called on the run's own code --
+        # a preview that promised a per-night split the run then refuses
+        # would be worse than no preview.
+        per_night = (StackWorker._flats_per_night(grp, lit, self._nights)
+                     if self.chk_flats_by_date.isChecked() else {})
+        if per_night:
+            files = [p for n in per_night for p in per_night[n]]
+        elif self.chk_flats_by_date.isChecked() and lit:
+            kept = [p for p in files if _night_of(p, self._nights) in lit]
+            if kept:
+                files = kept
+        return files, per_night, lit
+
+    def _flat_rows(self) -> list:
+        """Rows for the Flats and Dark-Flats table.
+
+        ``(filter, flats, dark-flats, offset, nights, tooltip)``, one per
+        filter that has either -- a filter with neither has nothing to
+        show and would only pad the table with dashes.
+        """
+        c = self._calib or {}
+        flats, dflats = c.get(KIND_FLAT) or {}, c.get(KIND_DARKFLAT) or {}
+        offsets = dict((f, off) for f, _n, _e, off
+                       in self._flat_offset_preview())
+        rows = []
+        for filt in sorted(self._groups):
+            fg, dg = flats.get(filt), dflats.get(filt)
+            if not fg and not dg:
+                continue
+            if fg:
+                text, tip = self._flats_cell(filt)
+                files, _pn, _lit = self._flat_files(filt)
+                nights = ", ".join(
+                    sorted({_night_of(p, self._nights) or "?" for p in files}))
+                # The set that will be STACKED as this filter's dark-flat,
+                # which is not always the one IMAGETYP labels DARKFLAT: a
+                # dark at the flat exposure does the job and is what the
+                # run reaches for.  Reading the keyword instead left this
+                # column empty for a session holding 160 usable frames,
+                # while the Offset column beside it named them.
+                label, off_grp = self._flat_offset_pick(filt)
+                if off_grp is not None and label != "bias":
+                    n_df = len(off_grp.get("files") or [])
+                    df_exp = float((off_grp.get("info") or {}).get("exp_s")
+                                   or 0.0)
+                    df_text = (f"{n_df} × {df_exp:g}s" if n_df and df_exp
+                               else (str(n_df) if n_df else "—"))
+                    if label != "dark-flat":
+                        tip += (f"\nThe dark-flat is a {label} set — a dark "
+                                "at the flat exposure IS a dark-flat, "
+                                "whatever IMAGETYP calls it, and it carries "
+                                "that exposure's dark current, which a bias "
+                                "does not.")
+                else:
+                    df_text = "—"
+                    tip += ("\nNo dark-flat and no dark at the flat "
+                            "exposure: the flats are offset-corrected with "
+                            f"the {label} offset.")
+            else:
+                text, tip, nights = "—", (
+                    f"Dark-flats for {filt} but no flats to apply them to — "
+                    "a dark-flat only ever calibrates a flat."), "—"
+                n_df = len(dg.get("files") or []) if dg else 0
+                df_exp = float((dg.get("info") or {}).get("exp_s") or 0.0) \
+                    if dg else 0.0
+                df_text = (f"{n_df} × {df_exp:g}s" if n_df and df_exp
+                           else (str(n_df) if n_df else "—"))
+            rows.append((filt, text, df_text, offsets.get(filt, "—"),
+                         nights or "—", tip))
+        return rows
+
+    def _dark_for_filter(self, filt: str):
+        """``(signature, note)`` — the dark set these lights will get.
+
+        The single place the rule lives: `_signature_matches` first, then
+        the one loosened dimension `_closest_dark` allows, the exposure,
+        inside DARK_EXPOSURE_TOLERANCE.  Everything else -- camera, gain,
+        binning, size, temperature -- still has to agree.  `None` when
+        nothing fits, with a note that says why.
+        """
         darks = (self._calib or {}).get(KIND_DARK) or {}
         info = (self._groups.get(filt) or {}).get("info") or {}
         want = float(info.get("exp_s") or 0.0)
         if not darks:
-            return False, ("No darks in the library — dark current, hot "
-                           "pixels and amp glow stay in this channel.")
-        for _sig, grp in darks.items():
+            return None, ("No darks in the library — dark current, hot "
+                          "pixels and amp glow stay in this channel.")
+        for sig, grp in darks.items():
             if _signature_matches(grp.get("info") or {}, info):
-                return True, f"Dark: {len(grp.get('files') or [])} frame(s)."
+                return sig, f"Dark: {len(grp.get('files') or [])} frame(s)."
         best = None
-        for _sig, grp in darks.items():
+        for sig, grp in darks.items():
             d = grp.get("info") or {}
             have = d.get("exp_s")
             if not have or not want:
@@ -9919,15 +9472,15 @@ class ImageMonoTrainWindow(QMainWindow):
             share = abs(float(have) - want) / want
             if share <= DARK_EXPOSURE_TOLERANCE and (
                     best is None or share < best[0]):
-                best = (share, float(have), len(grp.get("files") or []))
+                best = (share, sig, float(have), len(grp.get("files") or []))
         if best:
-            return True, (f"Dark: closest set at {best[1]:g}s against "
-                          f"{want:g}s lights ({best[0] * 100:.0f}% off), "
-                          f"{best[2]} frame(s).")
+            return best[1], (f"Dark: closest set at {best[2]:g}s against "
+                             f"{want:g}s lights ({best[0] * 100:.0f}% off), "
+                             f"{best[3]} frame(s).")
         have = sorted({float((g.get("info") or {}).get("exp_s") or 0.0)
                        for g in darks.values()})
         total = sum(len(g.get("files") or []) for g in darks.values())
-        return False, (
+        return None, (
             f"{total} dark(s) in the library, at "
             + ", ".join(f"{e:g}s" for e in have if e)
             + f" — none matches {want:g}s lights (or the camera state "
@@ -9935,54 +9488,68 @@ class ImageMonoTrainWindow(QMainWindow):
             + (f"{want:g}s" if want else "the light exposure")
             + " with the same gain and temperature would fix this.")
 
-    def _calib_cell(self, filt: str) -> tuple:
-        """``(text, tooltip, warn)`` — what this filter WILL be given.
+    def _dark_rows(self) -> list:
+        """Rows for the darks-and-bias table: only what reaches the lights.
 
-        The column used to answer "how many flats lie in the folder",
-        which is a discovery fact the user can already see elsewhere and
-        which was identical for every filter on the rig this was built
-        for.  It answers the useful question now: which masters reach
-        THESE lights.  A missing dark is the single largest quality gap
-        a run can have, and nothing in the window said so before -- the
-        log said it, once, in the middle of a run that had already
-        started.
+        ``(type, frames, exposure, details, applies to, tooltip)``.  A
+        library is meant to grow, and listing all fifteen signatures of a
+        well-stocked one would bury the two this run will open.  Bias is
+        listed because it always does something: it reaches lights no
+        dark covers, and where a dark covers them all it is still the
+        flats' offset.
         """
-        if not self.chk_calibrate.isChecked():
-            c = self._calib or {}
-            found = sum(len(g.get("files") or []) for kind in
-                        (KIND_FLAT, KIND_DARKFLAT, KIND_DARK, KIND_BIAS)
-                        for g in (c.get(kind) or {}).values())
-            return "off", (
-                f"'Apply calibration when frames exist' is switched off, so "
-                f"the {found} calibration frame(s) that were found stay "
-                "unused. Tick it to calibrate with them."), False
+        c = self._calib or {}
+        darks = c.get(KIND_DARK) or {}
+        serves: dict = {}
+        for filt in sorted(self._groups):
+            sig, _note = self._dark_for_filter(filt)
+            if sig is not None:
+                serves.setdefault(sig, []).append(filt)
+        rows = []
+        for sig in sorted(serves, key=_sig_sort_key):
+            grp = darks[sig]
+            info = grp.get("info") or {}
+            exp = float(info.get("exp_s") or 0.0)
+            n = len(grp.get("files") or [])
+            rows.append(("Dark", str(n), f"{exp:g}s" if exp else "—",
+                         self._calib_detail(info),
+                         ", ".join(serves[sig]),
+                         "\n".join(self._dark_for_filter(f)[1]
+                                    for f in serves[sig][:1])))
+        bias = c.get(KIND_BIAS) or {}
+        if bias:
+            key = sorted(bias, key=_sig_sort_key)[0]
+            grp = bias[key]
+            info = grp.get("info") or {}
+            n = len(grp.get("files") or [])
+            uncovered = [f for f in sorted(self._groups)
+                         if self._dark_for_filter(f)[0] is None]
+            exp = float(info.get("exp_s") or 0.0)
+            rows.append((
+                "Bias", str(n), f"{exp:g}s" if exp else "—",
+                self._calib_detail(info),
+                ", ".join(uncovered) if uncovered else "flats' offset only",
+                "Bias reaches the lights only where no dark does — a master "
+                "dark already carries the offset. It is always available as "
+                "the flats' own offset."
+                + (f"  {len(bias)} bias sets found; the first is used."
+                   if len(bias) > 1 else "")))
+        return rows
 
-        parts, tips = [], []
-        dark_ok, dark_note = self._dark_preview(filt)
-        tips.append(dark_note)
-        if dark_ok:
-            parts.append("Dark")
-            if self.chk_cosmetic.isChecked():
-                tips.append("Cosmetic correction reads that dark's own "
-                            "statistics to repair hot and cold pixels.")
+    def _dark_gaps(self) -> list:
+        """``[(filter, why)]`` for every channel that gets no dark.
 
-        flat_text, flat_tip = self._flats_cell(filt)
-        tips.append(flat_tip)
-        if flat_text not in ("—",):
-            grp = ((self._calib or {}).get(KIND_FLAT) or {}).get(filt)
-            lit = set((self._groups.get(filt) or {}).get("dates") or [])
-            per_night = (StackWorker._flats_per_night(grp, lit)
-                         if grp and self.chk_flats_by_date.isChecked() else {})
-            parts.append(f"Flat ×{len(per_night)}" if per_night else "Flat")
-
-        if not dark_ok and (self._calib or {}).get(KIND_BIAS):
-            # Bias reaches the lights only when no dark does: a master
-            # dark already carries the offset.
-            parts.append("Bias")
-
-        text = " + ".join(parts) if parts else "none"
-        return (("⚠ " + text) if not dark_ok else text,
-                "\n".join(t for t in tips if t), not dark_ok)
+        A filter with no matching dark has no row in the table above, and
+        an empty table is exactly what "everything is fine" looks like.
+        This is the single largest quality gap a run can have, so it is
+        said in words underneath rather than left to an absence.
+        """
+        gaps = []
+        for filt in sorted(self._groups):
+            sig, note = self._dark_for_filter(filt)
+            if sig is None:
+                gaps.append((filt, note))
+        return gaps
 
     def _flats_cell(self, filt: str) -> tuple:
         """``(text, tooltip)`` describing the flats this filter WILL use.
@@ -10004,20 +9571,8 @@ class ImageMonoTrainWindow(QMainWindow):
         if not grp:
             return "—", (f"No flats found for {filt}. Vignetting and dust "
                          "shadows will stay in this channel.")
-        files = grp["files"]
-        lit = set((self._groups.get(filt) or {}).get("dates") or [])
-        # The identical rule the run uses, called on the run's own code --
-        # a preview that promised a per-night split the run then refuses
-        # would be worse than no preview.
-        per_night = (StackWorker._flats_per_night(grp, lit)
-                     if self.chk_flats_by_date.isChecked() else {})
-        if per_night:
-            files = [p for n in per_night for p in per_night[n]]
-        elif self.chk_flats_by_date.isChecked() and lit:
-            kept = [p for p in files if _path_date(p) in lit]
-            if kept:
-                files = kept
-        nights = sorted({_path_date(p) or "?" for p in files})
+        files, per_night, lit = self._flat_files(filt)
+        nights = sorted({_night_of(p, self._nights) or "?" for p in files})
         exp = float((grp.get("info") or {}).get("exp_s") or 0.0)
         text = f"{len(files)} × {exp:g}s" if exp else str(len(files))
         offset = dict((f, off) for f, _n, _e, off
@@ -10048,14 +9603,24 @@ class ImageMonoTrainWindow(QMainWindow):
                        "so they cannot be kept apart — pooled.")
         return text, "\n".join(tip)
 
-    def _show_calib_summary(self, unsupported: int = 0) -> None:
-        """Report what calibration material the scan turned up."""
+    def _show_calib_summary(self, unsupported: int = 0,
+                            quiet: bool = False) -> None:
+        """Report what calibration material the scan turned up.
+
+        `quiet` updates the LABEL without writing to Siril's log.  The
+        label has to follow every switch -- it describes what will be
+        used -- but the log is a record of the run, and re-logging the
+        same three paragraphs on each click buried it: eleven repetitions
+        of "Flat offset — …" in seventeen seconds of someone deciding
+        which boxes to tick.
+        """
+        log = (lambda *_a, **_k: None) if quiet else self._log
         if unsupported:
-            self._log(
+            log(
                 f"{unsupported} XISF file(s) found and skipped — that format "
                 "is not supported (its headers cannot be read).",
                 LogColor.SALMON)
-        if not self.chk_calibrate.isChecked():
+        if not self._calibration_on():
             c = self._calib or {}
             found = sum(len(g["files"]) for kind in
                         (KIND_FLAT, KIND_DARKFLAT, KIND_DARK, KIND_BIAS)
@@ -10065,25 +9630,36 @@ class ImageMonoTrainWindow(QMainWindow):
                 + (f"  {found} calibration frame(s) were found and will "
                    "NOT be used." if found else ""))
             if found:
-                self._log(
+                log(
                     f"Calibration is switched off, so the {found} "
                     "calibration frame(s) that were found stay unused. "
-                    "Tick 'Apply calibration when frames exist' to use "
-                    "them.", LogColor.SALMON)
+                    "Tick 'Use flats and dark-flats' or 'Use darks and "
+                    "bias' to use them.", LogColor.SALMON)
             return
         c = self._calib or {}
-        # The label carries LIBRARY-level facts only: how much material
-        # there is and at what exposure.  What each FILTER will be given
-        # is one row per filter in the table above, and repeating it here
-        # as prose made four lines of 9pt blue in which nothing stood
-        # out -- three times "→ 3s dark", three times "3 master(s)".
+        # What is left for this line to say, now that both tables answer
+        # "what will each filter be given": WHERE the material physically
+        # came from.  No table shows that, and it is the one question a
+        # library folder raises -- picking one otherwise produced a path
+        # and no visible consequence.  It also counts sets no table
+        # lists, such as a 600s dark that matches nothing here.
+        #
+        # What each FILTER will be given is one row per filter in the
+        # tables, and repeating it here as prose made four lines of 9pt
+        # blue in which nothing stood out -- three times "→ 3s dark",
+        # three times "3 master(s)".
         # Split by WHERE it came from.  Picking a library folder otherwise
         # produced a path and no visible consequence: the counts went up
         # somewhere in a single line, and a library that contributed
         # nothing looked exactly like one that contributed everything.
         near, lib = [], []
-        for kind, label in ((KIND_FLAT, "flat"), (KIND_DARKFLAT, "dark-flat"),
-                            (KIND_DARK, "dark"), (KIND_BIAS, "bias")):
+        # Plural spelled out per kind: appending "s" to every label read
+        # "100 biass".  Bias is its own plural here -- "biases" is correct
+        # English but reads as a second word next to "darks" and "flats".
+        for kind, one, many in ((KIND_FLAT, "flat", "flats"),
+                                (KIND_DARKFLAT, "dark-flat", "dark-flats"),
+                                (KIND_DARK, "dark", "darks"),
+                                (KIND_BIAS, "bias", "bias")):
             groups = c.get(kind) or {}
             for where, files in ((near, "near"), (lib, "lib")):
                 n = sum(self._count_from(g["files"], files)
@@ -10095,7 +9671,7 @@ class ImageMonoTrainWindow(QMainWindow):
                                if self._count_from(g["files"], files)})
                 at = ("" if kind in (KIND_FLAT, KIND_BIAS) or not any(exps)
                       else " at " + ", ".join(f"{e:g}s" for e in exps if e))
-                where.append(f"{n} {label}{'' if n == 1 else 's'}{at}")
+                where.append(f"{n} {one if n == 1 else many}{at}")
         bits = []
         if near:
             bits.append("Next to the lights: " + " · ".join(near))
@@ -10106,7 +9682,7 @@ class ImageMonoTrainWindow(QMainWindow):
             # gave the run nothing.
             bits.append("<span style='color:#ffaa88;'>From the library: "
                         "nothing usable found</span>")
-            self._log(
+            log(
                 f"The library folder {self._library} holds no calibration "
                 "frames this run can use — check that it contains DARK or "
                 "BIAS frames for this camera.", LogColor.SALMON)
@@ -10115,13 +9691,13 @@ class ImageMonoTrainWindow(QMainWindow):
             # Log only: which offset each filter's flats get.  "synthetic"
             # is the one worth noticing -- it means the library has
             # nothing that matches THIS filter's flat exposure.
-            self._log(
+            log(
                 "Flat offset — " + ", ".join(
                     f"{f} {n}×{exp:g}s → {off}"
                     for f, n, exp, off in preview), LogColor.BLUE)
             weak = [f for f, _n, _e, off in preview if off == "synthetic"]
             if weak:
-                self._log(
+                log(
                     "No dark-flat or bias matches the flat exposure of "
                     + ", ".join(weak)
                     + " — Siril's synthetic offset will be used there. A "
@@ -10137,12 +9713,13 @@ class ImageMonoTrainWindow(QMainWindow):
                 if filt not in (self._groups or {}):
                     continue
                 lit = set((self._groups.get(filt) or {}).get("dates") or [])
-                per_night = StackWorker._flats_per_night(grp, lit)
+                per_night = StackWorker._flats_per_night(
+                    grp, lit, self._nights)
                 if per_night:
                     split[filt] = (sorted(per_night),
                                    sorted(lit - set(per_night)))
             if split:
-                self._log(
+                log(
                     "Flats are kept per night: "
                     + "; ".join(f"{f} → {', '.join(n)}"
                                 for f, (n, _m) in sorted(split.items()))
@@ -10151,7 +9728,7 @@ class ImageMonoTrainWindow(QMainWindow):
                     LogColor.GREEN)
                 gaps = {f: m for f, (_n, m) in split.items() if m}
                 if gaps:
-                    self._log(
+                    log(
                         "No flats of their own for "
                         + "; ".join(f"{f} {', '.join(m)}"
                                     for f, m in sorted(gaps.items()))
@@ -10160,7 +9737,7 @@ class ImageMonoTrainWindow(QMainWindow):
             elif any(len((self._groups.get(f) or {}).get("dates") or []) > 1
                      for f in (c.get(KIND_FLAT) or {})
                      if f in (self._groups or {})):
-                self._log(
+                log(
                     "'Match flats to the same night' is on, but no filter "
                     "has flats from two of its imaged nights — there is "
                     "nothing to keep apart, so one pooled master is used.",
@@ -10176,7 +9753,7 @@ class ImageMonoTrainWindow(QMainWindow):
                 why.setdefault(note, []).append(filt)
         if bits:
             head = "<br>".join(bits)
-            self._log("Calibration found — "
+            log("Calibration found — "
                       + " | ".join(re.sub(r"<[^>]+>", "", b) for b in bits),
                       LogColor.GREEN)
         else:
@@ -10184,11 +9761,13 @@ class ImageMonoTrainWindow(QMainWindow):
                 "" if self._library else "  Set a Library folder for "
                 "darks / bias.")
         if no_dark:
-            head += ("<br><span style='color:#ffaa88;'>⚠ no dark for "
-                     + ", ".join(no_dark)
-                     + " — flat correction only</span>")
+            # The WARNING belongs under the darks table, where the filter
+            # that lacks one is missing from the rows -- `_refresh_darks_
+            # _table` writes it there.  Repeating it here put the same
+            # sentence twice on one screen, and a fact stated twice reads
+            # as two facts.  The log still records it once per reason.
             for note, which in sorted(why.items()):
-                self._log(f"{', '.join(which)}: {note}", LogColor.SALMON)
+                log(f"{', '.join(which)}: {note}", LogColor.SALMON)
         self.lbl_calib_found.setText(head)
 
     def _on_analyze_done(self, payload: dict) -> None:
@@ -10197,6 +9776,11 @@ class ImageMonoTrainWindow(QMainWindow):
         total = payload["total"]
         objects = payload.get("objects", [])
         self._calib = payload.get("calib", {}) or {}
+        # The night each frame really belongs to (noon-to-noon, from its
+        # own DATE-OBS).  The previews below must judge nights by the same
+        # rule the run does, or the table promises a per-night split the
+        # run then refuses -- or hides one it is about to make.
+        self._nights = payload.get("nights", {}) or {}
         self._show_calib_summary(payload.get("unsupported", 0))
         if payload.get("stray_lights"):
             self._log(
@@ -10207,7 +9791,7 @@ class ImageMonoTrainWindow(QMainWindow):
 
         self._set_left_enabled(True)
 
-        self.lbl_target.setText(f"Target: {self._target}")
+        self.grp_discovered.setTitle(DISCOVERED_TITLE + (self._target or "—"))
 
         # Frames from two different objects must never be pooled into one
         # stack -- that silently produces garbage.  Warn loudly.  Compared
@@ -10231,6 +9815,8 @@ class ImageMonoTrainWindow(QMainWindow):
         # Populate the table.
         filters = sorted(self._groups.keys())
         total_lights, total_exp = self._refresh_filter_table()
+        self._refresh_flats_table()
+        self._refresh_darks_table()
         total_txt = _format_duration(total_exp)
         self.lbl_header.setText(
             f"{self._target}: {len(filters)} filter(s), "
@@ -10295,7 +9881,9 @@ class ImageMonoTrainWindow(QMainWindow):
             palette = _detect_palette(sorted(self._groups.keys()))
 
         return {
-            "calibrate": self.chk_calibrate.isChecked(),
+            "calibrate": self._calibration_on(),
+            "use_flats": self.chk_use_flats.isChecked(),
+            "use_darks": self.chk_use_darks.isChecked(),
             "cosmetic": self.chk_cosmetic.isChecked(),
             "flats_by_date": self.chk_flats_by_date.isChecked(),
             "calib_library": self._library,
@@ -10397,7 +9985,7 @@ class ImageMonoTrainWindow(QMainWindow):
 
         self._stack_worker = StackWorker(
             self.siril, self._groups, self._target, out_dir,
-            self._ext, self._current_opts(), self._calib)
+            self._ext, self._current_opts(), self._calib, self._nights)
         self._stack_worker.progress.connect(self._on_progress)
         # Text-only slot: the worker already logged to the Siril console on
         # its own thread, so the main thread must not touch sirilpy here.
@@ -10683,15 +10271,22 @@ class ImageMonoTrainWindow(QMainWindow):
             "<ol>"
             "<li>Click <b>Select Target Folder…</b> and pick the root "
             "folder of one target.</li>"
-            "<li>The script <b>analyzes</b> the tree and lists every filter "
-            "with its light-frame count, its integration time, and a "
-            "<b>Calibration</b> column saying which masters those lights "
-            "will really be given — <tt>Dark + Flat ×3</tt>, <tt>Flat</tt>, "
-            "<tt>none</tt>.  A <tt>⚠</tt> in warning colour means no dark "
-            "fits these lights; the tooltip names the exposures the library "
-            "does hold and what would fix it.  That gap used to surface "
-            "only once the run was already going.</li>"
-            "<li>Review the <b>Discovered Filters</b> table and the "
+            "<li>The script <b>analyzes</b> the tree and fills three "
+            "tables.  <b>Discovered Lights</b> lists every filter with its "
+            "frame count, integration time and camera state — what was "
+            "shot.  <b>Flats and Dark-Flats</b> and <b>Calibration with "
+            "Darks and Bias</b> then say what those lights will be "
+            "<i>given</i>: the sets that will actually be opened, the "
+            "offset each flat is corrected with, and which filters each "
+            "dark covers.  Every filter that gets <b>no dark</b> is named "
+            "in warning colour under that table, with the exposures the "
+            "library does hold and what would fix it — a gap that used to "
+            "surface only once the run was already going.</li>"
+            "<li>Each of the two calibration tables has its own switch, so "
+            "good flats can be used with unusable darks, or the reverse.  "
+            "What is switched off stays listed and turns grey: found is "
+            "never the same as applied.</li>"
+            "<li>Review the three tables and the "
             "<b>Overview</b> tab.</li>"
             "<li>Adjust <b>Stacking Options</b> if needed (defaults are "
             "sensible).</li>"
@@ -11283,8 +10878,29 @@ class ImageMonoTrainWindow(QMainWindow):
             "</ul>"
             "<h3 style='color:#88aaff;'>Options</h3>"
             "<ul>"
-            "<li><b>Apply calibration when frames exist</b> — master switch.  "
-            "Harmless to leave on when there is nothing to apply.</li>"
+            "<li>There is no separate master switch.  Every gate one would "
+            "hold is about darks, flats or bias, so the two boxes below say "
+            "it together — and a third could contradict them: switched off "
+            "with both of these on was a state in which the panel showed "
+            "two armed switches and the run calibrated nothing.  Both off "
+            "is \u201cunchecked\u201d for the whole group, and stacks raw lights.</li>"
+            "<li><b>Use flats and dark-flats</b> — divide the lights by the "
+            "master flat.  The dark-flat (or, failing that, the bias) is the "
+            "flat's own offset and follows this switch: it exists only to "
+            "calibrate the flats.  Switched off, no flat master is stacked "
+            "at all — the frames are listed in the table above, greyed, so "
+            "\u201cfound\u201d can never be mistaken for "
+            "\u201capplied\u201d.</li>"
+            "<li><b>Use darks and bias</b> — subtract the master dark, and "
+            "use the master bias where no dark applies.  Bias reaches the "
+            "lights <i>only</i> where no dark does, because a master dark "
+            "already carries the offset.  Switched off, neither master is "
+            "stacked and cosmetic correction has nothing to read — but the "
+            "bias is still built when flats need it as their offset, so "
+            "turning the darks off cannot quietly downgrade every flat to a "
+            "synthetic one.  The two kinds are separate switches because "
+            "they fail for unrelated reasons: a session can have perfect "
+            "flats and a library of darks that fit nothing.</li>"
             "<li><b>Cosmetic correction (hot pixels)</b> — adds "
             "<tt>-cc=dark 3 3</tt>, which locates hot and cold pixels from "
             "the master dark's own statistics.  Needs a matching dark; "

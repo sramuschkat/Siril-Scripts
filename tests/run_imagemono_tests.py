@@ -14,7 +14,8 @@ SUITES = ("test_imagemono_static.py",       # AST sweeps, settings symmetry
           "test_imagemono_helpers.py",      # pure helpers on hostile input
           "test_imagemono_behaviour.py",    # the run, on a stubbed Siril
           "test_imagemono_docs.py",         # version + four documents
-          "test_imagemono_flat_offset.py")  # per-filter flat offset
+          "test_imagemono_flat_offset.py",  # per-filter flat offset
+          "test_imagemono_framing.py")     # -framing=min really applied?
 
 failed = []
 for name in SUITES:

@@ -37,7 +37,8 @@ WANT = ("_format_duration", "_median", "_exp_tag", "_night_key", "_path_date",
         "_palette_roles", "_is_nb_palette", "_fits_ext", "_is_fits_like",
         "_first_with_role", "_detect_palette", "_auto_channel_map",
         "_unfillable_channels", "_align_pairs_warn", "_weight_token",
-        "_parse_spcc_fit", "_log_delta")
+        "_parse_spcc_fit", "_log_delta", "_night_of", "_flat_shape",
+        "_flat_normalise", "_rebin_mean", "_flat_ratio_spread", "_with_fits")
 for node in tree.body:
     if isinstance(node, ast.FunctionDef) and node.name in WANT:
         exec("from __future__ import annotations\n"
@@ -484,6 +485,125 @@ check(not conn_dead(Exception("Unknown command: seqfoo")),
       "a plain refusal is NOT — the fallback chains stay in charge")
 check(not conn_dead(Exception("could not open file lights_00001.fit")),
       "neither is an unreadable frame")
+
+
+# ---------------------------------------------------------------------------
+print("\n1.7.15 — the observing night is the one the frame itself records")
+# `_night_key` was computed for every frame during discovery and then read
+# by nothing: every night decision went through the date FOLDER instead, so
+# a session crossing midnight was split in two and half its lights were
+# paired against the wrong flats.  `_night_of` is the single rule now.
+_night_of = ns["_night_of"]
+LIGHT = "/data/2026-08-13/LIGHT/M16/HA/sub.fits"    # folder says the 13th
+FLAT = "/data/2026-08-12/FLAT/HA/flat.fits"         # folder says the 12th
+# ...but the light was taken at 01:20, i.e. during the night of the 12th.
+hdr = {LIGHT: ns["_night_key"]("2026-08-13T01:20:00"),
+       FLAT: ns["_night_key"]("2026-08-12T20:40:00")}
+check(hdr[LIGHT] == "2026-08-12" and hdr[FLAT] == "2026-08-12",
+      "noon-to-noon puts a dusk flat and a post-midnight light in one night")
+check(_night_of(LIGHT, hdr) == _night_of(FLAT, hdr),
+      "so the two now match, where the folder names never could")
+check(_night_of(LIGHT, {}) != _night_of(FLAT, {}),
+      "without the map they fall back to the folders and disagree — the "
+      "behaviour every release up to 1.7.12 had")
+check(_night_of(LIGHT, None) == "2026-08-13",
+      "no map at all: the folder date, unchanged")
+check(_night_of("/data/2026-09-01/x.fits", hdr) == "2026-09-01",
+      "a path the map does not know falls back per frame, not wholesale")
+check(_night_of("/nowhere/x.fits", {}) == "",
+      "and a path with no date anywhere answers empty, as before")
+check(_night_of(LIGHT, {LIGHT: ""}) == "2026-08-13",
+      "an unreadable DATE-OBS (empty entry) falls back too")
+
+
+print("\n1.7.15 — the flat map is built on the size the night agrees on")
+# The reference size came from the FIRST frame read, so one mixed-binning
+# frame at the head of the list made the outlier the reference and skipped
+# every ordinary frame behind it -- the night was then compared on a map
+# built from the one frame that did not belong.  The warning fired either
+# way, which is how it looked handled.
+_BIG = np.full((600, 600), 1000.0, dtype=np.float32)
+_SMALL = np.full((300, 300), 1000.0, dtype=np.float32)
+_PLANES = {}
+ns["_with_fits"] = lambda path, reader, **kw: _PLANES[path]
+_flat_shape = ns["_flat_shape"]
+
+for name, arr in (("big", _BIG), ("small", _SMALL)):
+    for i in range(8):
+        _PLANES[f"{name}{i}"] = arr
+big7 = [f"big{i}" for i in range(7)]
+
+for label, paths in (("outlier first", ["small0"] + big7),
+                     ("outlier last", big7 + ["small0"]),
+                     ("outlier in the middle", big7[:3] + ["small0"]
+                      + big7[3:])):
+    st = {}
+    m = _flat_shape(paths, limit=8, stats=st)
+    check(st == {"used": 7, "skipped": 1},
+          f"{label}: the seven agreeing frames are the ones averaged")
+    check(m is not None, f"{label}: and a map comes back")
+
+st = {}
+_flat_shape(big7, limit=8, stats=st)
+check(st == {"used": 7, "skipped": 0}, "a clean night skips nothing")
+st = {}
+_flat_shape(["small0"], limit=8, stats=st)
+check(st == {"used": 1, "skipped": 0},
+      "a night that is ALL one unusual size is not thrown away")
+st = {}
+_flat_shape(["small0", "small1", "big0", "big1"], limit=8, stats=st)
+check(st["used"] == 2, "an even split keeps two, not one")
+check(_flat_shape(["small0", "small1", "big0", "big1"], limit=8).shape
+      == _flat_shape(["big0", "big1"], limit=8).shape,
+      "and the tie goes to the larger, i.e. unbinned, image")
+check(_flat_shape([], limit=8) is None, "no frames at all -> None")
+st = {}
+check(_flat_shape([], limit=8, stats=st) is None and st["used"] == 0,
+      "and the stats still come back initialised, never stale")
+
+print("\n1.7.15 — GESDT falls back to the band BELOW it")
+_rf, _ra = ns["_rejection_fallback"], ns["_rejection_args"]
+gesdt = _ra(100, True)[0]
+check(gesdt[:2] == ["rej", "g"], "100 frames really are in the GESDT band")
+fb = _rf(gesdt)
+check(fb is not None and fb[0] == ["rej", "winsorized", "3", "3"],
+      "an older Siril refusing `g` retries with winsorized")
+check(fb[0] == _ra(GESDT_MIN := 30, True)[0],
+      "which is exactly what _rejection_args gives the frames just short "
+      "of GESDT — the tier below, as both call sites always claimed")
+check(_rf(_ra(400, True)[0]) is None,
+      "linear fit is never swapped — it is the band ABOVE GESDT")
+for n in (2, 8, 20, 400):
+    check(_rf(_ra(n, True)[0]) is None,
+          f"n={n}: nothing but GESDT is ever retried with another algorithm")
+check(_rf(_ra(50, False)[0]) is None,
+      "and 'no rejection' is never quietly re-enabled")
+
+print("\n1.7.15 — a WCS and a distortion-aware WCS are different facts")
+_hdr: dict = {}
+ns_sip = {"_read_header": lambda path: _hdr.get(path)}
+for _n in tree.body:
+    if isinstance(_n, ast.FunctionDef) and _n.name == "_has_sip":
+        exec("from __future__ import annotations\n"
+             + ast.get_source_segment(src, _n), ns_sip)
+has_sip = ns_sip["_has_sip"]
+_hdr["linear"] = {"CTYPE1": "RA---TAN", "CRVAL1": 308.7, "CD1_1": 1e-4}
+_hdr["sip"] = dict(_hdr["linear"], A_ORDER=3, B_ORDER=3)
+_hdr["ctype"] = {"CTYPE1": "RA---TAN-SIP", "CRVAL1": 308.7}
+_hdr["bonly"] = {"CTYPE1": "RA---TAN", "B_ORDER": 2}
+check(has_sip("sip") is True,
+      "SIP order keywords are what Siril writes, and what is asked for")
+check(has_sip("ctype") is True,
+      "a CTYPE suffix from another writer counts too")
+check(has_sip("bonly") is True,
+      "half a pair is still distortion — never treat it as linear and "
+      "overwrite it")
+check(has_sip("linear") is False,
+      "a plain TAN solution is linear — exactly what the composite "
+      "inherits, and what SPCC warns about")
+check(has_sip("missing") is False,
+      "an unreadable header means 'assume linear': one re-solve costs "
+      "seconds, a skipped one costs the colour calibration")
 
 print()
 if fails:

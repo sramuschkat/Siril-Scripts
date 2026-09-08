@@ -40,6 +40,18 @@ def body(name, klass=cls):
                   if isinstance(m, ast.FunctionDef) and m.name == name))
 
 
+def _cls_method(cls_name, fn_name):
+    """One method's source, addressed by class name rather than by `cls`."""
+    k = next(n for n in tree.body
+             if isinstance(n, ast.ClassDef) and n.name == cls_name)
+    return body(fn_name, k)
+
+
+ns_presets: dict = {}
+exec(src[src.index("PRESETS = {"):src.index("def _log_swallowed")],
+     ns_presets)
+
+
 # --------------------------------------------------------------------
 # A stubbed Siril, and the real _stack_all_filters running on top of it
 # --------------------------------------------------------------------
@@ -74,8 +86,9 @@ code = "from __future__ import annotations\n" + "\n".join(
     textwrap.dedent(body(n)) for n in
     ("_stack_all_filters", "_calib_split", "_calibrate_in_parts",
      "_master_stem", "_release_work", "_find_fullframe",
-     "_drop_generation", "_drop_staged", "_drop_parts"))
-for _fn in ("_exp_tag", "_path_date"):
+     "_drop_generation", "_drop_staged", "_drop_parts",
+     "_check_framing", "_reg_frame_sizes"))
+for _fn in ("_exp_tag", "_path_date", "_night_of", "_read_header"):
     code += "\n" + textwrap.dedent(
         ast.get_source_segment(src, next(
             n for n in tree.body if isinstance(n, ast.FunctionDef)
@@ -85,6 +98,7 @@ exec(code, ns)
 
 class Worker:
     for _n in ("_stack_all_filters", "_calib_split", "_calibrate_in_parts",
+               "_check_framing", "_reg_frame_sizes",
                "_master_stem", "_release_work", "_drop_generation",
                "_drop_staged", "_drop_parts"):
         locals()[_n] = ns[_n]
@@ -92,6 +106,10 @@ class Worker:
     def __init__(self, tmp, groups, masters, fail_merge=False,
                  flat_nights=None):
         self._out_dir, self._groups, self._masters = tmp, groups, masters
+        # path -> observing night, as discovery fills it in.  Empty in these
+        # fixtures, so `_night_of` falls through to the folder date -- the
+        # rule the run used unconditionally before 1.7.15.
+        self._nights: dict = {}
         self._flat_nights = flat_nights or {}
         self._night_notes = {}
         self._opts = {"calibrate": True, "cosmetic": False,
@@ -104,6 +122,10 @@ class Worker:
         self._blank_skipped, self._stacked_counts = 0, {}
         self._qf_decision, self._rej_labels = {}, {}
         self._measured, self._reg_stats = {}, {}
+        # The stub's "frames" are not real FITS, so `_check_framing` reads
+        # nothing and stays silent -- which is itself the contract: an
+        # unreadable sequence is "cannot tell", never a warning.
+        self._reg_degraded, self._reg_degraded_why = {}, {}
         self._current_n_frames, self._aborted = 0, False
         self.cmds, self.log, self._fail_merge = [], [], fail_merge
         self.progress = types.SimpleNamespace(emit=lambda *a: None)
@@ -498,11 +520,20 @@ fc = body("_check_flat_consistency")
 # The bug this section exists for: `setdefault(night, path)` kept ONE sub
 # per night, so the spread was shot noise -- 1.78% against a 0.30% limit,
 # on every dataset.  A whole night has to reach the measurement.
-check("setdefault(_path_date(path) or \"?\", []).append(path)" in fc,
+check("_night_of(path, self._nights) or \"?\", []).append(path)" in fc,
       "every frame of a night is collected, not the first one")
+# 1.7.15: and the night is the frame's OWN (noon-to-noon from DATE-OBS),
+# not its date folder -- the key that was computed and never read.
+check("_path_date(path)" not in fc,
+      "and the night comes from the header, not the folder")
 shape = src[src.index("def _flat_shape"):src.index("def _flat_normalise")]
-check("stack + frame" in shape and "stack / used" in shape,
+check("have[0] + frame" in shape and "stack / used" in shape,
       "and the night is averaged before anything is measured")
+# 1.7.15: the reference size is the one MOST of the night agrees on.
+# Taking it from the first frame read let a single mixed-binning frame at
+# the head of the list skip every ordinary frame behind it.
+check("sums[sh][1]" in shape,
+      "on the size the majority of the night agrees on")
 check("_rebin_mean" in src[src.index("def _flat_normalise"):
                            src.index("def _flat_ratio_spread")],
       "then binned down, the way the thresholds' own source tool does")
@@ -870,6 +901,217 @@ check("except SirilGoneError" in run_body
 check("Reuse existing masters" in run_body,
       "and the message names the recovery: restart Siril, re-run, reuse "
       "the finished masters")
+
+
+# ---------------------------------------------------------------------------
+print("\n20) 1.7.15 — the quality-filter value is reset in BOTH directions")
+# The reset used to be keyed on "the old value no longer fits the new
+# range", which only ever fired one way: 90 does not fit 1..10, so
+# % -> k-sigma was correct, while k-sigma -> % left a 3 in a box now
+# reading "3 %" -- a filter keeping the best three percent of the frames.
+
+
+class _Spin:
+    """A QSpinBox that clamps on setRange and setValue, exactly as Qt does."""
+
+    def __init__(self, v=90):
+        self._lo, self._hi, self._v = 1, 100, v
+        self.suffix = ""
+
+    def setRange(self, lo, hi):
+        self._lo, self._hi = lo, hi
+        self._v = max(lo, min(hi, self._v))
+
+    def setValue(self, v):
+        self._v = max(self._lo, min(self._hi, v))
+
+    def value(self):
+        return self._v
+
+    def setSuffix(self, sfx):
+        self.suffix = sfx
+
+
+mode_ns = {"getattr": getattr}
+exec("from __future__ import annotations\n"
+     + textwrap.dedent(_cls_method("ImageMonoTrainWindow",
+                                   "_on_filter_mode_changed")), mode_ns)
+_on_mode = mode_ns["_on_filter_mode_changed"]
+
+
+class _ModeWin:
+    def __init__(self):
+        self._filter_spins = [_Spin() for _ in range(4)]
+        self._applying_preset = False
+        self._restoring_settings = False
+        _on_mode(self, "% best")          # the constructor's own call
+
+
+mw = _ModeWin()
+check(all(s.value() == 90 and s.suffix == " %" for s in mw._filter_spins),
+      "construction leaves the boxes at 90 %")
+_on_mode(mw, "k-sigma")
+check(all(s.value() == 3 and s.suffix == " σ" for s in mw._filter_spins),
+      "% -> k-sigma resets to 3 sigma (this direction always worked)")
+_on_mode(mw, "% best")
+check(all(s.value() == 90 for s in mw._filter_spins),
+      "k-sigma -> % resets to 90 % — it used to leave a 3, i.e. 'keep the "
+      "best 3 %', which on 200 frames really integrates six of them")
+mw._filter_spins[0].setValue(75)
+_on_mode(mw, "% best")
+check(mw._filter_spins[0].value() == 75,
+      "re-applying the SAME mode leaves the user's own value alone")
+
+print("\n20b) the presets say which mode their numbers are in")
+for name, preset in ns_presets["PRESETS"].items():
+    check(preset.get("filter_mode") == "% best",
+          f"{name!r} names the mode its 90 belongs to")
+ap = _cls_method("ImageMonoTrainWindow", "_apply_preset")
+check("QComboBox" in ap and "isinstance(widgets.get(kv[0]), QComboBox)" in ap,
+      "and _apply_preset applies the combos FIRST, so the mode sets the "
+      "range before the values land in it")
+check('"filter_mode": self.cmb_filter_mode' in _cls_method(
+          "ImageMonoTrainWindow", "_preset_widgets"),
+      "the preset widget map carries the mode combo")
+
+print("\n21) 1.7.15 — a channel dropped by the alignment says why")
+am = _cls_method("StackWorker", "_align_masters")
+check(am.count("self._align_dropped[filt]") == 2,
+      "both exclusions — missing file and a contradicting FILTER keyword — "
+      "record their reason")
+run_src = _cls_method("StackWorker", "run")
+check("self._align_dropped.get(filt)" in run_src
+      and "errors.setdefault(" in run_src,
+      "and run() carries them into `errors`, so the report cannot fall "
+      "through to 'not reached — the run was stopped' about a filter whose "
+      "master is sitting in masters/")
+
+print("\n22) 1.7.15 — the grid check reads the files, not the align flag")
+check("if want_compose and len(final_paths) >= 2:" in run_src,
+      "_mixed_grids runs whenever a composite is about to be built")
+check("if want_compose and not did_align" not in run_src,
+      "not only when alignment did NOT run — which was exactly the case "
+      "the single-pass fallback (no -framing=min) slipped through")
+check("self._align_framing_min = True" in am,
+      "the alignment records whether -framing=min really applied")
+check("_align_framing_min" in run_src,
+      "and the message distinguishes the fallback from a plain failure")
+
+print("\n23) 1.7.15 — smaller guards")
+fin = _cls_method("StackWorker", "_finish_composite")
+check("solved = inherited" in fin,
+      "an inherited WCS survives a platesolve that refuses the composite")
+spcc = _cls_method("StackWorker", "_spcc_args")
+check("DEFAULT_NB_BANDWIDTH" in spcc and 'nb_bandwidth", 7' not in spcc,
+      "the narrowband bandwidth falls back to the documented default")
+sa = _cls_method("StackWorker", "_stack_all_filters")
+check(sa.count("to register and stack.") == 2
+      and "falling back from per-part calibration" in sa,
+      "the two-frame guard is re-checked after the per-part fallback — the "
+      "one above it ran on the count of the PARTS")
+check(sa.index("falling back from per-part calibration")
+      < sa.index("proc_dir = os.path.join(work, \"process\")"),
+      "and it stops the filter BEFORE the conversion, so a re-stage that "
+      "came back short becomes a clean skip, not a Siril error")
+
+
+print("\n24) 1.7.15 — a crop that was asked for but did not happen")
+# Siril ACCEPTS -framing=min on the astrometric (plate-solve) path, raises
+# nothing, and exports frames of differing sizes anyway; `stack` then says
+# "Forcing to maximize framing" and the master comes out LARGER than any
+# sub.  Observed on an NGC 6946 run: 3008x3008 subs, r_ frames 3007x3008
+# to 3013x3014, master 3060x3128.  Nothing raised, so nothing was recorded.
+cf = _cls_method("StackWorker", "_check_framing")
+check("_reg_frame_sizes(process_dir, seq)" in cf,
+      "the frames themselves are asked — only they can answer this")
+check("if len(sizes) < 2:\n            return" in cf,
+      "one common size is silent")
+check('self._reg_degraded[filt] = ["-framing=min"]' in cf,
+      "a differing set records -framing=min as not applied")
+check("self._reg_degraded_why[filt]" in cf and "accepted the argument" in cf,
+      "...with its own reason, so the report cannot print the refusal "
+      "wording for a case Siril never refused")
+check("if filt in self._reg_degraded:\n            return" in cf,
+      "a channel already recorded as degraded keeps its own story")
+sizes_src = _cls_method("StackWorker", "_reg_frame_sizes")
+check("_read_header(" in sizes_src and ".data" not in sizes_src,
+      "sizes come from headers, never from pixel data")
+check("if len(sizes) > 1:\n                break" in sizes_src,
+      "...and the scan stops at the first disagreement")
+check("self._check_framing(" in sa
+      and 'if self._opts.get("crop_edges", True):' in sa,
+      "the check runs where the exported frames are already being counted, "
+      "and only when the crop was actually asked for")
+
+print("\n24b) the report tells the two causes apart")
+docs = _cls_method("StackWorker", "_write_docs")
+check("self._reg_degraded_why.get(" in docs
+      and "Siril refused the full argument set" in docs,
+      "the refusal wording is the FALLBACK now, not the only sentence")
+
+print("\n25) 1.7.15 — an inherited solution is not claimed as new work")
+ps = _cls_method("StackWorker", "_platesolve_file")
+check("inherited = _has_wcs(path)" in ps,
+      "the header is asked before the command runs")
+check("already carried an" in ps and "if inherited:" in ps,
+      "an already-solved master says so instead of 'Plate-solved'")
+check(ps.index('self._cmd("platesolve")') < ps.index("if inherited:"),
+      "...and the command still runs — whether an existing solution is "
+      "good enough is Siril's call, not this function's")
+
+print("\n26) 1.7.15 — SPCC gets the solution it asks for")
+# Siril asks for one twice per finish: "Found linear plate solve data,
+# you may need to solve your image with distortions to ensure correct
+# calibration of stars near image corners."  It does NOT fix the weak
+# colour fit -- an A/B on one composite moved sigma(R/G) 2.2497 -> 2.2481
+# -- so what is asserted here is the request being answered, and the
+# guards that keep answering it from costing anything else.
+fc = _cls_method("StackWorker", "_finish_composite")
+check("_has_sip(path)" in fc,
+      "the header is asked whether the inherited solution carries SIP")
+check("-force" in fc,
+      "and the re-solve is forced — Siril answers 'Nothing will be done' "
+      "to a plain platesolve on a solved image")
+check("-noflip" in fc,
+      "...with the flip disabled: a forced solve may flip an image it "
+      "reads as upside-down, and the composite must stay on the masters' "
+      "grid")
+check("f\"-order={SPCC_SIP_ORDER}\"" in fc,
+      "the SIP order is passed explicitly, not left to Siril's preferences")
+check("self._photometry_planned(palette)" in fc,
+      "and it only runs when a photometric calibration really will")
+check(fc.index("_has_sip(path)") < fc.index("_colour_calibrate"),
+      "the solve happens BEFORE the calibration that needs it")
+check("continuing with the solution the image still carries" in fc,
+      "a refused solve does not abort the finish")
+# The gate is a copy of _colour_calibrate's own refusals; if that method
+# grows a new one, this must follow.
+ns26: dict = {}
+exec(src[src.index("_NB_PALETTES = {"):src.index("# The emission line")],
+     ns26)
+exec("from __future__ import annotations\n"
+     + textwrap.dedent(_cls_method("StackWorker", "_photometry_planned")),
+     ns26)
+
+
+class _W:
+    def __init__(self, **o):
+        self._opts = o
+    _photometry_planned = ns26["_photometry_planned"]
+
+
+check(_W().  _photometry_planned("RGB") is True,
+      "a plain RGB composite is calibrated photometrically")
+check(_W()._photometry_planned("HaRGB") is False,
+      "HaRGB is not — its Red carries blended Ha, so star colours are not "
+      "physical, and a solve for it would be pure cost")
+check(_W(use_spcc=False)._photometry_planned("HOO") is False,
+      "narrowband with SPCC off leaves no attempt at all: PCC assumes "
+      "broadband star colours")
+check(_W(use_spcc=True)._photometry_planned("HOO") is True,
+      "narrowband with SPCC on still measures stars")
+check(_W(use_spcc=False)._photometry_planned("RGB") is True,
+      "and SPCC off on broadband still falls through to PCC")
 
 print()
 if fails:
