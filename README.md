@@ -649,7 +649,7 @@ Reads the current image from Siril, divides it into a configurable grid of tiles
 
 ## Svenesis ImageMono Train
 
-**File:** `Svenesis-ImageMono-Train.py` (v1.7.19) — **[Detailed Instructions](Instructions/Svenesis-ImageMono-Train-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-ImageMono-Train-Instructions_de.md)**
+**File:** `Svenesis-ImageMono-Train.py` (v1.7.20) — **[Detailed Instructions](Instructions/Svenesis-ImageMono-Train-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-ImageMono-Train-Instructions_de.md)**
 
 > ⚠️ Public preview — not yet submitted to the official Siril Script Repository.
 
@@ -678,7 +678,7 @@ Siril computes **Lc = (L − D) / (F − O)**. Everything is optional: the scrip
 - **Bias is never applied together with a dark** (the master dark already contains the offset), and flats are offset-corrected before stacking in four steps: real bias / dark-flat → a plain **DARK shot at the flats' exposure** (within 20 % — a dark at the flat exposure *is* a dark-flat, whatever `IMAGETYP` calls it) → Siril's synthetic `=64*$OFFSET` → raw. Calibration never aborts a run.
 - **A filter that mixes exposures, or nights, is calibrated in parts** — each exposure with its own dark, each night with its own flat, merged again before registration. A dark only removes the thermal signal that grew during *its* exposure, so one dark for 120 s and 300 s subs is right for neither; a flat only describes the optical train it was shot through, so nights that were not shot through the same one want their own.
 - Optional **cosmetic correction** (`-cc=dark`, hot/cold pixels from the dark's own statistics) and **"match flats to the same night"**, which builds one master flat per night and divides each night's lights by its own — for rigs that were touched between sessions.
-- Masters are cached in `calib/` under readable, header-derived names (`M101_RED_-10C_3s_G100_flat`) and reused on later runs.
+- Masters are cached in `calib/` under readable, header-derived names (`M101_RED_-10C_3s_G100_flat`) and reused on later runs **while their frames stay the same**. Each master carries a record of the frames it was built from; add, remove or swap one and the master is rebuilt, with the reason in the log.
 
 #### Stacking — adaptive, not one-size-fits-all
 
@@ -713,7 +713,7 @@ Siril computes **Lc = (L − D) / (F − O)**. Everything is optional: the scrip
 #### Output that explains itself
 
 ```
-output/
+Stacked/
 ├─ TARGET_RGB.fit        the finished colour image (linear, calibrated)
 ├─ masters/
 │   ├─ TARGET_FILTER.fit            aligned — use these to combine
@@ -722,7 +722,7 @@ output/
 │                                   the recipe: frames, exposure, gain, temp
 ├─ output.md             what the script did, step by step
 ├─ todo.md               step-by-step final-processing guide
-├─ calib/                master dark / flat / bias — reused next run
+├─ calib/                master dark / flat / bias — reused while its frames are unchanged
 ├─ qa/                   rejection maps (if enabled)
 └─ _work/                intermediates — safe to delete
 ```
@@ -760,12 +760,12 @@ Both documents describe **what actually happened**, not the usual case:
 ### Usage
 
 1. Run **Svenesis ImageMono Train** from Siril: **Processing → Scripts** (or your Scripts menu). No image needs to be loaded.
-2. Click **Select Target Folder…** and pick the root folder of **one** target.
+2. Click **Select Target Folder…** and pick the root folder of **one** target. Under **Output**, *Results folder* places `Stacked/` inside it or up to three folders above — with Astro-PM, pick `Originals` and choose *1 level up*.
 3. *(Optional)* Set a **Library** folder holding your reusable darks and bias — it is remembered between runs. Session flats are found automatically next to your lights.
 4. Review the discovered filters, frame counts, integration times and what calibration was found.
 5. Pick a **Preset** (or adjust the options), choose a **Palette** — or leave it on *Auto*. Check the **SPCC** fields under *Auto-finish*: they are pre-filled for one particular rig, so put your own sensor and filter names there (the Log tells you if a name does not match Siril's database).
 6. Press **Stack All Filters** and watch the Log tab.
-7. Open `output/` — the colour image is loaded in Siril automatically; read **`todo.md`** for the remaining, creative steps.
+7. Open `Stacked/` — the colour image is loaded in Siril automatically; read **`todo.md`** for the remaining, creative steps.
 
 > **Flats matter most.** Without them expect vignetting and dust shadows, and PCC will keep complaining about a gradient. Shoot 20–40 per filter after each session, before you break the optical train down, and drop them next to your lights. Darks (25–30 per exposure × gain × setpoint) and bias (50–100 per gain) belong in the library; on a modern low-dark-current sensor their main benefit is the cosmetic correction against hot pixels.
 

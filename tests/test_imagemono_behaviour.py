@@ -162,6 +162,7 @@ class Worker:
         self.cc_seen: dict = {}
         self._split_refused: dict = {}
         self._cc_said: dict = {}
+        self._no_flat_said: set = set()
         self._commands: list = []
         self.progress = types.SimpleNamespace(emit=lambda *a: None)
 
@@ -611,7 +612,7 @@ oapi_src = src[src.index("OPTIONAL_API = ("):
                 src.index("def _missing_capabilities")]
 
 print("\n9c) calibration masters go through the same rejection bands")
-scg = body("_stack_calib_group")
+scg = body("_build_calib_master")
 # A bare `rej 3 3` is Siril's DEFAULT, winsorized -- the band meant for
 # 11-30 frames, and it used to be sent for a 5-frame flat and a 442-frame
 # dark alike.
@@ -1850,6 +1851,77 @@ check("RBF_NARROWBAND_KEPT" in adv and "POLY1_NARROWBAND_KEPT" in adv,
       "and quotes the constants rather than repeating their numbers")
 check("POLY1_NARROWBAND_KEPT:.1%" in adv,
       "99.9% is printed as 99.9%, not rounded up to 100%")
+
+print("\n48) the results folder goes where the menu says")
+# 1.7.20.  Every path the run and the finish dialog use comes from the one
+# level the user chose; nothing may rebuild "<root>/output" on its own.
+ui_cls = next(k for k in tree.body if isinstance(k, ast.ClassDef)
+              and any(isinstance(f, ast.FunctionDef) and f.name == "_set_root"
+                      for f in k.body))
+ui = ui_cls.name
+starter = next(f.name for f in ui_cls.body if isinstance(f, ast.FunctionDef)
+               and "self._run_out_dir = out_dir"
+               in (ast.get_source_segment(src, f) or ""))
+check("os.path.join(self._root, STACKS_DIRNAME)" not in src,
+      "no code path builds the results folder behind the level menu's back")
+check("out_dir = self._output_path()" in _cls_method(ui, starter),
+      f"{starter} hands the run the path from the menu")
+check("_run_out_dir" in _cls_method(ui, "_on_stack_done"),
+      "the finish dialog reports the folder the run was given")
+check("_skip_in_discovery(dirpath, d)" in _cls_method("AnalyzeWorker", "_scan"),
+      "discovery prunes through the one rule, old name included")
+check("_looks_like_results(path)" in _cls_method(ui, "_looks_like_our_output"),
+      "the picker guard uses the same test as the pruning")
+check("self.cmb_out_level" in _cls_method(ui, "_set_left_enabled"),
+      "the menu is locked while a run goes")
+check('"output_level"' in _cls_method(ui, "_save_settings")
+      and '"output_level"' in _cls_method(ui, "_load_settings"),
+      "the chosen level is saved and restored")
+check("_out_level_pref =" not in _cls_method(ui, "_fill_out_levels"),
+      "refilling the menu for a new folder never overwrites the choice")
+
+print("\n49) three things the NGC 7380 run said wrong or not at all")
+ui_cls = next(k for k in tree.body if isinstance(k, ast.ClassDef)
+              and any(isinstance(f, ast.FunctionDef) and f.name == "_set_root"
+                      for f in k.body))
+ca = _cls_method("StackWorker", "_calibrate_args")
+check("_no_flat_said" in ca and "no flat" in ca,
+      "the run names a filter calibrated without a flat, once per filter")
+check('self._opts.get("use_flats", True)' in ca.split("_no_flat_said")[0],
+      "and stays quiet when flats are switched off on purpose")
+check("_filters_without_flats(" in _cls_method(ui_cls.name,
+                                              "_show_calib_summary"),
+      "the analysis names it before anything is stacked")
+fc = _cls_method("StackWorker", "_finish_composite")
+check(fc.index("will_resolve = ") < fc.index("plate-solve skipped"),
+      "whether a re-solve follows is decided before 'skipped' may be said")
+check("elif inherited:" in fc and "if inherited and will_resolve:" in fc,
+      "'no new solve was needed' is only written when none follows")
+check("if solved and will_resolve:" in fc,
+      "the re-solve uses the same decision, so the two cannot disagree")
+pm = _cls_method(ui_cls.name, "_apply_palette_mapping")
+check("and not missing" in pm.split("will blend")[0].rsplit("elif", 1)[1],
+      "HaRGB's 'will blend' needs the palette to be buildable first")
+
+print("\n50) a calibration master is reused only while it fits its frames")
+# 1.7.20.  An OIII flat master from 12 frames was reused with 20 flats in
+# the folder: reuse asked only whether the file name existed.
+sg = body("_stack_calib_group")
+check("_calib_master_stale(_frame_record(files), recorded, count)" in sg,
+      "the reuse decision compares the frames, not just the name")
+check("_read_frame_record(dest)" in sg and "_fits_stackcnt(dest)" in sg,
+      "the record decides, STACKCNT stands in for an older master")
+check(sg.index("_read_frame_record(dest)") < sg.index("_fits_stackcnt(dest)"),
+      "and the header is only read when there is no record")
+check("built is None and stale and os.path.exists(dest)" in sg,
+      "a failed rebuild falls back to the master it was replacing")
+check("Rebuilding master" in sg,
+      "a rebuild is said, with the reason")
+bm = body("_build_calib_master")
+check(bm.count("self._write_frame_record(dest, kind,") == 2,
+      "both ways a master comes into being write its record")
+check("used.append(src)" in bm and "_write_frame_record(dest, kind, used)" in bm,
+      "the record lists the frames actually staged, not the ones offered")
 
 print()
 if fails:

@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.7.19** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.7.20** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.7.19](#17-neu-in-1719)
+17. [Neu in 1.7.20](#17-neu-in-1720)
 
 ---
 
@@ -115,7 +115,7 @@ Das Skript startet jetzt nicht mehr unterhalb von **sirilpy 1.0.0** (das mit Sir
 
 **Plattenplatz während eines Laufs.** Jeder Schritt — Kalibrieren, Hintergrund, Registrieren — schreibt eine vollständige Kopie jedes Frames. Mit gesetztem **Delete _work/ when finished** wird jede Generation freigegeben, sobald die nächste fertig ist; der Spitzenbedarf bleibt damit bei etwa zwei statt vier Generationen — rund 3,6 GB pro Generation bei hundert 3008×3008-Subs in 32 bit. Ohne den Haken bleibt jede Zwischenstufe liegen, und genau das will man, wenn etwas untersucht werden muss. (Die Idee stammt aus **Storage Friendly Stacking** von Quark-Coder, das den Ordner überwacht; ein fester Schritt nach jedem Kommando leistet dasselbe ohne Dateiwächter.)
 
-Halte den Arbeitsbaum auf einer **lokalen Platte**. Wenn deine Rohdaten in der Cloud liegen, kopiere den Zielordner vorher lokal, oder nimm den Ordner `output/_work/` von der Synchronisation aus.
+Halte den Arbeitsbaum auf einer **lokalen Platte**. Wenn deine Rohdaten in der Cloud liegen, kopiere den Zielordner vorher lokal, oder nimm den Ordner `Stacked/_work/` von der Synchronisation aus.
 
 ---
 
@@ -161,7 +161,7 @@ Darks und Bias gehören in einen separaten **Library**-Ordner (siehe §7), weil 
 ## 5. Erste Schritte — der erste Lauf
 
 1. **Skript starten.** Es muss kein Bild geladen sein.
-2. **Select Target Folder…** — den Wurzelordner **eines** Ziels wählen.
+2. **Select Target Folder…** — den Wurzelordner **eines** Ziels wählen. Unter **Output** bestimmt *Results folder*, wo `Stacked/` entsteht: in diesem Ordner oder bis zu drei Ordner darüber. Mit Astro-PM den `Originals`-Ordner des Ziels wählen und *1 level up* einstellen.
 3. Optional einen **Library…**-Ordner mit deinen wiederverwendbaren Darks und Bias setzen. Er wird zwischen Läufen gemerkt.
 4. Die Ordnerauswahl analysiert sofort — **Re-scan Folder** ist für danach da, wenn Frames dazukommen oder die Library wechselt. Es folgen drei Tabellen. **Discovered Lights** listet jeden Filter mit Frameanzahl, Gesamtbelichtung und Kamerazustand — was aufgenommen wurde. **Flats and Dark-Flats** und **Calibration with Darks and Bias** sagen, was diese Lights *bekommen*: die Sätze, die wirklich geöffnet werden, der Offset, mit dem jedes Flat korrigiert wird, und welcher Dark welche Filter abdeckt. Jede der beiden Kalibrationstabellen hat einen eigenen Schalter, damit eine Nacht mit guten Flats und einer Library voller unpassender Darks keine Alles-oder-nichts-Entscheidung mehr ist. Abgewähltes bleibt gelistet und wird grau — gefunden heißt nie angewandt — und ein Filter **ohne Dark** wird in Warnfarbe unter seiner Tabelle genannt.
 
@@ -171,7 +171,7 @@ Darks und Bias gehören in einen separaten **Library**-Ordner (siehe §7), weil 
 5. **Palette** prüfen. *Auto* schlägt eine aus den gefundenen Filtern vor, und immer nur eine, deren drei Kanäle sich tatsächlich füllen lassen.
 6. Unter **Auto-finish** die **SPCC**-Felder prüfen. Sie sind für ein bestimmtes Rig vorbelegt — trage deinen eigenen Sensor- und Filternamen ein (siehe §10).
 7. **Stack All Filters** drücken und den **Log**-Tab beobachten.
-8. Am Ende öffnet sich `output/`, das Farbbild ist in Siril geladen. Lies **`todo.md`** für den Rest.
+8. Am Ende öffnet sich `Stacked/`, das Farbbild ist in Siril geladen. Lies **`todo.md`** für den Rest.
 
 Eine Nacht mit sechs Filtern und vierzig Frames dauert auf einem aktuellen Laptop rund 20 Sekunden.
 
@@ -196,7 +196,7 @@ Im Log erklärt das Skript seine Entscheidungen. Wenn es etwas überspringt, auf
 2. **Kalibrierung** — Library-Pfad und die Kalibrierungsschalter (§7)
 3. **Stacking** — Rejection, Gewichtung, Qualitätsfilter, Beschnitt, Hintergrund (§8)
 4. **Farbe** — Palette, Kanalzuordnung, Komposition und Auto-finish (§9, §10)
-5. **Aktionen** — Ausrichtung, Plate-Solving, Wiederverwendung, Aufräumen und **Stack All Filters**
+5. **Aktionen** — Ergebnisordner, Ausrichtung, Plate-Solving, Wiederverwendung, Aufräumen und **Stack All Filters**
 
 ### Vorlagen (Presets)
 
@@ -290,7 +290,7 @@ Flats müssen ihren eigenen Offset loswerden, bevor sie irgendetwas normieren k�
 3. Sirils **synthetischer Bias** `=64*$OFFSET`,
 4. gar keine Offset-Korrektur — das Flat wird direkt gestackt.
 
-Master werden in `calib/` unter lesbaren, aus dem Header abgeleiteten Namen wie `M101_RED_-10C_3s_G100_flat` zwischengespeichert und von späteren Läufen wiederverwendet.
+Master werden in `calib/` unter lesbaren, aus dem Header abgeleiteten Namen wie `M101_RED_-10C_3s_G100_flat` zwischengespeichert und von späteren Läufen wiederverwendet, aber nur, solange die Frames dahinter gleich bleiben. Jeder Master trägt eine Liste seiner Frames (`<master>.sources.json`, Dateiname und Größe); kommen Frames hinzu, fallen welche weg oder werden ausgetauscht, wird der Master neu gebaut, und das Log nennt den Grund. Ein Master von vor 1.7.20 hat keine Liste, dann springt sein `STACKCNT`-Header ein.
 
 ---
 
@@ -742,7 +742,7 @@ Sie ist außerdem **nichtlinear und pixelweise**, würde also genau die Eigensch
 ## 11. Ausgabedateien
 
 ```
-output/
+Stacked/
 ├─ TARGET_RGB.fit        das fertige Farbbild (linear, kalibriert)
 ├─ TARGET_RGB_preview.fit gestreckte Vorschau, falls aktiviert
 ├─ masters/
@@ -751,10 +751,12 @@ output/
 │                                   voller, unbeschnittener Stack
 ├─ output.md             was das Skript getan hat, Schritt für Schritt
 ├─ todo.md               Anleitung für die finale Bearbeitung
-├─ calib/                Master-Dark / -Flat / -Bias — beim nächsten Lauf wiederverwendet
+├─ calib/                Master-Dark / -Flat / -Bias — wiederverwendet, solange ihre Frames gleich bleiben
 ├─ qa/                   Rejection-Maps (falls aktiviert)
 └─ _work/                Zwischendateien — jederzeit löschbar
 ```
+
+**Wo der Ordner liegt.** *Results folder* in der Gruppe **Output** legt `Stacked/` in den gewählten Ordner oder bis zu drei Ordner darüber; die Zeile **Output** zeigt den genauen Pfad. Mit Astro-PM wählst du `Originals` und *1 level up*, dann liegt er neben `Originals`. Ein Ergebnisordner von vor 1.7.20 heißt `output/`. Er wird weiter erkannt und bei der Discovery übersprungen; benenne ihn in `Stacked` um, um seine Master weiter zu nutzen.
 
 **`masters/` enthält zwei Fassungen pro Kanal.** Die `_fullframe`-Datei ist der Stack in seiner eigenen Geometrie; die schlichte wurde auf das gemeinsame Raster neu projiziert und ist die, die man zum Kanalkombinieren nimmt.
 
@@ -856,7 +858,7 @@ Frames ohne genügend erkennbare Sterne — Wolken, Dunst, ein durchziehender Sc
 
 ### „FITS error: failed to find or open the following file"
 
-Fast immer ein **Cloud-synchronisierter Arbeitsordner**. Sirils `link` legt Symlinks an, und Dropbox & Co. schreiben sie mitten im Lauf um. Verschiebe den Arbeitsbaum auf eine lokale Platte oder nimm `output/_work/` von der Synchronisation aus. Siehe §3.
+Fast immer ein **Cloud-synchronisierter Arbeitsordner**. Sirils `link` legt Symlinks an, und Dropbox & Co. schreiben sie mitten im Lauf um. Verschiebe den Arbeitsbaum auf eine lokale Platte oder nimm `Stacked/_work/` von der Synchronisation aus. Siehe §3.
 
 ### „2-pass registration unavailable"
 
@@ -910,11 +912,31 @@ Es fragt zuerst nach, beendet dann den aktuellen Filter und hört dort auf. Ausr
 Ja. Installiere einen lokalen Gaia-Katalog in Siril, dann erreicht ihn die Kalibrierungskette. Ohne beides entsteht das Komposit trotzdem — nur unkalibriert, und der Bericht sagt das.
 
 **Verändert es meine Rohframes?**
-Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
+Nein. Alles wird unter `Stacked/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.7.19
+## 17. Neu in 1.7.20
+
+Der Ergebnisordner heißt **Stacked**, und du bestimmst, wo er liegt.
+
+**Ein Menü „Results folder" in der Gruppe Output.** Bisher entstand der Ordner immer im gewählten Ordner. Das passt zum N.I.N.A.-Layout, nicht zu einem Astro-PM-Projekt: Dort zeigt jeder Filter auf `<Ziel>/Originals`, und die Stacks gehören daneben nach `<Ziel>/Stacked`. Das Menü bietet den gewählten Ordner und bis zu drei Ordner darüber an und nennt jeweils den Ordner, in dem das Ergebnis landet. Ebenen, die es nicht gibt oder in die nicht geschrieben werden kann, werden nicht angeboten, und die Zeile **Output** darunter zeigt immer den genauen Pfad. Die Wahl wird gemerkt: Bietet ein Ordner weniger Ebenen als gewählt, wird die höchste verfügbare benutzt und angezeigt, und beim nächsten tieferen Ordner kommt deine Wahl zurück. Mit Astro-PM wählst du `Originals` und *1 level up*.
+
+**Die Discovery überspringt `Stacked` in jeder Schreibweise, und der alte Name zählt weiter.** Ein Zielordner, der vor 1.7.20 verarbeitet wurde, trägt ein `output/` voller Master und Kalibrierframes, und die Umbenennung allein hätte es als Lights wieder eingelesen. Deshalb wird `output/` weiter übersprungen, aber nur, wenn es wirklich Ergebnisse enthält (`masters/`, `calib/`, `output.md` oder `commands.ssf`). Damit endet eine stille Nebenwirkung der alten Regel: Lights in einem Ordner, der zufällig `output` hieß, wurden ignoriert. Die Warnung *das ist der Ergebnisordner* bei der Ordnerwahl nutzt denselben Test. Der Bericht behält seinen Namen, `output.md`.
+
+**Die Wiederverwendung sucht im neuen Ordner.** Kalibriermaster und *Reuse existing masters* lesen aus `Stacked/`, der erste Lauf nach dem Update baut seine Kalibriermaster also neu. Wer den Inhalt eines vorhandenen `output/` weiter nutzen will, benennt es in `Stacked` um.
+
+**Ein Ordner oberhalb des gewählten kann geteilt sein.** Liegen dort weitere Ziele, schreiben deren Läufe in dasselbe `Stacked/`. Master und Farbbilder tragen das Ziel im Namen, `output.md`, `todo.md` und `commands.ssf` gehören aber dem Lauf, der zuletzt fertig wurde. Der Tooltip des Menüs sagt das.
+
+**Drei Dinge, die der erste Astro-PM-Lauf falsch oder gar nicht gesagt hat.**
+
+- **Ein Filter ohne Flats wird im Log genannt.** Ein SII-Kanal ging nur mit Dark in ein SHO-Komposit, und im Log stand nichts außer einer `calibrate`-Zeile, der zufällig `-flat=` fehlte. Der Tooltip der Tabelle und `output.md` wussten es. Die Analyse sagt jetzt *No flats for SII*, sobald der Ordner gelesen ist, und der Lauf sagt es dort noch einmal, wo dieser Filter kalibriert wird.
+- **Die Astrometrie des Komposits wird einmal beschrieben.** Der Lauf meldete *plate-solve skipped* und schrieb *no new solve was needed* in `output.md`, um kurz darauf mit Verzeichnung neu zu lösen. Ob dieser zweite Solve folgt, wird jetzt zuerst entschieden. Folgt er, hält der Bericht fest, dass die geerbte Lösung linear war, und der Neu-Solve sagt den Rest.
+- **HaRGB widerspricht sich in der Analyse nicht mehr.** Auf *HaRGB cannot be built from these filters* folgte *HaRGB will blend HA into Red*. Die zweite Zeile erscheint jetzt nur noch, wenn sich die Palette bauen lässt.
+
+**Ein Kalibriermaster wird neu gebaut, wenn sich seine Frames ändern.** Die Wiederverwendung fragte bisher nur, ob eine Datei mit dem Namen des Masters existiert, und der Name enthält Ziel, Filter, Temperatur, Belichtung und Gain, nicht die Frames. Acht OIII-Flats zu zwölf dazugelegt, und der Zwölf-Frame-Master blieb in Gebrauch: Die Analyse sagte *OIII 20×3s*, der Lauf *Reusing master flat*, und der Header des Masters `STACKCNT = 12`. Jeder Master bekommt jetzt eine Liste seiner Frames daneben, `<master>.sources.json`, mit Name und Größe jeder Datei. Ein verschobener Projektordner macht nichts ungültig, und Nacht-Ordner, die `flat_00001.fit` mehrfach verwenden, zählen weiter doppelt. Ein Master von vorher hat keine Liste, dann springt Sirils `STACKCNT` ein; das erkennt hinzugekommene oder entfernte Frames, nicht einen ausgetauschten Satz gleicher Größe. Das Log sagt, worauf eine Wiederverwendung beruht oder warum ein Master neu gebaut wird, und scheitert der Neubau, wird der bisherige Master weiterverwendet.
+
+## Was neu war in 1.7.19
 
 Die Schmalband-Warnung behauptete, die Größe des Ziels zu kennen.
 

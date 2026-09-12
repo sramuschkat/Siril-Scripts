@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.7.19** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.7.20** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.7.19](#17-whats-new-in-1719)
+17. [What's New in 1.7.20](#17-whats-new-in-1720)
 
 ---
 
@@ -115,7 +115,7 @@ The script now refuses to start below **sirilpy 1.0.0** (which ships with Siril 
 
 **Disk while a run is going.** Each step — calibrate, background, register — writes a full copy of every frame. With **Delete _work/ when finished** ticked, each generation is freed as soon as the next one is complete, so the peak stays at about two generations instead of four: roughly 3.6 GB per generation for a hundred 3008×3008 32-bit subs. Untick it and every intermediate is kept, which is what you want when something needs inspecting. (The idea comes from **Storage Friendly Stacking** by Quark-Coder, which watches the folder; a deterministic step after each command does the same job without a file watcher.)
 
-Keep the working tree on a **local disk**. If your raw data lives in the cloud, either copy the target folder locally before processing, or exclude the `output/_work/` folder from syncing.
+Keep the working tree on a **local disk**. If your raw data lives in the cloud, either copy the target folder locally before processing, or exclude the `Stacked/_work/` folder from syncing.
 
 ---
 
@@ -161,7 +161,7 @@ Darks and bias belong in a separate **Library** folder (see §7), because they a
 ## 5. Getting Started — Your First Run
 
 1. **Run the script.** No image needs to be loaded.
-2. **Select Target Folder…** — pick the root folder of **one** target.
+2. **Select Target Folder…** — pick the root folder of **one** target. Under **Output**, *Results folder* decides where `Stacked/` is created: inside that folder, or up to three folders above it. With Astro-PM, pick the target's `Originals` folder and choose *1 level up*.
 3. Optionally set a **Library…** folder holding your reusable darks and bias. It is remembered between runs.
 4. Selecting the folder analyses it straight away — **Re-scan Folder** is there for afterwards, once you add frames or change the Library. Three tables follow. **Discovered Lights** lists every filter with its frame count, total integration and camera state — what was shot. **Flats and Dark-Flats** and **Calibration with Darks and Bias** say what those lights will be *given*: the sets that will really be opened, the offset each flat is corrected with, and which filters each dark covers. Each of the two calibration tables carries its own switch, so a session with good flats and a library of darks that fit nothing is no longer an all-or-nothing choice. What is switched off stays listed and turns grey — found is never the same as applied — and a filter that gets **no dark** is named in warning colour under its table.
 
@@ -171,7 +171,7 @@ Darks and bias belong in a separate **Library** folder (see §7), because they a
 5. Check the **Palette**. *Auto* proposes one from the filters found and only ever proposes one whose three channels can actually be filled.
 6. Under **Auto-finish**, check the **SPCC** fields. They ship pre-filled for one particular rig — replace them with your own sensor and filter names (see §10).
 7. Press **Stack All Filters** and watch the **Log** tab.
-8. When it finishes, `output/` opens with the colour image loaded in Siril. Read **`todo.md`** for the rest.
+8. When it finishes, `Stacked/` opens with the colour image loaded in Siril. Read **`todo.md`** for the rest.
 
 A six-filter, forty-frame night takes roughly 20 seconds on a modern laptop.
 
@@ -196,7 +196,7 @@ The Log is where the script explains its decisions. When it skips something, deg
 2. **Calibration** — library path and the calibration switches (§7)
 3. **Stacking** — rejection, weighting, quality filters, framing, background (§8)
 4. **Colour** — palette, channel mapping, composition and auto-finish (§9, §10)
-5. **Actions** — alignment, plate-solving, reuse, cleanup, and **Stack All Filters**
+5. **Actions** — results folder, alignment, plate-solving, reuse, cleanup, and **Stack All Filters**
 
 ### Presets
 
@@ -290,7 +290,7 @@ Flats need their own offset removed before they can normalise anything. The scri
 3. Siril's **synthetic bias** `=64*$OFFSET`,
 4. no offset correction at all — the flat is stacked directly.
 
-Masters are cached in `calib/` under readable, header-derived names such as `M101_RED_-10C_3s_G100_flat` and reused by later runs.
+Masters are cached in `calib/` under readable, header-derived names such as `M101_RED_-10C_3s_G100_flat` and reused by later runs, but only while the frames behind them stay the same. Each master carries a record of its frames (`<master>.sources.json`, file name and size); when frames are added, removed or swapped, the master is rebuilt and the log says why. A master built before 1.7.20 has no record, and its `STACKCNT` header stands in for it.
 
 ---
 
@@ -742,7 +742,7 @@ It is also **non-linear and per-pixel**, so running it would break the one prope
 ## 11. Output Files
 
 ```
-output/
+Stacked/
 ├─ TARGET_RGB.fit        the finished colour image (linear, calibrated)
 ├─ TARGET_RGB_preview.fit stretched preview, if enabled
 ├─ masters/
@@ -751,10 +751,12 @@ output/
 │                                   full, uncropped stack
 ├─ output.md             what the script did, step by step
 ├─ todo.md               step-by-step final-processing guide
-├─ calib/                master dark / flat / bias — reused next run
+├─ calib/                master dark / flat / bias — reused while its frames are unchanged
 ├─ qa/                   rejection maps (if enabled)
 └─ _work/                intermediates — safe to delete
 ```
+
+**Where the folder goes.** *Results folder* in the **Output** group places `Stacked/` inside the folder you selected, or up to three folders above it; the **Output** line shows the exact path. With Astro-PM, select `Originals` and choose *1 level up*, which puts it beside `Originals`. A results folder written before 1.7.20 is called `output/`. It is still recognised and skipped during discovery; rename it to `Stacked` to keep reusing its masters.
 
 **`masters/` holds two versions per channel.** The `_fullframe` file is the stack in its own geometry; the plain one has been re-projected onto the common grid and is the one to use for channel combination.
 
@@ -856,7 +858,7 @@ Frames without enough detectable stars — cloud, haze, a passing veil — canno
 
 ### "FITS error: failed to find or open the following file"
 
-Almost always a **cloud-synced working folder**. Siril's `link` creates symlinks, and Dropbox & co. rewrite them mid-run. Move the working tree to a local disk, or exclude `output/_work/` from syncing. See §3.
+Almost always a **cloud-synced working folder**. Siril's `link` creates symlinks, and Dropbox & co. rewrite them mid-run. Move the working tree to a local disk, or exclude `Stacked/_work/` from syncing. See §3.
 
 ### "2-pass registration unavailable"
 
@@ -910,11 +912,31 @@ It asks first, then finishes the current filter and stops there. Alignment, plat
 Yes. Install a local Gaia catalogue in Siril, and the calibration chain will reach it. Without either, the composite is still produced — just uncalibrated, and the report says so.
 
 **Does it modify my raw frames?**
-No. Everything is written under `output/`, and the raw frames are only read.
+No. Everything is written under `Stacked/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.7.19
+## 17. What's New in 1.7.20
+
+The results folder is called **Stacked**, and you choose where it goes.
+
+**A Results folder menu in the Output group.** Until now the folder was always created inside the folder you selected. That suits the N.I.N.A. layout, not an Astro-PM project, where every filter points at `<Target>/Originals` and the stacks belong beside it in `<Target>/Stacked`. The menu offers the selected folder and up to three folders above it, naming the folder each choice lands in. Levels that do not exist or cannot be written to are not offered, and the **Output** line underneath always shows the exact path. The choice is remembered: when a folder offers fewer levels than you chose, the highest available one is used and shown, and your choice returns for the next deeper folder. With Astro-PM, select `Originals` and choose *1 level up*.
+
+**Discovery skips `Stacked` in any letter case, and the old name still counts.** A target folder processed before 1.7.20 carries an `output/` full of masters and calibration frames, and the rename alone would have fed it back in as light frames. So `output/` is still skipped, but only when it really holds results (`masters/`, `calib/`, `output.md` or `commands.ssf`). That ends a quiet side effect of the old rule: lights kept in a folder that happened to be called `output` were ignored. The picker's *this is the results folder* guard uses the same test. The report keeps its name, `output.md`.
+
+**Reuse looks in the new folder.** Calibration masters and *Reuse existing masters* read from `Stacked/`, so the first run after the update builds its calibration masters again. Rename an existing `output/` to `Stacked` to keep reusing what it holds.
+
+**A folder above the one you selected can be shared.** If it also holds other targets, their runs write into the same `Stacked/`. Masters and composites carry the target in their name, but `output.md`, `todo.md` and `commands.ssf` belong to whichever run finished last. The menu's tooltip says so.
+
+**Three things the first Astro-PM run said wrong, or not at all.**
+
+- **A filter without flats is named in the log.** An SII channel went into an SHO composite with a dark only, and the log carried nothing but a `calibrate` line that happened to lack `-flat=`. The table's tooltip and `output.md` knew. The analysis now says *No flats for SII* as soon as the folder is read, and the run says it again where that filter is calibrated.
+- **The composite's astrometry is described once.** The run logged *plate-solve skipped* and wrote *no new solve was needed* into `output.md`, then re-solved with distortions a moment later. Whether that re-solve follows is now decided first. When it does, the report records that the inherited solution was linear, and the re-solve says the rest.
+- **HaRGB no longer contradicts itself in the analysis.** *HaRGB cannot be built from these filters* was followed by *HaRGB will blend HA into Red*. The second line now appears only when the palette can be built.
+
+**A calibration master is rebuilt when its frames change.** Reuse used to ask only whether a file of the master's name existed, and that name carries target, filter, temperature, exposure and gain, not the frames. Eight OIII flats added to twelve left the twelve-frame master in use: the analysis said *OIII 20×3s*, the run said *Reusing master flat*, and the master's own header said `STACKCNT = 12`. Every master is now written with a record of its frames beside it, `<master>.sources.json`, holding each file's name and size. A moved project tree invalidates nothing, and per-night folders that reuse `flat_00001.fit` still count twice. A master built before this has no record, and Siril's `STACKCNT` stands in; it catches frames added or removed, not a set swapped for one of the same size. The log says what a reuse rests on, or why a master is rebuilt, and a rebuild that fails falls back to the master it was replacing.
+
+## What was new in 1.7.19
 
 The narrowband warning claimed to know the size of your target.
 

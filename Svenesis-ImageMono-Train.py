@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.7.19
+Script Version: 1.7.20
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.7.19
+# Script Version: 1.7.20
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +97,75 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.7.20 - Stacked, where you choose it; and what real Astro-PM runs showed
+      - A RESULTS-FOLDER LEVEL IN THE OUTPUT GROUP.  The folder was always
+        created inside the selected one, which fits the N.I.N.A. layout
+        and not an Astro-PM project: there every filter points at
+        <Target>/Originals, and the stacks belong next to it in
+        <Target>/Stacked.  A menu now offers the selected folder and up to
+        three folders above it (OUTPUT_LEVEL_MAX), naming the folder each
+        one lands in; levels that do not exist or cannot be written are
+        not offered, and the Output line underneath shows the exact path.
+        The choice is remembered.  When a folder offers fewer levels than
+        the stored choice, the highest available is used and shown, and
+        the stored choice is kept for the next folder.  The menu is locked
+        while a run goes, and the finish dialog reports the folder the run
+        was given.
+      - THE FOLDER IS CALLED Stacked.  Discovery prunes it in any letter
+        case.  The old name still matters: a target folder processed
+        before 1.7.20 carries an "output" full of masters and calibration
+        frames, and the rename alone would have fed it back in as light
+        frames.  So discovery keeps pruning "output" -- but only when it
+        really holds results (masters/, calib/, output.md or
+        commands.ssf).  That also ends the old side effect of pruning by
+        name: lights kept in a folder that happened to be called "output"
+        were silently ignored.  The picker's "this is the results folder"
+        guard uses the same test, so the two cannot disagree.  The report
+        keeps its name, output.md.
+      - A folder above the selected one can be shared.  If it holds other
+        targets, their runs write into the same Stacked folder; masters
+        and composites carry the target in their name, but output.md,
+        todo.md and commands.ssf belong to whichever run finished last.
+        The tooltip says so.
+      - The comment over COMMANDS_FILENAME still promised a headless
+        replay, which 1.7.18 established the file cannot give, and the
+        layout sketch over STACKS_DIRNAME left out calib/, qa/ and the
+        three documents.  Both corrected.
+      - A FILTER WITHOUT FLATS IS NAMED IN THE LOG.  An Astro-PM SHO run
+        calibrated SII with a dark only, and the log carried nothing but a
+        `calibrate` line that happened to lack -flat=; the table's tooltip
+        and output.md knew.  The analysis now says "No flats for SII" as
+        soon as the folder is read, and the run says it again, once per
+        filter, where that filter is calibrated.  Neither fires with
+        'Use flats and dark-flats' switched off, which has its own message.
+      - THE COMPOSITE'S ASTROMETRY IS DESCRIBED ONCE.  The same run logged
+        "plate-solve skipped" and wrote "no new solve was needed" into
+        output.md, then re-solved with distortions a moment later.  Whether
+        that re-solve follows is now decided first; when it does, the
+        report records that the inherited solution was linear and the
+        re-solve says the rest.
+      - HaRGB STOPPED CONTRADICTING ITSELF IN THE ANALYSIS.  "HaRGB cannot
+        be built from these filters" was followed by "HaRGB will blend HA
+        into Red".  The second line now needs the palette to be buildable.
+      - A CALIBRATION MASTER IS REBUILT WHEN ITS FRAMES CHANGE.  Reuse
+        asked only whether a file of the master's name existed, and the
+        name carries target, filter, temperature, exposure and gain -- not
+        the frames.  Eight OIII flats added to twelve left the twelve-frame
+        master in use: the analysis said "OIII 20x3s", the run said
+        "Reusing master flat", and the master's own header said
+        STACKCNT = 12.  Every master is now written with a record of its
+        frames beside it (<master>.sources.json: file name and size,
+        compared as a multiset, so a moved project tree does not
+        invalidate anything and per-night folders that reuse flat_00001
+        still count twice).  A master built before this has no record, and
+        Siril's STACKCNT stands in: it catches frames added or removed,
+        not a set swapped for one of the same size.  The log says what the
+        reuse rests on, or why the master is rebuilt; a rebuild that fails
+        falls back to the master it was replacing.
+      - New helpers: _output_dir, _output_levels, _looks_like_results,
+        _skip_in_discovery, _filters_without_flats, _frame_record,
+        _calib_master_stale, _read_frame_record, _fits_stackcnt.
+
 1.7.19 - The narrowband warning claimed to know the size of your target
       - THE RBF WARNING NAMED A TARGET SIZE IT NEVER MEASURED.  A
         narrowband master met RBF background extraction and the run
@@ -610,29 +679,42 @@ from PyQt6.QtGui import QColor, QDesktopServices, QPalette
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.7.19"
+VERSION = "1.7.20"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
 
-# Our output folder, created inside the target folder.  Discovery MUST prune
-# it, otherwise a second run re-ingests the masters / composites / work files
-# it produced as if they were new light frames.
-STACKS_DIRNAME = "output"
-# Sub-structure inside the output folder (kept human-readable):
+# The results folder.  It sits inside the selected folder or up to
+# OUTPUT_LEVEL_MAX folders above it, as the user chooses (_output_dir).
+# "Stacked" since 1.7.20, the name Astro-PM gives the sibling of a
+# project's Originals folder.  Discovery MUST prune it, otherwise a second
+# run re-ingests the masters / composites / work files it produced as if
+# they were new light frames.
+STACKS_DIRNAME = "Stacked"
+# The name until 1.7.19.  Target folders processed before the rename still
+# carry one, full of masters and calibration frames, so discovery keeps
+# pruning it -- but only when it holds results (_skip_in_discovery).
+LEGACY_STACKS_DIRNAME = "output"
+# How many folders above the selected one the results may be placed.
+OUTPUT_LEVEL_MAX = 3
+# Sub-structure inside the results folder (kept human-readable):
 #   <STACKS_DIRNAME>/
 #     TARGET_<palette>.fit        the finished colour image(s), at the top
+#     output.md, todo.md          the report and the finishing guide
+#     commands.ssf                the record of every Siril command
 #     masters/                    per-channel masters (TARGET_FILTER.fit =
 #                                 aligned; *_fullframe.fit = uncropped,
 #                                 named <N>x<EXP>_G<gain>_<temp>C)
+#     calib/                      calibration masters, reused next run
+#     qa/                         rejection maps
 #     _work/                      all intermediates -- safe to delete
 #       sequences/<filter>/       Siril sequences per filter
 #       align/                    cross-filter alignment work
 #       helpers/                  compose helpers (_nbnorm, _RED_Ha)
 MASTERS_DIRNAME = "masters"
-# Verbatim record of every Siril command a run issued, written beside the
-# output so a run can be replayed headless instead of reconstructed from
-# a pasted log.
+# A record of every Siril command a run issued, written into the results
+# folder.  A RECORD, not a replayable script: the steps the script performs
+# itself are marked in it with '#' lines -- see _write_commands.
 COMMANDS_FILENAME = "commands.ssf"
 # The `requires` line that record carries.  Matches the "Siril Version"
 # in this file's header: older builds lack commands this script uses.
@@ -1485,6 +1567,193 @@ def _frame_fov_arcmin(path: str) -> float:
         _log_swallowed(exc)
         return 0.0
 
+def _output_dir(root: str, level: int = 0) -> str:
+    """The results folder for a run on `root`, placed `level` folders up.
+
+    Level 0 is inside the selected folder, the only layout before 1.7.20.
+    Level 1 is beside it: an Astro-PM project points every filter at
+    <Target>/Originals and keeps <Target>/Stacked as that folder's
+    sibling, so selecting Originals and one level up lands exactly there.
+    The walk stops at the filesystem root instead of wrapping, so an
+    out-of-range level can never name a path outside the tree.
+    """
+    base = os.path.normpath(root)
+    for _ in range(max(0, int(level))):
+        up = os.path.dirname(base)
+        if not up or up == base:
+            break
+        base = up
+    return os.path.join(base, STACKS_DIRNAME)
+
+
+def _output_levels(root: str, max_level: int = OUTPUT_LEVEL_MAX,
+                   writable=None) -> list:
+    """``[(level, results folder)]`` a run on `root` may write into.
+
+    Level 0 is always offered: it is where the script has always written,
+    and refusing it for a read-only folder would only move the error from
+    the run into the menu.  Higher levels are offered while they exist,
+    are distinct -- the filesystem root ends the walk -- and can be
+    written to.  `/Volumes` above an external disk is a folder, but not
+    one a run could create its results in, and a menu entry that fails
+    only when the run reaches it is worse than no entry.
+    """
+    can_write = writable or (lambda p: os.access(p, os.W_OK))
+    out = [(0, _output_dir(root, 0))]
+    base = os.path.normpath(root)
+    for level in range(1, max(0, int(max_level)) + 1):
+        up = os.path.dirname(base)
+        if not up or up == base or not can_write(up):
+            break
+        base = up
+        out.append((level, os.path.join(base, STACKS_DIRNAME)))
+    return out
+
+
+def _looks_like_results(path: str) -> bool:
+    """True if `path` is a results folder this script wrote.
+
+    Recognised by what is IN it -- masters/, calib/, output.md or
+    commands.ssf -- under either name the folder has carried.  The
+    contents decide, not the name: Astro-PM creates a Stacked folder in
+    every project before anything has been stacked, and a user may keep
+    lights in a folder they happened to call "output".
+    """
+    name = os.path.basename(os.path.normpath(path)).lower()
+    if name not in (STACKS_DIRNAME.lower(), LEGACY_STACKS_DIRNAME.lower()):
+        return False
+    return (any(os.path.isdir(os.path.join(path, d))
+                for d in (MASTERS_DIRNAME, CALIB_DIRNAME))
+            or any(os.path.isfile(os.path.join(path, f))
+                   for f in ("output.md", COMMANDS_FILENAME)))
+
+
+def _skip_in_discovery(dirpath: str, name: str) -> bool:
+    """Should discovery stay out of the subfolder `name` of `dirpath`?
+
+    A folder called Stacked always, in any letter case: results go there
+    now, and in an Astro-PM project it also holds other tools' stacks --
+    neither is a light frame.  A folder called "output" only when it
+    holds results.  That was the name until 1.7.20, and a target folder
+    processed before then still carries one full of masters and
+    calibration frames; the rename alone would have fed them back in as
+    lights.  Pruning every "output" by name, as before, silently hid
+    lights that lived in a folder of that name.
+    """
+    low = name.lower()
+    if low == STACKS_DIRNAME.lower():
+        return True
+    return (low == LEGACY_STACKS_DIRNAME.lower()
+            and _looks_like_results(os.path.join(dirpath, name)))
+
+
+# Written beside every calibration master: the frames it was built from.
+# Until 1.7.20 a master was reused whenever a file of its name existed, and
+# the name carries target, filter, temperature, exposure and gain -- not the
+# frames.  Eight OIII flats added to a set of twelve left the twelve-frame
+# master in use, silently, with twenty flats sitting in the folder.
+CALIB_SOURCES_SUFFIX = ".sources.json"
+
+
+def _frame_record(paths, size_of=os.path.getsize) -> list:
+    """``[[basename, bytes], ...]``, sorted: what a master was built from.
+
+    Basename and size rather than the full path, so a project tree that is
+    moved, or a drive that mounts under another name, does not invalidate
+    every master.  A swapped frame changes the name (capture software puts
+    a timestamp in it); a re-exported one of the same name changes size.
+    A size that cannot be read is recorded as -1 instead of raising.
+    """
+    out = []
+    for p in paths:
+        try:
+            size = int(size_of(p))
+        except (OSError, TypeError, ValueError):
+            size = -1
+        out.append([os.path.basename(p), size])
+    return sorted(out)
+
+
+def _calib_master_stale(current: list, recorded, stackcnt) -> str:
+    """Why an existing calibration master no longer fits its frames, or "".
+
+    `recorded` is the frame record written beside the master when it was
+    built, and it decides whenever it exists.  Compared as a MULTISET:
+    per-night flat folders reuse names like flat_00001.fit, so a set of
+    names would count two nights as one.
+
+    A master from before the record existed has none, and then Siril's
+    own STACKCNT is the only witness.  It catches frames added or removed,
+    not a set swapped for one of the same size -- and with neither there
+    is nothing to compare, so the master is reused as it always was.
+    """
+    from collections import Counter
+    if recorded is not None:
+        now = sorted(tuple(f) for f in current)
+        was = sorted(tuple(f) for f in recorded)
+        if now == was:
+            return ""
+        names_now = Counter(n for n, _size in now)
+        names_was = Counter(n for n, _size in was)
+        added = sum((names_now - names_was).values())
+        removed = sum((names_was - names_now).values())
+        if added or removed:
+            bits = ([f"{added} frame(s) added"] if added else []) + \
+                   ([f"{removed} removed"] if removed else [])
+            return " and ".join(bits) + " since it was built"
+        return "the same file names, but frames of a different size"
+    try:
+        count = int(stackcnt) if stackcnt is not None else 0
+    except (TypeError, ValueError):
+        count = 0
+    if count and count != len(current):
+        return f"built from {count} frames, {len(current)} found now"
+    return ""
+
+
+def _read_frame_record(master: str):
+    """The frame record beside `master`, or None when absent or malformed."""
+    try:
+        with open(master + CALIB_SOURCES_SUFFIX, encoding="utf-8") as fh:
+            frames = json.load(fh).get("frames")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if isinstance(frames, list) and all(
+            isinstance(f, list) and len(f) == 2 for f in frames):
+        return frames
+    return None
+
+
+def _fits_stackcnt(path: str):
+    """Siril's STACKCNT from a master's header, or None.
+
+    Never raises: it is a witness for the reuse decision, and a header that
+    cannot be read means "cannot tell", which reuses the master as before.
+    """
+    def read(hdul):
+        for hdu in hdul:
+            value = hdu.header.get("STACKCNT")
+            if value is not None:
+                return int(value)
+        return None
+    try:
+        return _with_fits(path, read)
+    except Exception as exc:                # noqa: BLE001
+        _log_swallowed(exc)
+        return None
+
+
+def _filters_without_flats(groups, flats) -> list:
+    """The light filters no flat set was found for, sorted.
+
+    Flats are keyed by filter exactly like the lights, so this is a set
+    difference -- kept as a function because the analysis and the tests
+    must ask the same question the same way.
+    """
+    have = set(flats or {})
+    return sorted(f for f in (groups or {}) if f not in have)
+
+
 def _header_string(path: str) -> str:
     """A FITS header as text, for `set_image_metadata_from_header_string`.
 
@@ -2303,9 +2572,11 @@ class AnalyzeWorker(QThread):
         """Collect FITS paths under `root`; also count unsupported files."""
         found, skipped = [], 0
         for dirpath, dirs, files in os.walk(root):
-            # Prune our own output folder so previously-generated masters,
-            # composites and work files are never re-ingested as lights.
-            dirs[:] = [d for d in dirs if d != STACKS_DIRNAME]
+            # Prune the results folder -- under its current name, and under
+            # the old one when it really holds results -- so earlier
+            # masters, composites and work files are never re-ingested as
+            # lights.  See _skip_in_discovery.
+            dirs[:] = [d for d in dirs if not _skip_in_discovery(dirpath, d)]
             for name in files:
                 if name.startswith("."):
                     continue
@@ -2617,6 +2888,7 @@ class StackWorker(QThread):
         # filter -> the `-cc=dark` pair already announced, so three
         # `calibrate` calls for one filter do not say it three times.
         self._cc_said: dict = {}
+        self._no_flat_said: set = set()
         # Where the narrowband/RBF mismatch has already been said, so
         # four channels do not repeat one sentence four times.
         self._rbf_warned: set = set()
@@ -3478,6 +3750,18 @@ class StackWorker(QThread):
         os.makedirs(d, exist_ok=True)
         return d
 
+    def _write_frame_record(self, dest: str, kind: str,
+                            sources: list) -> None:
+        """Write, beside a master, the frames it was just built from."""
+        try:
+            _atomic_write_text(dest + CALIB_SOURCES_SUFFIX, json.dumps(
+                {"kind": kind, "master": os.path.basename(dest),
+                 "frames": _frame_record(sources)}, indent=1) + "\n")
+        except OSError as exc:
+            # Without the record the next run falls back to STACKCNT --
+            # weaker, but the master itself is fine.
+            _log_swallowed(exc)
+
     def _master_name(self, kind: str, info: dict, filt: str = "",
                      suffix: str = "") -> str:
         """Descriptive master filename, built from the frame's own header.
@@ -3523,18 +3807,63 @@ class StackWorker(QThread):
         the same frame-count bands the light stacks use.
         Returns None (and logs) if anything goes wrong -- calibration must
         never abort a run.
+
+        An existing master is reused only while it still fits its frames:
+        the record written beside it decides, Siril's STACKCNT stands in for
+        a master built before that record existed (see _calib_master_stale).
+        A rebuild that fails falls back to the master it was replacing -- a
+        flat from twelve of twenty frames still beats no flat at all.
         """
         files = grp.get("files") or []
         dest = os.path.join(self._calib_dir(), out_name + self._ext)
+        stale = False
         if os.path.exists(dest):
-            self._emit(f"  Reusing master {kind}: {os.path.basename(dest)}",
-                       LogColor.GREEN)
+            name = os.path.basename(dest)
+            recorded = _read_frame_record(dest)
+            count = None if recorded is not None else _fits_stackcnt(dest)
+            why = _calib_master_stale(_frame_record(files), recorded, count)
+            if not why:
+                # Say what the reuse rests on, and no more than that.
+                if recorded is not None:
+                    how = (f" — the same {len(files)} frame(s) it was built "
+                           "from")
+                elif count:
+                    how = (" — its header counts the same "
+                           f"{len(files)} frame(s)")
+                else:
+                    how = ""
+                self._emit(f"  Reusing master {kind}: {name}{how}",
+                           LogColor.GREEN)
+                return dest
+            stale = True
+            self._emit(f"  Rebuilding master {kind} {name}: {why}.",
+                       LogColor.BLUE)
+        built = self._build_calib_master(kind, files, dest, out_name,
+                                         bias_master)
+        if built is None and stale and os.path.exists(dest):
+            self._emit(
+                f"  {kind}: the rebuild failed, so the previous "
+                f"{os.path.basename(dest)} is used — it was built from an "
+                "older set of frames.", LogColor.SALMON)
             return dest
+        return built
 
+    def _build_calib_master(self, kind: str, files: list, dest: str,
+                            out_name: str,
+                            bias_master: str = "") -> str | None:
+        """Stack `files` into the master at `dest`; return it, or None.
+
+        Split from `_stack_calib_group` so that a failed rebuild can fall
+        back to the master it was meant to replace.  Every success writes
+        the frame record beside the master, from the frames that were
+        actually staged -- a frame that could not be staged is then missing
+        from the record, and the next run tries again to include it.
+        """
         if len(files) == 1:
             # A single frame is a ready-made master, not something to stack.
             try:
                 shutil.copy2(files[0], dest)
+                self._write_frame_record(dest, kind, files)
                 self._emit(
                     f"  {kind}: single file treated as a ready master "
                     f"({os.path.basename(files[0])}).", LogColor.BLUE)
@@ -3549,6 +3878,7 @@ class StackWorker(QThread):
         self._clear_stale_dir(work, f"{kind} calibration")
         os.makedirs(stage, exist_ok=True)
         staged = 0
+        used: list = []
         for i, src in enumerate(files):
             try:
                 dst = os.path.join(stage, f"{i:04d}_{os.path.basename(src)}")
@@ -3559,6 +3889,7 @@ class StackWorker(QThread):
                 except (OSError, NotImplementedError):
                     shutil.copy2(src, dst)
                 staged += 1
+                used.append(src)
             except Exception as exc:
                 _log_swallowed(exc)
         if staged < 2:
@@ -3637,6 +3968,7 @@ class StackWorker(QThread):
                            LogColor.RED)
                 return None
             shutil.copy2(produced, dest)
+            self._write_frame_record(dest, kind, used)
             self._emit(f"  Built master {kind} from {staged} frames "
                        f"({rej_label}) -> {os.path.basename(dest)}",
                        LogColor.GREEN)
@@ -4326,6 +4658,19 @@ class StackWorker(QThread):
         if flat:
             args.append(f'"-flat={flat}"')
             used.append(f"flat={os.path.basename(flat)}")
+        elif (self._opts.get("use_flats", True)
+              and filt not in self._no_flat_said):
+            # Said where it happens, once per filter (a split calls this
+            # per part).  The table's tooltip and output.md already knew;
+            # the log -- the record a user actually scrolls -- carried
+            # only a `calibrate` line that happened to lack `-flat=`.  That
+            # is how an SII channel went into an SHO composite uncorrected
+            # without a single word.
+            self._no_flat_said.add(filt)
+            self._emit(
+                f"  {filt}: no flat — vignetting and dust shadows stay in "
+                "this channel.  Flats are filter-specific, so this filter "
+                "needs a set of its own.", LogColor.SALMON)
 
         # Bias goes to the lights ONLY when no dark is used: a master dark
         # already contains the offset, so subtracting bias as well would
@@ -7391,10 +7736,25 @@ class StackWorker(QThread):
         # calibration -- over a WCS that was sitting in the header the
         # whole time.
         solved = inherited
+        # Decided before anything is said: a linear inherited solution is
+        # re-solved with distortions further down, and that changes what
+        # this step may claim about itself.
+        palette = self._opts.get("compose_palette", "RGB")
+        will_resolve = (not _has_sip(path)
+                        and self._photometry_planned(palette))
         try:
             self._cmd("platesolve")
             solved = True
-            if inherited:
+            if inherited and will_resolve:
+                # "plate-solve skipped" and "no new solve was needed", then
+                # a forced solve twenty milliseconds later, was the log and
+                # the report contradicting themselves (an NGC 7380 SHO run).
+                # The re-solve below says what happened; this only records
+                # where the first solution came from.
+                self._finish_steps.append(
+                    "Astrometry (WCS) was inherited from the plate-solved "
+                    "masters via rgbcomp — a linear solution.")
+            elif inherited:
                 self._finish_steps.append(
                     "Astrometry (WCS) was inherited from the plate-solved "
                     "masters via rgbcomp — no new solve was needed.")
@@ -7440,8 +7800,7 @@ class StackWorker(QThread):
         # otherwise answer "Nothing will be done"; `-noflip` because a
         # forced solve is allowed to flip an image it reads as upside-down,
         # and the composite has to stay on the masters' grid.
-        palette = self._opts.get("compose_palette", "RGB")
-        if solved and not _has_sip(path) and self._photometry_planned(palette):
+        if solved and will_resolve:
             try:
                 self._cmd("platesolve", "-force", "-noflip",
                           f"-order={SPCC_SIP_ORDER}")
@@ -8769,6 +9128,9 @@ class ImageMonoTrainWindow(QMainWindow):
         self._missing_api: list = []
         self._settings = QSettings(SETTINGS_ORG, SETTINGS_APP)
         self._root = ""
+        # The results-folder level the user last chose; the menu is refilled
+        # per selected folder, this is what it tries to restore.
+        self._out_level_pref = 0
         self._groups: dict = {}
         self._target = ""
         self._ext = ".fit"
@@ -10145,7 +10507,12 @@ class ImageMonoTrainWindow(QMainWindow):
                 "RGB and name the file accordingly.  Ha is mixed into Red "
                 "at the strength above; it is not one of the four channel "
                 "dropdowns.", LogColor.SALMON)
-        elif palette == "HaRGB" and self.chk_compose.isChecked():
+        elif (palette == "HaRGB" and self.chk_compose.isChecked()
+              and not missing):
+            # Only when the palette can be built at all: right after
+            # "HaRGB cannot be built from these filters", a line
+            # describing how it WILL blend Ha was the analysis
+            # contradicting itself.
             self._log(
                 f"HaRGB will blend {_first_with_role(filters, 'ha')} into "
                 "Red — Ha is an admixture, not a mapped channel, which is "
@@ -10155,10 +10522,30 @@ class ImageMonoTrainWindow(QMainWindow):
         group = QGroupBox("Output")
         layout = QVBoxLayout(group)
 
-        self.lbl_out = QLabel("Output: <target folder>/output")
+        row_level = QHBoxLayout()
+        row_level.addWidget(QLabel("Results folder:"))
+        self.cmb_out_level = QComboBox()
+        self.cmb_out_level.setToolTip(
+            f"Where the {STACKS_DIRNAME} folder is created: inside the "
+            "folder you selected, or one to three folders above it.\n\n"
+            "Astro-PM: select the target's Originals folder and choose "
+            f"'1 level up' — the results land in <Target>/{STACKS_DIRNAME}, "
+            "next to Originals.\n\n"
+            "A folder above the selected one can be shared.  If it also "
+            "holds other targets, their runs write into the same "
+            f"{STACKS_DIRNAME} folder: masters and composites are named by "
+            "target, but output.md, todo.md and commands.ssf are replaced "
+            "by whichever run finished last.")
+        self.cmb_out_level.currentIndexChanged.connect(
+            self._on_out_level_changed)
+        row_level.addWidget(self.cmb_out_level, 1)
+        layout.addLayout(row_level)
+
+        self.lbl_out = QLabel(f"Output: <target folder>/{STACKS_DIRNAME}")
         self.lbl_out.setWordWrap(True)
         self.lbl_out.setStyleSheet(_hint_style())
         layout.addWidget(self.lbl_out)
+        self._fill_out_levels()
 
         self.chk_align_filters = QCheckBox("Align filters to each other (LRGB)")
         self.chk_align_filters.setChecked(True)
@@ -10466,6 +10853,12 @@ class ImageMonoTrainWindow(QMainWindow):
             self.chk_finish_stretch.setChecked(
                 st.value("finish_stretch", False, type=bool))
             self._on_compose_toggled(self.chk_compose.isChecked())
+            try:
+                self._out_level_pref = max(0, min(
+                    OUTPUT_LEVEL_MAX, int(st.value("output_level", 0))))
+            except (TypeError, ValueError):
+                self._out_level_pref = 0
+            self._fill_out_levels()
             last = str(st.value("last_folder", ""))
             if last and os.path.isdir(last):
                 self._set_root(last)
@@ -10530,6 +10923,7 @@ class ImageMonoTrainWindow(QMainWindow):
         st.setValue("ha_strength", int(self.spin_ha.value()))
         st.setValue("finish", self.chk_finish.isChecked())
         st.setValue("finish_stretch", self.chk_finish_stretch.isChecked())
+        st.setValue("output_level", int(self._out_level_pref))
         if self._root:
             st.setValue("last_folder", self._root)
 
@@ -10647,21 +11041,75 @@ class ImageMonoTrainWindow(QMainWindow):
     def _set_root(self, path: str) -> None:
         self._root = path
         self.lbl_folder.setText(path)
-        self.lbl_out.setText(
-            f"Output: {os.path.join(path, STACKS_DIRNAME)}")
+        # The levels on offer depend on the folder: a new selection can
+        # have fewer ancestors, or an unwritable one, than the last.
+        self._fill_out_levels()
         self.btn_analyze.setEnabled(True)
 
-    def _looks_like_our_output(self, path: str) -> bool:
-        """True if `path` is an output folder this script produced.
+    def _fill_out_levels(self) -> None:
+        """Offer the results locations that exist for THIS selection.
 
-        Discovery prunes a nested output/ folder, but picking that folder
-        *itself* as the target would side-step the guard and re-ingest our
-        own masters as if they were light frames.
+        Refilling the menu must not overwrite what the user chose: when a
+        new folder offers fewer levels, the highest one available is
+        shown -- and the Output line underneath names the real path --
+        but the stored preference stays, so the next deep folder gets it
+        back.
         """
-        if os.path.basename(os.path.normpath(path)) != STACKS_DIRNAME:
-            return False
-        return (os.path.isdir(os.path.join(path, MASTERS_DIRNAME))
-                or os.path.isfile(os.path.join(path, "output.md")))
+        cmb = self.cmb_out_level
+        self._filling_out_levels = True
+        try:
+            cmb.clear()
+            if self._root:
+                levels = _output_levels(self._root)
+            else:
+                levels = [(lv, "") for lv in range(OUTPUT_LEVEL_MAX + 1)]
+            for level, path in levels:
+                if level == 0:
+                    text = "In the selected folder"
+                else:
+                    text = f"{level} level{'s' if level > 1 else ''} up"
+                    host = os.path.basename(os.path.dirname(path))
+                    if host:
+                        text += f" — in {host}"
+                cmb.addItem(text, level)
+            idx = cmb.findData(self._out_level_pref)
+            if idx < 0:
+                idx = cmb.count() - 1
+            cmb.setCurrentIndex(idx)
+        finally:
+            self._filling_out_levels = False
+        self._refresh_out_label()
+
+    def _selected_out_level(self) -> int:
+        data = self.cmb_out_level.currentData()
+        try:
+            return max(0, int(data))
+        except (TypeError, ValueError):
+            return 0
+
+    def _output_path(self) -> str:
+        """The results folder the next run would write into."""
+        return _output_dir(self._root, self._selected_out_level())
+
+    def _refresh_out_label(self) -> None:
+        self.lbl_out.setText(
+            f"Output: {self._output_path()}" if self._root
+            else f"Output: <target folder>/{STACKS_DIRNAME}")
+
+    def _on_out_level_changed(self, _index: int) -> None:
+        if not getattr(self, "_filling_out_levels", False):
+            self._out_level_pref = self._selected_out_level()
+        self._refresh_out_label()
+
+    def _looks_like_our_output(self, path: str) -> bool:
+        """True if `path` is a results folder this script produced.
+
+        Discovery prunes a nested results folder, but picking that folder
+        *itself* as the target would side-step the guard and re-ingest our
+        own masters as if they were light frames.  Same test as the
+        pruning, so the two can never disagree -- see _looks_like_results.
+        """
+        return _looks_like_results(path)
 
     def _on_pick_folder(self) -> None:
         start = self._root or os.path.expanduser("~")
@@ -11342,6 +11790,20 @@ class ImageMonoTrainWindow(QMainWindow):
                     + " — Siril's synthetic offset will be used there. A "
                     "dark set at that exposure in the Library would be "
                     "better.", LogColor.SALMON)
+        # A filter with no flat at all is the largest gap a run can carry
+        # into a colour image, and until now only the table's tooltip said
+        # so.  Logged here, before anything is stacked, while shooting or
+        # copying the missing set is still an option.
+        if self.chk_use_flats.isChecked():
+            bare = _filters_without_flats(self._groups, c.get(KIND_FLAT))
+            if bare:
+                log(
+                    f"No flats for {', '.join(bare)} — vignetting and dust "
+                    "shadows will stay in "
+                    + ("that channel" if len(bare) == 1 else "those channels")
+                    + ".  Flats are filter-specific: without a set taken "
+                    "through that filter, its lights are calibrated with "
+                    "dark only.", LogColor.SALMON)
         # Per-night calibration changes how many masters get built and
         # which lights each one touches, so it belongs in the summary
         # rather than only in the run log -- by then it is too late to
@@ -11489,7 +11951,7 @@ class ImageMonoTrainWindow(QMainWindow):
             "<p style='color:#aaaaaa;'>Review the list, adjust the stacking "
             "options if needed, then press <b>Stack All Filters</b>.  "
             "One integrated master light is written per filter into the "
-            "output folder.</p>")
+            "<b>Stacked</b> results folder.</p>")
 
         self._log(
             f"Discovered target '{self._target}': {len(filters)} filter(s), "
@@ -11613,7 +12075,10 @@ class ImageMonoTrainWindow(QMainWindow):
         if not self._ext.startswith("."):
             self._ext = "." + self._ext
 
-        out_dir = os.path.join(self._root, STACKS_DIRNAME)
+        out_dir = self._output_path()
+        # Held for the finish dialog: the menu is locked while the run
+        # goes, but the path the run was GIVEN is the one to report.
+        self._run_out_dir = out_dir
 
         self._maybe_clear_log()
         self._set_left_enabled(False)
@@ -11661,7 +12126,7 @@ class ImageMonoTrainWindow(QMainWindow):
             (f"Stopped: {n_ok} master(s) finished before the abort."
              if aborted else f"Finished: {n_ok} ok, {n_err} failed."))
 
-        out_root = os.path.join(self._root, STACKS_DIRNAME)
+        out_root = getattr(self, "_run_out_dir", "") or self._output_path()
         ok_rows = "".join(
             f"<li><b style='color:#88ff88;'>{f}</b> → "
             f"<span style='color:#aaa;'>{os.path.basename(p)}</span></li>"
@@ -11762,7 +12227,7 @@ class ImageMonoTrainWindow(QMainWindow):
     def _set_left_enabled(self, enabled: bool) -> None:
         self._busy = not enabled
         for w in (self.btn_pick, self.btn_analyze, self.btn_stack,
-                  self.cmb_preset):
+                  self.cmb_preset, self.cmb_out_level):
             w.setEnabled(enabled)
         # The window can still be closed while busy (closeEvent then offers to
         # abort), but greying the button out makes the state obvious.
@@ -11961,7 +12426,8 @@ class ImageMonoTrainWindow(QMainWindow):
             "folder), their frames would end up in the same stack — so the "
             "script detects that from the <tt>OBJECT</tt> keyword, warns you "
             "after the analysis, and asks again before stacking.</p>"
-            "<p>Its own results folder (<b>output/</b>) is skipped while "
+            "<p>Its own results folder (<b>Stacked/</b>, and an older "
+            "<b>output/</b> that holds results) is skipped while "
             "scanning, so a second run never re-reads the masters it wrote "
             "as if they were new light frames.</p>")
         tabs.addTab(tab1, "Getting Started")
@@ -12210,7 +12676,8 @@ class ImageMonoTrainWindow(QMainWindow):
             "<p>The composite (<span style='font-family:monospace;"
             "color:#aaddaa;'>TARGET_RGB</span> / <span "
             "style='font-family:monospace;color:#aaddaa;'>TARGET_SHO</span>…) "
-            "is written to the output folder and loaded in Siril.  Needs at "
+            "is written to the Stacked results folder and loaded in Siril.  "
+            "Needs at "
             "least R, G and B mapped.</p>"
             "<hr>"
             "<h3 style='color:#88aaff;'>Stack only the filters this "
@@ -12556,11 +13023,14 @@ class ImageMonoTrainWindow(QMainWindow):
             "to a pooled master, and the log names it.</li>"
             "</ul>"
             "<h3 style='color:#88aaff;'>Masters and reuse</h3>"
-            f"<p>Every master built is written to <b>output/{CALIB_DIRNAME}/"
+            f"<p>Every master built is written to <b>{STACKS_DIRNAME}/"
+            f"{CALIB_DIRNAME}/"
             "</b> with a descriptive name such as "
             "<span style='font-family:monospace;color:#aaddaa;'>"
-            "M101_RED_-10C_3s_G100_flat</span>, and reused on the next run.  "
-            "Delete that folder to force a rebuild.  The report "
+            "M101_RED_-10C_3s_G100_flat</span>, and reused on the next run — "
+            "unless the frames behind it changed, which rebuilds it by "
+            "itself.  Delete that folder to force a rebuild anyway.  The "
+            "report "
             "(<tt>output.md</tt>) always lists which master went into which "
             "filter.</p>"
             "<h3 style='color:#88aaff;'>How many to shoot</h3>"
@@ -12790,9 +13260,12 @@ class ImageMonoTrainWindow(QMainWindow):
         tab3.setOpenExternalLinks(True)
         tab3.setHtml(
             "<h2 style='color:#88aaff;'>Output &amp; Tips</h2>"
-            "<p>Results go into an <b>output</b> folder inside your "
-            "target folder, with a tidy, self-explaining layout:</p>"
-            "<pre style='color:#aaddaa'>output/\n"
+            "<p>Results go into a <b>Stacked</b> folder.  <i>Results "
+            "folder</i> decides where it is created: inside the folder you "
+            "selected, or one to three folders above it — with Astro-PM, "
+            "select <tt>Originals</tt> and choose <i>1 level up</i>.  The "
+            "layout is tidy and self-explaining:</p>"
+            "<pre style='color:#aaddaa'>Stacked/\n"
             "├─ TARGET_RGB.fit        the finished colour image(s)\n"
             "├─ masters/\n"
             "│   ├─ TARGET_FILTER.fit            aligned (use to combine)\n"
@@ -12828,8 +13301,10 @@ class ImageMonoTrainWindow(QMainWindow):
             "full, uncropped stack, named after what went into it: frames "
             "integrated, exposure, gain, sensor temperature.</li>"
             "<li><b>calib/</b> keeps the calibration masters that were built "
-            "(dark, flat per filter, bias).  They are reused by later runs — "
-            "delete the folder to rebuild them.</li>"
+            "(dark, flat per filter, bias).  They are reused by later runs "
+            "while the frames behind them stay the same; when frames are "
+            "added, removed or swapped, the master is rebuilt by itself.  "
+            "Delete the folder to force a rebuild anyway.</li>"
             "<li>Everything else lives under <b>_work/</b> — you can delete "
             "that whole folder any time without losing a result.</li>"
             "</ul>"

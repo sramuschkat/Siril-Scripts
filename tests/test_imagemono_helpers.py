@@ -40,7 +40,10 @@ WANT = ("_format_duration", "_median", "_exp_tag", "_night_key", "_path_date",
         "_parse_spcc_fit", "_log_delta", "_night_of", "_flat_shape",
         "_flat_normalise", "_rebin_mean", "_flat_ratio_spread", "_with_fits",
         "_spread_sample", "_palette_filters", "_align_ref_advice",
-        "_pixel_scale_deg", "_fov_arcmin", "_rbf_narrowband_advice")
+        "_pixel_scale_deg", "_fov_arcmin", "_rbf_narrowband_advice",
+        "_output_dir", "_output_levels", "_looks_like_results",
+        "_skip_in_discovery", "_filters_without_flats", "_frame_record",
+        "_calib_master_stale")
 for node in tree.body:
     if isinstance(node, ast.FunctionDef) and node.name in WANT:
         exec("from __future__ import annotations\n"
@@ -695,6 +698,105 @@ check("could not be read" in blind and "' across" not in blind,
 for who in ("master", "composite"):
     check(rbf(who, 12.0).startswith(f"This {who} is line emission"),
           f"the {who} is named as the thing being described")
+
+print("\n1.7.20 — the results folder is Stacked, at the level the user picks")
+import tempfile
+odir, olev = ns["_output_dir"], ns["_output_levels"]
+check(ns["STACKS_DIRNAME"] == "Stacked", "the results folder is called Stacked")
+with tempfile.TemporaryDirectory() as tmp:
+    # Astro-PM: [Root]/[Site - Telescope - Camera]/[Target]/Originals, with
+    # Processed and Stacked as Originals' siblings.
+    proj = os.path.join(tmp, "Site - RC10 - ASI6200", "NGC 1499")
+    orig = os.path.join(proj, "Originals")
+    os.makedirs(os.path.join(orig, "Session 1"))
+    check(odir(orig, 0) == os.path.join(orig, "Stacked"),
+          "level 0 keeps the old place: inside the selected folder")
+    check(odir(orig, 1) == os.path.join(proj, "Stacked"),
+          "level 1 from Originals is <Target>/Stacked, where Astro-PM wants it")
+    check([lv for lv, _ in olev(orig, 3)] == [0, 1, 2, 3],
+          "every level that exists and is writable is offered")
+    site = os.path.dirname(proj)
+    check([lv for lv, _ in olev(orig, 3, writable=lambda p: p != site)]
+          == [0, 1],
+          "the walk stops at the first folder a run could not write into")
+    check([lv for lv, _ in olev(orig, 3, writable=lambda p: False)] == [0],
+          "level 0 stays offered even when nothing above can be written")
+check(odir("/a", 9) == os.path.join(os.sep, "Stacked"),
+      "an out-of-range level stops at the filesystem root, never wraps")
+
+skip, looks = ns["_skip_in_discovery"], ns["_looks_like_results"]
+with tempfile.TemporaryDirectory() as tmp:
+    old = os.path.join(tmp, "before_1720")
+    os.makedirs(os.path.join(old, "output", "masters"))
+    user = os.path.join(tmp, "user")
+    os.makedirs(os.path.join(user, "output"))
+    open(os.path.join(user, "output", "L_0001.fits"), "w").close()
+    apm = os.path.join(tmp, "apm")
+    os.makedirs(os.path.join(apm, "Stacked", "Session 1"))
+    check(all(skip(tmp, n) for n in ("Stacked", "stacked", "STACKED")),
+          "Stacked is pruned in any letter case")
+    check(skip(old, "output"),
+          "an 'output' written before 1.7.20 is still pruned — the rename "
+          "must not feed its masters back in as light frames")
+    check(not skip(user, "output"),
+          "an 'output' holding only lights is scanned — pruning by name "
+          "used to hide them silently")
+    check(not skip(apm, "Originals") and not skip(apm, "Processed"),
+          "Astro-PM's other folders are not touched by the pruning")
+    check(not looks(os.path.join(apm, "Stacked")),
+          "an Astro-PM Stacked folder with nothing of ours in it is not "
+          "mistaken for our results by the picker guard")
+    for marker, make in (("calib", os.makedirs),
+                         ("output.md", lambda p: open(p, "w").close()),
+                         ("commands.ssf", lambda p: open(p, "w").close())):
+        d = os.path.join(tmp, f"m_{marker}", "Stacked")
+        os.makedirs(d)
+        make(os.path.join(d, marker))
+        check(looks(d), f"{marker} marks a folder as our results")
+
+print("\n1.7.20 — a filter without flats is named")
+nf = ns["_filters_without_flats"]
+check(nf({"HA": {}, "OIII": {}, "SII": {}}, {"HA": {}, "OIII": {}}) == ["SII"],
+      "the NGC 7380 case: SII is the one without flats")
+check(nf({"HA": {}}, {"HA": {}, "RED": {}}) == [],
+      "flats for a filter with no lights are not a gap")
+check(nf({"B": {}, "A": {}}, None) == ["A", "B"],
+      "no flats at all names every filter, sorted")
+check(nf(None, {"HA": {}}) == [], "no lights, nothing to name")
+
+print("\n1.7.20 — a calibration master must still fit its frames")
+fr, stale = ns["_frame_record"], ns["_calib_master_stale"]
+sizes = {}
+def _size(p):
+    return sizes[p]
+oiii = [f"/a/OIII/flat_{i:05d}.fit" for i in range(1, 21)]
+for p in oiii:
+    sizes[p] = 36201600
+now = fr(oiii, _size)
+check(len(now) == 20 and now == sorted(now), "the record is sorted, one row per frame")
+check(stale(now, None, 12) == "built from 12 frames, 20 found now",
+      "the NGC 7380 case: a 12-frame master with 20 flats found, no record")
+check(stale(now, None, 20) == "" and stale(now, None, None) == "",
+      "an older master is reused when STACKCNT agrees, or cannot be read")
+twelve = fr(oiii[:12], _size)
+check(stale(now, twelve, 12) == "8 frame(s) added since it was built",
+      "with a record, the change is named")
+check(stale(now, now, 99) == "", "the record decides over STACKCNT")
+swapped = [[f"other_{i:05d}.fit", 36201600] for i in range(20)]
+check(stale(now, swapped, 20).startswith("20 frame(s) added and 20 removed"),
+      "a swapped set of the same size is caught — STACKCNT alone could not")
+resized = [[n, s + 1] for n, s in now]
+check("different size" in stale(now, resized, 20),
+      "a frame re-exported under the same name is caught")
+night_a = [f"/n1/flat_{i:05d}.fit" for i in range(1, 11)]
+night_b = [f"/n2/flat_{i:05d}.fit" for i in range(1, 11)]
+for p in night_a + night_b:
+    sizes[p] = 1000
+both = fr(night_a + night_b, _size)
+check(stale(both, fr(night_a, _size), None) == "10 frame(s) added since it was built",
+      "per-night folders reusing flat_00001.fit still count twice")
+check(fr(["/x/gone.fit"], lambda p: (_ for _ in ()).throw(OSError())) == [["gone.fit", -1]],
+      "an unreadable size is recorded as -1, not raised")
 
 print()
 if fails:
