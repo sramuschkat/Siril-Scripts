@@ -38,7 +38,8 @@ WANT = ("_format_duration", "_median", "_exp_tag", "_night_key", "_path_date",
         "_first_with_role", "_detect_palette", "_auto_channel_map",
         "_unfillable_channels", "_align_pairs_warn", "_weight_token",
         "_parse_spcc_fit", "_log_delta", "_night_of", "_flat_shape",
-        "_flat_normalise", "_rebin_mean", "_flat_ratio_spread", "_with_fits")
+        "_flat_normalise", "_rebin_mean", "_flat_ratio_spread", "_with_fits",
+        "_spread_sample")
 for node in tree.body:
     if isinstance(node, ast.FunctionDef) and node.name in WANT:
         exec("from __future__ import annotations\n"

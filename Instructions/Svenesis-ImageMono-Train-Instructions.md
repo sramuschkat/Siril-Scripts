@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.7.16** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.7.17** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.7.16](#17-whats-new-in-1716)
+17. [What's New in 1.7.17](#17-whats-new-in-1717)
 
 ---
 
@@ -914,7 +914,47 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.7.16
+## 17. What's New in 1.7.17
+
+Lessons taken from reading the Starloch Batch Preprocessor, plus three audits of the script's own arithmetic against [Siril's documentation](https://siril.readthedocs.io/en/stable/preprocessing/stacking.html) and against Siril's own log output. One of these costs real signal; the rest cost **confidence** — messages that were quieter, or more certain, than the data justified.
+
+**From the Starloch Batch Preprocessor**
+
+- **Disabled colours moved from the stylesheet to the palette.** 1.7.16 made `setEnabled(False)` visible by adding six `:disabled` rules — one per widget class that happened to be affected. A CSS rule reaches only the classes it names, so the next widget added would be invisible again, and the seven other Svenesis scripts (86 further `setEnabled` calls) would each need the same block copied in. `QPalette.ColorGroup.Disabled` reaches **every** widget, in three lines. And the window now follows Siril's theme via `get_siril_config("gui", "theme")` instead of being fixed dark; light mode drops the dark sheet entirely, because Fusion's standard palette already is a complete light theme. The Overview and Log panes stay dark in both modes — they are a terminal.
+- **Every run now writes `commands.ssf`.** A verbatim record of every Siril command the run issued, next to the output, written **before** each call — the command that kills a run must not be the missing one. A run replays headless with `siril-cli -s commands.ssf`. It carries the `requires` line a script needs and marks `load_seq` as `# GUI-ONLY` rather than silently rewriting it.
+- **A cleanup that failed was silent, and four of them were dangerous.** Four of the seven `rmtree` calls clear a directory that is about to be **refilled** with freshly staged frames under index-based names — a leftover `lights_00050.fit` from a longer previous run would have been linked into the new sequence and stacked in without a word. Those four now stop the run. The three that merely free disk space warn and carry on. And a stage that reported success but wrote nothing now fails where it happened: the master is checked after the background extraction rewrites it, each aligned channel before it becomes a colour, with a zero-byte file counting as missing.
+- **The hot-pixel threshold now follows the stack size.** `-cc=dark 3 3` went to every filter regardless. But stacking only removes a hot pixel because **dithering** puts it on a different sky pixel each frame; at four frames, rejection is percentile clipping over four samples and a defect present in two of them is no minority at all. A channel of 10 frames or fewer now gets `-cc=dark 3 2.5`. The cold side is untouched — every calibration observed reported `0 + N`, so it never fires here.
+- **And equal size was being taken for overlay.** Four masters of 2942×2876 can still sit pixels apart, and a healthy star-pair count says the fit *converged*, not that it converged rightly. Five points of the first master now go to the sky through its own solution and back to pixels through each other master's; anything past a whole pixel is said before the channels are combined. Headers only.
+
+**Audit of the arithmetic**
+
+- **The frame-loss warning could not fire.** It read an estimate that is an **upper** bound on the surviving frames — and therefore a *lower* bound on the loss, the wrong direction for a warning about losing too much. On one NGC 6946 run with `-filter-wfwhm=90% -filter-round=87%` it predicted 13–14 % dropped where 21–23 % really went, on all four channels, so the note fired on **none** of them while 88 of 400 frames were removed. It now uses the pessimistic estimate, which lands within a frame of reality. The docstring's justification went with it: it argued the metrics are correlated so the product keeps a margin, and three of those four channels came out *below* the product.
+- **A quality filter that never reached Siril said nothing.** The percentage boxes accept 1–100; asking for the best 15 % of 25 frames leaves 3, under the floor of 4, so the filter was silently dropped — and the one message for that situation only covers *"too few frames to filter at all"*. You ticked a box, got the full stack, and were told nothing. Every refused filter is now named, with its reason and the consequence.
+- **The short-channel warning hung on the wrong constant.** *"Too few for outlier rejection to mean much"* tested against `MIN_STACK_FRAMES`, which is the floor the quality **filters** may not cross — not a statement about rejection. A channel of exactly **four** frames fell straight through it in silence. That is your IC 1805 SII channel. It now tests the top of the percentile band, shared with the rejection ladder.
+- **And the dark tolerance was symmetric where the physics is not.** A 630 s dark on 600 s lights counted the same as a 570 s one. The **longer** dark over-subtracts: the background goes negative and Siril clamps calibrated 32-bit data to [0, 1], so those pixels land on zero and their faint signal is gone. The **shorter** one leaves a pedestal the background extraction removes anyway. A longer dark now has to be within 2 % where a shorter one may be 5 % out, ties go to the shorter, and the message says which way it went.
+- **A star count on Siril's ceiling is not a measurement.** `-maxstars` is documented as *"must be between 100 and 2000"*. On a star-rich field every frame hits it — of 400 frames in one NGC 6946 run, **395 reported exactly 2000** — so `-weight=nbstars` hands them all the same weight and does almost nothing, while the log printed *"2000 stars"* as though it had measured a rich field. The cap is now marked in the log and footnoted in the report, and star-count weighting on saturated data is called out, naming **Noise** and **Weighted FWHM**, which still tell those frames apart.
+- **The flat noise floor straddled time.** It compared the first half of a night's flats against the second, and since the list is in acquisition order, any drift in the flats' *shape* (dew, a twilight gradient) was measured as "noise". Pure *level* drift was already immune. Simulated at 0.2 % shape drift the floor came out **2.1× too high**, and an inflated error bar hides the very night-to-night difference the measurement exists to find — on your data the two sit within a thousandth of a percent of each other. The halves now **interleave** (1.15× at the same drift), and the eight-flat sample is taken at an even stride rather than from the head of a twenty-flat run.
+- **The rejection fallback ignored the quality filters entirely.** When the registered count cannot be read, the number that picks the rejection algorithm fell back to the **staged** count — 74 frames choosing the algorithm for 74 where 57 are integrated, with only 31 frames separating winsorized from GESDT. It now falls back to the pessimistic estimate, erring towards the gentler algorithm.
+- **Drizzle warned about something its own settings prevent.** The message blamed a *"grid unevenly filled"* below 40 frames — the failure mode of `pixfrac < 1`. At the shipped `pixfrac=1.0` every output pixel is covered by every frame. What is actually missing on a short run is **sub-pixel sampling**, and the message now says that, along with what you get instead. `pixfrac` sits beside the threshold as a named constant; it stays at 1.0 because lowering it would change everyone's images.
+- **And `CALIB_TEMP_TOLERANCE_C` carries its reasoning.** It was a bare `2.0` in a file whose neighbouring constant explains at length why the *exposure* tolerance must be a fraction. Dark current doubles roughly every 6 °C, so 2 °C is up to ~26 % of the dark signal — negligible at a cooled set point, not negligible on an uncooled camera.
+
+- **A calibration part too small to be a sequence took the whole split down.** Siril cannot build a sequence from a single file, so a night holding one light fails `calibrate` — and the run then falls back to one pooled pass **after** having stacked a master flat per night that nothing goes on to read. Seen on IC 1805: OIII arrived as 8 frames on one night and 1 on the next, two per-night flats were built, both were thrown away, and the log carried an error that reads like a defect. The condition is knowable before the parts are built, so the split is now refused there — and the run says so, because discovery had *announced* per-night calibration and that announcement must not be left standing. The tightened hot-pixel note is now also said once per filter rather than once per part.
+
+**And the one that costs signal**
+
+- **RBF background extraction eats line emission.** Measured with `siril-cli` on a synthetic frame — a nebula covering 95 % of the field plus a known linear sky gradient, decomposed by least squares into [nebula, x, y, 1]:
+
+| `subsky` parameters | nebula kept | gradient removed |
+|---|---:|---:|
+| `1 -samples=20` (degree 1) | **99.9 %** | 85.6 % |
+| `2 -samples=20` (degree 2) | 32.1 % | 96.2 % |
+| `-rbf -samples=20 -smooth=0.5` | **17.8 %** | 99.1 % |
+| `-rbf -samples=20 -smooth=1.0` | 48.1 % | 94.5 % |
+
+  RBF is the **most destructive** option available on a target that fills the frame, and none of its settings are safe there — `smooth=1.0` is the maximum Siril accepts and still loses half. The per-sub pass was already right (degree 1, Siril's own guidance for individual frames); the per-channel master and the composite ran RBF unconditionally, and the option described its benefit without its cost. On a **compact** target the opposite holds and RBF is clearly better, which is why it stays on offer. It cannot be detected from the pixels: the fraction of the frame above *median + MAD* is 26.0 % for plain sky, 26.0 % for the frame-filling nebula and 27.5–30.3 % for a compact galaxy on real masters. A smooth nebula **is** statistically sky — which is precisely why the model removes it. The reliable signal is the **filter**, so a narrowband master and a narrowband palette now say so with the measured figures. It warns rather than overriding: swapping your background model out silently would change images without being asked.
+- **And the colour-fit threshold compared a scaled number against an absolute one.** Siril's sigma is the scatter of *Image* R/G, so it carries whatever scale those channels are on — and with **Output normalization** (on by default) each master is divided by its own brightest pixel, which is not a photometric quantity and differs per filter. Confirmed on your real masters: every channel ends at max = 1.000017…1.000021. Scaling the ratio by *k* scales the slope and the sigma alike, so **σ/|slope|** is the number a fixed threshold may be compared against. Two runs of the *same* IC 1805 data, one with narrowband normalisation and one without, reported raw σ 0.323 and 0.216 — 50 % apart — and **0.2748 against 0.2750** once the scale is divided out. The white-balance factors carry the same scaling: the calibrated image is correct, but K0/K1/K2 are **not** a measurement of the filters or the sensor, and the run now says so where they are printed.
+
+## What was new in 1.7.16
 
 Five things real runs turned up — four of them messages or controls that described something other than what was actually happening, and the last complaint pyflakes had about the file.
 

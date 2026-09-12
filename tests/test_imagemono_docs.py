@@ -202,7 +202,10 @@ for lang, doc in docs.items():
 
 print("\n6) the rejection bands agree with the code everywhere")
 ns = {}
-i = src.index("SIGMA_MAX_FRAMES")
+# Anchored on the DEFINITION, not on the first mention: the CHANGELOG
+# names these constants in prose, and `src.index` on a bare identifier
+# found that text instead.
+i = re.search(r"^SIGMA_MAX_FRAMES = ", src, re.M).start()
 exec(src[i:src.index("\n\n", i)], ns)
 lo, gesdt, lin = (ns["SIGMA_MAX_FRAMES"], ns["GESDT_MIN_FRAMES"],
                   ns["LINEAR_MIN_FRAMES"])

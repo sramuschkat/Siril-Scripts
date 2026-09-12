@@ -528,8 +528,8 @@ gap = _method("ImageMonoTrainWindow", "_refresh_darks_table")
 check("No dark for" in gap and "lbl_dark_gap" in gap,
       "and shown under the table whose silence it explains")
 lbl = _method("ImageMonoTrainWindow", "_build_calibration_group")
-check("lbl_dark_gap" in lbl and "#ffaa88" in lbl,
-      "in warning colour rather than buried in the run log")
+check("lbl_dark_gap" in lbl and "_tc('warn')" in lbl,
+      "in the theme's warning colour rather than buried in the run log")
 # Per-filter prose belonged in the table, not in a 9pt paragraph that
 # said "→ 3s dark" once per filter and "3 master(s)" once per filter.
 for gone in ('bits.append("flat offset: ', 'bits.append("per night: '):

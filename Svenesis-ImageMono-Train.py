@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.7.16
+Script Version: 1.7.17
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.7.16
+# Script Version: 1.7.17
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +97,220 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.7.17 - Lessons taken from the Starloch Batch Preprocessor, and three
+        audits of this script's own arithmetic against Siril's
+        documentation and against Siril's own log output
+      - DISABLED COLOURS MOVED FROM THE STYLESHEET TO THE PALETTE.
+        1.7.16 made setEnabled(False) visible by adding six `:disabled`
+        rules -- one per widget class that happened to be affected.  That
+        is the wrong shape: a CSS rule reaches only the classes it names,
+        so the next widget added is invisible again, and the seven other
+        Svenesis scripts (86 further setEnabled calls) would each need
+        the same block.  QPalette.ColorGroup.Disabled reaches every
+        widget there is, in three lines.  DISABLED_STYLESHEET stays for
+        dark mode only, where the shared sheet hard-codes backgrounds on
+        the input widgets and a sheet beats the palette.
+      - AND THE WINDOW NOW FOLLOWS SIRIL'S THEME.  It is launched from
+        Siril's Python menu and was fixed dark whatever Siril was set to.
+        `get_siril_config("gui", "theme")` decides; light mode drops the
+        dark sheet entirely rather than carrying a second, hand-written
+        copy of it, because Fusion's standard palette already is a
+        complete light theme.  An unreadable setting stays dark.  The
+        console panes keep their dark background in both modes -- they
+        are a terminal, and the coloured log lines are written for a dark
+        ground.
+      - EVERY RUN NOW WRITES commands.ssf.  A verbatim record of every
+        Siril command the run issued, next to the output, rewritten after
+        each one and recorded BEFORE the call -- the command that kills a
+        run is the interesting line, so it must not be the missing one.
+        Until now a defect was reproduced by scraping commands out of a
+        pasted GUI log by hand; now the run replays headless with
+        `siril-cli -s commands.ssf`.  It carries the `requires` line a
+        script needs, and marks `load_seq` as GUI-ONLY instead of
+        silently rewriting it: a record that quietly differs from what
+        ran is worse than no record.
+      - A CLEANUP THAT FAILED WAS SILENT, AND FOUR OF THEM WERE
+        DANGEROUS.  All seven `shutil.rmtree(..., ignore_errors=True)`
+        calls ignored failure.  Four of them clear a working directory
+        that is about to be REFILLED with freshly staged frames under
+        index-based names -- so a leftover `lights_00050.fit` from a
+        longer previous run would be linked into the new sequence and
+        stacked into the master without a word.  Those four now re-check
+        the directory and fail the run.  The three that merely free space
+        warn and carry on, because nothing reads them again.
+      - AND A STAGE THAT WROTE NOTHING NOW FAILS WHERE IT HAPPENED.  The
+        stack output was checked; the master is then written a SECOND
+        time by the background extraction, through Siril, whose `save`
+        can fail without raising.  `_verify_outputs` checks the master
+        after that rewrite and each aligned channel before it becomes a
+        colour, counting a zero-byte file as missing.
+      - THE HOT-PIXEL THRESHOLD NOW FOLLOWS THE STACK SIZE.  `-cc=dark
+        3 3` went to every filter regardless.  But stacking only removes
+        a hot pixel because DITHERING puts it on a different sky pixel in
+        every frame, leaving it a minority at each one -- and that
+        argument needs frames.  At four, rejection is percentile clipping
+        over four samples: it discards a fixed share by rank, and a
+        defect present in two of the four is not a minority at all.
+        Measured on IC 1805, SII stacked 4 frames with 19.3-31.1%
+        rejection, the weakest channel of the set.  A channel of
+        SIGMA_MAX_FRAMES or fewer now gets a tightened hot threshold (2.5
+        instead of 3).  The cold side is untouched: every calibration in
+        those runs reported "0 + N", so it never fires and changing it
+        would be a guess.  The count is passed as an argument --
+        `_current_n_frames` is only set AFTER calibration runs -- and the
+        split path passes the filter's TOTAL, since the parts are merged
+        again before stacking.
+      - AND EQUAL SIZE WAS BEING TAKEN FOR OVERLAY.  After the
+        cross-filter alignment the run checked that the masters came out
+        the same size and that the star matcher found enough pairs.
+        Neither proves the channels describe the same sky pixel -- four
+        masters of 2942x2876 can sit pixels apart, and a healthy pair
+        count says the fit converged, not that it converged on the right
+        solution.  Five points of the first master now go to the sky
+        through its own solution and back to pixels through each other
+        master's; anything past a whole pixel is said BEFORE the channels
+        are combined.  Headers only.  A master without a usable solution
+        is "cannot tell" and stays silent.
+
+        --- and then three audits of the arithmetic itself ---
+
+      - THE FRAME-LOSS WARNING COULD NOT FIRE.  It read
+        `_effective_frame_count`, which takes min() of the percentages
+        and is an UPPER bound on the survivors -- therefore a LOWER bound
+        on the loss, the wrong direction for a warning about losing too
+        much.  Survivors must pass EVERY filter, so the real count is the
+        intersection.  Measured on one NGC 6946 run with 90% / 87%:
+        predicted 13-14% dropped against 21-23% really dropped, on all
+        four channels, so the note fired on NONE of them while 88 of 400
+        frames went.  It now reads `_projected_frame_count`, which
+        multiplies the shares and comes within a frame of the truth
+        (57/54/148/51 against 57/55/148/52).  The docstring's
+        justification went with it: it argued the metrics are correlated
+        so the product keeps a margin, and three of those four channels
+        came out BELOW the product.
+      - A QUALITY FILTER THAT NEVER REACHED SIRIL WAS SILENT.  The spin
+        boxes accept 1-100.  Asking for the best 15% of 25 frames leaves
+        3, under MIN_STACK_FRAMES, so the filter was dropped -- and the
+        one message for that case only covers "too few frames", which 25
+        is not.  The user got the FULL stack and no word about the cut
+        they asked for.  `_quality_filter_plan` now returns what was
+        skipped and why.
+      - THE SHORT-CHANNEL WARNING HUNG ON THE WRONG CONSTANT.  "Too few
+        for outlier rejection to mean much" tested `n_reg <
+        MIN_STACK_FRAMES` -- but that is the floor the quality FILTERS
+        may not cross, not a statement about rejection.  Two meanings on
+        one number, and a channel of exactly four frames -- percentile
+        clipping, the weakest case there is -- fell through in silence.
+        It now tests PERCENTILE_MAX_FRAMES, shared with `_rejection_args`
+        so the two cannot drift.
+      - AND THE DARK TOLERANCE WAS SYMMETRIC WHERE THE PHYSICS IS NOT.
+        `abs(have - want)` treated a 630 s dark on 600 s lights like a
+        570 s one.  Dark current grows with exposure: the longer dark
+        OVER-subtracts, the background goes negative, and Siril clamps
+        calibrated 32-bit data to [0, 1] -- those pixels land on zero and
+        their faint signal is gone for good.  The shorter dark
+        under-subtracts, leaving a pedestal the background extraction
+        removes anyway.  A longer dark now needs
+        DARK_OVERSHOOT_TOLERANCE (2%) against the usual 5%, ties go to
+        the shorter one, and the message names the direction.
+      - A STAR COUNT ON SIRIL'S CEILING IS NOT A MEASUREMENT.  The manual
+        gives `-maxstars` as "must be between 100 and 2000".  On a
+        star-rich field every frame hits it: of 400 frames in one NGC
+        6946 run, 395 reported exactly 2000.  `-weight=nbstars` then
+        gives all of them the SAME weight, so a setting offered as
+        "Improves SNR when frame quality varies" does almost nothing --
+        and the registration line printed "2000 stars" as if it had
+        measured a rich field.  The cap is now recognised in the log and
+        the report, and star-count weighting on saturated data is called
+        out, naming Noise and wFWHM, which still separate those frames.
+      - THE FLAT NOISE FLOOR STRADDLED TIME.  It compared the first half
+        of a night's flats against the second.  The file list is sorted
+        by path and a flat run is named by timestamp, so those halves are
+        separated in TIME, and any drift in the flats' SHAPE -- dew, a
+        twilight gradient -- was measured as "noise".  Pure LEVEL drift
+        was already immune (each map is divided by its own median); shape
+        drift was not.  Simulated at 0.2% shape drift over eight flats
+        the floor came out 2.1x too high, and an inflated error bar hides
+        the very difference it exists to find.  The halves now
+        INTERLEAVE (1.15x at the same drift), and `_spread_sample` takes
+        the eight at an even stride instead of from the head of a
+        twenty-flat run.
+      - THE REJECTION FALLBACK IGNORED THE QUALITY FILTERS.  When the
+        registered count cannot be read, `n_stack` fell back to
+        `n_linked` -- the full STAGED count, as if no filter had run: 74
+        staged frames chose the algorithm for 74 where 57 were
+        integrated, and only 31 frames separate winsorized from GESDT.
+        It now falls back to `_projected_frame_count`, so the error is
+        towards the gentler algorithm.  `effective` keeps the optimistic
+        estimate, because the report quotes it as "<=N used".
+      - DRIZZLE WARNED ABOUT SOMETHING ITS OWN SETTINGS PREVENT.  The
+        message blamed a "grid unevenly filled" below 40 frames -- the
+        failure mode of pixfrac < 1.  At the shipped pixfrac of 1.0 every
+        output pixel is covered by every frame.  What is really missing
+        on a short run is sub-pixel sampling, and the message now says
+        so, along with what you get instead.  DRIZZLE_PIXFRAC sits beside
+        the threshold so the two cannot drift apart; it stays at 1.0
+        because lowering it changes everyone's images.
+      - AND CALIB_TEMP_TOLERANCE_C CARRIES ITS REASONING NOW.  It sat
+        there as a bare 2.0, in a file whose neighbouring constant
+        explains at length why the EXPOSURE tolerance must be a fraction.
+        Dark current doubles every ~6 C, so 2 C is up to ~26% of the dark
+        signal -- negligible at a cooled set point, not negligible on an
+        uncooled camera.
+      - RBF BACKGROUND EXTRACTION EATS LINE EMISSION.  Measured with
+        siril-cli on a synthetic frame -- a nebula covering 95% of the
+        field plus a known linear sky gradient, decomposed by least
+        squares into [nebula, x, y, 1]:
+
+            subsky 1 (degree 1)       99.9% of the nebula kept
+            subsky 2 (degree 2)       32.1% kept
+            subsky -rbf -smooth=0.5   17.8% kept   <- what ran
+            subsky -rbf -smooth=1.0   48.1% kept   (1.0 is the maximum)
+
+        RBF is the most destructive option available on a target that
+        fills the frame, and no RBF setting is safe there.  The per-sub
+        pass was already right (degree 1, Siril's own guidance); the
+        per-master and composite passes ran RBF unconditionally, and the
+        tooltip described the benefit without the cost.  It cannot be
+        detected from the pixels: the fraction above median + MAD is
+        26.0% for plain sky, 26.0% for the frame-filling nebula and
+        27.5-30.3% for a compact galaxy on real masters.  A smooth nebula
+        IS statistically sky, which is why the model removes it.  The
+        reliable signal is the FILTER, so a narrowband master and a
+        narrowband palette now say so, with the measured figures.  It
+        WARNS rather than overriding: swapping the user's background
+        model silently would change images unasked.
+      - A CALIBRATION PART TOO SMALL TO BE A SEQUENCE TOOK THE WHOLE
+        SPLIT DOWN.  Siril cannot build a sequence from one file, so a
+        night holding a single light failed `calibrate` and the run fell
+        back to one pooled pass -- after having stacked a master flat per
+        night that nothing then read.  Seen on IC 1805: OIII arrived as
+        8 frames on one night and 1 on the next, two per-night flats were
+        built, both thrown away, and the log carried an error that looks
+        like a defect.  The condition is knowable before the parts are
+        built, so `_calib_split` now refuses there, and the run says so
+        -- discovery had ANNOUNCED per-night calibration, and that
+        announcement must not be left standing.
+      - AND THE TIGHTENED-COSMETIC NOTE IS SAID ONCE PER FILTER.  A split
+        calls `_calibrate_args` per part, so OIII said the same sentence
+        three times in one run.  The arguments are still built every
+        time; only the message is gated.
+      - AND THE COLOUR-FIT THRESHOLD COMPARED A SCALED NUMBER TO AN
+        ABSOLUTE ONE.  Siril's sigma is the scatter of *Image* R/G, so it
+        carries whatever scale those channels are on -- and with
+        `-output_norm` (on by default) each master is divided by its own
+        brightest pixel, which is not a photometric quantity and differs
+        per filter.  Confirmed on real masters: every channel ends at
+        max = 1.000017..1.000021.  Scaling the ratio by k scales the
+        slope and the sigma alike, so sigma/|slope| is what a fixed
+        threshold may be compared against.  Two runs of the SAME IC 1805
+        data, one with narrowband normalisation and one without, gave raw
+        sigma 0.323 and 0.216 -- 50% apart -- and 0.2748 against 0.2750
+        once scaled out.  The white-balance factors carry the same
+        scaling: the calibrated image is right, but K0/K1/K2 are not a
+        measurement of the filters or the sensor, and the run says so
+        where they are printed.
+
 1.7.16 - Three places that described the wrong thing, a greying that
         never greyed, and an import nobody used
       - THE FRAME-DROP MESSAGE NAMED THE WRONG CAUSE.  A run with the
@@ -304,6 +518,7 @@ s.ensure_installed("PyQt6", "astropy", "numpy")
 
 import numpy as np
 from astropy.io import fits
+from astropy.wcs import WCS
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout,
@@ -316,13 +531,13 @@ from PyQt6.QtWidgets import (
     QAbstractItemView, QCompleter,
 )
 from PyQt6.QtCore import Qt, QSettings, QUrl, pyqtSignal, QThread
-from PyQt6.QtGui import QColor, QDesktopServices
+from PyQt6.QtGui import QColor, QDesktopServices, QPalette
 
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.7.16"
+VERSION = "1.7.17"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -342,6 +557,16 @@ STACKS_DIRNAME = "output"
 #       align/                    cross-filter alignment work
 #       helpers/                  compose helpers (_nbnorm, _RED_Ha)
 MASTERS_DIRNAME = "masters"
+# Verbatim record of every Siril command a run issued, written beside the
+# output so a run can be replayed headless instead of reconstructed from
+# a pasted log.
+COMMANDS_FILENAME = "commands.ssf"
+# The `requires` line that record carries.  Matches the "Siril Version"
+# in this file's header: older builds lack commands this script uses.
+SIRIL_MIN_VERSION = "1.4.0"
+# Commands Siril accepts interactively but refuses inside a script, so
+# the record marks them rather than pretending the file runs as-is.
+_SCRIPT_FORBIDDEN_COMMANDS = frozenset({"load_seq"})
 WORK_DIRNAME = "_work"
 # Quality-assurance artefacts (rejection maps) that would otherwise be
 # buried in _work/ and deleted with it.
@@ -380,11 +605,34 @@ KIND_BIAS = "bias"
 # exposure, so 5% of 300s is a different thing than 5% of 30s.
 DARK_EXPOSURE_TOLERANCE = 0.05
 
+# ...and a LONGER dark is not the same mistake as a shorter one, so it
+# gets its own, tighter bound.  Dark current grows with exposure, so a
+# dark longer than the lights OVER-subtracts: the background goes
+# negative, and Siril clamps calibrated 32-bit data to [0, 1], so those
+# pixels land hard on zero and the faint signal in them is gone for good.
+# A shorter dark UNDER-subtracts, which leaves a positive pedestal that
+# the background extraction removes anyway, plus hot pixels that the
+# cosmetic map and the stacking rejection are there for.  Same |delta|,
+# two different outcomes -- one recoverable, one not.
+DARK_OVERSHOOT_TOLERANCE = 0.02
+
 # Wider for the flats' offset: a flat exposure is short, so the same share
 # is a much smaller absolute difference -- and so is the dark signal it
 # corrects.
 DARKFLAT_EXPOSURE_TOLERANCE = 0.20
 
+# How far the cooled set point may drift before a master stops matching.
+# Absolute degrees, unlike the exposure tolerances above, because that is
+# what the header records and what a set-point camera actually holds.
+#
+# The consequence is not linear: dark current roughly DOUBLES every ~6 C,
+# so 2 C is up to ~26% error in the dark signal being subtracted.  That
+# sounds worse than it is at a cooled set point -- at -10 C and 600 s the
+# dark signal of a modern CMOS sensor is a few electrons, and a quarter
+# of that disappears under the read noise.  It would NOT be harmless on
+# an uncooled camera or at long exposures in summer, which is why the
+# number is written down here with its reasoning rather than left as the
+# one calibration constant nobody justified.
 CALIB_TEMP_TOLERANCE_C = 2.0
 
 # SIP polynomial order for the plate solve that precedes photometric colour
@@ -405,6 +653,18 @@ NO_FILTER = "NOFILTER"
 # outlier rejection needs a population, and a sharp 2-frame stack is worse
 # than a slightly softer 6-frame one.
 MIN_STACK_FRAMES = 4
+
+# Top of the percentile-clipping band (see `_rejection_args`).  At or
+# below this, rejection has almost nothing to work with: Siril's own
+# manual calls percentile clipping the choice for small sets, and on four
+# samples it discards a fixed share by rank -- a defect present in two of
+# the four is not an outlier at all.  Shared with the ladder rather than
+# written twice, because the two must not drift apart: the warning that
+# says "too few for outlier rejection to mean much" used MIN_STACK_FRAMES
+# instead, which is the floor the quality FILTERS may not cross.  Two
+# meanings on one number, and a 4-frame channel -- the exact case the
+# sentence describes -- fell through it in silence.
+PERCENTILE_MAX_FRAMES = 4
 
 # Quality filters only pay off once a channel has enough frames.  Dropping
 # subs always costs signal-to-noise (noise scales with 1/sqrt(n)), and on a
@@ -432,10 +692,80 @@ SIGMA_MAX_FRAMES = 10
 GESDT_MIN_FRAMES = 31
 LINEAR_MIN_FRAMES = 300
 
-# Drizzle redistributes each sub's flux onto a finer grid, so it needs many
-# dithered frames to fill that grid evenly.  Below this count the coverage
-# gets patchy and the result is noisier than the plain stack -- warn instead
-# of silently producing a worse master.
+# `-cc=dark <cold> <hot>` sigmas.  LOWER is MORE aggressive: the value is a
+# threshold above the master dark's own noise, so a smaller one flags more
+# pixels as defective.
+COSMETIC_COLD_SIGMA = "3"
+COSMETIC_HOT_SIGMA = "3"
+# Stacking only removes a hot pixel because DITHERING puts it on a
+# different sky pixel in every frame, leaving it a minority at each one.
+# That argument needs frames.  At four, rejection is percentile clipping
+# over four samples -- it discards a fixed share by rank, and a defect
+# present in two of the four is not a minority at all.  Below this count
+# the cosmetic map has to catch at source what rejection will not catch
+# later, so its hot threshold is tightened.  Measured across this
+# session's runs, the cold side never fires at all (every calibration
+# reported "0 + N"), so it is left where it is rather than changed blind.
+COSMETIC_TIGHT_MAX_FRAMES = SIGMA_MAX_FRAMES
+COSMETIC_TIGHT_HOT_SIGMA = "2.5"
+
+# How much of its own footprint each input pixel keeps when it is dropped
+# onto the finer grid.  1.0 = the full pixel, which is the SAFE end of the
+# scale and the reason the frame-count warning below had to be reworded:
+# at 1.0 every output pixel is covered by every input frame, so the
+# "patchy coverage" that drizzle is warned about cannot occur -- that is
+# the failure mode of pixfrac < 1.
+#
+# The price is that drizzle's actual purpose goes with it.  The
+# sub-pixel resolution it recovers comes from shrinking the drop below
+# one pixel; at 1.0 the result is close to a smoothed upsample, with
+# twice the pixels, neighbouring output pixels correlated, and little
+# real detail gained.  Lowering this is what makes drizzle worth running
+# -- and it is exactly then that many well-dithered frames start to
+# matter.  Left at 1.0 because changing it changes everyone's images.
+# Siril's hard ceiling on detected stars per frame: the manual gives
+# `-maxstars` as "must be between 100 and 2000".  On a star-rich field
+# every frame hits it, and then the star COUNT stops being a measurement
+# -- it is the constant.  That matters twice: `-weight=nbstars` gives
+# every saturated frame the same weight, so the weighting does nothing;
+# and the registration line reported "2000 stars" as if it had measured
+# something.  wFWHM is unaffected (it scales FWHM, which still varies)
+# and so is noise weighting.
+SIRIL_MAX_STARS = 2000
+
+# How much of a FRAME-FILLING smooth emission signal each background model
+# leaves behind.  Measured with siril-cli on a synthetic frame: a Gaussian
+# nebula covering 95% of the field plus a known linear sky gradient, then
+# decomposed by least squares into [nebula, x, y, 1].
+#
+#     subsky 1  (degree 1)         99.9% of the nebula kept, 86% of the
+#                                  gradient removed
+#     subsky 2  (degree 2)         32.1% kept, 96% removed
+#     subsky -rbf -smooth=0.5      17.8% kept, 99% removed
+#     subsky -rbf -smooth=1.0      48.1% kept, 95% removed  (1.0 is the
+#                                  maximum; Siril refuses 2.0)
+#
+# RBF is therefore the most destructive option available on a target that
+# fills the frame, and NO RBF setting is safe there -- only the degree-1
+# polynomial is.  On a compact target (a galaxy in a wide field) the
+# opposite holds and RBF is clearly better, which is why it stays on
+# offer rather than being removed.
+#
+# There is no way to tell the two cases apart from the pixels: measured on
+# real masters, the fraction of the frame above median + MAD is 26.0% for
+# plain sky, 26.0% for the frame-filling nebula and 27.5-30.3% for the
+# compact galaxy.  A smooth nebula IS statistically sky, which is exactly
+# why the model removes it.  The reliable signal is the FILTER: a
+# narrowband channel is emission, and emission is what fills the frame.
+RBF_NARROWBAND_KEPT = 0.18
+POLY1_NARROWBAND_KEPT = 0.999
+
+DRIZZLE_PIXFRAC = 1.0
+
+# Dithered frames wanted before drizzle earns its cost.  NOT about patchy
+# coverage while DRIZZLE_PIXFRAC is 1.0 (see above); about whether there
+# is enough sub-pixel sampling for the finer grid to carry information
+# the plain stack does not already have.
 DRIZZLE_MIN_FRAMES = 40
 
 # Default rig description for SPCC, pre-filled into the UI.  These are the
@@ -529,6 +859,21 @@ PRESETS = {
         "cleanup_work": False,
     },
 }
+
+
+def _atomic_write_text(path: str, text: str) -> None:
+    """Write a small text file without ever leaving a truncated one.
+
+    The command record is rewritten after every command, so a crash mid
+    write is not hypothetical -- and a half-written record of the run
+    that crashed is exactly the file someone would go on to trust.
+    """
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
 
 
 def _log_swallowed(exc: BaseException) -> None:
@@ -662,12 +1007,119 @@ QComboBox:disabled{background-color:#333333;color:#666666;border-color:#444444}
 QSpinBox:disabled,QDoubleSpinBox:disabled{background-color:#333333;color:#666666;border-color:#444444}
 """
 
-# A hint line under a control.  BOTH states are spelled out because a
-# per-widget stylesheet naming `color` beats every global rule, the
-# :disabled one included -- which is how eight of these stayed fully lit
-# while the control they describe went grey.
-HINT_STYLE = ("QLabel{color:#888888;font-size:9pt}"
-              "QLabel:disabled{color:#555555}")
+
+
+# ---------------------------------------------------------------------------
+# Theme
+# ---------------------------------------------------------------------------
+# Set once in main() from Siril's own preference, before the window exists.
+_THEME_MODE = "dark"
+
+# Accent, warning and hint tones per mode.  The dark values are the ones
+# that were hard-coded through the file; the light ones are darkened to
+# keep the same contrast against a pale window.
+_THEME_COLORS = {
+    "dark":  {"accent": "#88aaff", "warn": "#ffaa88",
+              "hint": "#888888", "hint_off": "#555555"},
+    "light": {"accent": "#2a5db0", "warn": "#a04a10",
+              "hint": "#5c5c5c", "hint_off": "#aaaaaa"},
+}
+
+
+def _tc(role: str) -> str:
+    """One themed colour by role."""
+    table = _THEME_COLORS.get(_THEME_MODE) or _THEME_COLORS["dark"]
+    return table.get(role, "#888888")
+
+
+def _hint_style() -> str:
+    """Stylesheet for a hint line under a control.
+
+    BOTH states are spelled out because a per-widget stylesheet naming
+    `color` beats every global rule, the :disabled one included -- which
+    is how eight of these stayed fully lit while the control they
+    describe went grey.
+    """
+    return (f"QLabel{{color:{_tc('hint')};font-size:9pt}}"
+            f"QLabel:disabled{{color:{_tc('hint_off')}}}")
+
+
+def _window_stylesheet() -> str:
+    """The main window's own sheet.
+
+    Dark mode keeps the sheet shared verbatim with the rest of the suite.
+    Light mode deliberately uses NONE: Fusion's standard palette already
+    is a complete, consistent light theme, and a hand-written parallel
+    sheet would be a second thing to keep in step with seven other
+    scripts for no gain.
+    """
+    if _THEME_MODE == "dark":
+        return DARK_STYLESHEET + DISABLED_STYLESHEET
+    return ""
+
+
+def _siril_theme_mode(siril) -> str:
+    """Siril's active theme as 'dark', 'light' or 'system'.
+
+    Siril 1.4 documents 0 = dark and 1 = light.  Unknown or future values
+    are handed to Qt's system appearance rather than guessed at.
+    """
+    try:
+        value = int(siril.get_siril_config("gui", "theme"))
+    except Exception as exc:
+        _log_swallowed(exc)
+        return "dark"
+    return {0: "dark", 1: "light"}.get(value, "system")
+
+
+def _apply_theme(app, siril) -> str:
+    """Paint the application in Siril's theme.  Returns the mode used.
+
+    The disabled colours are set on the PALETTE, not in the stylesheet.
+    A `:disabled` CSS rule only reaches the widget classes it names --
+    which is why the 1.7.16 fix had to list six of them by hand, and why
+    the seven other Svenesis scripts still grey nothing out.  The
+    palette's Disabled colour group reaches EVERY widget, including the
+    ones added after this was written.  DISABLED_STYLESHEET stays as
+    well: in dark mode the shared sheet hard-codes backgrounds on the
+    input widgets, and a stylesheet background beats the palette.
+    """
+    global _THEME_MODE
+    # Resolve FIRST and use only the resolved value below.  "system" maps
+    # to dark here, and deciding the palette on the unresolved answer put
+    # the dark stylesheet over a light palette -- with the light disabled
+    # tones underneath it.
+    _THEME_MODE = "light" if _siril_theme_mode(siril) == "light" else "dark"
+    app.setStyle("Fusion")
+    dark = _THEME_MODE == "dark"
+
+    palette = QPalette() if dark else app.style().standardPalette()
+    if dark:
+        for role, color in (
+                (QPalette.ColorRole.Window, "#2b2b2b"),
+                (QPalette.ColorRole.WindowText, "#e0e0e0"),
+                (QPalette.ColorRole.Base, "#3c3c3c"),
+                (QPalette.ColorRole.AlternateBase, "#333333"),
+                (QPalette.ColorRole.Text, "#e0e0e0"),
+                (QPalette.ColorRole.Button, "#444444"),
+                (QPalette.ColorRole.ButtonText, "#dddddd"),
+                (QPalette.ColorRole.ToolTipBase, "#333333"),
+                (QPalette.ColorRole.ToolTipText, "#ffffff"),
+                (QPalette.ColorRole.Highlight, "#285299"),
+                (QPalette.ColorRole.HighlightedText, "#ffffff"),
+                (QPalette.ColorRole.PlaceholderText, "#909090")):
+            palette.setColor(role, QColor(color))
+    off = "#666666" if dark else "#a0a0a0"
+    off_bg = "#333333" if dark else "#ececec"
+    for role in (QPalette.ColorRole.WindowText,
+                 QPalette.ColorRole.Text,
+                 QPalette.ColorRole.ButtonText,
+                 QPalette.ColorRole.PlaceholderText):
+        palette.setColor(QPalette.ColorGroup.Disabled, role, QColor(off))
+    for role in (QPalette.ColorRole.Base, QPalette.ColorRole.Button):
+        palette.setColor(QPalette.ColorGroup.Disabled, role, QColor(off_bg))
+    app.setPalette(palette)
+    return _THEME_MODE
 
 
 # ---------------------------------------------------------------------------
@@ -999,6 +1451,31 @@ SPCC_SIGMA_LIMIT = 1.0
 LOG_ANCHOR_CHARS = 400
 
 
+def _spread_sample(items: list, limit: int) -> list:
+    """At most `limit` items, spread EVENLY over `items`.
+
+    `items[:limit]` takes the head, and a flat list is in acquisition
+    order -- so capping at eight looked only at the start of a twenty-flat
+    run and never saw whether the panel drifted afterwards.  An even
+    stride keeps the same sample size and the same cost while covering
+    the whole session.
+
+    Order is preserved, which matters: the caller splits the result into
+    interleaved halves and both must stay comparable.
+    """
+    n = len(items)
+    if limit <= 0 or n <= limit:
+        return list(items)
+    step = n / float(limit)
+    picked, seen = [], set()
+    for i in range(limit):
+        j = min(n - 1, int(i * step))
+        if j not in seen:
+            seen.add(j)
+            picked.append(items[j])
+    return picked
+
+
 def _rebin_mean(arr, target: int = FLAT_COMPARE_TARGET):
     """Block-average a 2-D array until its long side is at most `target`.
 
@@ -1071,7 +1548,7 @@ def _flat_shape(paths: list, limit: int = FLAT_COMPARE_MAX_FRAMES,
     # case and two on the mixed night this rule exists for.
     sums: dict = {}
     read_total = 0
-    for path in paths[:limit]:
+    for path in _spread_sample(paths, limit):
         try:
             frame = _with_fits(path, read, ignore_missing_simple=True)
             if frame is None:
@@ -1392,6 +1869,57 @@ def _signature_matches(master: dict, target: dict) -> bool:
         if abs(float(mt) - float(tt)) > CALIB_TEMP_TOLERANCE_C:
             return False
     return True
+
+
+# Above this the channels are not describing the same sky pixel any
+# more.  Registration works to well under a pixel, so anything past one
+# whole pixel is not tolerance, it is a different solution.
+OVERLAY_MAX_PX = 1.0
+
+
+def _overlay_error_px(paths: list) -> tuple[float, str] | None:
+    """Worst distance, in pixels, between what two channels call one point.
+
+    Equal image sizes do NOT prove the channels overlay -- four masters of
+    2942x2876 can still sit pixels apart, and `_mixed_grids` cannot see
+    it.  This takes five points of the first master (corners and centre),
+    converts them to sky through ITS solution and back to pixels through
+    each other master's, and reports the largest displacement.
+
+    Header-only: no pixel data is read.  Returns None when any master
+    lacks a usable celestial solution, which means "cannot tell" and must
+    never be reported as agreement.  The returned name is the channel
+    that sat furthest out.
+    """
+    if len(paths) < 2:
+        return (0.0, "")
+    try:
+        heads = [(name, fits.getheader(path, ext=0)) for name, path in paths]
+        ref = WCS(heads[0][1]).celestial
+        if not ref.has_celestial:
+            return None
+        w = min(int(h.get("NAXIS1", 0)) for _n, h in heads)
+        h_px = min(int(h.get("NAXIS2", 0)) for _n, h in heads)
+        if w <= 1 or h_px <= 1:
+            return None
+        xs = np.asarray([0.0, w - 1.0, 0.0, w - 1.0, (w - 1.0) / 2.0])
+        ys = np.asarray([0.0, 0.0, h_px - 1.0, h_px - 1.0, (h_px - 1.0) / 2.0])
+        worst, who = 0.0, ""
+        for name, head in heads[1:]:
+            other = WCS(head).celestial
+            if not other.has_celestial:
+                return None
+            sky = other.all_pix2world(xs, ys, 0)
+            back = ref.all_world2pix(*sky, 0)
+            off = np.hypot(back[0] - xs, back[1] - ys)
+            if not np.all(np.isfinite(off)):
+                return None
+            if float(np.max(off)) > worst:
+                worst, who = float(np.max(off)), name
+        return (worst, who)
+    except Exception as exc:
+        _log_swallowed(exc)
+        return None
 
 
 def _mixed_grids(paths: dict) -> dict:
@@ -1935,6 +2463,30 @@ class StackWorker(QThread):
         self._align_framing_min = False
         # Siril's data directory, asked for once (None = not asked yet).
         self._spcc_root_cache: str | None = None
+        # Every Siril command this run issued, in order, mirrored to
+        # commands.ssf beside the output.  Written for replay: the run can
+        # be repeated headless with siril-cli, which is how a command-level
+        # defect gets bisected without the GUI in the way.
+        self._commands: list[str] = []
+        # filter -> [(part, frames)] for a split refused because a part
+        # was too small to be a sequence.  The run has to say so: it had
+        # announced per-night calibration during discovery.
+        self._split_refused: dict = {}
+        # filter -> the `-cc=dark` pair already announced, so three
+        # `calibrate` calls for one filter do not say it three times.
+        self._cc_said: dict = {}
+        # Where the narrowband/RBF mismatch has already been said, so
+        # four channels do not repeat one sentence four times.
+        self._rbf_warned: set = set()
+        # Filters whose star detection hit Siril's ceiling, so their
+        # star count is the cap rather than a property of the frame.
+        self._stars_capped: set = set()
+        # Worst channel-to-channel astrometric disagreement, in pixels,
+        # or None when it could not be told.  The report quotes it.
+        self._overlay_px = None
+        # filter -> the `-cc=dark` pair actually handed to Siril, so the
+        # report quotes what ran instead of the constant in the tooltip.
+        self._cc_used: dict = {}
         # Set when the user stopped the run.  Everything downstream of
         # stacking is then skipped: the channel set is incomplete, so a
         # colour image built from it would not be the image they asked for.
@@ -1985,12 +2537,116 @@ class StackWorker(QThread):
         SirilGoneError here, at the single funnel every command uses,
         and fails the RUN with one honest message instead.
         """
+        self._record_command(*args)
         try:
             self.siril.cmd(*args)
         except Exception as exc:
             if _connection_dead(exc):
                 raise SirilGoneError(str(exc)) from exc
             raise
+
+    def _verify_outputs(self, paths, stage: str) -> None:
+        """Fail the run when a stage reported success but wrote nothing.
+
+        A Siril command that returns without raising has not necessarily
+        produced its file -- a full disk, a refused path or a silently
+        skipped save all look like success from here.  Checking at the
+        stage boundary names the stage that failed; noticing three steps
+        later names the wrong one.
+        """
+        missing = [str(p) for p in paths
+                   if not (p and os.path.isfile(p)
+                           and os.path.getsize(p) > 0)]
+        if missing:
+            raise RuntimeError(
+                f"{stage} finished without writing its output: "
+                + ", ".join(os.path.basename(m) for m in missing))
+
+    def _clear_stale_dir(self, path: str, what: str) -> None:
+        """Empty a working directory BEFORE it is refilled.
+
+        Not cosmetic.  The run stages fresh frames into this same place
+        under index-based names, so anything a failed delete leaves
+        behind is picked up by the next `link` as if it belonged to this
+        run -- a leftover frame from a longer previous run would be
+        stacked into the master without a word.  Silence here is the one
+        outcome that must not happen, so this raises.
+        """
+        if not os.path.isdir(path):
+            return
+        shutil.rmtree(path, ignore_errors=True)
+        if not os.path.isdir(path):
+            return
+        try:
+            left = len(os.listdir(path))
+        except OSError:
+            left = -1
+        raise RuntimeError(
+            f"Could not clear the {what} working directory before "
+            f"refilling it ({path}"
+            + (f", {left} entr{'y' if left == 1 else 'ies'} left" if left >= 0
+               else "")
+            + "). Frames from an earlier run would be stacked into this "
+            "one, so the run stopped instead. Close anything holding "
+            "those files open, or delete the folder by hand.")
+
+    def _discard_dir(self, path: str, what: str) -> bool:
+        """Delete a directory that is no longer needed.
+
+        The opposite case to `_clear_stale_dir`: nothing reads this path
+        again, so a failure costs disk space and nothing else.  It is
+        still SAID -- `ignore_errors=True` on its own turned a folder
+        that quietly survived into a folder the user believes is gone.
+        """
+        if not os.path.isdir(path):
+            return True
+        shutil.rmtree(path, ignore_errors=True)
+        if not os.path.isdir(path):
+            return True
+        self._emit(
+            f"  Could not delete the {what} ({path}) — it is still there "
+            "and still takes up space. Processing continues; nothing "
+            "downstream reads it.", LogColor.SALMON)
+        return False
+
+    def _record_command(self, *args) -> None:
+        """Append one command to commands.ssf beside the output.
+
+        Recorded BEFORE the call, so a command that kills the run is in
+        the file rather than missing from it -- that one is usually the
+        interesting line.
+
+        The file is a faithful record, not a certified script: `load_seq`
+        is GUI-only and Siril refuses it in a script, so a headless replay
+        has to drop those lines.  They are marked in place instead of
+        being silently rewritten, because a record that quietly differs
+        from what ran is worse than none.
+        """
+        rendered = " ".join(str(a) for a in args)
+        self._commands.append(rendered)
+        try:
+            path = os.path.join(self._out_dir, COMMANDS_FILENAME)
+            body = [
+                "# Siril commands issued by Svenesis ImageMono Train "
+                f"v{VERSION}",
+                f"# Target: {self._target}",
+                f"# Written: {datetime.datetime.now():%Y-%m-%d %H:%M:%S}",
+                "#",
+                "# Replay headless:  siril-cli -s " + COMMANDS_FILENAME,
+                "# Lines marked GUI-ONLY must be removed first (Siril "
+                "rejects them in a script).",
+                "",
+                f"requires {SIRIL_MIN_VERSION}",
+                "",
+            ]
+            for cmd in self._commands:
+                if cmd.split(" ", 1)[0] in _SCRIPT_FORBIDDEN_COMMANDS:
+                    body.append(f"{cmd}    # GUI-ONLY")
+                else:
+                    body.append(cmd)
+            _atomic_write_text(path, "\n".join(body) + "\n")
+        except OSError as exc:
+            _log_swallowed(exc)
 
     def _emit(self, msg: str, color=LogColor.BLUE) -> None:
         """Log a worker message.
@@ -2073,12 +2729,17 @@ class StackWorker(QThread):
         while their intersection can be one or two.  The guard then
         promised a floor it had no way to hold.
 
-        The running estimate multiplies the shares.  That assumes the
-        metrics are independent and they are not -- a bad frame tends to
-        be bad on several at once -- so the true count is HIGHER and the
-        guard stops one filter earlier than strictly necessary.  Erring
-        towards keeping frames is the right direction for a floor whose
-        whole purpose is to leave rejection something to work with.
+        The running estimate multiplies the shares, which is what
+        independence predicts.  The comment here used to argue that the
+        metrics are correlated -- a bad frame being bad on several at
+        once -- and that the true count is therefore HIGHER, leaving the
+        guard a margin.  Four channels of one NGC 6946 run say otherwise:
+        57 against a predicted 58, 55 against 55.8, 148 against 149.4, 52
+        against 51.9.  The two metrics are independent to within a frame
+        here, and three of the four came out slightly BELOW the product.
+        There is no margin, so the estimate is floored with int() rather
+        than rounded, and the claim of one has been removed instead of
+        being left to justify a guard it does not support.
 
         k-sigma has no estimate at all: how many frames lie beyond k sigma
         is a property of the data, not of the setting.  Rather than invent
@@ -2086,11 +2747,59 @@ class StackWorker(QThread):
         (see ``FILTER_MAX_KSIGMA``) and the report marks its counts as
         upper bounds.
         """
+        return self._quality_filter_plan(n_frames)[0]
+
+    def _projected_frame_count(self, n_frames: int) -> int:
+        """Frames expected to survive -- the PESSIMISTIC estimate.
+
+        The counterpart to `_effective_frame_count`, and the two must be
+        used in opposite places.  Survivors pass EVERY filter, so:
+
+          * the product of the shares is what independence predicts;
+          * `min(shares)` is what perfect correlation predicts, and is an
+            upper bound on the survivors.
+
+        An upper bound on survivors is a LOWER bound on the loss, which
+        is the wrong direction for a warning about losing too much.  Four
+        channels of one NGC 6946 run: the min-bound predicted 13-14%
+        dropped against 21-23% really dropped, so the "you are losing a
+        lot of frames" note stayed silent on all four.
+
+        Measured, the product is accurate to about one frame and can sit
+        a frame OPTIMISTIC (57 against 58, 55 against 55.8, 148 against
+        149.4) -- so it is floored, never rounded up.
+
+        k-sigma returns the full count: how many frames lie beyond k
+        sigma is a property of the data, and inventing a number would be
+        worse than declining to warn.
+        """
+        _args, _skipped, share = self._quality_filter_plan(n_frames)
+        if share >= 1.0:
+            return n_frames
+        return max(1, int(n_frames * share))
+
+    def _quality_filter_plan(self, n_frames: int) -> tuple[list, list, float]:
+        """``(args, skipped, share)`` -- the arguments AND what was dropped.
+
+        `skipped` carries ``(flag, value, why)`` for every filter the user
+        switched on that does not reach Siril.  It exists because there
+        was no way to tell: a filter refused by the MIN_STACK_FRAMES
+        floor simply vanished, and the caller could only see that the
+        argument list was shorter than the tick boxes suggested.  With
+        the spin boxes accepting 1-100, asking for the best 15% of 25
+        frames produced NO filter and NO message -- the full stack, and
+        nothing said.
+
+        `share` is the projected survivor fraction, the product of the
+        percentages.  See `_projected_frame_count` for which direction it
+        errs in and where that is safe to use.
+        """
         args: list = []
-        if n_frames < FILTER_MIN_FRAMES:
-            return args
-        suffix = "k" if self._opts.get("filter_mode") == "k-sigma" else "%"
+        skipped: list = []
         share = 1.0                 # projected survivors, as a fraction
+        if n_frames < FILTER_MIN_FRAMES:
+            return args, skipped, share
+        suffix = "k" if self._opts.get("filter_mode") == "k-sigma" else "%"
         for key, flag in (("f_wfwhm", "-filter-wfwhm"),
                           ("f_round", "-filter-round"),
                           ("f_stars", "-filter-nbstars"),
@@ -2100,16 +2809,26 @@ class StackWorker(QThread):
             value = int(self._opts.get(key + "_val", 90))
             if suffix == "%":
                 if value >= 100:
-                    continue                 # 100% keeps everything
-                if int(n_frames * share * value / 100) < MIN_STACK_FRAMES:
+                    continue                 # 100% keeps everything, silently
+                left = int(n_frames * share * value / 100)
+                if left < MIN_STACK_FRAMES:
+                    skipped.append((
+                        flag, f"{value}%",
+                        f"would leave about {left} frame(s), under the "
+                        f"floor of {MIN_STACK_FRAMES}"))
                     continue
                 share *= value / 100.0
             elif len(args) >= FILTER_MAX_KSIGMA:
                 # Nothing here can predict the survivors, so the only
                 # honest brake is on how many cuts are combined.
+                skipped.append((
+                    flag, f"{value}k",
+                    f"more than {FILTER_MAX_KSIGMA} k-sigma cuts at once, "
+                    "and how many frames each one takes cannot be "
+                    "predicted"))
                 continue
             args.append(f"{flag}={value}{suffix}")
-        return args
+        return args, skipped, share
 
     def _seq_quality(self, process_dir: str, seq: str, filt: str,
                      expect: int = 0) -> dict | None:
@@ -2206,12 +2925,30 @@ class StackWorker(QThread):
             parts = [f"median FWHM {out['fwhm']:.2f} px"]
             if out.get("roundness") is not None:
                 parts.append(f"roundness {out['roundness']:.2f}")
+            capped = (out.get("stars") is not None
+                      and int(out["stars"]) >= SIRIL_MAX_STARS)
             if out.get("stars") is not None:
-                parts.append(f"{int(out['stars'])} stars")
+                parts.append(f"{int(out['stars'])} stars"
+                             + (" (Siril's cap — not a measurement)"
+                                if capped else ""))
             self._emit(
                 f"  Registration data: {out['included']} of {out['total']} "
                 f"frame(s) included, " + ", ".join(parts) + ".",
                 LogColor.BLUE)
+            if capped:
+                self._stars_capped.add(filt)
+                if (self._opts.get("weighting", True)
+                        and _weight_token(self._opts) == "nbstars"):
+                    # Said once per filter, where the number that proves
+                    # it has just been printed.
+                    self._emit(
+                        f"  {filt}: frame weighting is set to 'Number of "
+                        f"stars', but the median frame already hits "
+                        f"Siril's ceiling of {SIRIL_MAX_STARS} — every "
+                        "such frame gets the SAME weight, so the "
+                        "weighting does almost nothing here. 'Noise' or "
+                        "'Weighted FWHM' still separate these frames.",
+                        LogColor.SALMON)
         return out
 
     def _count_seq_frames(self, process_dir: str, seq: str) -> int:
@@ -2317,26 +3054,43 @@ class StackWorker(QThread):
             # -flat.  Passing -scale inside the drizzle group risks being
             # parsed as an unknown drizzle argument.
             apply_args += [f"-scale={drizzle}", "-drizzle",
-                           "-pixfrac=1.0", "-kernel=square"]
+                           f"-pixfrac={DRIZZLE_PIXFRAC:g}",
+                           "-kernel=square"]
         n_in = self._current_n_frames
         if drizzle and drizzle > 1 and n_in < DRIZZLE_MIN_FRAMES:
-            # Drizzle spreads each sub's flux over a finer grid; without
-            # enough dithered frames that grid stays unevenly filled and the
-            # master ends up noisier than an undrizzled one.
+            # The old wording blamed patchy coverage, which cannot
+            # happen at pixfrac 1.0 -- every output pixel is covered by
+            # every frame.  What is actually missing on a short run is
+            # sub-pixel sampling: without it the finer grid carries no
+            # information the plain stack does not already have.
             self._emit(
-                f"  Drizzle {drizzle}x on only {n_in} frame(s): drizzle "
-                f"wants roughly {DRIZZLE_MIN_FRAMES}+ *dithered* subs to "
-                "fill the finer grid evenly.  Below that it usually adds "
-                "noise instead of resolution — consider turning it off.",
-                LogColor.SALMON)
+                f"  Drizzle {drizzle}x on only {n_in} frame(s): recovering "
+                "detail on a finer grid needs many *dithered* subs to "
+                f"sample between the pixels — roughly "
+                f"{DRIZZLE_MIN_FRAMES}+. Below that you get "
+                f"{drizzle}x the pixels and correlated neighbours, with "
+                "little real resolution for them — consider turning it "
+                "off.", LogColor.SALMON)
             self._drizzle_warned = True
-        qfilters = self._quality_filter_args(n_in)
+        qfilters, qskipped, _share = self._quality_filter_plan(n_in)
+        for flag, value, why in qskipped:
+            # A filter the user ticked that never reaches Siril.  Without
+            # this it simply vanished: the run kept every frame and said
+            # nothing about the cut that was asked for.
+            self._emit(
+                f"  {flag}={value} was NOT applied — {why}. The frames it "
+                "would have removed are all still in the stack.",
+                LogColor.SALMON)
         if qfilters:
             apply_args += qfilters
             self._emit("  Quality filters: " + " ".join(qfilters),
                        LogColor.BLUE)
             # Dropping frames always costs SNR; say so when it is a lot.
-            n_eff = self._effective_frame_count(n_in)
+            # The PESSIMISTIC count, on purpose: survivors pass every
+            # filter, so the optimistic bound understated both the loss
+            # and the noise and the note never fired (see
+            # `_projected_frame_count`).
+            n_eff = self._projected_frame_count(n_in)
             dropped = n_in - n_eff
             if dropped > 0 and dropped / n_in > FILTER_WARN_FRACTION:
                 noise = (math.sqrt(n_in / n_eff) - 1.0) * 100.0
@@ -2601,8 +3355,7 @@ class StackWorker(QThread):
 
         work = os.path.join(self._out_dir, WORK_DIRNAME, "calib", out_name)
         stage = os.path.join(work, kind)
-        if os.path.isdir(work):
-            shutil.rmtree(work, ignore_errors=True)
+        self._clear_stale_dir(work, f"{kind} calibration")
         os.makedirs(stage, exist_ok=True)
         staged = 0
         for i, src in enumerate(files):
@@ -2885,11 +3638,20 @@ class StackWorker(QThread):
         binning, size, temperature.  This loosens only the one dimension
         that degrades gracefully, and always says so, because a silently
         substituted dark is exactly what this script exists to surface.
+
+        The looseness is NOT symmetric.  |delta| alone treats a 630 s dark
+        on 600 s lights like a 570 s one, and they are not alike: the
+        longer dark over-subtracts into the clamp at zero and takes faint
+        signal with it, while the shorter one leaves a pedestal the
+        background extraction removes anyway.  A shorter dark therefore
+        wins ties, and a longer one has to be closer to qualify at all
+        (DARK_OVERSHOOT_TOLERANCE against DARK_EXPOSURE_TOLERANCE).
         """
         want = light_info.get("exp_s")
         if not want:
             return None
-        best = best_delta = best_exp = None
+        want_f = float(want)
+        best = best_key = best_exp = None
         for _sig, (path, info) in (self._masters.get(KIND_DARK) or {}).items():
             have = info.get("exp_s")
             if not have:
@@ -2897,23 +3659,40 @@ class StackWorker(QThread):
             probe = dict(info, exp_s=want)     # judge everything BUT exposure
             if not _signature_matches(probe, light_info):
                 continue
-            delta = abs(float(have) - float(want))
-            if best_delta is None or delta < best_delta:
-                best, best_delta, best_exp = path, delta, float(have)
+            have_f = float(have)
+            share = abs(have_f - want_f) / want_f
+            longer = have_f > want_f
+            if share > (DARK_OVERSHOOT_TOLERANCE if longer
+                        else DARK_EXPOSURE_TOLERANCE):
+                continue
+            # Sorted on (distance, is-longer): at equal distance the
+            # shorter dark wins, because under-subtraction is the
+            # recoverable half of the mistake.
+            key = (share, 1 if longer else 0)
+            if best_key is None or key < best_key:
+                best, best_key, best_exp = path, key, have_f
         if best is None:
-            return None
-        share = best_delta / float(want)
-        if share > DARK_EXPOSURE_TOLERANCE:
+            # Report against the LOOSER bound: naming the tighter one
+            # would read as the rule for every dark, and it is not.
             self._emit(
-                f"  {filt}: the closest dark is {best_exp:g}s against "
-                f"{float(want):g}s lights ({share * 100:.0f}% off) — too far "
-                "to help, continuing without one.", LogColor.SALMON)
+                f"  {filt}: no dark within "
+                f"{DARK_EXPOSURE_TOLERANCE * 100:.0f}% of "
+                f"{want_f:g}s lights (a LONGER dark has to be within "
+                f"{DARK_OVERSHOOT_TOLERANCE * 100:.0f}%, because it "
+                "over-subtracts into the clamp at zero) — continuing "
+                "without one.", LogColor.SALMON)
             return None
+        share = best_key[0]
+        if share <= 0.0:
+            return best
         self._emit(
-            f"  {filt}: no dark matches {float(want):g}s exactly; using the "
-            f"closest at {best_exp:g}s ({share * 100:.0f}% off).  Everything "
-            "else — camera, gain, binning, size, temperature — does match.",
-            LogColor.SALMON)
+            f"  {filt}: no dark matches {want_f:g}s exactly; using the "
+            f"closest at {best_exp:g}s ({share * 100:.0f}% "
+            + ("longer — it slightly over-subtracts"
+               if best_exp > want_f
+               else "shorter — it slightly under-subtracts")
+            + ").  Everything else — camera, gain, binning, size, "
+              "temperature — does match.", LogColor.SALMON)
         return best
 
     @staticmethod
@@ -3026,15 +3805,23 @@ class StackWorker(QThread):
         # each half averages fewer frames than the full maps do.
         floor = None
         if len(base) > 1:
-            cut = len(base) // 2
+            # INTERLEAVED, not the first half against the second.  The
+            # file list is sorted by path and a flat run is named by
+            # timestamp, so contiguous halves are separated in TIME: any
+            # drift across the run -- twilight fading, the panel warming,
+            # dew -- landed in the "noise floor" as if it were noise.
+            # That inflates the floor, and an inflated error bar hides
+            # exactly the night-to-night difference this measurement
+            # exists to find.  Alternate frames share the drift instead
+            # of straddling it.
             half_a, half_b = {}, {}
             floor = _flat_ratio_spread(
-                _flat_shape(base[:cut], stats=half_a),
-                _flat_shape(base[cut:], stats=half_b))
+                _flat_shape(base[0::2], stats=half_a),
+                _flat_shape(base[1::2], stats=half_b))
             if floor is not None:
                 floor *= _floor_rescale(
-                    half_a.get("used", cut) or 1,
-                    half_b.get("used", len(base) - cut) or 1,
+                    half_a.get("used", len(base[0::2])) or 1,
+                    half_b.get("used", len(base[1::2])) or 1,
                     base_stats.get("used", len(base)) or 1,
                     worst_used or 1)
         bar = (f" (noise floor {floor * 100:.3f}%)"
@@ -3279,7 +4066,7 @@ class StackWorker(QThread):
                 "pooled master.", LogColor.SALMON)
         return (self._masters.get(KIND_FLAT) or {}).get(filt) or ""
 
-    def _calibrate_args(self, filt: str, light_info: dict,
+    def _calibrate_args(self, filt: str, light_info: dict, n_frames: int = 0,
                         warn_mixed: bool = True, night: str = "") -> list:
         """Build the `calibrate` arguments for one filter, or [] for none.
 
@@ -3318,7 +4105,22 @@ class StackWorker(QThread):
                     "only. Stack the exposures separately for a clean "
                     "result.", LogColor.SALMON)
             if self._opts.get("cosmetic", True):
-                args += ["-cc=dark", "3", "3"]
+                cc, cc_label = _cosmetic_args(n_frames)
+                args += cc
+                if (cc_label != _cosmetic_args(0)[1]
+                        and self._cc_said.get(filt) != cc_label):
+                    self._cc_said[filt] = cc_label
+                    # Said out loud: the run is about to correct this
+                    # filter harder than the others, and the reason is the
+                    # frame count, which is visible two lines above.  Once
+                    # per filter -- a split calls this per part, and OIII
+                    # said the same sentence three times.
+                    self._emit(
+                        f"  {filt}: {n_frames} frame(s) — hot-pixel "
+                        f"threshold tightened to {cc_label}. Rejection "
+                        "needs dithered frames to take a hot pixel out, "
+                        "and this few cannot.", LogColor.BLUE)
+                self._cc_used[filt] = cc_label
         elif self._masters.get(KIND_DARK):
             self._emit(
                 f"  {filt}: no dark matches these lights (exposure, gain, "
@@ -3436,19 +4238,53 @@ class StackWorker(QThread):
                 key = (exp if split_exp else base,
                        _night_of(path, self._nights) if split_night else "")
                 parts.setdefault(key, []).append(path)
+        # Siril cannot build a sequence from a single file, so a part of
+        # one frame fails `calibrate` and takes the WHOLE split down with
+        # it -- the run then falls back to one pooled pass, after having
+        # already stacked a master flat per night that nothing now reads.
+        # Seen on IC 1805: OIII arrived as 8 frames on one night and 1 on
+        # the next, two per-night flats were built, and both were thrown
+        # away by an error in the log that looks like a defect.
+        #
+        # The condition is knowable here, so it is decided here.  Refusing
+        # the split costs the smaller night its own flat; attempting it
+        # costs every night theirs, plus the error.
+        thin = {k: len(v) for k, v in parts.items() if len(v) < 2}
+        if thin:
+            self._split_refused[filt] = sorted(
+                (self._part_label(exp, night, split_exp, split_night), n)
+                for (exp, night), n in thin.items())
+            return []
+
         out = []
         for (exp, night), files in sorted(
                 parts.items(), key=lambda kv: (kv[0][1], kv[0][0] or 0.0)):
-            bits = []
-            if split_exp:
-                bits.append(_exp_tag(exp))
-            if split_night:
-                # A night that never made it into a flat master still gets
-                # its own part -- it is calibrated with the pooled flat,
-                # and keeping it separate is what lets the log say so.
-                bits.append("n" + (_safe(night).replace("-", "") or "undated"))
-            out.append(("_".join(bits), exp, night, files))
+            out.append((self._part_tag(exp, night, split_exp, split_night),
+                        exp, night, files))
         return out
+
+    @staticmethod
+    def _part_tag(exp, night, split_exp: bool, split_night: bool) -> str:
+        """Sequence-name token for one calibration part."""
+        bits = []
+        if split_exp:
+            bits.append(_exp_tag(exp))
+        if split_night:
+            # A night that never made it into a flat master still gets its
+            # own part -- it is calibrated with the pooled flat, and
+            # keeping it separate is what lets the log say so.
+            bits.append("n" + (_safe(night).replace("-", "") or "undated"))
+        return "_".join(bits)
+
+    @staticmethod
+    def _part_label(exp, night, split_exp: bool, split_night: bool) -> str:
+        """How that part reads in a message, rather than in a filename."""
+        bits = []
+        if split_exp and exp:
+            bits.append(f"{float(exp):g}s")
+        if split_night:
+            bits.append(str(night) or "undated")
+        return " ".join(bits) or "the group"
 
     def _unused_by_palette(self, filters: list) -> set:
         """Filters to leave unstacked, when the user asked for that.
@@ -3572,13 +4408,25 @@ class StackWorker(QThread):
             work = os.path.join(self._out_dir, WORK_DIRNAME, "sequences",
                                 self._tok(filt))
             lights_dir = os.path.join(work, "lights")
-            if os.path.isdir(work):
-                shutil.rmtree(work, ignore_errors=True)
+            self._clear_stale_dir(work, f"{filt} sequence")
             # A dark is only valid for the exposure it was shot at and a
             # flat only for the night it was shot on, so a filter that
             # mixes either is staged in parts and merged again after
             # calibration.
             splits = self._calib_split(filt)
+            if filt in self._split_refused:
+                # Discovery announced per-night calibration for this
+                # filter.  It is not happening, and saying nothing would
+                # leave that announcement standing.
+                shown = ", ".join(
+                    f"{lbl} ({n} frame{'' if n == 1 else 's'})"
+                    for lbl, n in self._split_refused[filt])
+                self._emit(
+                    f"  {filt}: calibrating in parts was NOT attempted — "
+                    f"{shown} cannot form a Siril sequence, and one "
+                    "unusable part fails the whole split. All frames are "
+                    "calibrated in one pass with the pooled master "
+                    "instead.", LogColor.SALMON)
             staged: list = []
             n_linked = 0
             blank_mark = self._blank_skipped
@@ -3593,7 +4441,7 @@ class StackWorker(QThread):
                 # unreadable): there is nothing left to split, so take the
                 # ordinary path -- and undo the blank tally, which the
                 # single pass is about to count again.
-                shutil.rmtree(work, ignore_errors=True)
+                self._clear_stale_dir(work, f"{filt} sequence")
                 self._blank_skipped = blank_mark
                 staged = []
             if staged:
@@ -3668,7 +4516,8 @@ class StackWorker(QThread):
                     # (background, registration, stacking) should work on
                     # corrected pixels.
                     cal_args = self._calibrate_args(
-                        filt, self._groups[filt].get("info") or {})
+                        filt, self._groups[filt].get("info") or {},
+                        n_frames=n_linked)
                     if cal_args:
                         self._emit("  Calibrating: calibrate lights "
                                    + " ".join(cal_args), LogColor.BLUE)
@@ -3757,7 +4606,13 @@ class StackWorker(QThread):
                 # frames go into the stack, not how it got to that number.
                 # "left" is gone with the nesting: nothing need have been
                 # lost for this to fire.
-                if n_reg and n_reg < MIN_STACK_FRAMES:
+                # PERCENTILE_MAX_FRAMES, not MIN_STACK_FRAMES: the
+                # sentence is about what rejection can still do, and that
+                # is the percentile band, not the floor the quality
+                # filters may not cross.  With `<` against the floor, a
+                # channel of exactly four frames -- percentile clipping,
+                # the weakest case there is -- said nothing at all.
+                if n_reg and n_reg <= PERCENTILE_MAX_FRAMES:
                     self._emit(
                         f"  Only {n_reg} frame(s) for {filt}: too few for "
                         "outlier rejection to mean much. Treat this "
@@ -3770,7 +4625,18 @@ class StackWorker(QThread):
                 # algorithm for a population smaller than the one being
                 # integrated.  The estimate is for the case where the
                 # count could not be read at all.
-                n_stack = n_reg or n_linked
+                # The two fallbacks pull in OPPOSITE directions on
+                # purpose.  `n_stack` picks the rejection algorithm, and
+                # falling back to `n_linked` ignored the quality filters
+                # altogether: 74 staged frames chose the algorithm for 74
+                # where 57 were integrated, and the bands are close
+                # together (31 separates winsorized from GESDT).  The
+                # conservative error is to pick the gentler algorithm for
+                # a smaller population, so this takes the pessimistic
+                # estimate.  `effective` is quoted in the report as
+                # "<=N used", where an upper bound is the honest
+                # direction -- hence the optimistic one.
+                n_stack = n_reg or self._projected_frame_count(n_linked)
                 effective = n_reg or self._effective_frame_count(n_linked)
                 self._measured[filt] = bool(n_reg)
                 quality = self._seq_quality(
@@ -3804,13 +4670,17 @@ class StackWorker(QThread):
                     # channels are combined works better than one pass on the
                     # finished colour image.
                     if self._opts.get("bg_master", True):
-                        self._bg_extract_master(final)
+                        self._bg_extract_master(final, filt)
                     # Rescue the rejection maps: Siril writes them next to
                     # the stack output inside _work/, which the user never
                     # opens and which "Delete _work/" removes.
                     if self._opts.get("rejmap", False):
                         self._collect_rejmaps(
                             os.path.join(work, "process"), out_name)
+                    # The stack output was checked above, but the master is
+                    # written a second time by the background extraction --
+                    # through Siril, whose `save` can fail without raising.
+                    self._verify_outputs([final], f"{filt} master")
                     results[filt] = final
                     last_result = final
                     self._emit(
@@ -3860,6 +4730,10 @@ class StackWorker(QThread):
         # exposure went uncalibrated must not put a calibration step into
         # a report where none happened.
         self._calib_notes.pop(filt, None)
+        # The parts are merged again before stacking, so what decides the
+        # cosmetic threshold is the filter's TOTAL -- a 4-frame part of a
+        # 60-frame filter is not a small stack.
+        n_total = sum(k for _t, _e, _n, _d, k in staged)
         notes: list = []
         seqs: list = []
         applied = 0
@@ -3870,8 +4744,8 @@ class StackWorker(QThread):
             # Everything else is shared: same filter, same camera.  Only
             # the dark (exposure) and the flat (night) lookups change.
             info = dict(base, exp_s=exp, exp=f"{exp:g}s")
-            args = self._calibrate_args(filt, info, warn_mixed=False,
-                                        night=night)
+            args = self._calibrate_args(filt, info, n_frames=n_total,
+                                        warn_mixed=False, night=night)
             what = " ".join(x for x in (f"{exp:g}s" if exp else "", night)
                             if x) or tag
             if args:
@@ -4003,7 +4877,7 @@ class StackWorker(QThread):
         """
         if not self._opts.get("cleanup_work", False):
             return
-        shutil.rmtree(staged_dir, ignore_errors=True)
+        self._discard_dir(staged_dir, "staged copy of the light frames")
 
     def _release_work(self, work: str, filt: str) -> None:
         """Delete one filter's working tree once its master is written.
@@ -4015,10 +4889,7 @@ class StackWorker(QThread):
         """
         if not self._opts.get("cleanup_work", False):
             return
-        try:
-            shutil.rmtree(work, ignore_errors=True)
-        except OSError as exc:
-            _log_swallowed(exc)
+        self._discard_dir(work, f"{filt} working tree")
 
     def _write_stub_report(self) -> None:
         """Write a brief output.md (replaced by the full report when done)."""
@@ -4275,11 +5146,23 @@ class StackWorker(QThread):
 
             for filt in sorted(self._reg_stats):
                 q = self._reg_stats[filt]
+                # A count sitting on Siril's ceiling is the ceiling, not
+                # a property of the frame.  Marked rather than printed
+                # plain, which read as a measurement of a rich field.
+                star_txt = _stat(q, "stars", ".0f")
+                if filt in self._stars_capped:
+                    star_txt += " †"
                 A(f"| {filt} | {q['included']} of {q['total']} "
                   f"| {_stat(q, 'fwhm', '.2f')} px | "
-                  f"{_stat(q, 'roundness', '.2f')} | "
-                  f"{_stat(q, 'stars', '.0f')} |")
+                  f"{_stat(q, 'roundness', '.2f')} | {star_txt} |")
             A("")
+            if self._stars_capped:
+                A(f"> † Star detection hit Siril's ceiling of "
+                  f"{SIRIL_MAX_STARS} on these filters, so the count is "
+                  "that limit and not a measurement.  Weighting frames "
+                  "*by number of stars* cannot separate frames that all "
+                  "report the cap; *Noise* or *Weighted FWHM* still can.")
+                A("")
             A("> Roundness is 1.00 for perfectly round stars; a value well "
               "below that means trailing. The star count is Siril's own "
               "detection on the reference layer — a channel far below the "
@@ -4427,9 +5310,26 @@ class StackWorker(QThread):
                       f"`{opts['calib_library']}`; flats come from the "
                       "session next to the lights.")
                 if opts.get("cosmetic", True):
-                    A("    - Cosmetic correction (`-cc=dark 3 3`) was "
-                      "requested — it only takes effect for filters that "
-                      "actually got a matching dark.")
+                    used = sorted(set(self._cc_used.values()))
+                    if len(used) == 1:
+                        A(f"    - Cosmetic correction (`{used[0]}`) was "
+                          "applied.")
+                    elif used:
+                        # Two thresholds in one run is the normal case for a
+                        # target with one short channel; naming only one of
+                        # them would describe the other filters wrongly.
+                        A("    - Cosmetic correction ran with a **per-filter**"
+                          " threshold — a channel with "
+                          f"{COSMETIC_TIGHT_MAX_FRAMES} frames or fewer is "
+                          "corrected harder, because stacking rejection "
+                          "cannot take a hot pixel out of that few dithered "
+                          "frames:")
+                        for _f, _c in sorted(self._cc_used.items()):
+                            A(f"        - {_f}: `{_c}`")
+                    else:
+                        A("    - Cosmetic correction was requested — it only "
+                          "takes effect for filters that actually got a "
+                          "matching dark, and none did.")
                 if opts.get("flats_by_date"):
                     A("    - Flats were matched **per night** (only flats "
                       "from the same observing night as the lights were "
@@ -5307,8 +6207,12 @@ class StackWorker(QThread):
                     self._cmd("cd", f'"{self._out_dir}"')
                 except (CommandError, DataError, SirilError) as exc:
                     _log_swallowed(exc)
-                if os.path.isdir(work_root):
-                    shutil.rmtree(work_root, ignore_errors=True)
+                # `_discard_dir` also returns True for a folder that was
+                # never there (full master reuse writes no _work/), and
+                # announcing a cleanup that had nothing to clean is the
+                # kind of sentence this report exists to avoid.
+                if (os.path.isdir(work_root)
+                        and self._discard_dir(work_root, "_work/ folder")):
                     self._emit(
                         "Cleaned up intermediates (_work/ removed).  The "
                         "masters in masters/ are untouched, so master reuse "
@@ -6174,7 +7078,7 @@ class StackWorker(QThread):
             f"  Finish: no colour calibration succeeded ({last}){why}; "
             "composite left uncalibrated.", LogColor.SALMON)
 
-    def _subsky(self, where: str) -> str:
+    def _subsky(self, where: str, narrowband: bool = False) -> str:
         """Run subsky on the loaded image; return what was used, for the log.
 
         RBF models a gradient that changes direction across the frame far
@@ -6183,11 +7087,32 @@ class StackWorker(QThread):
         the individual subs: Siril's guidance is a degree-1 polynomial
         there, and that is what seqsubsky keeps doing.
 
+        `narrowband` says the image is line emission, which is the one
+        case where RBF is the WRONG choice: emission fills the frame, and
+        a model flexible enough to follow a gradient that changes
+        direction is flexible enough to follow the nebula.  Measured, it
+        keeps 18% of it where the degree-1 polynomial keeps 99.9% (see
+        RBF_NARROWBAND_KEPT).  It is said rather than overridden -- the
+        setting is the user's, and switching their model out from under
+        them would change images without being asked.
+
         Falls back to the polynomial if RBF is refused, so an older build
         cannot cost the user the background extraction altogether.
         """
         if self._opts.get("bg_rbf", False):
             smooth = float(self._opts.get("bg_smooth", 50)) / 100.0
+            if narrowband and where not in self._rbf_warned:
+                self._rbf_warned.add(where)
+                self._emit(
+                    f"  This {where} is line emission, and RBF cannot tell "
+                    "nebulosity from gradient: measured on a nebula filling "
+                    f"95% of the frame it keeps about "
+                    f"{RBF_NARROWBAND_KEPT:.0%} of it, where the degree-1 "
+                    f"polynomial keeps {POLY1_NARROWBAND_KEPT:.0%}. The "
+                    "gradient does come out cleaner — but on a target this "
+                    "size most of what it removes is your signal. Untick "
+                    "'use RBF instead of a polynomial' for narrowband.",
+                    LogColor.SALMON)
             try:
                 self._cmd("subsky", "-rbf", "-samples=20",
                           f"-smooth={smooth:g}")
@@ -6200,13 +7125,14 @@ class StackWorker(QThread):
         self._cmd("subsky", "1", "-samples=20")
         return "polynomial, degree 1"
 
-    def _bg_extract_master(self, path: str) -> None:
+    def _bg_extract_master(self, path: str, filt: str = "") -> None:
         """Background-extract a single linear per-filter master, in place."""
         ext = self._ext
         base = path[:-len(ext)] if path.lower().endswith(ext.lower()) else path
+        nb = _filter_role(filt) in _LINE_NM if filt else False
         try:
             self._cmd("load", f'"{path}"')
-            how = self._subsky("master")
+            how = self._subsky("master", narrowband=nb)
             self._cmd("save", f'"{base}"')
             self._emit(f"  Background extracted ({how}, per-channel master).",
                           LogColor.GREEN)
@@ -6329,7 +7255,10 @@ class StackWorker(QThread):
         # methods explicitly want a flat background ("correct the image
         # gradient first") -- so this runs regardless of the per-channel pass.
         try:
-            how = self._subsky("composite")
+            how = self._subsky(
+                "composite",
+                narrowband=bool(_NB_PALETTES.get(
+                    self._opts.get("compose_palette", ""))))
             self._finish_steps.append(
                 f"Extracted the background gradient (subsky, {how}).")
             self._emit(f"  Finish: composite background extracted ({how}, "
@@ -6505,20 +7434,44 @@ class StackWorker(QThread):
         fit["method"] = label
         self._spcc_fit = fit
         sig = fit.get("sigma") or {}
+        rel = _spcc_relative_sigma(fit)
+        fit["relative_sigma"] = rel
         bits = [f"σ({k}) {v:.3f}" for k, v in sorted(sig.items())]
         if fit.get("stars"):
             bits.append(f"{fit['stars']} stars")
         self._emit("  Colour fit: " + " · ".join(bits), LogColor.BLUE)
-        # A sigma of a few tenths is a solution worth trusting; single
-        # digits mean the measured colours barely follow the catalogue.
-        worst = max(sig.values(), default=0.0)
+        # Judged on sigma/|slope|, not sigma.  Sigma is the scatter of
+        # *Image* R/G, so it carries the scale that channel pair happens
+        # to be on -- and with `-output_norm` each master was divided by
+        # its own brightest pixel, a number with no photometric meaning
+        # and a different one in every filter.  Scaling the ratio by k
+        # scales the slope and the sigma alike, so the quotient is what
+        # a fixed threshold may be compared against.
+        worst_key, worst = "", 0.0
+        for key, value in sorted((rel or sig).items()):
+            if value > worst:
+                worst_key, worst = key, value
         if worst > SPCC_SIGMA_LIMIT:
+            raw = sig.get(worst_key)
             self._emit(
-                f"  The colour solution is weak: the worst ratio scatters "
-                f"by {worst:.2f} around the catalogue prediction (good is "
-                f"well under {SPCC_SIGMA_LIMIT:g}). The white balance was "
-                "still applied — treat it as a starting point, not a "
-                "measurement.", LogColor.SALMON)
+                f"  The colour solution is weak: {worst_key} scatters by "
+                f"{worst:.2f} of its own slope around the catalogue "
+                f"prediction (good is well under {SPCC_SIGMA_LIMIT:g})"
+                + (f"; Siril printed it as σ {raw:.2f} on the scale the "
+                   "channels happen to be on" if raw is not None
+                   and rel else "")
+                + ". The white balance was still applied — treat it as a "
+                "starting point, not a measurement.", LogColor.SALMON)
+        if self._opts.get("output_norm", True):
+            # Said once, where the numbers are: with output normalisation
+            # on, these factors are NOT a property of the sensor.
+            self._emit(
+                "  Note: 'Output normalization' scaled every channel to "
+                "its own brightest pixel before this fit, so the white-"
+                "balance factors and slopes above carry that scaling too "
+                "— the calibrated image is right, but the numbers are not "
+                "a measurement of the filters or the sensor.",
+                LogColor.BLUE)
 
     def _read_align_pairs(self, log_before, index_to_filter: dict,
                           scope: str = "") -> None:
@@ -6558,6 +7511,44 @@ class StackWorker(QThread):
                 "reference among the channels that end up in the picture.",
                 LogColor.SALMON)
 
+    def _check_overlay(self, aligned: dict) -> None:
+        """Do the aligned channels really describe the same sky pixel?
+
+        The run already checks that they came out the same SIZE
+        (`_mixed_grids`) and that the star matcher found enough pairs.
+        Neither proves overlay: identical crops can sit pixels apart, and
+        a healthy pair count says the fit converged, not that it
+        converged on the right solution.  This compares the astrometric
+        solutions the masters carry, which is independent of both.
+
+        Expected to be ~0 -- these frames were re-projected onto one
+        grid.  A non-zero answer therefore means the assumption the
+        composite rests on is not true, and it is said before the
+        channels are combined rather than found in the finished colour.
+        """
+        if len(aligned) < 2:
+            return
+        result = _overlay_error_px(sorted(aligned.items()))
+        if result is None:
+            # No warning: a master without a usable solution is "cannot
+            # tell", and the run has never promised one.
+            return
+        worst, who = result
+        self._overlay_px = worst
+        if worst <= OVERLAY_MAX_PX:
+            self._emit(
+                f"  Channel overlay verified: worst disagreement "
+                f"{worst:.2f} px across {len(aligned)} channel(s).",
+                LogColor.GREEN)
+            return
+        self._emit(
+            f"  {who} sits {worst:.1f} px away from the other channels "
+            "where their astrometry says the same point should be — they "
+            "are the same size but they do not overlay. A composite built "
+            "from these will show colour fringes that no colour "
+            "calibration can fix. Re-run the alignment, or check that "
+            "this master came from THIS run.", LogColor.SALMON)
+
     def _align_masters(self, results: dict) -> dict:
         """Register the per-filter masters onto one shared pixel grid.
 
@@ -6573,8 +7564,7 @@ class StackWorker(QThread):
             adir = os.path.join(self._out_dir, MASTERS_DIRNAME)
             work = os.path.join(self._out_dir, WORK_DIRNAME, "align")
             lights = os.path.join(work, "masters")
-            if os.path.isdir(work):
-                shutil.rmtree(work, ignore_errors=True)
+            self._clear_stale_dir(work, "cross-filter alignment")
             os.makedirs(lights, exist_ok=True)
             os.makedirs(adir, exist_ok=True)
 
@@ -6672,11 +7662,13 @@ class StackWorker(QThread):
                 if os.path.exists(out):
                     os.remove(out)
                 shutil.copy2(src, out)
+                self._verify_outputs([out], f"{filt} alignment")
                 aligned[filt] = out
                 self._emit(
                     f"  Aligned {filt} -> {os.path.basename(out)}",
                     LogColor.GREEN)
 
+            self._check_overlay(aligned)
             self._cmd("cd", f'"{self._out_dir}"')
             try:
                 self._cmd("close")
@@ -6741,6 +7733,25 @@ def _safe(token: str) -> str:
     return keep.strip("_") or "X"
 
 
+def _cosmetic_args(n_frames: int) -> tuple[list[str], str]:
+    """`-cc=dark` arguments for a stack of ``n_frames``, plus a label.
+
+    One threshold for 4 frames and for 190 is the wrong shape: the
+    smaller the stack, the less of the detector's own defects the
+    rejection downstream can still take out, and the more the cosmetic
+    map has to do on its own.  See COSMETIC_TIGHT_MAX_FRAMES.
+
+    ``n_frames`` of 0 means "not known here" and takes the standard
+    pair -- never the tighter one, which would then be applied on a
+    guess.
+    """
+    if 0 < n_frames <= COSMETIC_TIGHT_MAX_FRAMES:
+        return (["-cc=dark", COSMETIC_COLD_SIGMA, COSMETIC_TIGHT_HOT_SIGMA],
+                f"-cc=dark {COSMETIC_COLD_SIGMA} {COSMETIC_TIGHT_HOT_SIGMA}")
+    return (["-cc=dark", COSMETIC_COLD_SIGMA, COSMETIC_HOT_SIGMA],
+            f"-cc=dark {COSMETIC_COLD_SIGMA} {COSMETIC_HOT_SIGMA}")
+
+
 def _rejection_args(n: int, enabled: bool) -> tuple[list[str], str]:
     """Pick a stacking rejection algorithm suited to the frame count.
 
@@ -6761,7 +7772,7 @@ def _rejection_args(n: int, enabled: bool) -> tuple[list[str], str]:
     """
     if not enabled:
         return ["rej", "none"], "no rejection"
-    if n <= 4:
+    if n <= PERCENTILE_MAX_FRAMES:
         # Percentile clipping -- params are fractions, not sigmas.
         return ["rej", "percentile", "0.2", "0.1"], "percentile 0.2/0.1"
     if n <= SIGMA_MAX_FRAMES:
@@ -6849,6 +7860,29 @@ def _log_delta(before, after, scope: str = ""):
     return None
 
 
+def _spcc_relative_sigma(fit: dict) -> dict:
+    """``{ratio: sigma/|slope|}`` -- the scale-free form of the fit scatter.
+
+    Siril reports sigma in the units of *Image* R/G, which is whatever
+    scale the two channels are on.  With `-output_norm` that scale is set
+    by each master's brightest pixel, so the same data normalised
+    differently produces a different sigma and can fall on either side of
+    a fixed threshold.  Dividing by the slope removes it: both are
+    proportional to the same factor.
+
+    Ratios whose slope is missing or ~0 are left out rather than guessed
+    at -- a slope near zero means the fit found no relationship at all,
+    and a quotient by it would be a very large number that says nothing.
+    """
+    sig, slope = fit.get("sigma") or {}, fit.get("slope") or {}
+    out = {}
+    for key, value in sig.items():
+        k = slope.get(key)
+        if k is not None and abs(k) > 1e-6:
+            out[key] = value / abs(k)
+    return out
+
+
 def _parse_spcc_fit(delta: str) -> dict:
     """How well the photometric colour solution actually fitted.
 
@@ -6866,12 +7900,23 @@ def _parse_spcc_fit(delta: str) -> dict:
     out: dict = {}
     for raw in delta.splitlines():
         line = re.sub(r"^\d{2}:\d{2}:\d{2}:\s*", "", raw).strip()
-        m = re.match(r"^Image ([RGB])/([RGB]) = .*\(sigma:\s*([\d.eE+-]+)\)",
-                     line)
+        # The SLOPE is read as well as the sigma, and the two must be
+        # used together: sigma is the scatter of *Image* R/G, so it
+        # carries whatever scale that channel pair happens to be on --
+        # and with `-output_norm` each master was divided by its own
+        # brightest pixel, which is not a photometric quantity.  Scaling
+        # the ratio by k scales BOTH the slope and the sigma by k, so
+        # sigma/slope is the scale-free number and a bare sigma against a
+        # fixed threshold is not.
+        m = re.match(r"^Image ([RGB])/([RGB]) = \s*([\d.eE+-]+)\s*\+\s*"
+                     r"([\d.eE+-]+)\s*\* Catalog [RGB]/[RGB]\s*"
+                     r"\(sigma:\s*([\d.eE+-]+)\)", line)
         if m:
+            key = f"{m.group(1)}/{m.group(2)}"
             try:
-                out.setdefault("sigma", {})[
-                    f"{m.group(1)}/{m.group(2)}"] = float(m.group(3))
+                out.setdefault("sigma", {})[key] = float(m.group(5))
+                out.setdefault("slope", {})[key] = float(m.group(4))
+                out.setdefault("intercept", {})[key] = float(m.group(3))
             except ValueError:
                 pass
             continue
@@ -7442,7 +8487,7 @@ class ImageMonoTrainWindow(QMainWindow):
         layout.addWidget(self._left_panel)
         layout.addWidget(self._build_right_panel(), 1)
         self.setWindowTitle("Svenesis ImageMono Train")
-        self.setStyleSheet(DARK_STYLESHEET + DISABLED_STYLESHEET)
+        self.setStyleSheet(_window_stylesheet())
         self.resize(1400, 900)
 
     # ---- LEFT PANEL ---------------------------------------------------
@@ -7461,8 +8506,8 @@ class ImageMonoTrainWindow(QMainWindow):
 
         lbl = QLabel(f"Svenesis ImageMono Train {VERSION}")
         lbl.setStyleSheet(
-            "font-size: 15pt; font-weight: bold; color: #88aaff; "
-            "margin-top: 5px;")
+            "font-size: 15pt; font-weight: bold; "
+            f"color: {_tc('accent')}; margin-top: 5px;")
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl)
 
@@ -7513,7 +8558,7 @@ class ImageMonoTrainWindow(QMainWindow):
 
         self.lbl_folder = QLabel("No folder selected.")
         self.lbl_folder.setWordWrap(True)
-        self.lbl_folder.setStyleSheet(HINT_STYLE)
+        self.lbl_folder.setStyleSheet(_hint_style())
         layout.addWidget(self.lbl_folder)
 
         # Picking a folder analyses it, so this button is only ever the
@@ -7580,7 +8625,7 @@ class ImageMonoTrainWindow(QMainWindow):
 
         # Carries the Details column's value while every filter shares it.
         self.lbl_uniform = QLabel("")
-        self.lbl_uniform.setStyleSheet(HINT_STYLE)
+        self.lbl_uniform.setStyleSheet(_hint_style())
         self.lbl_uniform.setVisible(False)
         layout.addWidget(self.lbl_uniform)
 
@@ -7593,7 +8638,7 @@ class ImageMonoTrainWindow(QMainWindow):
         self.lbl_flats_none = QLabel(
             "Analyze a folder to see the flats found next to the lights.")
         self.lbl_flats_none.setWordWrap(True)
-        self.lbl_flats_none.setStyleSheet(HINT_STYLE)
+        self.lbl_flats_none.setStyleSheet(_hint_style())
         layout.addWidget(self.lbl_flats_none)
 
         self.chk_use_flats = QCheckBox("Use flats and dark-flats")
@@ -7657,7 +8702,7 @@ class ImageMonoTrainWindow(QMainWindow):
 
         self.lbl_library = QLabel("No library folder set.")
         self.lbl_library.setWordWrap(True)
-        self.lbl_library.setStyleSheet(HINT_STYLE)
+        self.lbl_library.setStyleSheet(_hint_style())
         layout.addWidget(self.lbl_library)
 
         self.chk_use_darks = QCheckBox("Use darks and bias")
@@ -7684,16 +8729,22 @@ class ImageMonoTrainWindow(QMainWindow):
         # stand for "nothing is wrong".
         self.lbl_dark_gap = QLabel("")
         self.lbl_dark_gap.setWordWrap(True)
-        self.lbl_dark_gap.setStyleSheet("color:#ffaa88;font-size:9pt;")
+        self.lbl_dark_gap.setStyleSheet(
+            f"color:{_tc('warn')};font-size:9pt;")
         self.lbl_dark_gap.setVisible(False)
         layout.addWidget(self.lbl_dark_gap)
 
         self.chk_cosmetic = QCheckBox("Cosmetic correction (hot pixels)")
         self.chk_cosmetic.setChecked(True)
         self.chk_cosmetic.setToolTip(
-            "Adds -cc=dark 3 3, which finds hot/cold pixels from the master "
+            "Adds -cc=dark, which finds hot/cold pixels from the master "
             "dark's statistics and repairs them.\n"
-            "Needs a matching dark — without one this has no effect.")
+            "Needs a matching dark — without one this has no effect.\n"
+            f"A channel of {COSMETIC_TIGHT_MAX_FRAMES} frames or fewer is "
+            "corrected harder (hot threshold "
+            f"{COSMETIC_TIGHT_HOT_SIGMA} instead of {COSMETIC_HOT_SIGMA}): "
+            "stacking rejection cannot take a hot pixel out of that few "
+            "dithered frames, so the map has to.")
         _nofocus(self.chk_cosmetic)
         layout.addWidget(self.chk_cosmetic)
 
@@ -7703,7 +8754,8 @@ class ImageMonoTrainWindow(QMainWindow):
         # the eye had already left behind.
         self.lbl_calib_found = QLabel("Analyze a folder to see what is found.")
         self.lbl_calib_found.setWordWrap(True)
-        self.lbl_calib_found.setStyleSheet("color:#88aaff;font-size:9pt;")
+        self.lbl_calib_found.setStyleSheet(
+            f"color:{_tc('accent')};font-size:9pt;")
         layout.addWidget(self.lbl_calib_found)
 
         parent_layout.addWidget(group)
@@ -7884,7 +8936,7 @@ class ImageMonoTrainWindow(QMainWindow):
         # share of the best frames, 'k' rejects beyond k sigma.
         lbl_f = QLabel(f"Frame quality filters (from {FILTER_MIN_FRAMES} "
                        "frames):")
-        lbl_f.setStyleSheet("color:#88aaff;margin-top:4px;")
+        lbl_f.setStyleSheet(f"color:{_tc('accent')};margin-top:4px;")
         layout.addWidget(lbl_f)
 
         row_mode = QHBoxLayout()
@@ -8267,7 +9319,7 @@ class ImageMonoTrainWindow(QMainWindow):
         self.lbl_spcc = QLabel(
             "     Mono sensor and filters (pre-filled; clear them to use "
             "Siril's own SPCC settings):")
-        self.lbl_spcc.setStyleSheet(HINT_STYLE)
+        self.lbl_spcc.setStyleSheet(_hint_style())
         self.lbl_spcc.setWordWrap(True)
         layout.addWidget(self.lbl_spcc)
 
@@ -8292,7 +9344,7 @@ class ImageMonoTrainWindow(QMainWindow):
         # Which half of this panel is live follows the PALETTE, not a
         # switch of its own -- see _refresh_spcc_mode for why.
         self.lbl_spcc_bb = QLabel("     Broadband filter names:")
-        self.lbl_spcc_bb.setStyleSheet(HINT_STYLE)
+        self.lbl_spcc_bb.setStyleSheet(_hint_style())
         self.lbl_spcc_bb.setWordWrap(True)
         layout.addWidget(self.lbl_spcc_bb)
 
@@ -8320,7 +9372,7 @@ class ImageMonoTrainWindow(QMainWindow):
         layout.addLayout(frow)
 
         self.lbl_spcc_nb = QLabel("")
-        self.lbl_spcc_nb.setStyleSheet(HINT_STYLE)
+        self.lbl_spcc_nb.setStyleSheet(_hint_style())
         self.lbl_spcc_nb.setWordWrap(True)
         layout.addWidget(self.lbl_spcc_nb)
 
@@ -8336,7 +9388,7 @@ class ImageMonoTrainWindow(QMainWindow):
         for _role in _LINE_NM:
             _row = QHBoxLayout()
             _lab = QLabel("")
-            _lab.setStyleSheet(HINT_STYLE)
+            _lab.setStyleSheet(_hint_style())
             _lab.setMinimumWidth(260)
             self.lbl_nb_line[_role] = _lab
             _row.addWidget(_lab)
@@ -8788,7 +9840,7 @@ class ImageMonoTrainWindow(QMainWindow):
 
         self.lbl_out = QLabel("Output: <target folder>/output")
         self.lbl_out.setWordWrap(True)
-        self.lbl_out.setStyleSheet(HINT_STYLE)
+        self.lbl_out.setStyleSheet(_hint_style())
         layout.addWidget(self.lbl_out)
 
         self.chk_align_filters = QCheckBox("Align filters to each other (LRGB)")
@@ -8864,7 +9916,8 @@ class ImageMonoTrainWindow(QMainWindow):
         parent_layout.addWidget(self.progress)
 
         self.lbl_status = QLabel("Ready.")
-        self.lbl_status.setStyleSheet("color: #888888; font-size: 9pt;")
+        self.lbl_status.setStyleSheet(
+            f"color: {_tc('hint')}; font-size: 9pt;")
         self.lbl_status.setWordWrap(True)
         parent_layout.addWidget(self.lbl_status)
 
@@ -11575,6 +12628,7 @@ def main() -> int:
         except (SirilError, SirilConnectionError, OSError, RuntimeError):
             # The GUI still opens; connection is retried before stacking.
             pass
+        _apply_theme(app, siril)
         win = ImageMonoTrainWindow(siril)
         win.showMaximized()
         try:

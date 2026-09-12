@@ -47,6 +47,13 @@ def _cls_method(cls_name, fn_name):
     return body(fn_name, k)
 
 
+def _fn_src(fn_name):
+    """One module-level function's source."""
+    return ast.get_source_segment(
+        src, next(n for n in tree.body
+                  if isinstance(n, ast.FunctionDef) and n.name == fn_name))
+
+
 ns_presets: dict = {}
 exec(src[src.index("PRESETS = {"):src.index("def _log_swallowed")],
      ns_presets)
@@ -82,12 +89,18 @@ ns = {"os": os, "shutil": shutil, "re": __import__("re"),
       "_DATE_SEGMENT_RE": __import__("re").compile(r"^\d{4}-\d{2}-\d{2}"),
       "_fits_filter": lambda p: "",
       "_rejection_args": lambda n, e: (["rej", "sigma", "3", "3"], "sigma")}
+ns.update({"FILTER_MIN_FRAMES": 20, "MIN_STACK_FRAMES": 4,
+           "FILTER_MAX_KSIGMA": 2, "PERCENTILE_MAX_FRAMES": 4})
 code = "from __future__ import annotations\n" + "\n".join(
     textwrap.dedent(body(n)) for n in
     ("_stack_all_filters", "_calib_split", "_calibrate_in_parts",
      "_master_stem", "_release_work", "_find_fullframe",
      "_drop_generation", "_drop_staged", "_drop_parts",
-     "_check_framing", "_reg_frame_sizes"))
+     "_check_framing", "_reg_frame_sizes",
+     "_clear_stale_dir", "_discard_dir", "_verify_outputs",
+     "_quality_filter_plan", "_projected_frame_count",
+     "_effective_frame_count", "_quality_filter_args",
+     "_part_tag", "_part_label"))
 for _fn in ("_exp_tag", "_path_date", "_night_of", "_read_header"):
     code += "\n" + textwrap.dedent(
         ast.get_source_segment(src, next(
@@ -100,8 +113,15 @@ class Worker:
     for _n in ("_stack_all_filters", "_calib_split", "_calibrate_in_parts",
                "_check_framing", "_reg_frame_sizes",
                "_master_stem", "_release_work", "_drop_generation",
-               "_drop_staged", "_drop_parts"):
+               "_drop_staged", "_drop_parts",
+               "_clear_stale_dir", "_discard_dir", "_verify_outputs",
+               "_quality_filter_plan", "_projected_frame_count",
+               "_effective_frame_count", "_quality_filter_args"):
         locals()[_n] = ns[_n]
+    # Both are @staticmethod in the real class; binding them as plain
+    # functions would hand them `self` as the first argument.
+    for _n in ("_part_tag", "_part_label"):
+        locals()[_n] = staticmethod(ns[_n])
 
     def __init__(self, tmp, groups, masters, fail_merge=False,
                  flat_nights=None):
@@ -128,6 +148,9 @@ class Worker:
         self._reg_degraded, self._reg_degraded_why = {}, {}
         self._current_n_frames, self._aborted = 0, False
         self.cmds, self.log, self._fail_merge = [], [], fail_merge
+        self.cc_seen: dict = {}
+        self._split_refused: dict = {}
+        self._cc_said: dict = {}
         self.progress = types.SimpleNamespace(emit=lambda *a: None)
 
     def isInterruptionRequested(self):
@@ -153,8 +176,12 @@ class Worker:
             open(os.path.join(d, os.path.basename(f)), "w").close()
         return len(files)
 
-    def _calibrate_args(self, filt, info, warn_mixed=True, night=""):
+    def _calibrate_args(self, filt, info, n_frames=0, warn_mixed=True,
+                        night=""):
         args, note = [], []
+        # Mirrors the real signature so the drivers' keyword call is
+        # exercised, and records the count each path handed down.
+        self.cc_seen[filt] = n_frames
         if abs(float(info.get("exp_s") or 0) - 300.0) < 0.01:
             args.append("-dark=/lib/master_dark_300s.fit")
             note.append("dark=master_dark_300s.fit")
@@ -185,7 +212,11 @@ class Worker:
     def _stack(self, seq, out, n, filt):
         p = os.path.join(self._out_dir, "_work", "sequences", filt, "process")
         os.makedirs(p, exist_ok=True)
-        open(os.path.join(p, out + ".fit"), "w").close()
+        # Non-empty on purpose: `_verify_outputs` treats a zero-byte master
+        # as a failure, because a `save` that creates the file and never
+        # fills it is exactly the silent case it exists to catch.
+        with open(os.path.join(p, out + ".fit"), "w") as fh:
+            fh.write("stub")
 
     def _bg_extract_master(self, p):
         pass
@@ -269,7 +300,8 @@ print("\n5) every exposure uncalibrated: no calibration is claimed")
 
 
 class Worker2(Worker):
-    def _calibrate_args(self, filt, info, warn_mixed=True, night=""):
+    def _calibrate_args(self, filt, info, n_frames=0, warn_mixed=True,
+                        night=""):
         return []
 
 
@@ -542,8 +574,15 @@ check("_rebin_mean" in src[src.index("def _flat_normalise"):
 check(fc.index("floor = _flat_ratio_spread") < fc.index("<= FLAT_MATCH_GOOD"),
       "the noise floor is measured before any threshold is applied")
 check("worst <= floor" in fc, "and a difference under it is reported as none")
-check("base[:cut]" in fc and "base[cut:]" in fc,
+check("base[0::2]" in fc and "base[1::2]" in fc,
       "the floor comes from one night split in half — zero shape difference")
+# 1.7.17: and the halves INTERLEAVE.  The file list is sorted by path and
+# a flat run is named by timestamp, so contiguous halves straddle time:
+# drift in the flats' SHAPE (dew, a twilight gradient) landed in the
+# "noise floor" as if it were noise, inflating the error bar that is
+# supposed to reveal a real night-to-night difference.
+check("base[:cut]" not in fc and "cut = len(base)" not in fc,
+      "not the first half against the second, which straddles any drift")
 # Written as a 4-tuple, read as a 4-tuple.  These sit ~1200 lines apart.
 wrote = re.search(r"self\._flat_warn\[filt\] = \(([^)]*)\)", fc).group(1)
 read = re.search(r"for filt, \(([^)]*)\) in sorted\(\s*self\._flat_warn",
@@ -710,12 +749,17 @@ check("what not in self._log_read_warned" in warn
 print("\n9g) the quality-filter floor holds for the COMBINATION")
 qf_ns = {"FILTER_MIN_FRAMES": 20, "MIN_STACK_FRAMES": 4,
          "FILTER_MAX_KSIGMA": 2}
-exec("from __future__ import annotations\n"
-     + textwrap.dedent(body("_quality_filter_args")), qf_ns)
+for _m in ("_quality_filter_args", "_quality_filter_plan",
+           "_projected_frame_count", "_effective_frame_count"):
+    exec("from __future__ import annotations\n"
+         + textwrap.dedent(body(_m)), qf_ns)
 
 
 class _QF:
     _quality_filter_args = qf_ns["_quality_filter_args"]
+    _quality_filter_plan = qf_ns["_quality_filter_plan"]
+    _projected_frame_count = qf_ns["_projected_frame_count"]
+    _effective_frame_count = qf_ns["_effective_frame_count"]
 
     def __init__(self, o):
         self._opts = o
@@ -1138,10 +1182,20 @@ check("self._quality_filter_args(n_linked)" in seg,
 # ...and the short-channel warning used to hang off the same condition:
 # it sat inside the drop branch, so a filter that STARTED below the floor
 # and lost nothing was never warned.
-short = seg[seg.index("MIN_STACK_FRAMES"):]
-check(seg.index("if n_reg and n_reg < MIN_STACK_FRAMES:")
-      > seg.index("cannot be aligned"),
+guard = "if n_reg and n_reg <= PERCENTILE_MAX_FRAMES:"
+short = seg[seg.index(guard):]
+check(seg.index(guard) > seg.index("cannot be aligned"),
       "the short-channel warning stands on its own, after the drop branch")
+# 1.7.17: and it is bound to the RIGHT number.  MIN_STACK_FRAMES is the
+# floor the quality filters may not cross; the sentence is about what
+# rejection can still do, which is the percentile band.  With `<` against
+# the floor, a channel of exactly four frames -- percentile clipping, the
+# weakest case there is -- said nothing at all.
+check("MIN_STACK_FRAMES" not in guard,
+      "the condition reads the percentile band, not the quality-filter "
+      "floor, which means something else entirely")
+check("<=" in guard,
+      "and it includes its own edge: four frames IS the percentile band")
 check("Only {n_reg} frame(s) for {filt}" in short,
       'and no longer says "left" — nothing need have been lost')
 check(seg.count("                if n_reg") == 2,
@@ -1213,21 +1267,483 @@ check("_refresh_spcc_mode()" in _cls_method("ImageMonoTrainWindow",
 # ...and the greying itself was invisible.  A stylesheet rule naming
 # `color` applies in every state unless a :disabled rule overrides it, and
 # the shared theme has one only for QPushButton -- so every setEnabled
-# (False) in this file changed nothing on screen.
+# (False) in this file changed nothing on screen.  1.7.16 answered that
+# with six :disabled rules; 1.7.17 moved the answer to the PALETTE, which
+# needs no rule per widget class.
 nsd: dict = {}
-exec(src[src.index("DISABLED_STYLESHEET = "):src.index("# A hint line")], nsd)
+exec(src[src.index("DISABLED_STYLESHEET = "):src.index("_THEME_MODE = ")],
+     nsd)
 dis = nsd["DISABLED_STYLESHEET"]
 for _w in ("QLabel", "QCheckBox", "QLineEdit", "QComboBox", "QSpinBox"):
     check(f"{_w}:disabled" in dis, f"{_w} has a disabled state to render")
-check("setStyleSheet(DARK_STYLESHEET + DISABLED_STYLESHEET)" in src,
-      "and the window applies the extension")
+check("setStyleSheet(_window_stylesheet())" in src,
+      "and the window applies whichever sheet the theme calls for")
 theme = src[src.index("DARK_STYLESHEET = "):
             src.index("QScrollBar::sub-line:vertical{height:0}")]
 check(":disabled" not in theme.replace("QPushButton:disabled", ""),
       "the shared theme is extended, not edited — it is copied verbatim "
       "between the Svenesis scripts")
+
+# The palette is what makes this general: a :disabled CSS rule reaches only
+# the widget classes it names, and the next widget added would be missed
+# again.  ColorGroup.Disabled reaches every widget there is.
+ap = _fn_src("_apply_theme")
+check("QPalette.ColorGroup.Disabled" in ap,
+      "the disabled colours live on the palette, not on a list of widgets")
+for _r in ("WindowText", "Text", "ButtonText"):
+    check(f"QPalette.ColorRole.{_r}" in ap,
+          f"{_r} greys out for every widget, named or not")
+check("Base" in ap and "Button" in ap,
+      "and the backgrounds follow, so light mode needs no sheet at all")
+check("_window_stylesheet" in src and 'if _THEME_MODE == "dark"' in
+      _fn_src("_window_stylesheet"),
+      "light mode drops the dark sheet instead of carrying a second copy")
+
+# Following Siril matters because this script is launched FROM Siril.
+tm = _fn_src("_siril_theme_mode")
+check('get_siril_config("gui", "theme")' in tm,
+      "the theme is read from Siril, not assumed")
+check('{0: "dark", 1: "light"}' in tm,
+      "0/1 are Siril's documented values")
+check('return "dark"' in tm and "_log_swallowed" in tm,
+      "an unreadable setting falls back to dark rather than failing")
+
 check('setStyleSheet("color:#888888' not in src,
       "and no hint label keeps a bare colour that would outrank :disabled")
+
+# --------------------------------------------------------------------
+print("\n29) every run leaves a replayable record of what it told Siril")
+# Reconstructing a run from a pasted GUI log is how command-level defects
+# were bisected until now.  `_cmd` is the single funnel, so the record is
+# complete by construction.
+rc = _cls_method("StackWorker", "_record_command")
+cmd = _cls_method("StackWorker", "_cmd")
+check("self._record_command(*args)" in cmd,
+      "the record is written from the one funnel every command goes through")
+check(cmd.index("_record_command") < cmd.index("self.siril.cmd("),
+      "and BEFORE the call — the command that kills a run is the "
+      "interesting line, and it must not be the missing one")
+check("COMMANDS_FILENAME" in rc and "_atomic_write_text" in rc,
+      "written atomically: it is rewritten after every command, so a "
+      "crash mid-write is not hypothetical")
+check("requires " in rc and "SIRIL_MIN_VERSION" in rc,
+      "carries the `requires` line a Siril script needs")
+check("_SCRIPT_FORBIDDEN_COMMANDS" in rc and "GUI-ONLY" in rc,
+      "and marks the commands Siril refuses in a script instead of "
+      "quietly rewriting them")
+ns_c: dict = {}
+exec(src[src.index("COMMANDS_FILENAME = "):src.index("# Calibration masters")],
+     ns_c)
+check(ns_c["COMMANDS_FILENAME"].endswith(".ssf"),
+      f'the record is a Siril script: {ns_c["COMMANDS_FILENAME"]}')
+check("load_seq" in ns_c["_SCRIPT_FORBIDDEN_COMMANDS"],
+      "load_seq is known to be GUI-only")
+
+# --------------------------------------------------------------------
+print("\n30) a cleanup that fails is never silent")
+# Two cases that must NOT share a reaction.
+clear = _cls_method("StackWorker", "_clear_stale_dir")
+disc = _cls_method("StackWorker", "_discard_dir")
+check("raise RuntimeError" in clear,
+      "clearing a directory that is about to be REFILLED fails the run — "
+      "leftovers get linked into the new sequence and stacked silently")
+check("raise" not in disc and "_emit" in disc,
+      "discarding one nothing reads again only warns and carries on")
+check("ignore_errors=True" in clear and "os.path.isdir(path)" in clear,
+      "both re-check the directory afterwards: ignore_errors hides the "
+      "very failure being tested for")
+drv = body("_stack_all_filters")
+check("self._clear_stale_dir(" in drv,
+      "the per-filter sequence tree is cleared through the strict path")
+check("shutil.rmtree" not in drv,
+      "and no call site reaches rmtree directly any more")
+rw = _cls_method("StackWorker", "_release_work")
+check("self._discard_dir(" in rw,
+      "a finished filter's tree goes through the lenient path")
+
+print("\n31) a stage that wrote nothing fails where it happened")
+vo = _cls_method("StackWorker", "_verify_outputs")
+check("getsize" in vo and "> 0" in vo,
+      "a zero-byte file counts as missing — a `save` that creates the "
+      "file and never fills it is the silent case")
+check("stage" in vo and "raise RuntimeError" in vo,
+      "and the message names the stage, not the step that tripped later")
+check('self._verify_outputs([final], f"{filt} master")' in drv,
+      "the master is checked AFTER the background extraction rewrote it, "
+      "not only after the stack")
+check("_verify_outputs" in _cls_method("StackWorker", "_align_masters"),
+      "and every aligned channel is checked before it becomes a colour")
+
+
+# --------------------------------------------------------------------
+print("\n32) the hot-pixel threshold follows the stack size")
+# Rejection only removes a hot pixel because dithering moves it to a
+# different sky pixel each frame.  That argument needs frames, so the
+# cosmetic map has to do more of the work when there are few.
+ns_cc: dict = {}
+for _k in ("COSMETIC_COLD_SIGMA", "COSMETIC_HOT_SIGMA",
+           "COSMETIC_TIGHT_HOT_SIGMA"):
+    ns_cc[_k] = re.search(rf'^{_k} = "(.+)"$', src, re.M).group(1)
+ns_cc["COSMETIC_TIGHT_MAX_FRAMES"] = int(
+    re.search(r"^SIGMA_MAX_FRAMES = (\d+)$", src, re.M).group(1))
+exec(_fn_src("_cosmetic_args"), ns_cc)
+_cc = ns_cc["_cosmetic_args"]
+check(float(ns_cc["COSMETIC_TIGHT_HOT_SIGMA"])
+      < float(ns_cc["COSMETIC_HOT_SIGMA"]),
+      "the tight threshold is LOWER — a smaller sigma flags more pixels")
+check(_cc(4)[0] == ["-cc=dark", "3", "2.5"],
+      f"a 4-frame channel is corrected harder: {_cc(4)[1]}")
+check(_cc(148)[0] == ["-cc=dark", "3", "3"],
+      f"a 148-frame channel is not: {_cc(148)[1]}")
+check(_cc(0)[1] == _cc(148)[1],
+      "an UNKNOWN count takes the standard pair — never the tighter one "
+      "on a guess")
+_edge = ns_cc["COSMETIC_TIGHT_MAX_FRAMES"]
+check(_cc(_edge)[1] != _cc(_edge + 1)[1],
+      f"and the band edge is exactly at {_edge}")
+check(_cc(1)[1] == _cc(_edge)[1],
+      "every count in the band gets the same answer")
+
+ca = _cls_method("StackWorker", "_calibrate_args")
+check("n_frames: int = 0" in ca,
+      "the count is a parameter, not read from mutable state — "
+      "_current_n_frames is only set AFTER calibration runs")
+check("_cosmetic_args(n_frames)" in ca,
+      "and it decides the arguments")
+check("self._cc_used[filt]" in ca,
+      "what was really sent is recorded, so the report cannot quote the "
+      "constant instead of the run")
+drv2 = body("_stack_all_filters")
+check("n_frames=n_linked" in drv2,
+      "the single-pass path passes the staged count")
+cip = _cls_method("StackWorker", "_calibrate_in_parts")
+check("n_total = sum(" in cip and "n_frames=n_total" in cip,
+      "and the split path passes the filter's TOTAL — the parts are "
+      "merged again before stacking, so a 4-frame part of a 60-frame "
+      "filter is not a small stack")
+
+print("\n33) the aligned channels are checked for overlay, not just size")
+ov = _fn_src("_overlay_error_px")
+check("all_pix2world" in ov and "all_world2pix" in ov,
+      "the check goes through the sky: pixel -> world -> pixel")
+check("has_celestial" in ov and "return None" in ov,
+      "a master without a usable solution is 'cannot tell', not agreement")
+check("getheader" in ov and "getdata" not in ov,
+      "headers only — no pixel data is read for this")
+co = _cls_method("StackWorker", "_check_overlay")
+check("len(aligned) < 2" in co,
+      "one channel cannot disagree with itself")
+check("if result is None" in co and "return" in co,
+      "and 'cannot tell' stays silent rather than warning")
+check("OVERLAY_MAX_PX" in co,
+      "the threshold is named, not inlined")
+am2 = _cls_method("StackWorker", "_align_masters")
+check("self._check_overlay(aligned)" in am2,
+      "it runs at the end of the alignment, on the set that becomes the "
+      "composite")
+
+
+# --------------------------------------------------------------------
+print("\n34) 1.7.17 — the frame-loss warning uses the PESSIMISTIC estimate")
+# Survivors pass EVERY filter, so min(shares) is an upper bound on them
+# and therefore a LOWER bound on the loss -- the wrong direction for a
+# warning about losing too much.  On one NGC 6946 run it predicted
+# 13-14% dropped against 21-23% real, and stayed silent on all four
+# channels.
+_w = _QF(_opts("percent", f_wfwhm=90, f_round=87))
+_WARN = float(re.search(r"^FILTER_WARN_FRACTION = ([\d.]+)",
+                        src, re.M).group(1))
+for _f, _n, _real in (("BLUE", 74, 57), ("GREEN", 70, 55),
+                      ("LUMINOS", 190, 148), ("RED", 66, 52)):
+    _opt = _w._effective_frame_count(_n)
+    _pes = _w._projected_frame_count(_n)
+    check(_pes <= _real + 1 and _pes >= _real - 2,
+          f"{_f}: projected {_pes} is within a frame of the real {_real}",
+          f"optimistic bound said {_opt}")
+    check((_n - _pes) / _n > _WARN,
+          f"{_f}: the note fires ({(_n - _pes) / _n:.1%} > {_WARN:.0%})",
+          f"with the old estimate it was {(_n - _opt) / _n:.1%}")
+check(_w._projected_frame_count(74) < _w._effective_frame_count(74),
+      "the two estimates bracket the truth from opposite sides")
+reg_src = _cls_method("StackWorker", "_register")
+check("_projected_frame_count(n_in)" in reg_src,
+      "and the warning reads the pessimistic one")
+check("_effective_frame_count" not in reg_src,
+      "not the optimistic one, which is for reporting an upper bound")
+# k-sigma cannot be predicted at all and must not be guessed at.
+check(_QF(_opts("k-sigma", f_wfwhm=3))._projected_frame_count(40) == 40,
+      "k-sigma returns the full count rather than inventing a number")
+
+print("\n35) 1.7.17 — a filter that never reaches Siril says so")
+# The spin boxes accept 1-100.  Asking for the best 15% of 25 frames
+# produced no filter AND no message: the full stack, silently.
+for _val, _want in ((20, True), (16, True), (15, False), (10, False)):
+    _a, _sk, _ = _QF(_opts("percent", f_wfwhm=_val))._quality_filter_plan(25)
+    check(bool(_a) == _want and bool(_sk) != _want,
+          f"{_val}% -> {'applied' if _want else 'skipped AND reported'}",
+          f"args={_a} skipped={_sk}")
+_a, _sk, _ = _QF(_opts("percent", f_wfwhm=10))._quality_filter_plan(25)
+check(_sk and "-filter-wfwhm" in _sk[0][0] and str(MIN := 4) in _sk[0][2],
+      f"the reason names the floor it hit: {_sk[0][2] if _sk else '-'}")
+check("was NOT applied" in reg_src,
+      "and the run says it out loud rather than shipping a shorter list")
+check("still in the stack" in reg_src,
+      "naming the consequence: those frames were all integrated")
+
+print("\n36) 1.7.17 — a longer dark is not the same mistake as a shorter one")
+# Dark current grows with exposure.  A longer dark OVER-subtracts, the
+# background goes negative, and Siril clamps to [0,1] -- the faint signal
+# in those pixels is gone.  A shorter one leaves a pedestal the
+# background extraction removes anyway.
+cd_src = _cls_method("StackWorker", "_closest_dark")
+ns_d = {}
+for _k in ("DARK_EXPOSURE_TOLERANCE", "DARK_OVERSHOOT_TOLERANCE"):
+    ns_d[_k] = float(re.search(rf"^{_k} = ([\d.]+)", src, re.M).group(1))
+check(ns_d["DARK_OVERSHOOT_TOLERANCE"] < ns_d["DARK_EXPOSURE_TOLERANCE"],
+      f"a longer dark has the tighter bound "
+      f"({ns_d['DARK_OVERSHOOT_TOLERANCE']:.0%} against "
+      f"{ns_d['DARK_EXPOSURE_TOLERANCE']:.0%})")
+check("abs(float(have) - float(want))" not in cd_src,
+      "the selection is no longer symmetric in |delta|")
+check("1 if longer else 0" in cd_src,
+      "ties go to the SHORTER dark — under-subtraction is the "
+      "recoverable half")
+check("over-subtracts" in cd_src and "under-subtracts" in cd_src,
+      "and the message names which way it went, not just how far")
+
+
+# --------------------------------------------------------------------
+print("\n37) 1.7.17 — a star count sitting on Siril's ceiling is not a "
+      "measurement")
+# The manual gives -maxstars as "must be between 100 and 2000", so 2000 is
+# the ceiling.  On a star-rich field every frame hits it, and then
+# -weight=nbstars gives them all the same weight.
+_cap = int(re.search(r"^SIRIL_MAX_STARS = (\d+)", src, re.M).group(1))
+check(_cap == 2000, f"the ceiling is Siril's documented maximum ({_cap})")
+sq = _cls_method("StackWorker", "_seq_quality")
+check("SIRIL_MAX_STARS" in sq and "capped" in sq,
+      "the registration read notices when the count is the ceiling")
+check("not a measurement" in sq,
+      "and says so where the number is printed")
+check('_weight_token(self._opts) == "nbstars"' in sq,
+      "the warning is tied to the weighting that the cap actually breaks")
+check("'Noise' or" in sq or "Noise" in sq,
+      "and names the two modes that still separate these frames")
+# wFWHM scales FWHM, which still varies, so it must NOT be warned about.
+check("wfwhm" not in sq.lower().replace("weighted fwhm", ""),
+      "wFWHM is not swept into the same warning — it still discriminates")
+wd = _cls_method("StackWorker", "_write_docs")
+check("_stars_capped" in wd and "†" in wd,
+      "the report marks the capped figure rather than printing it plain")
+
+print("\n38) 1.7.17 — the flat noise floor does not straddle time")
+fs = _fn_src("_spread_sample")
+check("step = n / float(limit)" in fs,
+      "the sample is spread by an even stride, not taken from the head")
+_ss: dict = {}
+exec(fs, _ss)
+_got = _ss["_spread_sample"](list(range(20)), 8)
+check(len(_got) == 8 and _got[0] == 0 and _got[-1] >= 15,
+      f"20 items capped at 8 now span the run: {_got}")
+check(_got == sorted(_got),
+      "order is preserved — the caller interleaves the result afterwards")
+check(_ss["_spread_sample"](list(range(5)), 8) == list(range(5)),
+      "fewer items than the cap are returned untouched")
+check("_spread_sample(paths, limit)" in _fn_src("_flat_shape"),
+      "and the night maps are built from that spread sample")
+
+print("\n39) 1.7.17 — the rejection fallback errs towards the gentler "
+      "algorithm")
+drv3 = body("_stack_all_filters")
+check("n_stack = n_reg or self._projected_frame_count(n_linked)" in drv3,
+      "an unreadable count falls back to the PESSIMISTIC estimate")
+check("effective = n_reg or self._effective_frame_count(n_linked)" in drv3,
+      "while the report keeps the optimistic one for its '<=N used'")
+# The old fallback was n_linked itself: the full staged count, as if the
+# quality filters had not run at all.
+check("n_stack = n_reg or n_linked" not in drv3,
+      "not the staged count, which ignored the filters entirely")
+
+print("\n40) 1.7.17 — drizzle's warning matches the settings it ships with")
+_pf = float(re.search(r"^DRIZZLE_PIXFRAC = ([\d.]+)", src, re.M).group(1))
+check("-pixfrac={DRIZZLE_PIXFRAC:g}" in _cls_method("StackWorker",
+                                                    "_register"),
+      "pixfrac is the named constant, not a literal beside the warning")
+reg3 = _cls_method("StackWorker", "_register")
+# Only the MESSAGE matters: the comment above it is allowed to name the
+# claim it replaced, and forbidding the word outright caught that too.
+_msg = "\n".join(l for l in reg3.splitlines()
+                 if not l.lstrip().startswith("#"))
+check("unevenly filled" not in _msg and "patchy" not in _msg.lower(),
+      f"the patchy-coverage claim is gone from the message — it cannot "
+      f"happen at pixfrac {_pf:g}")
+check("sample between the pixels" in reg3,
+      "and the real reason is named: sub-pixel sampling")
+check("correlated neighbours" in reg3,
+      "together with what you do get instead")
+
+print("\n41) 1.7.17 — every calibration tolerance carries its reasoning")
+_head = src[:src.index("def _is_fits")]
+for _c in ("DARK_EXPOSURE_TOLERANCE", "DARKFLAT_EXPOSURE_TOLERANCE",
+           "DARK_OVERSHOOT_TOLERANCE", "CALIB_TEMP_TOLERANCE_C"):
+    _i = re.search(rf"^{_c} = ", _head, re.M).start()
+    _before = _head[:_i].rstrip().splitlines()[-1].strip()
+    check(_before.startswith("#"),
+          f"{_c} is explained on the line above it")
+# Anchored on the ASSIGNMENT.  `index()` on the bare name finds the
+# CHANGELOG, which now discusses this constant in prose -- the same trap
+# that caught the docs suite one version ago.
+_ti = re.search(r"^CALIB_TEMP_TOLERANCE_C = ", _head, re.M).start()
+check("doubles" in _head[max(0, _ti - 900):_ti].lower(),
+      "and the temperature one names the exponential it governs")
+
+
+# --------------------------------------------------------------------
+print("\n42) 1.7.17 — RBF is the wrong background model for line emission")
+# Measured with siril-cli on a nebula filling 95% of the frame: the
+# degree-1 polynomial keeps 99.9% of it, RBF keeps 18%.
+_kept_rbf = float(re.search(r"^RBF_NARROWBAND_KEPT = ([\d.]+)",
+                            src, re.M).group(1))
+_kept_p1 = float(re.search(r"^POLY1_NARROWBAND_KEPT = ([\d.]+)",
+                           src, re.M).group(1))
+check(_kept_rbf < _kept_p1,
+      f"the measurement is recorded: RBF keeps {_kept_rbf:.0%}, "
+      f"degree 1 keeps {_kept_p1:.1%}")
+ss = _cls_method("StackWorker", "_subsky")
+check("narrowband: bool = False" in ss,
+      "the model chooser is told whether the image is line emission")
+check("RBF_NARROWBAND_KEPT" in ss,
+      "and quotes the measured figure rather than an adjective")
+check("_rbf_warned" in ss,
+      "said once per place, not once per channel")
+# It WARNS, it does not override: the setting is the user's.
+check("self._opts.get(\"bg_rbf\", False)" in ss and "return" in ss,
+      "RBF still runs when asked for — a silent swap would change images")
+bem = _cls_method("StackWorker", "_bg_extract_master")
+check("_filter_role(filt) in _LINE_NM" in bem,
+      "a master knows it is narrowband from its own FILTER")
+fin = _cls_method("StackWorker", "_finish_composite")
+check("_NB_PALETTES.get(" in fin,
+      "and the composite from its palette")
+drv4 = body("_stack_all_filters")
+check("_bg_extract_master(final, filt)" in drv4,
+      "the filter reaches the extraction that needs it")
+
+print("\n43) 1.7.17 — the colour-fit threshold is scale-free")
+# sigma is the scatter of *Image* R/G, so it carries whatever scale the
+# channels are on -- and `-output_norm` divides each master by its own
+# brightest pixel.  Scaling the ratio by k scales slope and sigma alike.
+ns_s: dict = {"re": re}
+for _n in ("_parse_spcc_fit", "_spcc_relative_sigma"):
+    exec("from __future__ import annotations\n" + _fn_src(_n), ns_s)
+_off = ns_s["_parse_spcc_fit"](
+    "Image B/G = -0.021290 + 1.174313 * Catalog B/G (sigma: 0.322732)")
+_on = ns_s["_parse_spcc_fit"](
+    "Image B/G = -0.012205 + 0.786050 * Catalog B/G (sigma: 0.216192)")
+check(_off["slope"]["B/G"] == 1.174313 and _off["intercept"]["B/G"] == -0.02129,
+      "the slope and intercept are parsed, not only the sigma")
+_r_off = ns_s["_spcc_relative_sigma"](_off)["B/G"]
+_r_on = ns_s["_spcc_relative_sigma"](_on)["B/G"]
+check(abs(_r_off - _r_on) < 0.001,
+      f"two real runs of the SAME target agree once scaled out: "
+      f"{_r_off:.4f} vs {_r_on:.4f}",
+      f"raw sigma differed by {abs(0.322732 - 0.216192) / 0.322732:.0%}")
+check(abs(0.322732 - 0.216192) > 0.1,
+      "while the raw sigmas they came from did not")
+check(ns_s["_spcc_relative_sigma"]({"sigma": {"R/G": 1.0},
+                                    "slope": {"R/G": 0.0}}) == {},
+      "a slope of zero is left out rather than dividing by it")
+check(ns_s["_spcc_relative_sigma"]({"sigma": {"R/G": 1.0}}) == {},
+      "and a missing slope is not guessed at")
+rs = _cls_method("StackWorker", "_read_spcc_fit")
+check("_spcc_relative_sigma(fit)" in rs,
+      "the warning is judged on the scale-free number")
+check("of its own slope" in rs,
+      "and says which number it is judging")
+# Two fragments: the sentence spans a line break in the source.
+check('self._opts.get("output_norm", True)' in rs
+      and "its own brightest pixel before this fit" in rs
+      and "a measurement of the filters or the sensor" in rs,
+      "and output normalisation is disclosed where the factors are printed")
+
+
+# --------------------------------------------------------------------
+print("\n44) a part too small to be a sequence does not take the split down")
+# Siril cannot build a sequence from one file, so a one-frame part fails
+# `calibrate` and the WHOLE split falls back to a pooled pass -- after
+# having stacked a master flat per night that nothing then reads.  Seen
+# on IC 1805: OIII arrived 8 + 1, two per-night flats were built, both
+# thrown away, and the log carried an error that looks like a defect.
+cs = _cls_method("StackWorker", "_calib_split")
+check("len(v) < 2" in cs and "_split_refused" in cs,
+      "a part under two frames refuses the split before it is attempted")
+check(cs.index("thin =") < cs.index("out = []"),
+      "decided BEFORE the parts are built, not after Siril rejects one")
+drv5 = body("_stack_all_filters")
+check("_split_refused" in drv5 and "was NOT attempted" in drv5,
+      "and the run says so — discovery had announced per-night "
+      "calibration, and that announcement must not be left standing")
+check("cannot form a Siril sequence" in drv5,
+      "naming the cause rather than only the outcome")
+
+ns_sp: dict = {"KIND_DARK": "dark", "_safe": lambda s: str(s),
+               "_exp_tag": lambda e: f"{e:g}s",
+               "_night_of": lambda p, n: n.get(p, "")}
+for _m in ("_calib_split", "_part_tag", "_part_label"):
+    exec("from __future__ import annotations\n"
+         + textwrap.dedent(_cls_method("StackWorker", _m)), ns_sp)
+
+
+class _SP:
+    _calib_split = ns_sp["_calib_split"]
+    _part_tag = staticmethod(ns_sp["_part_tag"])
+    _part_label = staticmethod(ns_sp["_part_label"])
+
+    def __init__(self, counts):
+        files, nights = [], {}
+        for night, n in counts.items():
+            for i in range(n):
+                f = f"{night}_{i}"
+                files.append(f)
+                nights[f] = night
+        self._opts = {"calibrate": True}
+        self._groups = {"F": {"by_exp": {600.0: files},
+                              "info": {"exp_s": 600.0}}}
+        self._nights, self._masters = nights, {"dark": {"x": 1}}
+        self._flat_nights = {"F": {k: "/m.fit" for k in counts}}
+        self._split_refused = {}
+
+
+for _counts, _want, _why in (
+        ({"2026-09-07": 8, "2026-09-08": 1}, False, "the real OIII case"),
+        ({"2026-09-07": 4, "2026-09-08": 6}, True, "the real SII case"),
+        ({"2026-09-07": 2, "2026-09-08": 2}, True, "two frames is enough"),
+        ({"2026-09-07": 9, "2026-09-08": 0}, True,
+         "an empty night never becomes a part at all")):
+    _w = _SP(_counts)
+    _got = bool(_w._calib_split("F"))
+    check(_got == _want,
+          f"{_why}: {'splits' if _want else 'refuses'}  {_counts}",
+          f"refused={_w._split_refused}")
+_w = _SP({"2026-09-07": 8, "2026-09-08": 1})
+_w._calib_split("F")
+check(_w._split_refused.get("F") == [("2026-09-08", 1)],
+      f"the reason names the part and its size: {_w._split_refused.get('F')}")
+
+print("\n45) the tightened-cosmetic note is said once per filter")
+# A split calls `_calibrate_args` per part, and OIII said the same
+# sentence three times in one run.
+ca2 = _cls_method("StackWorker", "_calibrate_args")
+check("self._cc_said.get(filt) != cc_label" in ca2,
+      "the note is gated on what was already said for this filter")
+check("self._cc_said[filt] = cc_label" in ca2,
+      "and records it")
+# The ARGUMENTS must still be produced every time -- only the message is
+# deduplicated.
+check(ca2.index("args += cc") < ca2.index("self._cc_said.get"),
+      "the arguments are appended before the gate, so every part is "
+      "still corrected")
+
 
 print()
 if fails:
