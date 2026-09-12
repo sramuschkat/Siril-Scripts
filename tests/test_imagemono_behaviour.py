@@ -88,7 +88,15 @@ ns = {"os": os, "shutil": shutil, "re": __import__("re"),
       "_safe": lambda t: t.replace(" ", "_"),
       "_DATE_SEGMENT_RE": __import__("re").compile(r"^\d{4}-\d{2}-\d{2}"),
       "_fits_filter": lambda p: "",
-      "_rejection_args": lambda n, e: (["rej", "sigma", "3", "3"], "sigma")}
+      "_rejection_args": lambda n, e: (["rej", "sigma", "3", "3"], "sigma"),
+      # The recorder is run for real, so the stub writes a genuine
+      # commands.ssf into its temp folder and section 46 reads it back.
+      "COMMANDS_FILENAME": "commands.ssf", "VERSION": "test",
+      "SIRIL_MIN_VERSION": "1.4.0",
+      "_SCRIPT_FORBIDDEN_COMMANDS": frozenset({"load_seq"}),
+      "datetime": __import__("datetime"),
+      "_atomic_write_text": lambda path, text: open(
+          path, "w", encoding="utf-8").write(text)}
 ns.update({"FILTER_MIN_FRAMES": 20, "MIN_STACK_FRAMES": 4,
            "FILTER_MAX_KSIGMA": 2, "PERCENTILE_MAX_FRAMES": 4})
 code = "from __future__ import annotations\n" + "\n".join(
@@ -100,6 +108,7 @@ code = "from __future__ import annotations\n" + "\n".join(
      "_clear_stale_dir", "_discard_dir", "_verify_outputs",
      "_quality_filter_plan", "_projected_frame_count",
      "_effective_frame_count", "_quality_filter_args",
+     "_record_command", "_note_command", "_here", "_write_commands",
      "_part_tag", "_part_label"))
 for _fn in ("_exp_tag", "_path_date", "_night_of", "_read_header"):
     code += "\n" + textwrap.dedent(
@@ -116,7 +125,9 @@ class Worker:
                "_drop_staged", "_drop_parts",
                "_clear_stale_dir", "_discard_dir", "_verify_outputs",
                "_quality_filter_plan", "_projected_frame_count",
-               "_effective_frame_count", "_quality_filter_args"):
+               "_effective_frame_count", "_quality_filter_args",
+               "_record_command", "_note_command", "_here",
+               "_write_commands"):
         locals()[_n] = ns[_n]
     # Both are @staticmethod in the real class; binding them as plain
     # functions would hand them `self` as the first argument.
@@ -151,6 +162,7 @@ class Worker:
         self.cc_seen: dict = {}
         self._split_refused: dict = {}
         self._cc_said: dict = {}
+        self._commands: list = []
         self.progress = types.SimpleNamespace(emit=lambda *a: None)
 
     def isInterruptionRequested(self):
@@ -167,6 +179,10 @@ class Worker:
 
     def _cmd(self, *a):
         self.cmds.append(" ".join(str(x) for x in a))
+        # The real `_cmd` records before it calls Siril, and section 46
+        # reads that file back — so the stub has to record too, or the
+        # notes would sit in a record with no commands around them.
+        self._record_command(*a)
         if a[0] == "merge" and self._fail_merge:
             raise CommandError("merge unavailable")
 
@@ -733,6 +749,13 @@ check(d is None, "but an unreadable log is still unreadable — no invention")
 
 am = body("_read_align_pairs")
 check("scope=scope" in am, "the alignment reader passes its marker through")
+# The few-stars remedy used to be a fixed sentence naming "Stack only the
+# filters this palette uses".  Under HaRGB that palette reads L, R, G, B
+# and Ha, so the switch drops nothing: the advice pointed at a control
+# that could not change the outcome.  It is now worked out per run.
+check("palette uses" not in am and "_align_ref_advice(self._opts" in am,
+      "the remedy is derived from the run's own palette, not hard-coded",
+      am[am.find("if weak"):][:400])
 sf = body("_read_spcc_fit")
 check("Running command: {command}" in sf,
       "and the colour reader anchors on the COMMAND it issued")
@@ -1323,14 +1346,28 @@ check("self._record_command(*args)" in cmd,
 check(cmd.index("_record_command") < cmd.index("self.siril.cmd("),
       "and BEFORE the call — the command that kills a run is the "
       "interesting line, and it must not be the missing one")
-check("COMMANDS_FILENAME" in rc and "_atomic_write_text" in rc,
+wc = _cls_method("StackWorker", "_write_commands")
+check("COMMANDS_FILENAME" in wc and "_atomic_write_text" in wc,
       "written atomically: it is rewritten after every command, so a "
       "crash mid-write is not hypothetical")
-check("requires " in rc and "SIRIL_MIN_VERSION" in rc,
+check("requires " in wc and "SIRIL_MIN_VERSION" in wc,
       "carries the `requires` line a Siril script needs")
-check("_SCRIPT_FORBIDDEN_COMMANDS" in rc and "GUI-ONLY" in rc,
+check("_SCRIPT_FORBIDDEN_COMMANDS" in wc and "GUI-ONLY" in wc,
       "and marks the commands Siril refuses in a script instead of "
       "quietly rewriting them")
+check("_write_commands()" in _cls_method("StackWorker", "_note_command"),
+      "a note lands on disk as soon as it is made, like a command")
+# The header used to read "Replay headless: siril-cli -s commands.ssf"
+# with load_seq as the only caveat.  Three larger obstacles went unsaid,
+# and the worst of them fails SILENTLY: `new` makes an empty canvas and
+# the composed pixels arrive through sirilpy, so a replay saves a blank
+# colour image under the right name.
+check("Replay headless" not in wc,
+      "the header no longer promises a replay the file cannot deliver")
+for want, why in (("A RECORD", "says what it is: a record"),
+                  ("BLANK colour image", "names the silent failure"),
+                  ("WORK_DIRNAME", "and that the work folders are deleted")):
+    check(want in wc, f"the header {why}")
 ns_c: dict = {}
 exec(src[src.index("COMMANDS_FILENAME = "):src.index("# Calibration masters")],
      ns_c)
@@ -1743,6 +1780,44 @@ check("self._cc_said[filt] = cc_label" in ca2,
 check(ca2.index("args += cc") < ca2.index("self._cc_said.get"),
       "the arguments are appended before the gate, so every part is "
       "still corrected")
+
+
+# --------------------------------------------------------------------
+print("\n46) the record marks the steps Siril never saw")
+# Read back from disk, not from the source: the point is what a user
+# opening commands.ssf is told.  A run whose lights are split per night
+# exercises both staging paths and the copy out of the work folder.
+w, res, tmp = run(
+    {"HA": group({300.0: ["2026-09-07/a1", "2026-09-07/a2",
+                          "2026-09-08/b1", "2026-09-08/b2"]})},
+    {"dark": {("s",): ("/d.fit", {})}},
+    flat_nights={"HA": {"2026-09-07": "/f7.fit", "2026-09-08": "/f8.fit"}})
+ssf = open(os.path.join(tmp, "commands.ssf"), encoding="utf-8").read()
+lines = ssf.splitlines()
+check(any(l.startswith("# ") and "staged into" in l for l in lines),
+      "the staged light frames are named before the `link` that reads them")
+# Every `link` must be preceded by a note, or the record still reads as
+# though Siril filled that directory itself.
+links = [i for i, l in enumerate(lines) if l.startswith("link ")]
+check(links, f"{len(links)} link command(s) recorded")
+unmarked = [lines[i] for i in links
+            if not any(lines[j].startswith("# staged")
+                       or "staged into" in lines[j]
+                       for j in range(max(0, i - 3), i))]
+check(not unmarked,
+      "every `link` is preceded by the staging that filled its folder",
+      str(unmarked[:2]))
+check(sum(1 for l in lines if "copied by the script" in l) >= 1,
+      "and the master copied out of the work folder is marked too")
+check(any("where Siril wrote it" in l for l in lines),
+      "naming both ends of that copy, so the two paths cannot be confused")
+# The notes are comments, so Siril skips them -- a record that breaks
+# the file it claims to be would be worse than no record.
+check(all(l.startswith("#") for l in lines if "by the script" in l),
+      "every note is a comment line Siril will ignore")
+check(ssf.count("requires 1.4.0") == 1 and "A RECORD" in ssf,
+      "the header is written once, and says what the file is")
+shutil.rmtree(tmp, ignore_errors=True)
 
 
 print()

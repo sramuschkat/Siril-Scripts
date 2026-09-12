@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.7.17
+Script Version: 1.7.18
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.7.17
+# Script Version: 1.7.18
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +97,51 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.7.18 - Two records that described something other than what happened
+      - COMMANDS.SSF SAID IT COULD BE REPLAYED, AND IT CANNOT.  The
+        header promised "Replay headless: siril-cli -s commands.ssf"
+        with GUI-ONLY lines as the single caveat.  Three larger
+        obstacles went unsaid.  The raw frames are put into the work
+        folders by the script (shutil.copy2 / os.symlink), so `link bias
+        -out=../process` reads a directory Siril never filled; the same
+        holds for the PixelMath inputs pm_R/pm_Ha, staged under names
+        without hyphens, and for every master copied out of
+        _work/.../process into masters/.  _work/ is then deleted by the
+        run that wrote the file.  And the worst of the three fails
+        SILENTLY: the composite's `load, load, load, new W H 3 RGB,
+        save` reads like a composition, but the three loads feed
+        get_image_pixeldata() into numpy, `new` makes an EMPTY canvas
+        and set_image_pixeldata() fills it through sirilpy -- replaying
+        those five lines writes a blank colour image under the right
+        name.  The header now says what the file is, and every step the
+        script performs itself is marked in place with a `#` line
+        carrying the frame count and the folder: staging, the PixelMath
+        copies, the masters copied in and out of the alignment, and the
+        canvas that only looks like a composition.  The record stays
+        complete and stops claiming what it cannot do.  Writing moved
+        out of _record_command into _write_commands so a note reaches
+        disk the same way a command does.
+
+      - ALIGNMENT ADVICE IS NOW DERIVED FROM THE RUN'S OWN PALETTE.
+        When a channel aligned on very few star pairs, the warning always
+        closed with the same remedy: "Stack only the filters this palette
+        uses" keeps the reference among the channels that end up in the
+        picture.  That sentence is a no-op under HaRGB.  The palette
+        reads L, R, G and B through the dropdowns and finds Ha by role,
+        so every discovered filter is already one of its own and the
+        option has nothing to leave out -- and the reference Siril picked
+        is one of the composite's channels too.  On an NGC 6946 run the
+        Ha master matched on 318 pairs against 1176-1741 for broadband,
+        and the script answered by pointing at a control that could not
+        change the outcome.  _align_ref_advice now asks _palette_filters
+        what THIS palette reads and says one of five things: which master
+        the switch would drop (the case it was written for), that the
+        pool is already restricted, that there is no composite to have a
+        palette, that the mapping names no discovered filter, or -- the
+        HaRGB case -- that no master can be left out, naming the
+        reference as one of the composite's own, and that only more
+        exposure on the weak channel moves the number.
+
 1.7.17 - Lessons taken from the Starloch Batch Preprocessor, and three
         audits of this script's own arithmetic against Siril's
         documentation and against Siril's own log output
@@ -537,7 +582,7 @@ from PyQt6.QtGui import QColor, QDesktopServices, QPalette
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.7.17"
+VERSION = "1.7.18"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -2622,8 +2667,40 @@ class StackWorker(QThread):
         being silently rewritten, because a record that quietly differs
         from what ran is worse than none.
         """
-        rendered = " ".join(str(a) for a in args)
-        self._commands.append(rendered)
+        self._commands.append(" ".join(str(a) for a in args))
+        self._write_commands()
+
+    def _note_command(self, text: str) -> None:
+        """Record, in place, a step Siril never saw.
+
+        The gaps this fills are not cosmetic.  Staging frames into the
+        work folders, copying a master to masters/, pushing composed
+        pixels through sirilpy -- none of it issues a Siril command, so
+        the record read back looks like a complete recipe when it is
+        not: `link bias` over a directory nothing filled, and a `new`
+        that appears to compose the three masters loaded before it when
+        it only makes the blank canvas they are written into.  That last
+        one fails SILENTLY on a replay, saving an empty colour image
+        under the right name.  A comment costs one line and turns each
+        of those into a gap the reader can see.
+        """
+        self._commands.append(f"# {text}")
+        self._write_commands()
+
+    def _here(self, path: str) -> str:
+        """A path as the record shows it: relative to the output folder."""
+        try:
+            return os.path.relpath(path, self._out_dir)
+        except ValueError:                   # another drive, on Windows
+            return path
+
+    def _write_commands(self) -> None:
+        """Rewrite commands.ssf from scratch.
+
+        Rewritten per line rather than appended to, so the file on disk
+        is always a complete, well-formed document -- including its
+        header -- however the run ends.
+        """
         try:
             path = os.path.join(self._out_dir, COMMANDS_FILENAME)
             body = [
@@ -2632,9 +2709,26 @@ class StackWorker(QThread):
                 f"# Target: {self._target}",
                 f"# Written: {datetime.datetime.now():%Y-%m-%d %H:%M:%S}",
                 "#",
-                "# Replay headless:  siril-cli -s " + COMMANDS_FILENAME,
-                "# Lines marked GUI-ONLY must be removed first (Siril "
-                "rejects them in a script).",
+                "# A RECORD of what Siril was asked to do, in order.  It is "
+                "not a script that",
+                "# reproduces this run on its own: the steps the script "
+                "performs ITSELF issue no",
+                "# Siril command, and every one of them is marked below "
+                "with a '#' line.  Replayed",
+                "# as it stands, this file would find the work folders "
+                "empty -- and would save a",
+                "# BLANK colour image, because `new` only makes the canvas "
+                "and the pixels arrive",
+                "# through sirilpy.",
+                "#",
+                "# Two more things stand between this file and a replay: "
+                "lines marked GUI-ONLY,",
+                "# which Siril refuses in a script, and " + WORK_DIRNAME
+                + "/, which this run deletes when it",
+                "# finishes.  What it is good for: reading back what ran, "
+                "bisecting a failure with",
+                "# siril-cli -s, and as the starting point for a script "
+                "built by hand.",
                 "",
                 f"requires {SIRIL_MIN_VERSION}",
                 "",
@@ -3376,6 +3470,10 @@ class StackWorker(QThread):
             return None
 
         try:
+            self._note_command(
+                f"{staged} {kind} frame(s) staged into "
+                f"{self._here(stage)} by the script — `link` below reads "
+                "what this step put there")
             self._cmd("cd", f'"{stage}"')
             self._cmd("link", kind, "-out=../process")
             self._cmd("cd", "../process")
@@ -4507,6 +4605,9 @@ class StackWorker(QThread):
                             errors[filt] = msg
                             continue
                 if seq is None:
+                    self._note_command(
+                        f"{n_linked} {filt} light frame(s) staged into "
+                        f"{self._here(lights_dir)} by the script")
                     self._cmd("cd", f'"{lights_dir}"')
                     self._cmd(conv, "lights", "-out=../process")
                     self._cmd("cd", "../process")
@@ -4665,6 +4766,11 @@ class StackWorker(QThread):
                     if os.path.exists(final):
                         os.remove(final)
                     shutil.copy2(produced, final)
+                    self._note_command(
+                        f"{os.path.basename(final)} copied by the script "
+                        f"from {self._here(produced)}, where Siril wrote "
+                        f"it, into {self._here(masters_dir)} — every path "
+                        "named below is the copy")
                     # Per-channel background extraction on the linear master --
                     # gradients differ per filter, so removing them before the
                     # channels are combined works better than one pass on the
@@ -4738,6 +4844,9 @@ class StackWorker(QThread):
         seqs: list = []
         applied = 0
         for tag, exp, night, d, _k in staged:
+            self._note_command(
+                f"{_k} {filt} light frame(s) staged into "
+                f"{self._here(d)} by the script")
             self._cmd("cd", f'"{d}"')
             self._cmd(conv, f"lights_{tag}", "-out=../process")
             self._cmd("cd", "../process")
@@ -6306,6 +6415,10 @@ class StackWorker(QThread):
         """
         name = f"pm_{tag}"
         shutil.copy2(src, os.path.join(helpers, name + self._ext))
+        self._note_command(
+            f"{name}{self._ext} copied from {os.path.basename(src)} by the "
+            "script — PixelMath names the file inside the expression, and "
+            "the original carries hyphens")
         return name
 
     def _compose(self, paths: dict) -> str | None:
@@ -6682,6 +6795,11 @@ class StackWorker(QThread):
             height, width = planes[0].shape
             data = np.stack(planes)            # (3, H, W), channels-first
             header = _header_string(chan["red"])
+            self._note_command(
+                "the three masters above were read into memory by the "
+                "script; `new` only makes an EMPTY RGB canvas and the "
+                "pixels are written into it through sirilpy — replaying "
+                "these lines saves a blank image")
             self._cmd("new", str(width), str(height), "3", "RGB")
             if not self.siril.is_image_loaded():
                 self._emit("  In-memory composition: Siril did not create "
@@ -7499,16 +7617,16 @@ class StackWorker(QThread):
                    + (f"; {ref} was the reference." if ref else "."),
                    LogColor.BLUE)
         if weak:
+            # The remedy is worked out from THIS run's palette, not stated
+            # as a general rule: the switch it used to name unconditionally
+            # is a no-op whenever the composite already reads every filter.
             self._emit(
                 "  " + ", ".join(sorted(weak))
                 + " aligned on very few stars.  A scale term fitted on "
                 "that many "
                 "points is carried badly, which shows up as colour fringing "
-                "towards the edges.  Siril picks the reference itself from "
-                "whatever is in the sequence, so a narrowband channel "
-                "matching a broadband reference is the usual cause — "
-                "'Stack only the filters this palette uses' keeps the "
-                "reference among the channels that end up in the picture.",
+                "towards the edges.  "
+                + _align_ref_advice(self._opts, sorted(pairs), ref or ""),
                 LogColor.SALMON)
 
     def _check_overlay(self, aligned: dict) -> None:
@@ -7598,6 +7716,11 @@ class StackWorker(QThread):
             if len(index_to_filter) < 2:
                 return {}
 
+            self._note_command(
+                f"{len(index_to_filter)} master(s) copied into "
+                f"{self._here(lights)} by the script: "
+                + ", ".join(f"{i:02d}={f}"
+                            for i, f in sorted(index_to_filter.items())))
             self._cmd("cd", f'"{lights}"')
             self._cmd("link", "masters", "-out=../process")
             self._cmd("cd", "../process")
@@ -7668,6 +7791,12 @@ class StackWorker(QThread):
                     f"  Aligned {filt} -> {os.path.basename(out)}",
                     LogColor.GREEN)
 
+            if aligned:
+                self._note_command(
+                    "aligned frame(s) copied out by the script, from the "
+                    "r_masters_NN Siril wrote, as "
+                    + ", ".join(os.path.basename(aligned[f])
+                                for f in sorted(aligned)))
             self._check_overlay(aligned)
             self._cmd("cd", f'"{self._out_dir}"')
             try:
@@ -8403,6 +8532,57 @@ def _palette_filters(opts: dict, filters: list) -> set:
             used.add(_first_with_role(filters, role) or "")
     used.discard("")
     return {f for f in filters if f in used}
+
+
+def _align_ref_advice(opts: dict, filters: list, ref: str) -> str:
+    """What to actually suggest when a channel aligned on few stars.
+
+    Siril picks the alignment reference itself, so the only lever the
+    script has is which masters are in the sequence at all -- and that
+    lever exists only when the composite leaves a filter out.  Naming
+    "Stack only the filters this palette uses" unconditionally sent the
+    user to a switch that, under HaRGB, cannot change a thing: that
+    palette reads L, R, G and B through the dropdowns and Ha by role, so
+    every discovered filter is already one of its own and the option
+    would drop nothing.  Worse, the reference is then one of the
+    composite's own channels already -- the few pairs are the narrowband
+    master being shallower, not a bad choice of anchor.
+    """
+    here = [f for f in dict.fromkeys(list(filters) + [ref]) if f]
+    if opts.get("palette_only", False):
+        return ("Only this palette's own channels were stacked, so the "
+                "reference pool is already as small as that switch makes "
+                "it — what is left is the gap in star count between a "
+                "narrowband master and the broadband one it matched.")
+    if not opts.get("compose", False):
+        return ("Siril picks the reference itself from whatever is in the "
+                "sequence, and the switch that would shrink that pool — "
+                "'Stack only the filters this palette uses' — needs a "
+                "colour composite to have a palette to go by.")
+    wanted = _palette_filters(opts, here)
+    if not wanted:
+        # The option refuses on exactly this condition, so it is no
+        # remedy here -- and claiming the palette reads every filter
+        # would be the opposite of what an unrecognised mapping means.
+        return ("Siril picks the reference itself from whatever is in the "
+                "sequence, and 'Stack only the filters this palette uses' "
+                "— the switch that would shrink that pool — cannot help "
+                "while the channel mapping names none of the discovered "
+                "filters.")
+    spare = [f for f in here if f not in wanted]
+    if spare:
+        return ("Siril picks the reference itself from whatever is in the "
+                "sequence, so a narrowband channel matching a broadband "
+                "reference is the usual cause — 'Stack only the filters "
+                "this palette uses' would leave " + ", ".join(spare)
+                + " out of that pool and keep the reference among the "
+                "channels that end up in the picture.")
+    return ("Every filter of this run is one the composite reads, so there "
+            "is no master to leave out of the reference pool"
+            + (f" and {ref} is itself one of them" if ref else "")
+            + ": a narrowband master matched against a broadband one shows "
+            "fewer stars whatever the settings say.  Only more exposure on "
+            "the weak channel moves this number.")
 
 
 def _auto_channel_map(filters: list[str], palette: str) -> dict:

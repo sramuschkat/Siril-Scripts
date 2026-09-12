@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.7.17** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.7.18** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.7.17](#17-neu-in-1717)
+17. [Neu in 1.7.18](#17-neu-in-1718)
 
 ---
 
@@ -914,7 +914,25 @@ Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.7.17
+## 17. Neu in 1.7.18
+
+Zwei Protokolle beschrieben etwas anderes als das, was geschah.
+
+**`commands.ssf` versprach eine Wiedergabe, die sie nicht leisten kann.** Im Kopf stand *Replay headless: `siril-cli -s commands.ssf`*, als einzige Einschränkung die GUI-ONLY-Zeilen. Drei größere Hindernisse blieben ungesagt. Die Rohframes legt **das Skript** in die Arbeitsordner, `link bias -out=../process` liest also ein Verzeichnis, das Siril nie gefüllt hat; dasselbe gilt für die PixelMath-Eingaben `pm_R`/`pm_Ha`, die unter Namen ohne Bindestrich bereitgestellt werden, und für jeden Master, der aus `_work/.../process` nach `masters/` kopiert wird. `_work/` löscht anschließend genau der Lauf, der die Datei geschrieben hat. Und das dritte scheitert **still** — diese fünf Zeilen lesen sich wie eine Komposition:
+
+```
+load ".../NGC_6946_RED_Ha.fit"
+load ".../NGC_6946_GREEN.fit"
+load ".../NGC_6946_BLUE.fit"
+new 2937 2879 3 RGB
+save ".../NGC_6946_HaRGB"
+```
+
+  Sie sind keine. Jedes `load` holt über `get_image_pixeldata()` die Pixel in den Speicher, `new` erzeugt eine **leere** RGB-Leinwand, und hineingeschrieben wird über sirilpy. Beim Abspielen speichern diese Zeilen ein leeres Farbbild unter dem richtigen Namen. Der Kopf sagt jetzt, was die Datei ist — ein Protokoll dessen, was Siril aufgetragen wurde — und jeder Schritt, den das Skript selbst ausführt, ist an Ort und Stelle mit einer `#`-Zeile samt Frame-Zahl und Ordner markiert, im selben Geist wie die bestehenden GUI-ONLY-Marken. Das Protokoll bleibt vollständig und behauptet nichts mehr, was es nicht kann.
+
+**Der Rat bei wenigen Sternen wird jetzt aus der Palette des Laufs hergeleitet.** Wenn ein Kanal auf sehr wenigen Sternpaaren ausgerichtet wird, trägt der Skalenterm schlecht, und das zeigt sich als Farbsaum zum Rand hin — und die Meldung schloss immer mit derselben Abhilfe: *Nur die Filter dieser Palette stapeln* hält die Referenz unter den Kanälen, die im Bild landen. Unter **HaRGB** ändert das nichts. Die Palette liest L, R, G und B über die Auswahlfelder und findet Ha über die Rolle, also ist jeder gefundene Filter bereits einer ihrer eigenen und die Option hat nichts auszulassen; die von Siril gewählte Referenz ist ebenfalls ein Kanal des Komposits. In einem NGC-6946-Lauf passte der Ha-Master auf **318** Paare gegen 1176–1741 bei den Breitbandkanälen, und das Skript antwortete mit einem Schalter, der am Ergebnis nichts ändern konnte. Der Rat fragt jetzt, was *diese* Palette tatsächlich liest, und sagt eines von fünf Dingen: welchen Master der Schalter weglassen würde — der Fall, für den er geschrieben wurde, und unter SHO mit übrigem L weiterhin der häufige — dass der Pool bereits eingeschränkt ist, dass es kein Komposit gibt, das eine Palette hätte, dass die Kanalzuordnung keinen gefundenen Filter benennt, oder, der HaRGB-Fall, dass kein Master weggelassen werden kann, benennt die Referenz als einen der eigenen Kanäle des Komposits und sagt, dass nur mehr Belichtung auf dem schwachen Kanal diese Zahl bewegt.
+
+## Was neu war in 1.7.17
 
 Lehren aus dem Starloch Batch Preprocessor, dazu drei Prüfdurchgänge über die Rechnungen des Scripts selbst — gegen [Sirils Dokumentation](https://siril.readthedocs.io/en/stable/preprocessing/stacking.html) und gegen Sirils eigene Log-Ausgabe. Einer dieser Punkte kostet echtes Signal, die übrigen kosten **Sicherheit**: Meldungen, die stiller oder gewisser waren, als die Daten hergaben.
 

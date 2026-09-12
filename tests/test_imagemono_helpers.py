@@ -39,7 +39,7 @@ WANT = ("_format_duration", "_median", "_exp_tag", "_night_key", "_path_date",
         "_unfillable_channels", "_align_pairs_warn", "_weight_token",
         "_parse_spcc_fit", "_log_delta", "_night_of", "_flat_shape",
         "_flat_normalise", "_rebin_mean", "_flat_ratio_spread", "_with_fits",
-        "_spread_sample")
+        "_spread_sample", "_palette_filters", "_align_ref_advice")
 for node in tree.body:
     if isinstance(node, ast.FunctionDef) and node.name in WANT:
         exec("from __future__ import annotations\n"
@@ -157,6 +157,40 @@ probe("one channel", w, {"HA": 100}, check=lambda g: isinstance(g, set))
 probe("all zero", w, {"A": 0, "B": 0}, want={"A", "B"})
 probe("one weak", w, {"A": 200, "B": 180, "C": 5},
       check=lambda g: g == {"C"})
+
+print("\n7b) _align_ref_advice names a switch only when it would do something")
+adv = ns["_align_ref_advice"]
+# The bug this replaces: the few-stars warning always pointed at "Stack
+# only the filters this palette uses".  Under HaRGB that palette reads
+# L, R, G, B AND Ha, so the option drops nothing and the advice sent the
+# user to a switch that cannot change the outcome.
+HARGB = {"compose": True, "palette_only": False, "compose_palette": "HaRGB",
+         "map_red": "RED", "map_green": "GREEN", "map_blue": "BLUE",
+         "map_lum": "LUMINOS"}
+said = adv(HARGB, ["BLUE", "GREEN", "HA", "RED"], "LUMINOS")
+check("palette uses" not in said,
+      "HaRGB reads every filter — the switch is NOT offered")
+check("LUMINOS is itself one of them" in said,
+      "and the reference is named as one of the composite's own channels")
+# The same warning under a palette that really does leave a master out.
+SHO = {"compose": True, "palette_only": False, "compose_palette": "SHO",
+       "map_red": "SII", "map_green": "HA", "map_blue": "OIII",
+       "map_lum": "LUMINOS"}
+said = adv(SHO, ["HA", "OIII", "SII"], "LUMINOS")
+check("would leave LUMINOS out" in said,
+      "SHO ignores the LUMINOS master — the switch IS offered, and names it")
+# Three ways the switch cannot be the answer, each said as itself.
+for opts, want, why in (
+        (dict(SHO, palette_only=True), "already as small",
+         "the pool is already restricted"),
+        (dict(HARGB, compose=False), "needs a colour composite",
+         "there is no palette to go by"),
+        ({"compose": True, "palette_only": False, "compose_palette": "RGB",
+          "map_red": "", "map_green": "", "map_blue": ""},
+         "names none of the discovered filters",
+         "the mapping is unrecognised")):
+    got = adv(opts, ["HA"], "LUMINOS")
+    check(want in got, f"no switch offered when {why}")
 
 print("\n8) filter roles and palettes survive junk")
 fr = ns["_filter_role"]

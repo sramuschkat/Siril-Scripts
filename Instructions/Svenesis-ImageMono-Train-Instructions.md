@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.7.17** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.7.18** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.7.17](#17-whats-new-in-1717)
+17. [What's New in 1.7.18](#17-whats-new-in-1718)
 
 ---
 
@@ -914,7 +914,25 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.7.17
+## 17. What's New in 1.7.18
+
+Two records described something other than what happened.
+
+**`commands.ssf` promised a replay it cannot deliver.** The header read *Replay headless: `siril-cli -s commands.ssf`*, with GUI-ONLY lines as the only caveat. Three larger obstacles went unsaid. The raw frames are placed into the work folders **by the script**, so `link bias -out=../process` reads a directory Siril never filled; the same holds for the PixelMath inputs `pm_R`/`pm_Ha`, staged under names free of hyphens, and for every master copied out of `_work/.../process` into `masters/`. `_work/` is then deleted by the very run that wrote the file. And the third fails **silently** — these five lines read like a composition:
+
+```
+load ".../NGC_6946_RED_Ha.fit"
+load ".../NGC_6946_GREEN.fit"
+load ".../NGC_6946_BLUE.fit"
+new 2937 2879 3 RGB
+save ".../NGC_6946_HaRGB"
+```
+
+  They are not one. Each `load` feeds `get_image_pixeldata()` into memory, `new` makes an **empty** RGB canvas, and the pixels are written into it through sirilpy. Replayed, those lines save a blank colour image under the right name. The header now says what the file is — a record of what Siril was asked to do — and every step the script performs itself is marked in place with a `#` line carrying the frame count and the folder, in the same spirit as the existing GUI-ONLY marks. The record stays complete and stops claiming what it cannot do.
+
+**The few-stars advice is now worked out from the run's own palette.** When a channel aligns on very few star pairs the scale term is carried badly, which shows up as colour fringing towards the edges — and the message always closed with the same remedy: *Stack only the filters this palette uses* keeps the reference among the channels that end up in the picture. Under **HaRGB** that is a no-op. The palette reads L, R, G and B through the dropdowns and finds Ha by role, so every discovered filter is already one of its own and the option has nothing to leave out; the reference Siril picked is one of the composite's channels too. On an NGC 6946 run the Ha master matched on **318** pairs against 1176–1741 for the broadband channels, and the script answered by naming a switch that could not change the outcome. The advice now asks what *this* palette actually reads and says one of five things: which master the switch would drop — the case it was written for, and still the common one under SHO with a spare L — that the pool is already restricted, that there is no composite to have a palette, that the channel mapping names no discovered filter, or, the HaRGB case, that no master can be left out, naming the reference as one of the composite's own and saying that only more exposure on the weak channel moves the number.
+
+## What was new in 1.7.17
 
 Lessons taken from reading the Starloch Batch Preprocessor, plus three audits of the script's own arithmetic against [Siril's documentation](https://siril.readthedocs.io/en/stable/preprocessing/stacking.html) and against Siril's own log output. One of these costs real signal; the rest cost **confidence** — messages that were quieter, or more certain, than the data justified.
 
