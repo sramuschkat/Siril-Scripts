@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.7.18
+Script Version: 1.7.19
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.7.18
+# Script Version: 1.7.19
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +97,34 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.7.19 - The narrowband warning claimed to know the size of your target
+      - THE RBF WARNING NAMED A TARGET SIZE IT NEVER MEASURED.  A
+        narrowband master met RBF background extraction and the run
+        said: "measured on a nebula filling 95% of the frame it keeps
+        about 18% of it ... on a target THIS SIZE most of what it
+        removes is your signal.  Untick 'use RBF instead of a
+        polynomial' for narrowband."  No size was measured.  `narrowband`
+        is decided by the FILTER alone (_filter_role(filt) in _LINE_NM),
+        and the constants block above RBF_NARROWBAND_KEPT already says
+        both halves of the truth in as many words: "On a compact target
+        (a galaxy in a wide field) the opposite holds and RBF is clearly
+        better", and "There is no way to tell the two cases apart from
+        the pixels".  So an NGC 6946 run -- an 11' galaxy in a 101' field,
+        Ha over perhaps one percent of the area -- was told to switch off
+        the model that suited it, with a figure measured at 95% frame
+        fill presented as a finding about that image.  Same disease as
+        the few-stars advice in 1.7.18, same cure: the message now
+        reports the measurement under the condition it was measured,
+        names BOTH cases, says plainly that the pixels cannot separate
+        them, and hands over the one piece of geometry the image really
+        does carry -- its field of view, read from the astrometric
+        solution (CDELT1, or the length of the CD matrix's first column
+        so a rotated field is not understated) or failing that from
+        FOCALLEN and the pixel pitch.  Then it leaves the choice, which
+        was always the user's.  New helpers: _pixel_scale_deg,
+        _fov_arcmin, _frame_fov_arcmin, _rbf_narrowband_advice.  The
+        polynomial figure also stopped rounding 99.9% up to 100%.
+
 1.7.18 - Two records that described something other than what happened
       - COMMANDS.SSF SAID IT COULD BE REPLAYED, AND IT CANNOT.  The
         header promised "Replay headless: siril-cli -s commands.ssf"
@@ -582,7 +610,7 @@ from PyQt6.QtGui import QColor, QDesktopServices, QPalette
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.7.18"
+VERSION = "1.7.19"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -1387,6 +1415,75 @@ def _with_fits(path: str, reader, **open_kw):
     with fits.open(path, memmap=False, **open_kw) as hdul:
         return reader(hdul)
 
+
+def _pixel_scale_deg(header) -> float:
+    """Degrees per pixel from a FITS header, or 0.0 when it cannot be had.
+
+    Two sources, in the order they deserve trust.  The astrometric
+    solution the master carries is a measurement of THIS optical train on
+    THIS night: CDELT1 states the scale outright, and a CD matrix states
+    it as the length of its first column -- CD1_1 alone understates a
+    rotated field, and every frame that went through `seqapplyreg` is
+    rotated.  Failing that, FOCALLEN with the sensor's pixel pitch is the
+    small-angle arithmetic on what the capture software wrote down.
+
+    Zero, not None, for "cannot be had".  Callers multiply this, and a
+    fabricated default focal length would put an invented field of view
+    into a message whose whole purpose is to stop inventing things.
+    """
+    try:
+        cdelt = abs(float(header["CDELT1"]))
+    except (KeyError, TypeError, ValueError):
+        cdelt = 0.0
+    if cdelt > 0:
+        return cdelt
+    try:
+        cd = math.hypot(float(header["CD1_1"]),
+                        float(header.get("CD2_1") or 0.0))
+    except (KeyError, TypeError, ValueError):
+        cd = 0.0
+    if cd > 0:
+        return cd
+    try:
+        focal = float(header["FOCALLEN"])                  # millimetres
+        pitch = float(header.get("XPIXSZ")
+                      or header.get("PIXSIZE1") or 0.0)    # micrometres
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+    if focal <= 0 or pitch <= 0:
+        return 0.0
+    return math.degrees((pitch / 1000.0) / focal)
+
+
+def _fov_arcmin(header) -> float:
+    """The long side of the frame in arcminutes, or 0.0 when unknown."""
+    scale = _pixel_scale_deg(header)
+    if scale <= 0:
+        return 0.0
+    try:
+        side = max(int(header["NAXIS1"]), int(header["NAXIS2"]))
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+    return scale * side * 60.0 if side > 0 else 0.0
+
+
+def _frame_fov_arcmin(path: str) -> float:
+    """`_fov_arcmin` for a file on disk; 0.0 if it cannot be read.
+
+    Never raises.  This feeds one clause of a warning, and a warning that
+    takes the run down would be worse than a warning that stays vague.
+    """
+    def read(hdul):
+        for hdu in hdul:
+            got = _fov_arcmin(hdu.header)
+            if got > 0:
+                return got
+        return 0.0
+    try:
+        return _with_fits(path, read)
+    except Exception as exc:                # noqa: BLE001
+        _log_swallowed(exc)
+        return 0.0
 
 def _header_string(path: str) -> str:
     """A FITS header as text, for `set_image_metadata_from_header_string`.
@@ -7196,7 +7293,8 @@ class StackWorker(QThread):
             f"  Finish: no colour calibration succeeded ({last}){why}; "
             "composite left uncalibrated.", LogColor.SALMON)
 
-    def _subsky(self, where: str, narrowband: bool = False) -> str:
+    def _subsky(self, where: str, narrowband: bool = False,
+                fov_arcmin: float = 0.0) -> str:
         """Run subsky on the loaded image; return what was used, for the log.
 
         RBF models a gradient that changes direction across the frame far
@@ -7205,14 +7303,19 @@ class StackWorker(QThread):
         the individual subs: Siril's guidance is a degree-1 polynomial
         there, and that is what seqsubsky keeps doing.
 
-        `narrowband` says the image is line emission, which is the one
-        case where RBF is the WRONG choice: emission fills the frame, and
-        a model flexible enough to follow a gradient that changes
-        direction is flexible enough to follow the nebula.  Measured, it
-        keeps 18% of it where the degree-1 polynomial keeps 99.9% (see
-        RBF_NARROWBAND_KEPT).  It is said rather than overridden -- the
-        setting is the user's, and switching their model out from under
-        them would change images without being asked.
+        `narrowband` says the image is line emission, which is the case
+        where RBF CAN be the wrong choice: a model flexible enough to
+        follow a gradient that changes direction is flexible enough to
+        follow a nebula that fills the frame, and measured at 95% fill it
+        keeps 18% of one where the degree-1 polynomial keeps 99.9% (see
+        RBF_NARROWBAND_KEPT).  CAN, not is: on a compact target in a wide
+        field the order reverses, and the same constants block records
+        that the pixels cannot tell the two apart.  So the warning states
+        the measurement and the field of view and leaves the choice --
+        `fov_arcmin` carries that field, 0.0 when the image does not say.
+        It is said rather than overridden: the setting is the user's, and
+        switching their model out from under them would change images
+        without being asked.
 
         Falls back to the polynomial if RBF is refused, so an older build
         cannot cost the user the background extraction altogether.
@@ -7222,14 +7325,7 @@ class StackWorker(QThread):
             if narrowband and where not in self._rbf_warned:
                 self._rbf_warned.add(where)
                 self._emit(
-                    f"  This {where} is line emission, and RBF cannot tell "
-                    "nebulosity from gradient: measured on a nebula filling "
-                    f"95% of the frame it keeps about "
-                    f"{RBF_NARROWBAND_KEPT:.0%} of it, where the degree-1 "
-                    f"polynomial keeps {POLY1_NARROWBAND_KEPT:.0%}. The "
-                    "gradient does come out cleaner — but on a target this "
-                    "size most of what it removes is your signal. Untick "
-                    "'use RBF instead of a polynomial' for narrowband.",
+                    "  " + _rbf_narrowband_advice(where, fov_arcmin),
                     LogColor.SALMON)
             try:
                 self._cmd("subsky", "-rbf", "-samples=20",
@@ -7250,7 +7346,9 @@ class StackWorker(QThread):
         nb = _filter_role(filt) in _LINE_NM if filt else False
         try:
             self._cmd("load", f'"{path}"')
-            how = self._subsky("master", narrowband=nb)
+            how = self._subsky(
+                "master", narrowband=nb,
+                fov_arcmin=_frame_fov_arcmin(path) if nb else 0.0)
             self._cmd("save", f'"{base}"')
             self._emit(f"  Background extracted ({how}, per-channel master).",
                           LogColor.GREEN)
@@ -7373,10 +7471,11 @@ class StackWorker(QThread):
         # methods explicitly want a flat background ("correct the image
         # gradient first") -- so this runs regardless of the per-channel pass.
         try:
+            nb = bool(_NB_PALETTES.get(
+                self._opts.get("compose_palette", "")))
             how = self._subsky(
-                "composite",
-                narrowband=bool(_NB_PALETTES.get(
-                    self._opts.get("compose_palette", ""))))
+                "composite", narrowband=nb,
+                fov_arcmin=_frame_fov_arcmin(path) if nb else 0.0)
             self._finish_steps.append(
                 f"Extracted the background gradient (subsky, {how}).")
             self._emit(f"  Finish: composite background extracted ({how}, "
@@ -8584,6 +8683,44 @@ def _align_ref_advice(opts: dict, filters: list, ref: str) -> str:
             "fewer stars whatever the settings say.  Only more exposure on "
             "the weak channel moves this number.")
 
+
+def _rbf_narrowband_advice(what: str, fov_arcmin: float = 0.0) -> str:
+    """What to say when RBF meets a narrowband image, honestly.
+
+    The old text closed "on a target this size most of what it removes is
+    your signal" and named the polynomial as the fix.  That size was never
+    measured: `narrowband` is decided by the FILTER alone, and the
+    constants block above RBF_NARROWBAND_KEPT says in as many words BOTH
+    that a compact target in a wide field is the case where RBF is the
+    better model AND that the pixels cannot tell the two apart.  So on an
+    NGC 6946 run -- an 11' galaxy in a 101' field -- the script told the
+    user to switch off the model that suited them, presenting a figure
+    measured at 95% frame fill as a finding about their own image.
+
+    Now it reports the measurement under the condition it was measured,
+    names both cases, hands over the field of view (the one piece of
+    geometry a plate-solved master really does carry) and leaves the
+    choice where it belongs.  `_align_ref_advice` had the same disease
+    and takes the same cure.
+    """
+    span = (f"  This {what} spans about {fov_arcmin:.0f}' across, and how "
+            "much of that your emission covers is the question."
+            if fov_arcmin > 0 else
+            f"  How much of the frame your emission covers is the "
+            f"question, and the field of view could not be read from this "
+            f"{what}.")
+    return (
+        f"This {what} is line emission, and RBF is flexible enough to "
+        "follow emission that fills the frame: measured on a nebula "
+        f"covering 95% of the field, RBF keeps {RBF_NARROWBAND_KEPT:.0%} "
+        f"of it where the degree-1 polynomial keeps "
+        f"{POLY1_NARROWBAND_KEPT:.1%}.  On a COMPACT target in a wide "
+        "field that order reverses and RBF is the better model, and the "
+        "pixels cannot tell the two apart — so the script does not know "
+        "which this is." + span
+        + "  Untick 'use RBF instead of a polynomial' if the emission "
+        "fills much of the frame; leave it on if the target is small "
+        "within it.")
 
 def _auto_channel_map(filters: list[str], palette: str) -> dict:
     """Return {lum,red,green,blue: filtername} for a palette (''=unused)."""

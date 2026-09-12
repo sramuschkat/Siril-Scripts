@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.7.18** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.7.19** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.7.18](#17-neu-in-1718)
+17. [Neu in 1.7.19](#17-neu-in-1719)
 
 ---
 
@@ -914,7 +914,29 @@ Nein. Alles wird unter `output/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.7.18
+## 17. Neu in 1.7.19
+
+Die Schmalband-Warnung behauptete, die Größe des Ziels zu kennen.
+
+**Sie nannte eine Größe, die sie nie gemessen hat.** Erreichte ein Schmalband-Master die Hintergrundextraktion mit eingeschaltetem RBF, sagte der Lauf: *gemessen an einem Nebel, der 95 % des Bildfeldes füllt, behält es etwa 18 % davon … auf einem Ziel **dieser Größe** ist das meiste, was es entfernt, Ihr Signal. Für Schmalband „RBF statt Polynom verwenden" abwählen.* Diese Größe hatte nichts gemessen. Das Schmalband-Kennzeichen entsteht allein aus dem **Filter**, und der Kommentarblock über den Konstanten nennt seit 1.7.17 beide Hälften der Wahrheit: *„On a compact target (a galaxy in a wide field) the opposite holds and RBF is clearly better"* und *„There is no way to tell the two cases apart from the pixels"*. Ein NGC-6946-Lauf — eine 11′ große Galaxie in einem 101′ großen Feld, das Ha über vielleicht einem Prozent der Fläche — bekam also den Rat, genau das Modell abzuschalten, das zu ihm passte, und eine bei 95 % Bildfüllung gemessene Zahl trat als Befund über dieses Bild auf.
+
+  Derselbe Fehler wie beim Sternpaar-Hinweis in 1.7.18, dieselbe Behebung. Die Meldung nennt die Messung jetzt **zusammen mit der Bedingung, unter der sie gemessen wurde**, benennt beide Fälle, sagt offen, dass die Pixel sie nicht trennen können, und gibt die eine geometrische Angabe weiter, die das Bild wirklich trägt:
+
+```
+This master is line emission, and RBF is flexible enough to follow emission
+that fills the frame: measured on a nebula covering 95% of the field, RBF
+keeps 18% of it where the degree-1 polynomial keeps 99.9%.  On a COMPACT
+target in a wide field that order reverses and RBF is the better model, and
+the pixels cannot tell the two apart -- so the script does not know which this
+is.  This master spans about 101' across, and how much of that your emission
+covers is the question.  Untick 'use RBF instead of a polynomial' if the
+emission fills much of the frame; leave it on if the target is small within
+it.
+```
+
+  Dieses Bildfeld wird aus der astrometrischen Lösung gelesen, die der Master ohnehin mitbringt — `CDELT1` oder die Länge der ersten Spalte der `CD`-Matrix, damit ein gedrehtes Feld nicht zu klein erscheint — und ersatzweise aus `FOCALLEN` und der Pixelgröße. Fehlt beides, sagt der Satz das, statt zu raten. Die Entscheidung bleibt bei Ihnen, wo sie immer lag. Außerdem rundet die Polynom-Zahl 99,9 % nicht länger auf 100 % auf.
+
+## Was neu war in 1.7.18
 
 Zwei Protokolle beschrieben etwas anderes als das, was geschah.
 

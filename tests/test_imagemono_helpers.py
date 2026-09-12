@@ -39,7 +39,8 @@ WANT = ("_format_duration", "_median", "_exp_tag", "_night_key", "_path_date",
         "_unfillable_channels", "_align_pairs_warn", "_weight_token",
         "_parse_spcc_fit", "_log_delta", "_night_of", "_flat_shape",
         "_flat_normalise", "_rebin_mean", "_flat_ratio_spread", "_with_fits",
-        "_spread_sample", "_palette_filters", "_align_ref_advice")
+        "_spread_sample", "_palette_filters", "_align_ref_advice",
+        "_pixel_scale_deg", "_fov_arcmin", "_rbf_narrowband_advice")
 for node in tree.body:
     if isinstance(node, ast.FunctionDef) and node.name in WANT:
         exec("from __future__ import annotations\n"
@@ -639,6 +640,61 @@ check(has_sip("linear") is False,
 check(has_sip("missing") is False,
       "an unreadable header means 'assume linear': one re-solve costs "
       "seconds, a skipped one costs the colour calibration")
+
+print("\n1.7.19 — the field of view is read, never assumed")
+scale, fov = ns["_pixel_scale_deg"], ns["_fov_arcmin"]
+# The real NGC 6946 Ha master, the frame the warning actually fires on:
+# 382 mm at 3.76 um is 2.03"/px, and 2985 px of that is 101'.  This is
+# the one number the warning is allowed to print.
+NINA = {"FOCALLEN": 382.0, "XPIXSZ": 3.76, "NAXIS1": 2985, "NAXIS2": 2980}
+probe("scale from focal length + pitch", scale, NINA,
+      check=lambda d: abs(d * 3600 - 2.030) < 0.005)
+probe("field of the stacked master", fov, NINA,
+      check=lambda a: 100.5 <= a <= 101.5)
+# A solved master states the scale itself, and that answer wins.
+probe("CDELT1 beats the focal-length arithmetic", scale,
+      dict(NINA, CDELT1=-1.0 / 3600),
+      check=lambda d: abs(d * 3600 - 1.0) < 1e-6)
+# CD1_1 ALONE understates a rotated field, and every frame that went
+# through seqapplyreg is rotated: this run's masters sit at -43.8 deg,
+# where cos(43.8) = 0.72.  The column length is the scale.
+rot = {"CD1_1": 1e-4 * math.cos(math.radians(43.8)),
+       "CD2_1": 1e-4 * math.sin(math.radians(43.8)),
+       "NAXIS1": 1000, "NAXIS2": 1000}
+probe("a rotated CD matrix is measured by its column length", scale, rot,
+      check=lambda d: abs(d - 1e-4) < 1e-9)
+# Absent is an answer.  A default focal length here would put an invented
+# field into the one message whose subject is not inventing things.
+for bad, why in (({"NAXIS1": 100, "NAXIS2": 100}, "no scale of any kind"),
+                 ({"FOCALLEN": 0, "XPIXSZ": 3.76}, "a zero focal length"),
+                 ({"FOCALLEN": "n/a", "XPIXSZ": 3.76}, "a corrupt keyword"),
+                 ({"FOCALLEN": 382.0}, "no pixel pitch")):
+    check(fov(bad) == 0.0 and scale(bad) == 0.0, f"0.0, not a guess, on {why}")
+
+print("\n1.7.19 — the RBF warning states its condition and both cases")
+rbf = ns["_rbf_narrowband_advice"]
+# The bug: "on a target THIS SIZE most of what it removes is your signal",
+# said on the strength of the FILTER alone.  On NGC 6946 -- 11' of galaxy
+# in 101' of sky -- that sentence told the user to switch off the model the
+# constants block calls "clearly better" for exactly that case.
+said = rbf("master", 101.0)
+check("this size" not in said,
+      "no claim about a target size the script never measured")
+check("95%" in said and "18%" in said,
+      "the measurement keeps the condition it was measured under")
+check("COMPACT" in said and "better model" in said,
+      "the case where RBF is the RIGHT choice is named too")
+check("cannot tell the two apart" in said,
+      "and the script says plainly that it cannot decide this")
+check("101'" in said, "the field of view is the one size it may state")
+check("99.9%" in said and "100%" not in said,
+      "the polynomial figure is not rounded up to a flat 100%")
+blind = rbf("composite")
+check("could not be read" in blind and "' across" not in blind,
+      "an unreadable field is said, not replaced by a default")
+for who in ("master", "composite"):
+    check(rbf(who, 12.0).startswith(f"This {who} is line emission"),
+          f"the {who} is named as the thing being described")
 
 print()
 if fails:

@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.7.18** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.7.19** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.7.18](#17-whats-new-in-1718)
+17. [What's New in 1.7.19](#17-whats-new-in-1719)
 
 ---
 
@@ -914,7 +914,29 @@ No. Everything is written under `output/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.7.18
+## 17. What's New in 1.7.19
+
+The narrowband warning claimed to know the size of your target.
+
+**It named a size it never measured.** When a narrowband master reached the background extraction with RBF switched on, the run said: *measured on a nebula filling 95 % of the frame it keeps about 18 % of it … on a target **this size** most of what it removes is your signal. Untick 'use RBF instead of a polynomial' for narrowband.* Nothing had measured that size. The narrowband flag is decided by the **filter** alone, and the comment block above the constants has stated both halves of the truth since 1.7.17: *"On a compact target (a galaxy in a wide field) the opposite holds and RBF is clearly better"*, and *"There is no way to tell the two cases apart from the pixels"*. So an NGC 6946 run — an 11′ galaxy in a 101′ field, its Ha covering perhaps one percent of the area — was told to switch off the model that suited it, and a figure measured at 95 % frame fill arrived dressed as a finding about that image.
+
+  Same fault as the few-stars advice in 1.7.18, same cure. The message now states the measurement **together with the condition it was measured under**, names both cases, says outright that the pixels cannot separate them, and hands over the one piece of geometry the image really does carry:
+
+```
+This master is line emission, and RBF is flexible enough to follow emission
+that fills the frame: measured on a nebula covering 95% of the field, RBF
+keeps 18% of it where the degree-1 polynomial keeps 99.9%.  On a COMPACT
+target in a wide field that order reverses and RBF is the better model, and
+the pixels cannot tell the two apart -- so the script does not know which this
+is.  This master spans about 101' across, and how much of that your emission
+covers is the question.  Untick 'use RBF instead of a polynomial' if the
+emission fills much of the frame; leave it on if the target is small within
+it.
+```
+
+  That field of view is read from the astrometric solution the master already holds — `CDELT1`, or the length of the `CD` matrix's first column, so a rotated field is not understated — and failing that from `FOCALLEN` with the pixel pitch. When neither is present the sentence says so rather than guessing. The choice stays yours, which it always was. The polynomial figure also stopped rounding 99.9 % up to 100 %.
+
+## What was new in 1.7.18
 
 Two records described something other than what happened.
 

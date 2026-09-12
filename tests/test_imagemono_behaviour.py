@@ -1820,6 +1820,37 @@ check(ssf.count("requires 1.4.0") == 1 and "A RECORD" in ssf,
 shutil.rmtree(tmp, ignore_errors=True)
 
 
+print("\n47) the narrowband warning does not invent a target size")
+# 1.7.19.  The warning fired on the FILTER and then spoke about the
+# TARGET: "on a target this size most of what it removes is your signal".
+# The constants block above RBF_NARROWBAND_KEPT says the opposite holds
+# for a compact target and that the pixels cannot tell the two apart, so
+# the sentence was a claim the script had no way to make.
+sub = _cls_method("StackWorker", "_subsky")
+check("this size" not in sub,
+      "_subsky no longer says anything about the size of the target")
+check("_rbf_narrowband_advice(where, fov_arcmin)" in sub,
+      "it hands the wording to the helper, with the field it was given")
+check("fov_arcmin" in sub.split("def _subsky")[1].split(")")[0]
+      or "fov_arcmin: float = 0.0" in sub,
+      "and the field of view is a parameter, not a guess inside")
+# Both callers have a path on disk at that moment, so both can read it --
+# and neither may pay for the read when the image is not narrowband.
+for meth, where in (("_bg_extract_master", "master"),
+                    ("_finish_composite", "composite")):
+    body_src = _cls_method("StackWorker", meth)
+    check("_frame_fov_arcmin(path) if nb else 0.0" in body_src,
+          f"{meth} reads the field from the file, and only when narrowband")
+# The measured figures keep the condition they were measured under, and
+# the helper is the only place that wording lives.
+adv = _fn_src("_rbf_narrowband_advice")
+check("95%" in adv and "COMPACT" in adv,
+      "the helper carries both the 95%-fill measurement and the other case")
+check("RBF_NARROWBAND_KEPT" in adv and "POLY1_NARROWBAND_KEPT" in adv,
+      "and quotes the constants rather than repeating their numbers")
+check("POLY1_NARROWBAND_KEPT:.1%" in adv,
+      "99.9% is printed as 99.9%, not rounded up to 100%")
+
 print()
 if fails:
     print(f"{len(fails)} FAILURE(S)")
