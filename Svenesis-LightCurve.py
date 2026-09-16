@@ -1,6 +1,6 @@
 """
 Svenesis LightCurve
-Script Version: 1.0.9
+Script Version: 1.0.10
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -64,6 +64,8 @@ Features:
   depth the fit measures, and the (Rp/Rs)^2 that EXOTIC, HOPS and
   AstroImageJ quote
 - AAVSO Exoplanet Watch submission file (T0, both depths, Rp/Rs, duration)
+- EXOTIC/ and HOPS/ folders beside it: the run's results in both
+  pipelines' own folder layouts, file names and column orders
 - Mid-transit time with a calibrated error bar, and chi2/nu against a
   model-independent noise floor
 - Limb-darkened transit fit, solved SIMULTANEOUSLY with the systematics:
@@ -90,6 +92,62 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.0.10 - EXOTIC and HOPS folders, the field image, the TESS candidate note
+      - A TESS candidate's AAVSO file says, in the log and in #NOTES,
+        that AAVSO's upload form validates the planet name against the
+        archive's confirmed-planet table and will refuse a TOI until it
+        is confirmed; ExoFOP-TESS is named as the venue.  A submitter's
+        TOI-7425.01 upload was refused with "missing a suffix letter?" -
+        no letter exists to add.
+      - field.png beside the CSV: the plate-solved reference frame with
+        the target and the comparison stars the photometry used marked,
+        north/east arrows and a 5' bar from the solution, shrunk to stay
+        under AAVSO's 2 MB - the picture its Exoplanet Database requires
+        with every submission.
+      - lightcurve/EXOTIC/ and lightcurve/HOPS/: the run's results in
+        the two pipelines' own folder layouts, file names and column
+        orders, so whatever reads an EXOTIC or a HOPS output folder
+        reads these.  EXOTIC: AAVSO_<planet>_<date>.txt with the -XC
+        JSON headers, FinalLightCurve png/pdf/csv, temp/ with
+        FinalParams json, FOV, NormalizedFlux, raw-flux, centroid and
+        observing-statistics plots, the posterior's Triangle and a
+        PlateStatus csv.  HOPS: PHOTOMETRY_1/ with PHOTOMETRY_APERTURE
+        .txt (exposure-start JD_UTC, target over the comp sum),
+        PHOTOMETRY_a.txt (every star's x, y, flux, error, sky per
+        frame), FOV.pdf, RESULTS.pdf, ExoClock_info.txt, log.yaml; in
+        HOPS mode PHOTOMETRY_APERTURE_FITTING/ with results.txt,
+        model.txt, detrended_model.txt, corner.pdf, traces.pdf,
+        detrended_model.jpg; and the ExoClock and ETD export files
+        under HOPS's name pattern.  The native photometry now keeps a
+        per-star, per-frame record (centroid, sky, peak, why a frame
+        gave nothing) and the HOPS-mode fit keeps its posterior
+        samples and chain for the corner and trace plots.  What a
+        folder cannot hold is said in the log: no PSF-photometry files,
+        no AID file (needs AAVSO chart stars), no corner plot without
+        a HOPS-mode posterior.  Both folders start empty on every run.
+      - Review fixes (fourth round).  Reserve comparison stars promoted
+        by the headroom guard now move through the detection frame's
+        homography like the rest: after a setref they were probed and
+        measured a full shift beside themselves.  The star list drawn
+        on field.png, FOV.pdf and RESULTS.pdf is in the detection
+        frame's coordinates and is set only after every fallback exit.
+        The E arrow on field.png had its sign inverted for every field
+        parity.  The blind fit's Am2 bar (EXOTIC AAVSO file, FinalParams)
+        and results.txt's basis coefficients are per airmass, not per
+        standardised column (the bar was sd(airmass) times too small).
+        RA wraps at 0h in the separation and in the header median.
+        PHOTOMETRY_a.txt's background columns are HOPS's aperture totals
+        and every per-star count is in ADU, not /65535.  12/14-bit clip
+        levels are found on calibrated float data too.  Sexagesimal
+        output carries its rounded seconds (no 59:60.00).  File names
+        drop the characters no file system takes.  A refused AAVSO
+        file or field image is removed rather than left stale.
+        COMP_STAR-XC / Best Comparison Star name a comp the photometry
+        used.  Astrodon ExoPlanet-BB is AAVSO's CBB, not CR.  ETD export
+        errors stay physical (HOPS's / sqrt(gain) only shrank them).
+        Am1/Am2 carry their law in #NOTES and the JSON.  #OBSTYPE has a
+        Camera control (CCD / DSLR).
+
 1.0.9 - Flats and bias no longer need the lights' temperature
       - Flats no longer have to match the lights' sensor temperature, and
         a bias no longer has to match the flats'.  A flat is a ratio and a
@@ -251,6 +309,16 @@ s.ensure_installed("numpy", "PyQt6", "matplotlib", "astropy")
 # nothing trains people to ignore the ones that do).  Started here it
 # inherits a working environment once; if it cannot start at all,
 # nothing is lost — Python relaunches it on demand exactly as before.
+# The helper is `python -c ...`, and that puts the CURRENT DIRECTORY
+# first on its sys.path.  When Siril's directory is on an external
+# volume the helper may not stat (macOS refused a FSKit exFAT volume
+# to the child with EPERM while Siril itself read and wrote it), the
+# helper dies inside importlib before it can even import
+# multiprocessing -- at start and again at every relaunch.
+# PYTHONSAFEPATH (Python 3.11+) keeps the current directory off the
+# child's path; it is read at interpreter start, so it changes nothing
+# for this process.
+os.environ.setdefault("PYTHONSAFEPATH", "1")
 try:
     from multiprocessing import resource_tracker as _resource_tracker
     _resource_tracker.ensure_running()
@@ -291,7 +359,7 @@ from matplotlib.ticker import FuncFormatter
 
 from sirilpy import LogColor
 
-VERSION = "1.0.9"
+VERSION = "1.0.10"
 
 # The full manual on GitHub, linked from the help dialog.  The in-app
 # tabs are the quick reference; the manual carries the measurements
@@ -1041,7 +1109,7 @@ AAVSO_FILTER_CODES = {
     "COUSINS_R": "R", "COUSINS_I": "I",
     "sdss_u": "SU", "sdss_g": "SG", "sdss_r": "SR", "sdss_i": "SI",
     "sdss_z": "SZ", "2mass_j": "J", "2mass_h": "H", "2mass_ks": "K",
-    "clear": "CV", "luminance": "CV", "exoplanets_bb": "CR",
+    "clear": "CV", "luminance": "CV", "exoplanets_bb": "CBB",
 }
 
 
@@ -1064,6 +1132,192 @@ def aavso_filter_code(text) -> str:
     if raw and len(raw) <= 3 and raw.isalnum():
         return raw
     return "CV"
+
+
+def field_orientation(stars):
+    """``(north_deg, east_ccw, arcsec_per_px)`` from plate-solved stars,
+    or None.
+
+    A least-squares linear map from pixel offsets to sky offsets
+    (RA·cos δ, δ) over every star that carries RA/Dec.  North is the
+    pixel direction along which δ grows fastest (angle from +x,
+    counter-clockwise in array coordinates, y down); ``east_ccw`` says
+    whether east lies 90° counter-clockwise from north (a mirrored
+    field) or clockwise (a direct one); the scale is the square root of
+    the map's determinant."""
+    pts = []
+    for st in stars or []:
+        try:
+            x = float(getattr(st, "xpos", None) if hasattr(st, "xpos")
+                      else st[0])
+            y = float(getattr(st, "ypos", None) if hasattr(st, "ypos")
+                      else st[1])
+            ra = float(getattr(st, "ra", None) if hasattr(st, "ra")
+                       else st[2])
+            dec = float(getattr(st, "dec", None) if hasattr(st, "dec")
+                        else st[3])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if abs(ra) > 1e-9 or abs(dec) > 1e-9:
+            pts.append((x, y, ra, dec))
+    if len(pts) < 8:
+        return None
+    arr = np.asarray(pts, dtype=float)
+    x, y, ra, dec = arr.T
+    ra0, dec0 = np.median(ra), np.median(dec)
+    dra = (ra - ra0 + 180.0) % 360.0 - 180.0
+    u = dra * math.cos(math.radians(dec0))       # east, degrees
+    v = dec - dec0                                # north, degrees
+    A = np.column_stack([x - np.median(x), y - np.median(y), np.ones(x.size)])
+    cu, *_ = np.linalg.lstsq(A, u, rcond=None)
+    cv, *_ = np.linalg.lstsq(A, v, rcond=None)
+    det = cu[0] * cv[1] - cu[1] * cv[0]
+    if not np.isfinite(det) or abs(det) < 1e-20:
+        return None
+    north = math.degrees(math.atan2(cv[1], cv[0]))
+    east = math.degrees(math.atan2(cu[1], cu[0]))
+    # east_ccw: east sits at north MINUS 90 deg of atan2 angle (the
+    # angle measured in array coordinates, y down).  ``east_angle_deg``
+    # is the one place that turns the flag back into an angle.
+    east_ccw = ((east - north + 360.0) % 360.0) > 180.0
+    return north, east_ccw, math.sqrt(abs(det)) * 3600.0
+
+
+def east_angle_deg(north: float, east_ccw: bool) -> float:
+    """The east direction's atan2 angle from ``field_orientation``'s
+    north angle and flag.  Verified on synthetic solved fields: a direct
+    field (north +y, east -x) gives 180 deg, its mirror 0 deg -- the
+    drawn E arrow once had the sign the other way round for every
+    parity."""
+    return north - 90.0 if east_ccw else north + 90.0
+
+
+def write_field_image(ref_path: str, target_xy, comps, out_path: str,
+                      title: str = "", aperture_px: float = 0.0,
+                      orientation=None, max_side: int = 1400,
+                      max_bytes: int = 1_900_000):
+    """The plate-solved reference frame with the target and the
+    comparison stars marked -- the image AAVSO's Exoplanet Database asks
+    for with every submission (one picture, common format, under 2 MB
+    all told).  ``(ok, note)``; the PNG shrinks until it fits."""
+    try:
+        from astropy.io import fits
+        with fits.open(ref_path, memmap=False) as hd:
+            data = None
+            for h in hd:
+                if getattr(h, "data", None) is not None \
+                        and np.ndim(h.data) >= 2:
+                    data = np.asarray(h.data, dtype=float)
+                    break
+        if data is None:
+            return False, "the reference frame holds no image"
+        while data.ndim > 2:
+            data = data[0]
+    except Exception as exc:                     # noqa: BLE001
+        return False, f"could not read the reference frame: {exc}"
+    h, w = data.shape
+    import matplotlib
+    from matplotlib.figure import Figure as _Fig
+    from matplotlib.backends.backend_agg import FigureCanvasAgg as _Agg
+    from matplotlib.patches import Circle
+    side = int(max_side)
+    for _attempt in range(4):
+        f = max(1, int(math.ceil(max(h, w) / side)))
+        hh, ww = (h // f) * f, (w // f) * f
+        small = data[:hh, :ww].reshape(hh // f, f, ww // f, f).mean(axis=(1, 3)) \
+            if f > 1 else data
+        finite = small[np.isfinite(small)]
+        lo, hi = (np.percentile(finite, [1.0, 99.7]) if finite.size
+                  else (0.0, 1.0))
+        if not hi > lo:
+            hi = lo + 1.0
+        img = np.arcsinh(np.clip((small - lo) / (hi - lo), 0, 1) * 30.0)
+        img = img / img.max() if img.max() > 0 else img
+        fig = _Fig(figsize=(8.0, 8.0 * small.shape[0] / small.shape[1]),
+                   dpi=max(50, min(200, small.shape[1] / 8.0)))
+        _Agg(fig)
+        ax = fig.add_axes([0.0, 0.0, 1.0, 0.94])
+        ax.imshow(img, cmap="gray", origin="lower", vmin=0, vmax=1,
+                  interpolation="nearest")
+        ax.set_axis_off()
+        # A marker the reader can find: three apertures, but never under
+        # 1.2 % of the frame -- on a 3008 px frame shrunk to 1000 px a
+        # 3-aperture circle is two pixels wide.
+        r_mark = max(float(aperture_px or 0.0) * 3.0, 0.012 * max(h, w)) / f
+        tx, ty = float(target_xy[0]) / f, float(target_xy[1]) / f
+        ax.add_patch(Circle((tx, ty), r_mark, fill=False, color="#40ff60",
+                            lw=1.6))
+        ax.text(tx + r_mark * 1.2, ty + r_mark * 1.2, "target",
+                color="#40ff60", fontsize=9, fontweight="bold")
+        for k, c in enumerate(comps or [], start=1):
+            cx, cy = float(c[0]) / f, float(c[1]) / f
+            ax.add_patch(Circle((cx, cy), r_mark, fill=False,
+                                color="#ffd040", lw=1.2))
+            ax.text(cx + r_mark * 1.2, cy + r_mark * 1.2, f"C{k}",
+                    color="#ffd040", fontsize=9)
+        if orientation:
+            north, east_ccw, scale = orientation
+            L = 0.08 * small.shape[1]
+            ox, oy = 0.06 * small.shape[1] + L, 0.06 * small.shape[0] + L
+            nx = L * math.cos(math.radians(north))
+            ny = L * math.sin(math.radians(north))
+            ea = east_angle_deg(north, east_ccw)
+            ex = L * math.cos(math.radians(ea))
+            ey = L * math.sin(math.radians(ea))
+            for dx, dy, lab in ((nx, ny, "N"), (ex, ey, "E")):
+                ax.annotate("", xy=(ox + dx, oy + dy), xytext=(ox, oy),
+                            arrowprops=dict(arrowstyle="->", color="#66ccff",
+                                            lw=1.4))
+                ax.text(ox + dx * 1.15, oy + dy * 1.15, lab, color="#66ccff",
+                        fontsize=10, ha="center", va="center")
+            bar = (300.0 / (scale * f)) if scale > 0 else 0.0   # 5 arcmin
+            if 0 < bar < 0.5 * small.shape[1]:
+                bx, by = small.shape[1] - 0.06 * small.shape[1] - bar, \
+                    0.06 * small.shape[0]
+                ax.plot([bx, bx + bar], [by, by], color="#66ccff", lw=2)
+                ax.text(bx + bar / 2, by + 0.015 * small.shape[0], "5'",
+                        color="#66ccff", fontsize=9, ha="center")
+        fig.text(0.5, 0.97, title, color="black", fontsize=10, ha="center",
+                 va="center")
+        try:
+            fig.savefig(out_path, dpi=fig.dpi, facecolor="white",
+                        format="png")
+        except Exception as exc:                 # noqa: BLE001
+            return False, f"could not write the field image: {exc}"
+        size = os.path.getsize(out_path)
+        if size <= max_bytes:
+            return True, (f"{small.shape[1]}x{small.shape[0]} px, "
+                          f"{size / 1024:.0f} kB")
+        side = int(side * 0.75)
+    return True, (f"{size / 1024:.0f} kB — above AAVSO's 2 MB after four "
+                  "shrinks; recompress before uploading")
+
+
+def aavso_candidate_note(eph: dict, planet_name: str) -> str:
+    """Why AAVSO's upload form will refuse a TESS candidate, or ''.
+
+    The form validates #EXOPLANET_NAME against the archive's
+    CONFIRMED-planet table (pscomppars).  A TOI candidate lives in the
+    TOI table only -- TOI-7425.01 is a planet candidate there and
+    nowhere else -- so the form answers "not found, is the name missing
+    a suffix letter?".  Inventing a letter would name a planet that
+    does not exist; the honest answer is to say so and point at
+    ExoFOP-TESS, where candidate follow-up belongs."""
+    eph = eph or {}
+    disp = str(eph.get("disposition") or "").strip().upper()
+    if not disp and not (looks_like_toi(planet_name)
+                         and not eph.get("hostname")):
+        return ""
+    return (f"{planet_name} is a TESS candidate"
+            + (f" (TFOPWG {disp})" if disp else "")
+            + ". AAVSO's Exoplanet Database checks #EXOPLANET_NAME "
+            "against the archive's CONFIRMED-planet table, where "
+            "candidates do not appear, so its upload form will refuse "
+            "this file until the candidate is confirmed and named with a "
+            "letter. Do not add a letter by hand — it would name a planet "
+            "that does not exist. ExoFOP-TESS (exofop.ipac.caltech.edu) "
+            "is where candidate follow-up is submitted; the numbers in "
+            "this file are usable there.")
 
 
 def host_star_name(planet_name: str, hostname: str = "") -> str:
@@ -1623,13 +1877,17 @@ def header_target_radec(infos):
         return None, None, ("no usable OBJCTRA/OBJCTDEC in the light frames")
     ras = np.asarray([v[0] for v in seen])
     decs = np.asarray([v[1] for v in seen])
-    ra_m, dec_m = float(np.median(ras)), float(np.median(decs))
+    # Median on offsets wrapped about the first frame's RA, so a field
+    # straddling 0h does not median 359.9 and 0.1 to 180.
+    ras = ras[0] + ((ras - ras[0] + 180.0) % 360.0) - 180.0
+    ra_med, dec_m = float(np.median(ras)), float(np.median(decs))
+    ra_m = ra_med % 360.0
     hours_note = (" — OBJCTRA is a bare decimal below 24, read as HOURS by "
                   "the FITS convention; a driver writing degrees there "
                   "would be 15x off, which the archive cross-check would "
                   "show" if bare_hours else "")
     spread = float(np.max(np.hypot(
-        (ras - ra_m) * np.cos(np.radians(dec_m)), decs - dec_m))) * 3600.0
+        (ras - ra_med) * np.cos(np.radians(dec_m)), decs - dec_m))) * 3600.0
     if spread > HEADER_RADEC_SPREAD_ARCSEC:
         return None, None, (
             f"OBJCTRA/OBJCTDEC disagree by {spread:.0f}\" across the lights "
@@ -1641,9 +1899,12 @@ def header_target_radec(infos):
 
 
 def angular_sep_arcsec(ra1, dec1, ra2, dec2) -> float:
-    """Separation of two sky positions, in arcseconds."""
+    """Separation of two sky positions, in arcseconds.  The RA
+    difference is wrapped to +-180 deg first: 359.99 and 0.01 are 72"
+    apart, not a full circle."""
     d = math.radians(dec1 + dec2) / 2.0
-    return math.hypot((ra1 - ra2) * math.cos(d), dec1 - dec2) * 3600.0
+    dra = ((ra1 - ra2 + 180.0) % 360.0) - 180.0
+    return math.hypot(dra * math.cos(d), dec1 - dec2) * 3600.0
 
 
 def normalise_planet_name(raw) -> str:
@@ -3375,6 +3636,10 @@ def hops_mode_fit(t, mag, err_mag, geom: dict, ldc, detrend: dict,
         "transit_flux": transit_flux, "template": template,
         "ldc": coeffs, "law": law, "geom": dict(geom),
         "mid_guess": float(mid_guess), "flux_median": med,
+        # The posterior itself, for corner and trace plots: the
+        # filtered flat samples and the post-burn-in chain.
+        "samples": flat, "chain": chain[burn:],
+        "param_names": ["n"] + list(names) + ["rp_over_rs", "mid_time"],
     }
 
 
@@ -3691,11 +3956,17 @@ def hops_results_text(r: dict) -> str:
                 _fix_row(row[0], row[2])
     else:
         csig = fit.get("coeff_sigmas") or []
+        scl = fit.get("basis_scales") or []
         _fit_row("n", fit.get("baseline", 0.0),
                  csig[0] if len(csig) > 0 else None, initial=0)
         for i, base in enumerate(fit.get("bases") or []):
-            _fit_row(base, (fit.get("basis_coeffs") or [0.0] * (i + 1))[i],
-                     csig[1 + i] if len(csig) > 1 + i else None, initial=0)
+            # Per unit of the raw basis (HOPS's convention: the airmass
+            # coefficient is per airmass), not per standardised column.
+            sc = float(scl[i]) if len(scl) > i and scl[i] else 1.0
+            _fit_row(base,
+                     (fit.get("basis_coeffs") or [0.0] * (i + 1))[i] / sc,
+                     csig[1 + i] / sc if len(csig) > 1 + i
+                     and csig[1 + i] is not None else None, initial=0)
         _fix_row("ldc_1", fit.get("ld_u1", ""))
         _fix_row("ldc_2", fit.get("ld_u2", ""))
         rprs, rsig = fit.get("rprs"), fit.get("rprs_sigma")
@@ -4192,6 +4463,10 @@ def fit_transit(t, mag, bases=None, u1: float = LD_U1, u2: float = LD_U2):
         "chi2_nu": chi2_nu, "chi2_nu_sigma": chi2_nu_sigma,
         "baseline": float(coeffs[0]),
         "basis_coeffs": [float(c) for c in coeffs[1:1 + len(base_names)]],
+        # The design columns are standardised; a coefficient per unit of
+        # the raw basis (per airmass) is coefficient / scale, and so is
+        # its bar.
+        "basis_scales": [float(s) for s in scales],
         "coeff_sigmas": coeff_sigmas,
         "bases": base_names,
         "base_note": base_note,
@@ -6751,6 +7026,8 @@ class LightCurveWorker(QThread):
                 "trend_flux": res["trend_flux"],
                 "transit_flux": res["transit_flux"],
                 "blind_significance": blind.get("significance"),
+                "samples": res.get("samples"), "chain": res.get("chain"),
+                "param_names": res.get("param_names"),
             },
         })
         self._emit(
@@ -6768,7 +7045,7 @@ class LightCurveWorker(QThread):
             self._emit("  NOTE: " + res["duration_note"] + ".", S)
         if res.get("n_nonfinite"):
             self._emit(f"  {res['n_nonfinite']} point(s) dropped from the "
-                       "HOPS fit for a non-finite detrending value "
+                       "HOPS fit for a non-finite error bar or detrending value "
                        "(airmass below the horizon).", S)
         self._emit(
             "  The blind detection test above still decides whether a "
@@ -7574,6 +7851,7 @@ class LightCurveWorker(QThread):
         # the .seq keeps the identity at image 35).  Send the positions
         # through the detection frame's own homography first, or every
         # seed is off by the full shift between the two frames.
+        draw_map = None          # (det_hom, (w, h)) when the stars were moved
         try:
             det = int(getattr(data, "reference_image", 0) or 0)
             wh = getattr(self, "_frame_wh", None)
@@ -7592,6 +7870,19 @@ class LightCurveWorker(QThread):
                         return None
                     moved.append(pos)
                 stars = moved
+                # The reserve comes in the same detection coordinates
+                # and is measured through the same homographies, so it
+                # moves with the rest -- a promoted reserve star used to
+                # be probed and photometered a full setref shift beside
+                # itself.
+                moved_res = []
+                for sx, sy in reserves:
+                    pos = frame_to_ref(det_hom, float(sx), float(sy),
+                                       wh[0], wh[1])
+                    if pos is not None:
+                        moved_res.append(pos)
+                reserves = moved_res
+                draw_map = (det_hom, (wh[0], wh[1]))
         except Exception as exc:                # noqa: BLE001
             _log_swallowed(exc)
             return None
@@ -7649,7 +7940,25 @@ class LightCurveWorker(QThread):
                                "without a bit shift.", LogColor.BLUE)
                 sat_adu = SAT_FRACTION * full
             elif d0 is not None and float(np.nanmax(d0)) <= 1.05:
+                # Siril's calibrated floats are 16-bit ADU / 65535, so
+                # the clip sits at 1.0 -- unless the camera never reached
+                # 65535: the header's DATAMAX/SATURATE, or a frame maximum
+                # exactly at 4095 or 16383 (a 12/14-bit camera without a
+                # bit shift), moves it down, as it does for integer data.
                 sat_adu = SAT_FRACTION
+                info0 = (getattr(self, "_light_infos", None) or [{}])[0]
+                hdr_max = info0.get("datamax")
+                fmax = float(np.nanmax(d0))
+                if hdr_max and 0 < float(hdr_max) < 65535.0:
+                    sat_adu = SAT_FRACTION * float(hdr_max) / 65535.0
+                    self._emit(f"  Clip level {float(hdr_max):g} ADU from "
+                               "the header (DATAMAX/SATURATE), on "
+                               "normalised float data.", LogColor.BLUE)
+                elif int(round(fmax * 65535.0)) in (4095, 16383):
+                    sat_adu = SAT_FRACTION * fmax
+                    self._emit(f"  Clip level {fmax * 65535.0:.0f} ADU: the "
+                               "frame tops out exactly there, a 12/14-bit "
+                               "camera without a bit shift.", LogColor.BLUE)
                 # Siril's calibrated output is 16-bit ADU divided by
                 # 65535.  A gain quoted in e-/ADU must scale with the
                 # data, or "1 unit" is read as ONE electron and the
@@ -7794,6 +8103,16 @@ class LightCurveWorker(QThread):
         tgt_lost_cen = 0                 # target centroid failed/walked
         tgt_lost_ap = 0                  # target aperture unmeasurable
         comp_clips = np.zeros(n_stars, dtype=int)
+        # The per-star record the EXOTIC- and HOPS-layout folders need:
+        # every star's centroid, sky and peak on every frame, and why a
+        # frame gave no target measurement.
+        xpos = np.full((n_stars, n_frames), np.nan)
+        ypos = np.full((n_stars, n_frames), np.nan)
+        skyv = np.full((n_stars, n_frames), np.nan)
+        skye = np.full((n_stars, n_frames), np.nan)
+        peakv = np.full((n_stars, n_frames), np.nan)
+        exps = np.full(n_frames, float(exposure or 0.0))
+        status = [""] * n_frames
         # The homography convention (frame->reference, as the drift filter
         # established on real data) gives the seed; the centroid does the
         # rest, and a seed that finds nothing is retried through the
@@ -7814,9 +8133,11 @@ class LightCurveWorker(QThread):
             except Exception as exc:            # noqa: BLE001
                 _log_swallowed(exc)
                 unreadable += 1
+                status[k] = "unreadable"
                 continue
             if d is None or d.ndim < 2:
                 unreadable += 1
+                status[k] = "unreadable"
                 continue
             # The time comes from the frame's OWN header, which is already
             # open -- not from sirilpy's ImgData.date_obs, which came back
@@ -7832,6 +8153,7 @@ class LightCurveWorker(QThread):
                 exp_s = 0.0
             if not exp_s:
                 exp_s = exposure
+            exps[k] = float(exp_s or 0.0)
             stamp = str(hdr.get("DATE-OBS", "") or "") if hdr is not None \
                 else ""
             if not stamp and when is not None:
@@ -7861,17 +8183,23 @@ class LightCurveWorker(QThread):
                 if cen is None:
                     if si == 0:
                         tgt_lost_cen += 1
+                        status[k] = "target_centroid_lost"
                     continue
                 got = aperture_photometry(d, cen[0], cen[1], radii,
                                           r_in, r_out, gain, sat_adu)
                 if got is None:
                     if si == 0:
                         tgt_lost_ap += 1
+                        status[k] = "target_aperture_off_frame"
                     continue
                 rows, _sky, _ssig, peak = got
+                xpos[si, k], ypos[si, k] = float(cen[0]), float(cen[1])
+                skyv[si, k], skye[si, k] = float(_sky), float(_ssig)
+                peakv[si, k] = float(peak)
                 if math.isinf(peak):            # clipped core this frame
                     if si == 0:
                         sat_dropped += 1
+                        status[k] = "target_saturated"
                     else:
                         comp_clips[si] += 1
                     continue
@@ -8025,6 +8353,40 @@ class LightCurveWorker(QThread):
         e = np.where(np.isfinite(err[ok]), err[ok], np.nanmedian(err[ok]))
         self._hops_photometry = {"rel": _rel[ok], "rel_err": _rel_err[ok],
                                  "n_comps": len(_cf)}
+        # Everything measured, per star and frame, at the chosen
+        # aperture -- what HOPS's PHOTOMETRY_a.txt and EXOTIC's
+        # per-frame plots are made of.  Times are the frames' own
+        # mid-exposure JD_UTC, before any barycentric correction.
+        # The list the photometry actually used (target first), in the
+        # coordinates of the frame the field pictures are drawn on --
+        # the detection frame, i.e. ``ref_path``.  Set only here, after
+        # every fallback exit: a run that fell back to Siril's
+        # light_curve must not draw stars Siril never measured.
+        if draw_map is not None:
+            dh, (dw, dhh) = draw_map
+            draw = []
+            for sx, sy in stars:
+                pos = ref_to_frame(dh, sx, sy, dw, dhh)
+                draw.append((float(pos[0]), float(pos[1])) if pos is not None
+                            else (float(sx), float(sy)))
+        else:
+            draw = [(float(sx), float(sy)) for sx, sy in stars]
+        self._photometry_stars = list(draw)
+        self._native_raw = {
+            "files": [os.path.basename(p) for (_i, _h, _w, p) in frames],
+            "frame_index": [int(_i) for (_i, _h, _w, p) in frames],
+            "jd": jd.copy(), "exp_s": exps,
+            "x": xpos, "y": ypos, "flux": flux[r_best].copy(),
+            "ferr": ferr[r_best].copy(), "sky": skyv, "sky_err": skye,
+            "peak": peakv, "status": status,
+            "stars": list(draw),
+            "keep": [bool(k) for k in keep],
+            "aperture": float(r_best), "r_in": float(r_in),
+            "r_out": float(r_out), "gain": float(gain_hdr),
+            # Siril's calibrated floats are ADU / 65535: the per-star
+            # files quote counts, so they multiply by this.
+            "adu_scale": 65535.0 if float_normalised else 1.0,
+        }
         return jd[ok], mag[ok], e, n_unmeasured, comp_rows, aper_rows
 
     def _run_light_curve(self, seq: str, target_xy, comps,
@@ -8633,6 +8995,7 @@ class LightCurveWorker(QThread):
                 "below, or type the planet's name in group 3.",
                 LogColor.SALMON)
         stars, ref_path = self._detect_reference_stars(seq, proc)
+        self._ref_stars = stars
         self._resolve_site(files)
         fwhm = _median([getattr(st, "fwhmx", 0.0) for st in stars]) or 3.0
         self._ref_fwhm = float(fwhm)
@@ -9287,10 +9650,146 @@ class LightCurveWorker(QThread):
         result["site_lat_deg"] = self.opts.get("site_lat_deg")
         result["site_lon_deg"] = self.opts.get("site_lon_deg")
         self._write_csv(result)
+        self._write_field_image(result)
         if self.opts.get("write_aavso", True):
             self._write_aavso(result)
+        self._write_tool_folders(result)
         self.progress.emit(100, "Done.")
         self.finished_ok.emit(result)
+
+    def _write_field_image(self, r: dict) -> None:
+        """field.png beside the CSV: the plate-solved reference frame with
+        the target and the comparison stars the photometry used marked,
+        north/east and a 5' bar from the solution.  AAVSO's Exoplanet
+        Database asks for exactly this picture with a submission."""
+        out = os.path.join(r["out_dir"], "field.png")
+        ref = r.get("ref_path")
+        if not ref or not os.path.isfile(ref):
+            _unlink_quiet(out)
+            return
+        used = getattr(self, "_photometry_stars", None) or []
+        if used:
+            target_xy, comps = used[0], used[1:]
+        else:
+            target_xy = r.get("target_xy")
+            comps = [(c[0], c[1]) for c in (r.get("comps") or [])]
+        if target_xy is None:
+            _unlink_quiet(out)
+            return
+        orient = field_orientation(getattr(self, "_ref_stars", None))
+        info0 = (getattr(self, "_light_infos", None) or [{}])[0]
+        name = (self.opts.get("resolved_target_name")
+                or (r.get("ephemeris") or {}).get("name")
+                or self.opts.get("target_name", "") or "")
+        title = (f"{name}  —  {(info0.get('date_obs') or '')[:10]}  —  "
+                 f"{r.get('filter') or 'no filter'}  —  target and "
+                 f"{len(comps)} comparison star(s)"
+                 + (f"  —  {orient[2]:.2f}\"/px, plate-solved"
+                    if orient else "  —  not plate-solved: no N/E"))
+        ok, note = write_field_image(
+            ref, target_xy, comps, out, title=title,
+            aperture_px=float(r.get("aperture_px") or 0.0),
+            orientation=orient)
+        if ok:
+            r["field_image"] = out
+            self._emit(f"  Field image written to {out} ({note}) — the "
+                       "plate-solved frame with target and comparison "
+                       "stars marked, the picture AAVSO asks for with a "
+                       "submission.", LogColor.GREEN)
+        else:
+            self._emit(f"  No field image: {note}", LogColor.SALMON)
+
+    def _write_tool_folders(self, r: dict) -> None:
+        """``lightcurve/EXOTIC/`` and ``lightcurve/HOPS/``: this run's
+        results in the two pipelines' own folder layouts and file names
+        (``write_exotic_folder``, ``write_hops_folder``).  A failure in
+        either folder is logged and never touches the run's own files,
+        which are already on disk by now."""
+        info0 = (getattr(self, "_light_infos", None) or [{}])[0]
+        eph = r.get("ephemeris") or {}
+        planet = (self.opts.get("resolved_target_name") or eph.get("name")
+                  or self.opts.get("target_name", "") or "UNKNOWN")
+        try:
+            exp_s = float(info0.get("exp_s") or 0.0)
+        except (TypeError, ValueError):
+            exp_s = 0.0
+        try:
+            binning = int(info0.get("binning") or 1)
+        except (TypeError, ValueError):
+            binning = 1
+        raw = getattr(self, "_native_raw", None)
+        quality = getattr(self, "_frame_quality", None) or {}
+        # Both folders are derivatives of THIS run: a previous run's
+        # files, named after another date or planet, must not survive
+        # beside them.  Files are removed, the directories stay: on an
+        # exFAT volume under macOS's FSKit a directory deleted and
+        # recreated in one breath refused the next write with EPERM
+        # (PHOTOMETRY_APERTURE.txt left at 0 bytes).
+        for label in (EXOTIC_DIRNAME, HOPS_DIRNAME):
+            _clear_tree_files(os.path.join(r["out_dir"], label))
+        comps_active = None
+        if raw and raw.get("stars"):
+            comps_active = [tuple(sxy) for sxy, kp in
+                            zip(raw["stars"][1:], raw.get("keep") or []) if kp]
+        filt_text = (self.opts.get("filter_name", "") or r.get("filter")
+                     or "")
+        orient = field_orientation(getattr(self, "_ref_stars", None))
+        x = {
+            "raw": raw, "version": VERSION, "planet": str(planet),
+            "star": host_star_name(str(planet), eph.get("hostname", "")),
+            "date_obs": info0.get("date_obs") or "",
+            "filter": hops_filter_name(filt_text) or filt_text or "",
+            "filter_raw": filt_text,
+            "aavso_filter": aavso_filter_code(filt_text),
+            "exp_s": exp_s, "binning": binning,
+            "gain": float(raw.get("gain") or 1.0) if raw else 1.0,
+            "ra_deg": self.opts.get("target_ra_deg"),
+            "dec_deg": self.opts.get("target_dec_deg"),
+            "target_name": host_star_name(str(planet), eph.get("hostname", "")),
+            "obscode": str(self.opts.get("obscode", "") or "").strip().upper(),
+            "obstype": self.opts.get("obstype", "CCD"),
+            "notes": (f"Svenesis LightCurve {VERSION}; "
+                      + ("no transit claimed; " if not (
+                          (r.get("fit") or {}).get("detected")) else "")
+                      + "see the AAVSO_exoplanet.txt beside this folder"),
+            "annulus": float(raw.get("r_in") or 0.0) if raw else 0.0,
+            "stars": list(getattr(self, "_photometry_stars", None) or []),
+            "comps_active": comps_active,
+            "seeing": quality.get("fwhm"),
+            "image_scale": (f"{orient[2]:.3f} arcsec/pixel" if orient
+                            else "image scale unknown"),
+        }
+        for label, writer in (("EXOTIC", write_exotic_folder),
+                              ("HOPS", write_hops_folder)):
+            try:
+                written, notes = writer(r, x)
+            except Exception as exc:              # noqa: BLE001
+                _log_swallowed(exc)
+                # The raise site, not the handler: an EPERM from a file
+                # system is useless without the file it refused.
+                frames = traceback.extract_tb(exc.__traceback__)
+                where = "; ".join(f"{os.path.basename(f.filename)}:{f.lineno} "
+                                  f"{f.name}" for f in frames[-3:])
+                fname = getattr(exc, "filename", None)
+                self._emit(f"  {label} folder not written: {exc}"
+                           + (f" [{fname}]" if fname else "") + f" at {where}",
+                           LogColor.SALMON)
+                continue
+            folder = os.path.join(r["out_dir"], label)
+            rel = sorted({os.path.relpath(p, folder) for p in written})
+            top = [p for p in rel if os.sep not in p]
+            subs = {}
+            for p in rel:
+                if os.sep in p:
+                    d = p.split(os.sep, 1)[0]
+                    subs[d] = subs.get(d, 0) + 1
+            self._emit(f"  {label} layout: {len(written)} file(s) under "
+                       f"{folder} — " + ", ".join(
+                           top + [f"{d}/ ({n} files)"
+                                  for d, n in sorted(subs.items())]),
+                       LogColor.GREEN)
+            for note in notes:
+                self._emit(f"    {label}: {note}", LogColor.BLUE)
 
     def _write_aavso(self, r: dict) -> None:
         """Write the AAVSO Exoplanet Watch submission file.
@@ -9321,6 +9820,7 @@ class LightCurveWorker(QThread):
                 "measurement. The local report still shows what the data "
                 "allow — a submission would not carry that caveat.",
                 LogColor.SALMON)
+            _unlink_quiet(os.path.join(r["out_dir"], "AAVSO_exoplanet.txt"))
             return
         if r.get("yield_severity") == "bad":
             self._emit(
@@ -9330,6 +9830,7 @@ class LightCurveWorker(QThread):
                 "happened to favour, which is a selected sample, not a "
                 "measured one.",
                 LogColor.SALMON)
+            _unlink_quiet(os.path.join(r["out_dir"], "AAVSO_exoplanet.txt"))
             return
         if r.get("time_system") != "BJD_TDB":
             self._emit("  No AAVSO file written: the times are "
@@ -9337,6 +9838,7 @@ class LightCurveWorker(QThread):
                        "BJD_TDB. Submitting JD_UTC under that header would "
                        "be an 8 minute error nobody could see.",
                        LogColor.SALMON)
+            _unlink_quiet(os.path.join(r["out_dir"], "AAVSO_exoplanet.txt"))
             return
         fit = r.get("fit")
         eph = r.get("ephemeris") or {}
@@ -9360,6 +9862,7 @@ class LightCurveWorker(QThread):
                        or eph.get("name")
                        or self.opts.get("target_name", "") or "UNKNOWN")
         star_name = host_star_name(planet_name, eph.get("hostname", ""))
+        candidate_note = aavso_candidate_note(eph, planet_name)
         info0 = (getattr(self, "_light_infos", None) or [{}])[0]
         try:
             exp_s = float(info0.get("exp_s") or 0.0)
@@ -9436,8 +9939,10 @@ class LightCurveWorker(QThread):
                 if r.get("site_lat_deg") is not None:
                     fh.write(f"#SITELAT={r['site_lat_deg']:.4f}\n")
                     fh.write(f"#SITELONG={r['site_lon_deg']:.4f}\n")
-                fh.write(f"#COMPS={len(r['comps'])} ensemble, "
-                         "instrumental\n")
+                raw = getattr(self, "_native_raw", None)
+                n_comps = (sum(1 for k in raw.get("keep") or [] if k)
+                           if raw else len(r["comps"]))
+                fh.write(f"#COMPS={n_comps} ensemble, instrumental\n")
                 if r.get("aperture_px"):
                     fh.write(f"#APERTURE={r['aperture_px']:.2f} px\n")
                 if fit is not None and fit.get("detected"):
@@ -9461,6 +9966,9 @@ class LightCurveWorker(QThread):
                 # #NOTES keys in one header, and which one a parser keeps
                 # is the parser's mood.
                 fh.write("#NOTES="
+                         + (("TESS candidate, not in the archive's "
+                             "confirmed-planet table; ") if candidate_note
+                            else "")
                          + ("no transit claimed; photometry only; "
                             if not (fit is not None and fit.get("detected"))
                             else "")
@@ -9486,10 +9994,13 @@ class LightCurveWorker(QThread):
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(partial, path)
+            r["aavso_path"] = path
             self._emit(f"  AAVSO submission file written to {path}"
                        + ("" if obscode else
                           " — fill in #OBSCODE before submitting."),
                        LogColor.GREEN)
+            if candidate_note:
+                self._emit("  NOTE: " + candidate_note, LogColor.SALMON)
         except OSError as exc:
             self._emit(f"  Could not write the AAVSO file: {exc}",
                        LogColor.SALMON)
@@ -9529,6 +10040,1317 @@ class LightCurveWorker(QThread):
             self._emit(f"  Light curve written to {path}", LogColor.GREEN)
         except OSError as exc:
             self._emit(f"  Could not write the CSV ({exc}).", LogColor.SALMON)
+
+
+# ---------------------------------------------------------------------------
+# EXOTIC- and HOPS-layout folders
+# ---------------------------------------------------------------------------
+# ``lightcurve/EXOTIC/`` and ``lightcurve/HOPS/`` hold this run's results
+# in the other two pipelines' own folder layouts, file names and column
+# orders, so anything written to read an EXOTIC or a HOPS output folder
+# reads these unchanged.  The numbers are this script's; only the
+# containers are theirs.  Every writer below takes plain arrays and
+# dicts and touches nothing but its own folder, so the whole section is
+# exercised by the test suite without Siril.
+EXOTIC_DIRNAME = "EXOTIC"
+HOPS_DIRNAME = "HOPS"
+HOPS_PHOTOMETRY_DIR = "PHOTOMETRY_1"
+HOPS_LC_FILE = "PHOTOMETRY_APERTURE.txt"
+_MONTH_NAMES = ("January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November",
+                "December")
+
+
+def exotic_date_text(date_obs: str) -> str:
+    """EXOTIC's observation-date text as its inits template spells it,
+    ``17-December-2017``, from a DATE-OBS; '' when the date is unreadable.
+    Spelled from a fixed month table, not strftime, so a German locale
+    does not write ``Dezember`` into a file name EXOTIC's tools parse."""
+    m = re.match(r"\s*(\d{4})-(\d{2})-(\d{2})", str(date_obs or ""))
+    if not m:
+        return ""
+    try:
+        d = datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return ""
+    return f"{d.day:02d}-{_MONTH_NAMES[d.month - 1]}-{d.year}"
+
+
+def hops_date_text(jd_utc: float) -> str:
+    """HOPS's observation date, ``YYYY-MM-DD`` of the first exposure's
+    JD_UTC (its export names carry the first ten characters of the
+    ISO time)."""
+    try:
+        jd = float(jd_utc)
+    except (TypeError, ValueError):
+        return ""
+    if not math.isfinite(jd):
+        return ""
+    unix = (jd - 2440587.5) * 86400.0
+    try:
+        return datetime.datetime.fromtimestamp(
+            unix, tz=datetime.timezone.utc).strftime("%Y-%m-%d")
+    except (OverflowError, OSError, ValueError):
+        return ""
+
+
+def round_to_two(value, unc=None):
+    """EXOTIC's rounding rule, reimplemented: a value written to the
+    decimals that give its uncertainty two significant figures -- two
+    decimals when the uncertainty is one or more, and the value's own
+    magnitude decides when there is no uncertainty."""
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return value
+    if not math.isfinite(x):
+        return x
+    try:
+        y = x if unc is None else float(unc)
+    except (TypeError, ValueError):
+        y = x
+    if not math.isfinite(y) or y == 0.0:
+        return round(x, 2)
+    if abs(y) >= 1.0:
+        return round(x, 2)
+    return round(x, 1 - int(math.floor(math.log10(abs(y)))))
+
+
+def _plain(value) -> str:
+    """A value without an uncertainty at full useful precision: a period
+    of 3.8608551 d must not become 3.86 because nothing prices it."""
+    try:
+        return f"{float(value):.10g}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _pm(value, unc=None, units: str = "") -> str:
+    """``value +/- unc`` in EXOTIC's rounding; without an uncertainty the
+    value alone at full precision; '' for no value."""
+    if value is None:
+        return ""
+    if unc is None:
+        txt = _plain(value)
+    else:
+        txt = f"{round_to_two(value, unc)} +/- {round_to_two(unc)}"
+    return txt + (f" {units}" if units else "")
+
+
+def _xc(value, unc=None, units=None) -> dict:
+    """One entry of EXOTIC's ``-XC`` JSON headers."""
+    d = {"value": (None if value is None else _plain(value) if unc is None
+                   else str(round_to_two(value, unc))),
+         "uncertainty": None if unc is None else str(round_to_two(unc))}
+    if units:
+        d["units"] = units
+    return d
+
+
+def _finite(a, default=float("nan")):
+    arr = np.asarray(a, dtype=float)
+    return np.where(np.isfinite(arr), arr, default)
+
+
+def _mag_to_flux(mag):
+    """Flux, out-of-transit-median 1, from a differential magnitude series
+    (a plain 10^(-0.4 m), the median removed, no mask)."""
+    m = np.asarray(mag, dtype=float)
+    return 10.0 ** (-0.4 * (m - np.nanmedian(m)))
+
+
+def exotic_fit_summary(r: dict) -> dict:
+    """The parameters EXOTIC's output files quote -- Tmid, Rp/R*, inc,
+    the two airmass coefficients, the duration -- from this run's fit.
+
+    The HOPS-mode posterior is used when the run has one (it is the
+    ephemeris-locked fit EXOTIC's own is), else the blind fit.  ``a1``
+    is the flux normalisation and ``a2`` the airmass coefficient: for
+    the HOPS-mode fit the linear coefficient of ``n (1 + a2 x)``, for
+    the blind fit the magnitude slope turned into the exponent of
+    ``exp(a2 X)``.  ``source`` says which.  Empty dict without a fit."""
+    fit = r.get("fit") or {}
+    if not fit:
+        return {}
+    eph = r.get("ephemeris") or {}
+    out = {"detected": bool(fit.get("detected")),
+           "inc": eph.get("inc_deg"), "inc_e": None,
+           "dur_d": fit.get("duration_d"), "dur_e": None,
+           "ldc": None}
+    hops = fit.get("hops")
+    if hops and hops.get("rows"):
+        rows = {row[0]: row for row in hops["rows"]}
+        n_row = rows.get("n")
+        a_row = rows.get("airmass")
+        out.update({
+            "source": "HOPS-mode posterior",
+            "tmid": fit.get("t0"),
+            "tmid_e": 0.5 * (float(hops.get("mid_m", 0.0))
+                             + float(hops.get("mid_p", 0.0))),
+            "rprs": fit.get("rprs"),
+            "rprs_e": 0.5 * (float(hops.get("rp_m", 0.0))
+                             + float(hops.get("rp_p", 0.0))),
+            "a1": float(n_row[2]) if n_row else 1.0,
+            "a1_e": 0.5 * (n_row[3] + n_row[4]) if n_row else None,
+            "a2": float(a_row[2]) if a_row else 0.0,
+            "a2_e": 0.5 * (a_row[3] + a_row[4]) if a_row else None,
+        })
+        ldc = hops.get("ldc")
+        if ldc is not None and len(ldc) == 4:
+            out["ldc"] = [float(c) for c in ldc]
+        return out
+    slope = fit.get("airmass_slope")
+    sig = fit.get("coeff_sigmas") or []
+    bases = fit.get("bases") or []
+    a2_e = None
+    # coeff_sigmas is [baseline, bases...], the baseline first, and it
+    # prices the STANDARDISED coefficients: per airmass it is / scale,
+    # like the slope itself (measured: without the division the bar was
+    # sd(airmass) times too small, 2-10x on a normal night).
+    scales = fit.get("basis_scales") or []
+    if "airmass" in bases:
+        k = bases.index("airmass")
+        if len(sig) > 1 + k:
+            sc = float(scales[k]) if len(scales) > k and scales[k] else 1.0
+            a2_e = 0.4 * math.log(10.0) * float(sig[1 + k]) / sc
+    out.update({
+        "source": "blind fit",
+        "tmid": fit.get("t0"),
+        "tmid_e": (float(fit["t0_sigma_d"])
+                   if fit.get("t0_sigma_d") is not None
+                   and np.isfinite(fit.get("t0_sigma_d")) else None),
+        "rprs": fit.get("rprs"),
+        "rprs_e": fit.get("rprs_sigma"),
+        "a1": 1.0, "a1_e": None,
+        "a2": (-0.4 * math.log(10.0) * float(slope)
+               if slope is not None and np.isfinite(slope) else 0.0),
+        "a2_e": a2_e,
+    })
+    return out
+
+
+def exotic_series(r: dict) -> dict:
+    """The per-point columns EXOTIC's files carry, from this run's
+    series: time, orbital phase, normalised raw flux and its error,
+    airmass, the systematics ("airmass") model as flux, the transit
+    model as flux and the detrended flux.  Every array has one entry per
+    kept point; missing quantities are NaN, never absent."""
+    jd = np.asarray(r["jd"], dtype=float)
+    n = jd.size
+    fit = r.get("fit") or {}
+    eph = r.get("ephemeris") or {}
+    oot = None
+    if fit.get("detected") and fit.get("t0") is not None \
+            and fit.get("duration_d"):
+        oot = np.abs(jd - float(fit["t0"])) > 0.5 * float(fit["duration_d"])
+    flux, ferr = aavso_rnflux(r["mag"], r["err"], oot)
+    flux = np.asarray(flux, dtype=float)
+    ferr = np.asarray(ferr, dtype=float)
+    if ferr.size != n:
+        ferr = np.full(n, np.nan)
+    X = r.get("airmass")
+    airmass = (np.asarray(X, dtype=float) if X is not None
+               and np.asarray(X).size == n else np.full(n, np.nan))
+    trend = fit.get("trend")
+    if trend is not None and np.asarray(trend).size == n:
+        tr = np.asarray(trend, dtype=float)
+        trend_flux = 10.0 ** (-0.4 * (tr - np.nanmedian(tr)))
+    else:
+        tr = None
+        trend_flux = np.ones(n)
+    model = fit.get("model_mag")
+    if tr is not None and model is not None and np.asarray(model).size == n:
+        transit_flux = 10.0 ** (-0.4 * (np.asarray(model, dtype=float) - tr))
+    else:
+        transit_flux = np.ones(n)
+    tmid = fit.get("t0")
+    period = eph.get("period_d")
+    if tmid is not None and period:
+        phase = (jd - float(tmid)) / float(period)
+    elif tmid is not None:
+        phase = jd - float(tmid)
+    else:
+        phase = np.full(n, np.nan)
+    # The pure transit sits at 1 out of transit, and so does the
+    # detrended curve: the blind fit's baseline constant lives in the
+    # model but not in the trend, and left in it put the model 0.5 %
+    # above the data on a real run.
+    top = float(np.nanmax(transit_flux)) if np.isfinite(transit_flux).any() \
+        else 1.0
+    if top > 0:
+        transit_flux = transit_flux / top
+    safe_trend = np.where(trend_flux > 0, trend_flux, np.nan)
+    detrended = flux / safe_trend
+    detrended_err = ferr / safe_trend
+    ref = detrended[oot] if oot is not None and np.any(oot) else detrended
+    norm = float(np.nanmedian(ref)) if np.isfinite(ref).any() else 1.0
+    if np.isfinite(norm) and norm > 0:
+        detrended = detrended / norm
+        detrended_err = detrended_err / norm
+    return {"time": jd, "phase": phase, "flux": flux, "err": ferr,
+            "airmass": airmass, "trend_flux": trend_flux,
+            "transit_flux": transit_flux,
+            "detrended": detrended, "detrended_err": detrended_err}
+
+
+def _agg_figure(w: float, h: float):
+    """A matplotlib figure on the Agg canvas (no window, worker thread
+    safe), or None when matplotlib is missing."""
+    try:
+        from matplotlib.figure import Figure as _Fig
+        from matplotlib.backends.backend_agg import FigureCanvasAgg as _Agg
+    except ImportError:
+        return None
+    fig = _Fig(figsize=(w, h))
+    _Agg(fig)
+    return fig
+
+
+def _save_figure(fig, *paths, dpi: int = 150) -> list:
+    """Save one figure under each path (the extension picks the format);
+    returns the paths that were written.  A format the backend cannot
+    write (JPEG without Pillow) is skipped, not fatal."""
+    done = []
+    for p in paths:
+        try:
+            fig.savefig(p, dpi=dpi, bbox_inches="tight")
+            done.append(p)
+        except Exception as exc:              # noqa: BLE001
+            _log_swallowed(exc)
+    return done
+
+
+def _load_frame(path: str):
+    """The first 2-D image of a FITS file as float, or None."""
+    try:
+        from astropy.io import fits
+        with fits.open(path, memmap=False) as hd:
+            for u in hd:
+                d = getattr(u, "data", None)
+                if d is not None and np.ndim(d) >= 2:
+                    d = np.asarray(d, dtype=float)
+                    while d.ndim > 2:
+                        d = d[0]
+                    return d
+    except Exception as exc:                  # noqa: BLE001
+        _log_swallowed(exc)
+    return None
+
+
+def _asinh_display(img):
+    """The image stretched for display: asinh between its 1st and 99.7th
+    percentiles, the same stretch EXOTIC's field plot uses."""
+    lo, hi = np.nanpercentile(img, [1.0, 99.7])
+    if not (hi > lo):
+        hi = lo + 1.0
+    x = np.clip((img - lo) / (hi - lo), 0.0, 1.0)
+    return np.arcsinh(x * 10.0) / np.arcsinh(10.0)
+
+
+def write_exotic_fov(ref_path: str, target_xy, comps, aperture: float,
+                     annulus: float, targ_name: str, image_scale: str,
+                     out_base: str) -> list:
+    """EXOTIC's field-of-view plot: the first frame with the aperture and
+    the sky annulus drawn around the target and every comparison star,
+    the target named and the comps labelled 'Comp Star', a legend with
+    the aperture and annulus radii, the image scale in the title.
+    Written as ``<out_base>.png`` and ``.pdf``; returns the paths."""
+    img = _load_frame(ref_path)
+    if img is None or target_xy is None:
+        return []
+    fig = _agg_figure(9.0, 9.0 * img.shape[0] / max(img.shape[1], 1))
+    if fig is None:
+        return []
+    from matplotlib.patches import Circle
+    from matplotlib.lines import Line2D
+    ax = fig.add_subplot(111)
+    ax.imshow(_asinh_display(img), cmap="Greys_r", origin="lower",
+              interpolation="nearest")
+    colour = "lime"
+    ap = abs(float(aperture) or 1.0)
+    ann = abs(float(annulus) or 0.0)
+    tx, ty = float(target_xy[0]), float(target_xy[1])
+    ax.add_patch(Circle((tx, ty), ap, color=colour, fill=False, ls="-"))
+    ax.add_patch(Circle((tx, ty), ap + ann, color=colour, fill=False,
+                        ls="--"))
+    ax.text(tx + ap + ann + 5, ty, targ_name, color="w", fontsize=10,
+            va="center")
+    for cx, cy in comps:
+        cx, cy = float(cx), float(cy)
+        ax.add_patch(Circle((cx, cy), ap, color=colour, fill=False, ls="-"))
+        ax.add_patch(Circle((cx, cy), ap + ann, color=colour, fill=False,
+                            ls="--"))
+        ax.text(cx + ap + ann + 5, cy, "Comp Star", color="w", fontsize=10,
+                va="center")
+    label = (f"Aperture Photometry\n(Aperture: {ap:.2f} px)\n"
+             f"(Annulus: {ann:.2f} px)")
+    ax.legend(handles=[Line2D([], [], color=colour, linestyle="-",
+                              label=label)],
+              loc="upper right", fontsize=8, facecolor="black",
+              labelcolor="white")
+    ax.set_title(f"FOV for {targ_name}\n({image_scale})")
+    ax.set_xlabel("x-axis [pixel]")
+    ax.set_ylabel("y-axis [pixel]")
+    return _save_figure(fig, out_base + ".png", out_base + ".pdf", dpi=150)
+
+
+def write_hops_fov(ref_path: str, stars, keep, aperture: float,
+                   out_path: str) -> list:
+    """HOPS's ``FOV.pdf``: the first frame with the target's aperture in
+    red labelled ``T(r)`` and each comparison's in cyan labelled
+    ``C_i(r)``, dropped comps marked '- Inactive', one legend entry for
+    each colour.  ``stars`` is the target first, ``keep`` one flag per
+    comp.  Returns the written paths."""
+    img = _load_frame(ref_path)
+    if img is None or not stars:
+        return []
+    fig = _agg_figure(9.0, 9.0 * img.shape[0] / max(img.shape[1], 1))
+    if fig is None:
+        return []
+    from matplotlib.patches import Circle
+    ax = fig.add_subplot(111)
+    fig.subplots_adjust(0.01, 0.05, 0.99, 0.89)
+    ax.imshow(_asinh_display(img), cmap="Greys_r", origin="lower",
+              interpolation="nearest")
+    ap = float(aperture)
+    for i, (sx, sy) in enumerate(stars):
+        sx, sy = float(sx), float(sy)
+        if i == 0:
+            ax.text(sx + ap, sy + ap, f"$T$({ap:g})", color="r", fontsize=8,
+                    va="top", ha="left")
+            ax.add_patch(Circle((sx, sy), ap, ec="r", fill=False,
+                                label="Target (ap. radius)"))
+            continue
+        active = bool(keep[i - 1]) if i - 1 < len(keep) else True
+        label = "Comparisons (ap. radius)" if i == 1 else None
+        ax.text(sx + ap, sy + ap,
+                f"$C_{{{i}}}$({ap:g})" + ("" if active else " - Inactive"),
+                color="#07fefc", fontsize=8, va="top", ha="left")
+        ax.add_patch(Circle((sx, sy), ap, ec="#07fefc", fill=False,
+                            label=label, ls="-" if active else "--"))
+    ax.legend(loc=(0, 1.01))
+    ax.set_xticks([])
+    ax.set_yticks([])
+    return _save_figure(fig, out_path, dpi=200)
+
+
+def write_hops_results_pdf(ref_path, stars, keep, aperture, jd, flux,
+                           out_path: str) -> list:
+    """HOPS's ``RESULTS.pdf``: one row per star -- a cut-out of the star
+    on the left, its relative light curve on the right, the target over
+    the sum of the active comparisons as ``T`` and each comparison over
+    the sum of the other active ones as ``C_i``, every curve divided by
+    its median, against hours since the first exposure."""
+    flux = np.asarray(flux, dtype=float)
+    jd = np.asarray(jd, dtype=float)
+    if flux.ndim != 2 or flux.shape[0] < 2 or jd.size != flux.shape[1]:
+        return []
+    n_stars = flux.shape[0]
+    fig = _agg_figure(8.0, 1.6 * n_stars + 0.6)
+    if fig is None:
+        return []
+    from matplotlib import gridspec
+    img = _load_frame(ref_path) if ref_path else None
+    gs = gridspec.GridSpec(n_stars, 4, figure=fig, left=0.01, right=0.99,
+                           bottom=0.6 / (1.6 * n_stars + 0.6), top=0.97,
+                           wspace=0.15, hspace=0.25)
+    hours = (jd - np.nanmin(jd)) * 24.0
+    active = np.array([True] + [bool(k) for k in keep[:n_stars - 1]]
+                      + [True] * max(0, n_stars - 1 - len(keep)))
+    ap = float(aperture)
+    for i in range(n_stars):
+        ax_img = fig.add_subplot(gs[i, 0])
+        if img is not None and i < len(stars):
+            sx, sy = int(round(float(stars[i][0]))), int(round(float(stars[i][1])))
+            h = int(max(3.0 * ap, 8.0))
+            y0, y1 = max(sy - h, 0), min(sy + h + 1, img.shape[0])
+            x0, x1 = max(sx - h, 0), min(sx + h + 1, img.shape[1])
+            if y1 > y0 and x1 > x0:
+                ax_img.imshow(_asinh_display(img[y0:y1, x0:x1]),
+                              cmap="Greys_r", origin="lower")
+        ax_img.set_xticks([])
+        ax_img.set_yticks([])
+        ax = fig.add_subplot(gs[i, 1:])
+        others = [j for j in range(1, n_stars) if j != i and active[j]]
+        denom = flux[others].sum(axis=0) if others else np.full(jd.size, np.nan)
+        rel = flux[i] / denom
+        rel = rel / np.nanmedian(rel) if np.isfinite(np.nanmedian(rel)) \
+            and np.nanmedian(rel) != 0 else rel
+        ax.plot(hours, rel, "ko", ms=3, label="Aperture")
+        ax.set_ylabel("T" if i == 0 else f"C{i}", fontsize=12)
+        ax.tick_params(labelsize=8, labelbottom=(i == n_stars - 1))
+        if i == n_stars - 1:
+            ax.set_xlabel("Time (hours in observation)", fontsize=8)
+        if i == 0:
+            ax.legend(fontsize="x-small", loc="upper right")
+    return _save_figure(fig, out_path, dpi=200)
+
+
+def write_corner_pdf(samples, names, out_path: str) -> list:
+    """A corner plot of a posterior: histograms on the diagonal, 2-D
+    histograms below it, one panel per parameter pair."""
+    s = np.asarray(samples, dtype=float)
+    if s.ndim != 2 or s.shape[0] < 10 or s.shape[1] != len(names):
+        return []
+    nd = s.shape[1]
+    fig = _agg_figure(2.0 * nd + 1.0, 2.0 * nd + 1.0)
+    if fig is None:
+        return []
+    for i in range(nd):
+        for j in range(nd):
+            if j > i:
+                continue
+            ax = fig.add_subplot(nd, nd, i * nd + j + 1)
+            if i == j:
+                ax.hist(s[:, i], bins=40, color="k", histtype="step")
+                q16, q50, q84 = np.quantile(s[:, i], [0.16, 0.5, 0.84])
+                ax.set_title(f"{names[i]} = {q50:.5g} "
+                             f"-{q50 - q16:.2g} +{q84 - q50:.2g}", fontsize=7)
+                ax.set_yticks([])
+            else:
+                ax.hist2d(s[:, j], s[:, i], bins=40, cmap="Greys")
+            if i == nd - 1:
+                ax.set_xlabel(names[j], fontsize=8)
+            else:
+                ax.set_xticklabels([])
+            if j == 0 and i > 0:
+                ax.set_ylabel(names[i], fontsize=8)
+            elif j > 0:
+                ax.set_yticklabels([])
+            ax.tick_params(labelsize=6)
+    fig.subplots_adjust(hspace=0.08, wspace=0.08)
+    return _save_figure(fig, out_path, dpi=120)
+
+
+def write_traces_pdf(chain, names, out_path: str) -> list:
+    """Walker traces of a posterior chain ``(steps, walkers, dims)``:
+    one panel per parameter, every walker a thin line against the
+    iteration."""
+    c = np.asarray(chain, dtype=float)
+    if c.ndim != 3 or c.shape[2] != len(names) or c.shape[0] < 2:
+        return []
+    nd = c.shape[2]
+    fig = _agg_figure(8.0, 1.5 * nd + 0.5)
+    if fig is None:
+        return []
+    for k in range(nd):
+        ax = fig.add_subplot(nd, 1, k + 1)
+        ax.plot(c[:, :, k], color="k", lw=0.3, alpha=0.4)
+        ax.set_ylabel(names[k], fontsize=8)
+        ax.tick_params(labelsize=7, labelbottom=(k == nd - 1))
+        if k == nd - 1:
+            ax.set_xlabel("iteration (after burn-in)", fontsize=8)
+    fig.subplots_adjust(hspace=0.15, left=0.12, right=0.98, top=0.98,
+                        bottom=0.08)
+    return _save_figure(fig, out_path, dpi=120)
+
+
+def _yaml_scalar(v) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if v is None:
+        return "null"
+    if isinstance(v, (int, float)):
+        return f"{v}"
+    if isinstance(v, (list, tuple)):
+        return "[" + ", ".join(_yaml_scalar(x) for x in v) + "]"
+    txt = str(v)
+    # Quoted only where YAML needs it: ': ' or ' #' inside, a leading
+    # indicator character, surrounding blanks, or text a parser would
+    # read as a number, a bool or null.  ``02:04:00.00 +46:42:00.0``
+    # stays plain, as HOPS's own log writes it.
+    if (txt == "" or ": " in txt or " #" in txt or txt != txt.strip()
+            or txt[0] in "[]{}&*!|>'\"%@`#,?-"
+            or txt.lower() in ("true", "false", "null", "yes", "no", "~")
+            or re.fullmatch(r"[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?", txt)):
+        return "'" + txt.replace("'", "''") + "'"
+    return txt
+
+
+def write_yaml(path: str, entries: dict) -> None:
+    """A flat ``key: value`` YAML file (scalars and flat lists only),
+    written without a YAML library so the script keeps its dependency
+    list."""
+    with open(path, "w", encoding="utf-8") as fh:
+        for k, v in entries.items():
+            fh.write(f"{k}: {_yaml_scalar(v)}\n")
+
+
+def _deg_to_sexagesimal(ra_deg, dec_deg) -> str:
+    """``hh:mm:ss.ss +dd:mm:ss.s`` for HOPS's log, or its placeholder."""
+    try:
+        ra, dec = float(ra_deg), float(dec_deg)
+    except (TypeError, ValueError):
+        return "hh:mm:ss +dd:mm:ss"
+    if not (np.isfinite(ra) and np.isfinite(dec)):
+        return "hh:mm:ss +dd:mm:ss"
+    # Round the total seconds FIRST, then split: splitting first and
+    # rounding the remainder printed 00:59:60.00 for 14.999999 deg.
+    tot = round((ra % 360.0) / 15.0 * 3600.0, 2)
+    if tot >= 86400.0:
+        tot = 0.0
+    hh = int(tot // 3600.0)
+    mm = int((tot - hh * 3600.0) // 60.0)
+    ss = tot - hh * 3600.0 - mm * 60.0
+    sign = "-" if dec < 0 else "+"
+    dtot = round(min(abs(dec), 90.0) * 3600.0, 1)
+    dd = int(dtot // 3600.0)
+    dm = int((dtot - dd * 3600.0) // 60.0)
+    ds = dtot - dd * 3600.0 - dm * 60.0
+    return f"{hh:02d}:{mm:02d}:{ss:05.2f} {sign}{dd:02d}:{dm:02d}:{ds:04.1f}"
+
+
+def _write_text(path: str, text: str) -> str:
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    return path
+
+
+def _safe_name(text) -> str:
+    """A planet or filter name as a file-name component: separators and
+    the characters no file system takes become '_'; the text inside the
+    files stays as it is.  ``Ha/OIII`` used to abort the folder halfway
+    with a FileNotFoundError."""
+    txt = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "_", str(text or "")).strip(" ._")
+    return txt or "unnamed"
+
+
+def _clear_tree_files(root: str) -> None:
+    """Remove every file below ``root`` but keep the directories: a
+    folder that is deleted and recreated at once made an exFAT volume
+    under macOS's FSKit refuse the next write with EPERM, unlinking the
+    files did not.  AppleDouble ``._`` siblings the OS keeps beside each
+    file go with it."""
+    if not os.path.isdir(root):
+        return
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            try:
+                os.remove(os.path.join(dirpath, name))
+            except OSError as exc:
+                _log_swallowed(exc)
+
+
+def _unlink_quiet(path: str) -> None:
+    """Remove a file a previous run may have left, so a refused output
+    is absent rather than stale."""
+    try:
+        if os.path.isfile(path):
+            os.remove(path)
+    except OSError as exc:
+        _log_swallowed(exc)
+
+
+def hops_photometry_arrays(raw: dict):
+    """From the native photometry's per-star record: the exposure-start
+    JD_UTC per frame, HOPS's relative light curve (target over the raw
+    sum of the ACTIVE comparisons, error propagated) and the mask of
+    frames HOPS would keep (a finite curve value)."""
+    flux = np.asarray(raw["flux"], dtype=float)
+    ferr = np.asarray(raw["ferr"], dtype=float)
+    keep = [bool(k) for k in raw.get("keep", [])]
+    active = [i + 1 for i, k in enumerate(keep) if k and i + 1 < flux.shape[0]]
+    rel, rel_err = hops_relative_flux(flux[0], [flux[i] for i in active],
+                                      ferr[0], [ferr[i] for i in active])
+    jd_start = (np.asarray(raw["jd"], dtype=float)
+                - np.asarray(raw["exp_s"], dtype=float) / 172800.0)
+    valid = np.isfinite(rel) & np.isfinite(jd_start)
+    return jd_start, np.asarray(rel), np.asarray(rel_err), valid
+
+
+def write_hops_folder(r: dict, x: dict) -> tuple:
+    """``lightcurve/HOPS/``: HOPS's observation folder as its photometry
+    and fitting steps leave it, plus the two files its 'EXPORT FOR
+    DATABASES' button writes.
+
+    ``PHOTOMETRY_1/`` holds ``PHOTOMETRY_APERTURE.txt`` (exposure-start
+    JD_UTC, target over the comparison sum, error), ``PHOTOMETRY_a.txt``
+    (file name, time, then per star x, y, flux, flux error, background,
+    background error), ``FOV.pdf``, ``RESULTS.pdf``,
+    ``ExoClock_info.txt``, ``photometry_output_description.txt`` and
+    ``log.yaml``.  ``PHOTOMETRY_1/PHOTOMETRY_APERTURE_FITTING/`` -- HOPS
+    names the fitting folder after the light-curve file -- holds
+    ``results.txt``, ``model.txt``, ``detrended_model.txt``,
+    ``corner.pdf``, ``traces.pdf``, ``detrended_model.jpg``,
+    ``fitting_output_description.txt`` and ``log.yaml``, and exists only
+    when the run fitted in HOPS mode.  The ExoClock and ETD export files
+    sit beside ``PHOTOMETRY_1`` under HOPS's own name pattern.
+
+    ``x`` carries what the result dict does not: ``raw`` (the native
+    photometry record, or None), ``version``, ``planet``, ``filter``,
+    ``exp_s``, ``gain``, ``binning``, ``ra_deg``/``dec_deg``,
+    ``hops_iterations``.  Returns ``(written paths, notes)``."""
+    written, notes = [], []
+    root = os.path.join(r["out_dir"], HOPS_DIRNAME)
+    phot_dir = os.path.join(root, HOPS_PHOTOMETRY_DIR)
+    os.makedirs(phot_dir, exist_ok=True)
+    raw = x.get("raw")
+    planet = str(x.get("planet") or "").replace(" ", "") or "Choose Planet"
+    filt = x.get("filter") or "default"
+    exp_s = float(x.get("exp_s") or 0.0)
+    eph = r.get("ephemeris") or {}
+
+    # --- the light curve HOPS's photometry step produces ---------------
+    if raw is not None and np.asarray(raw.get("flux")).ndim == 2:
+        jd_start, rel, rel_err, valid = hops_photometry_arrays(raw)
+        lc = np.column_stack([jd_start[valid], rel[valid], rel_err[valid]])
+        p = os.path.join(phot_dir, HOPS_LC_FILE)
+        np.savetxt(p, lc)
+        written.append(p)
+        s = float(raw.get("adu_scale") or 1.0)
+        flux = np.asarray(raw["flux"], dtype=float)
+        ferr = np.asarray(raw["ferr"], dtype=float)
+        n_stars = flux.shape[0]
+        # HOPS's background columns are the sky INSIDE the aperture
+        # (pi r^2 x mean) and its error (sqrt(pi r^2) x sigma), not the
+        # per-pixel values the photometry keeps; and everything is in
+        # counts, so Siril's /65535 floats are scaled back.
+        area = math.pi * float(raw.get("aperture") or 0.0) ** 2
+        blocks = [np.asarray(raw[k], dtype=float) for k in ("x", "y")] + [
+            flux * s, ferr * s,
+            np.asarray(raw["sky"], dtype=float) * area * s,
+            np.asarray(raw["sky_err"], dtype=float) * math.sqrt(area) * s]
+        names = list(raw.get("files") or [""] * jd_start.size)
+        p = os.path.join(phot_dir, "PHOTOMETRY_a.txt")
+        with open(p, "w", encoding="utf-8") as fh:
+            for k in np.flatnonzero(valid):
+                cells = [str(names[k]), str(float(jd_start[k]))]
+                for block in blocks:
+                    cells.extend(str(float(block[si, k]))
+                                 for si in range(n_stars))
+                fh.write(" ".join(cells) + "\n")
+        written.append(p)
+        stars = list(raw.get("stars") or [])
+        keep = list(raw.get("keep") or [])
+        written += write_hops_fov(r.get("ref_path") or "", stars, keep,
+                                  float(raw.get("aperture") or 0.0),
+                                  os.path.join(phot_dir, "FOV.pdf"))
+        written += write_hops_results_pdf(
+            r.get("ref_path") or "", stars, keep,
+            float(raw.get("aperture") or 0.0), jd_start[valid],
+            flux[:, valid], os.path.join(phot_dir, "RESULTS.pdf"))
+        first_jd = float(jd_start[valid][0]) if valid.any() else float("nan")
+    else:
+        # Siril's light_curve measured the run: no per-star fluxes, so
+        # the curve comes from the differential magnitudes.
+        jd_utc = np.asarray(r.get("jd_utc"), dtype=float)
+        jd_start = jd_utc - exp_s / 172800.0
+        rel = _mag_to_flux(r["mag"])
+        rel_err = np.abs(rel) * 0.4 * math.log(10.0) * _finite(r["err"], 0.0)
+        valid = np.isfinite(jd_start) & np.isfinite(rel)
+        lc = np.column_stack([jd_start[valid], rel[valid], rel_err[valid]])
+        p = os.path.join(phot_dir, HOPS_LC_FILE)
+        np.savetxt(p, lc)
+        written.append(p)
+        notes.append("PHOTOMETRY_a.txt, FOV.pdf and RESULTS.pdf need the "
+                     "script's own photometry (Siril's light_curve keeps "
+                     "no per-star fluxes); PHOTOMETRY_APERTURE.txt was "
+                     "made from the differential magnitudes")
+        first_jd = float(jd_start[valid][0]) if valid.any() else float("nan")
+    notes.append("PHOTOMETRY_GAUSS.txt / PHOTOMETRY_g.txt not written: "
+                 "this script has no PSF-fitting photometry")
+    date = hops_date_text(first_jd)
+
+    written.append(_write_text(
+        os.path.join(phot_dir, "ExoClock_info.txt"), "\n".join([
+            "The ExoClock Project keeps the ephemerides of exoplanets "
+            "precise for the planning of future observations. An observed "
+            "transit can be contributed at:", "",
+            "https://www.exoclock.space", "",
+            f"File to upload: {HOPS_LC_FILE}", "",
+            f"Planet: {planet}", "",
+            "Time format: JD_UTC \n(UTC-based Julian date)", "",
+            "Time stamp: Exposure start \n(the time refers to the beginning "
+            "of each exposure)", "",
+            "Flux format: Flux \n(flux of target over summed flux of "
+            "comparisons)", "",
+            f"Filter: {filt}", "",
+            f"Exposure time in seconds: {exp_s}", ""])))
+    written.append(_write_text(
+        os.path.join(phot_dir, "photometry_output_description.txt"),
+        "\n".join([
+            "", "--- FOV.pdf ---",
+            "The field with the target and the comparison stars marked "
+            "(aperture radius in brackets; a dropped comparison is "
+            "'Inactive').", "",
+            "--- RESULTS.pdf ---",
+            "The relative light curve of the target (T) and of every "
+            "comparison star (C1, C2, ...), each divided by its median.",
+            "", "--- ExoClock_info.txt ---",
+            "What the ExoClock upload form asks for this file.", "",
+            f"--- {HOPS_LC_FILE} ---",
+            "The target's relative light curve from aperture photometry. "
+            "Columns:", "1. exposure start time in JD_UTC",
+            "2. relative flux (flux of the target divided by the sum of "
+            "the active comparison stars)",
+            "3. relative flux uncertainty", "",
+            "--- PHOTOMETRY_a.txt ---",
+            "Everything the aperture photometry measured, one row per "
+            "frame. Columns: file name, exposure start time in JD_UTC, "
+            "then for the target and every comparison star in turn the x "
+            "position, the y position, the flux, the flux uncertainty, "
+            "the background inside the aperture and its uncertainty "
+            "(all in counts and pixels).", "",
+            f"Written by Svenesis LightCurve {x.get('version', '')} in "
+            "HOPS's folder layout.", ""])))
+    log_common = {
+        "target_ra_dec": _deg_to_sexagesimal(x.get("ra_deg"),
+                                             x.get("dec_deg")),
+        "target_name": x.get("target_name") or "Your target",
+        "planet": planet,
+        "filter": filt,
+        "exposure_time_key": "EXPTIME",
+        "observation_date_key": "DATE-OBS",
+        "observation_time_key": "DATE-OBS",
+        "time_stamp": "exposure start",
+        "camera_gain": float(x.get("gain") or 1.0),
+        "binning": int(x.get("binning") or 1),
+        "max_comparisons": int(len(x.get("comps_active")
+                                   if x.get("comps_active") is not None
+                                   else (r.get("comps") or []))),
+        "photometry_complete": True,
+        "photometry_version": f"Svenesis LightCurve {x.get('version', '')}",
+        "period": float(eph.get("period_d") or 0.0),
+        "mid_time": float(eph.get("t0_bjd") or 0.0),
+        "rp_over_rs": float(eph.get("rprs_archive") or 0.0),
+        "sma_over_rs": float(eph.get("a_rs") or 0.0),
+        "inclination": float(eph.get("inc_deg") or 0.0),
+        "eccentricity": float(eph.get("ecc") or 0.0),
+        "periastron": float(eph.get("peri_deg") or 0.0),
+        "temperature": float(eph.get("teff_k") or 0.0),
+        "logg": float(eph.get("logg") or 0.0),
+        "fitting_complete": False,
+        "fitting_version": False,
+    }
+    p = os.path.join(phot_dir, "log.yaml")
+    write_yaml(p, log_common)
+    written.append(p)
+
+    # --- the fitting folder, HOPS mode only -----------------------------
+    fit = r.get("fit") or {}
+    hops = fit.get("hops") if fit else None
+    if hops and hops.get("rows"):
+        fit_dir = os.path.join(phot_dir,
+                               HOPS_LC_FILE.rsplit(".", 1)[0] + "_FITTING")
+        os.makedirs(fit_dir, exist_ok=True)
+        written.append(_write_text(os.path.join(fit_dir, "results.txt"),
+                                   hops_results_text(r)))
+        t = np.asarray(hops["t"], dtype=float)
+        fl = np.asarray(hops["flux"], dtype=float)
+        fe = np.asarray(hops["flux_err"], dtype=float)
+        model = np.asarray(hops["model_flux"], dtype=float)
+        trend = np.asarray(hops["trend_flux"], dtype=float)
+        transit = np.asarray(hops["transit_flux"], dtype=float)
+        period = float(eph.get("period_d") or 0.0)
+        mid = float(fit.get("t0") or np.nanmedian(t))
+        phase = (t - mid) / period if period > 0 else t - mid
+        p = os.path.join(fit_dir, "model.txt")
+        np.savetxt(p, np.column_stack([t, phase, fl, fe, model, fl - model]))
+        written.append(p)
+        safe_trend = np.where(trend != 0, trend, np.nan)
+        p = os.path.join(fit_dir, "detrended_model.txt")
+        np.savetxt(p, np.column_stack([t, phase, fl / safe_trend,
+                                       fe / safe_trend, transit,
+                                       fl / safe_trend - transit]))
+        written.append(p)
+        pnames = list(hops.get("param_names") or [])
+        if hops.get("samples") is not None and pnames:
+            written += write_corner_pdf(hops["samples"], pnames,
+                                        os.path.join(fit_dir, "corner.pdf"))
+        if hops.get("chain") is not None and pnames:
+            written += write_traces_pdf(hops["chain"], pnames,
+                                        os.path.join(fit_dir, "traces.pdf"))
+        fig = _agg_figure(7.0, 5.5)
+        if fig is not None:
+            ax1 = fig.add_subplot(4, 1, (1, 3))
+            ax2 = fig.add_subplot(4, 1, 4, sharex=ax1)
+            det = fl / safe_trend
+            ax1.errorbar(t, det, yerr=fe / safe_trend, fmt="ko", ms=3,
+                         elinewidth=0.5, zorder=1)
+            order = np.argsort(t)
+            ax1.plot(t[order], transit[order], "r-", lw=1.5, zorder=2)
+            ax1.set_ylabel("Relative flux (norm)")
+            ax1.set_title(f"{planet}  ·  {date}  ·  {filt}  ·  De-trended",
+                          fontsize=10)
+            ax1.tick_params(labelbottom=False)
+            ax2.plot(t, det - transit, "ko", ms=3)
+            ax2.axhline(0.0, color="r", lw=1)
+            ax2.set_ylabel("Residuals (norm)")
+            ax2.set_xlabel("Time (BJD_TDB)")
+            fig.subplots_adjust(hspace=0.05, left=0.13, right=0.97,
+                                top=0.93, bottom=0.1)
+            written += _save_figure(fig, os.path.join(
+                fit_dir, "detrended_model.jpg"), dpi=300)
+        written.append(_write_text(
+            os.path.join(fit_dir, "fitting_output_description.txt"),
+            "\n".join([
+                "", "--- results.txt ---",
+                "The fitted and fixed parameters in HOPS's results.txt "
+                "layout: variable, fix/fit, value, uncertainty, initial, "
+                "min. allowed, max. allowed; then the filter, the epoch, "
+                "the outliers removed, the uncertainty scale factor and "
+                "the residual statistics.", "",
+                "--- model.txt ---",
+                "Columns: mid-exposure time in BJD_TDB, orbital phase, "
+                "relative flux, its uncertainty as used in the fit, the "
+                "model, the residuals.", "",
+                "--- detrended_model.txt ---",
+                "The same columns with every flux divided by the fitted "
+                "systematics model.", "",
+                "--- corner.pdf ---",
+                "Correlations between the fitted parameters over the "
+                "posterior samples.", "",
+                "--- traces.pdf ---",
+                "Every walker's value of each parameter against the "
+                "iteration, after burn-in.", "",
+                "--- detrended_model.jpg ---",
+                "The detrended data, the transit model and the "
+                "residuals.", "",
+                f"Written by Svenesis LightCurve {x.get('version', '')} in "
+                "HOPS's folder layout.", ""])))
+        log_fit = dict(log_common)
+        log_fit.update({
+            "light_curve_file": os.path.join(HOPS_PHOTOMETRY_DIR, HOPS_LC_FILE),
+            "fitting_complete": True,
+            "fitting_version": f"Svenesis LightCurve {x.get('version', '')}",
+            "iterations": int(hops.get("iterations") or 0),
+            "burn": int(hops.get("burn_in") or 0),
+            "scatter": 3.0,
+            "a_i_fit": False,
+            "detrending": str(hops.get("detrend") or ""),
+        })
+        p = os.path.join(fit_dir, "log.yaml")
+        write_yaml(p, log_fit)
+        written.append(p)
+    else:
+        notes.append("no HOPS fitting folder: the run was not fitted in "
+                     "HOPS mode")
+
+    # --- the export files ----------------------------------------------
+    lc_tag = f"{HOPS_PHOTOMETRY_DIR}_{HOPS_LC_FILE.rsplit('.', 1)[0]}"
+    lc = np.column_stack([jd_start[valid], rel[valid], rel_err[valid]])
+    for db in ("ExoClock", "ETD"):
+        name = (f"HOPS_{lc_tag}_{date}_{_safe_name(planet)}_{_safe_name(filt)}"
+                f"_{exp_s}s_for_{db}.txt")
+        if db == "ExoClock":
+            header = "\n".join([
+                f"#Planet: {planet}", "#Time format: JD_UTC",
+                "#Time stamp: Exposure start", "#Flux format: Flux",
+                f"#Filter: {filt}",
+                f"#Exposure time in seconds: {exp_s}",
+                "#Time                   Flux            Flux uncertainty\n"])
+            shift = 0.0
+        else:
+            header = "\n".join([
+                f"#Planet: {planet}", "#Time format: JD_UTC (geocentric)",
+                "#Time stamp: Mid-exposure", "#Flux format: Flux (in flux)",
+                f"#Filter: {filt}",
+                f"#Exposure time in seconds: {exp_s}",
+                "#Time                   Flux            Flux uncertainty\n"])
+            # HOPS also divides the ETD errors by sqrt(gain) "to be in
+            # electrons".  Not here: the curve is a ratio and the gain is
+            # already inside the CCD equation that made the error, so the
+            # division only shrank the bars (0.5x at 4 e-/ADU).
+            shift = exp_s / 172800.0
+        p = os.path.join(root, name)
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(header)
+            for row in lc:
+                fh.write("{0:.10f}\t{1:.10f}\t{2:.10f}\n".format(
+                    row[0] + shift, row[1], row[2]))
+        written.append(p)
+    notes.append("ETD export: times shifted to mid-exposure as HOPS does, "
+                 "errors kept physical (HOPS divides them by sqrt(gain))")
+    return written, notes
+
+
+def write_exotic_folder(r: dict, x: dict) -> tuple:
+    """``lightcurve/EXOTIC/``: the files EXOTIC leaves in its output
+    folder, under its names -- ``AAVSO_<planet>_<date>.txt``,
+    ``FinalLightCurve_<planet>_<date>.png/.pdf`` at the top and, in
+    ``temp/``, the field plot, the final time series as CSV, the final
+    parameters as JSON, the normalised flux table and plot, the raw-flux
+    plots, the centroid plot, the observing statistics per star, the
+    posterior's corner plot and the per-frame plate status.
+
+    The parameters come from the HOPS-mode posterior when the run has
+    one, else from the blind fit (``exotic_fit_summary``).  ``x`` is as
+    for ``write_hops_folder`` plus ``star``, ``date_obs``,
+    ``aavso_filter``, ``obscode``, ``obstype``, ``notes``, ``annulus``
+    (inner sky radius) and ``seeing`` (per-frame FWHM by frame index,
+    or None).  Returns ``(written paths, notes)``."""
+    written, notes = [], []
+    root = os.path.join(r["out_dir"], EXOTIC_DIRNAME)
+    temp = os.path.join(root, "temp")
+    os.makedirs(temp, exist_ok=True)
+    pname = str(x.get("planet") or "UNKNOWN")
+    fname = _safe_name(pname)              # the name as a file-name part
+    sname = str(x.get("star") or host_star_name(pname, ""))
+    date = exotic_date_text(x.get("date_obs") or "") or "undated"
+    eph = r.get("ephemeris") or {}
+    s = exotic_series(r)
+    f = exotic_fit_summary(r)
+    raw = x.get("raw")
+    version = x.get("version", "")
+    rprs_prior = eph.get("rprs_archive")
+    if rprs_prior is None and eph.get("depth_pct"):
+        # A TESS candidate has a depth but no Rp/R*: the same inversion
+        # the chart's expected curve uses.
+        rprs_prior = rprs_from_depth(float(eph["depth_pct"]) / 100.0)
+
+    def _r(v, nd):
+        return round(float(v), nd) if v is not None and np.isfinite(v) \
+            else "nan"
+
+    # What Am1/Am2 mean in THIS file: EXOTIC's own are a1 exp(a2 X); the
+    # HOPS-mode fit is linear in the airmass above its minimum, the
+    # blind fit's slope is turned into an exponent.  Said in the header
+    # and in the JSON, so nobody rebuilds DETREND_2 from the wrong law.
+    x_min = float(np.nanmin(s["airmass"])) if np.isfinite(s["airmass"]).any() \
+        else float("nan")
+    if f.get("source") == "HOPS-mode posterior":
+        am_label = (f"Am1/Am2 from the HOPS-mode fit: flux = Am1 * (1 + Am2 * "
+                    f"(X - {x_min:.3f})), linear in airmass, not EXOTIC's "
+                    "Am1 * exp(Am2 * X)")
+    elif f.get("source"):
+        am_label = ("Am1/Am2 from the blind fit: flux = Am1 * exp(Am2 * X), "
+                    "Am2 = -0.921 * (magnitude slope per airmass)")
+    else:
+        am_label = "no fit: Am1/Am2 not measured"
+
+    # --- AAVSO_<planet>_<date>.txt, only when the main file passed ------
+    if r.get("aavso_path"):
+        comp_xc = None
+        # The comparison the photometry actually used first (the
+        # selection before the headroom and scatter guards can name a
+        # star that was dropped), the same star the observing-statistics
+        # plots call Comp Star 1.
+        comps = list(x.get("comps_active") or r.get("comps") or [])
+        if comps:
+            comp_xc = {"ra": None, "dec": None,
+                       "x": str(float(comps[0][0])),
+                       "y": str(float(comps[0][1]))}
+        # desc is the filter as the frames name it, not HOPS's nearest
+        # passband: a RED wheel aliased to COUSINS_R is still "Red".
+        filter_xc = {"name": x.get("aavso_filter") or "",
+                     "desc": x.get("filter_raw") or x.get("filter") or "",
+                     "fwhm": [{"value": None, "units": "nm"},
+                              {"value": None, "units": "nm"}]}
+        ldc = f.get("ldc") or [None] * 4
+        priors_txt = [f"Period={_pm(eph.get('period_d'))}",
+                      f"Rp/R*={_pm(rprs_prior)}",
+                      f"a/R*={_pm(eph.get('a_rs'))}",
+                      f"inc={_pm(eph.get('inc_deg'))}",
+                      f"ecc={_pm(eph.get('ecc') or 0.0)}"]
+        priors_txt += [f"u{i}={_pm(ldc[i])}" for i in range(4)]
+        priors_xc = {"Period": _xc(eph.get("period_d"), units="days"),
+                     "Rp/R*": _xc(rprs_prior),
+                     "a/R*": _xc(eph.get("a_rs")),
+                     "inc": _xc(eph.get("inc_deg"), units="degrees"),
+                     "ecc": _xc(eph.get("ecc") or 0.0)}
+        for i in range(4):
+            priors_xc[f"u{i}"] = _xc(ldc[i])
+        results_txt = [f"Tc={_pm(f.get('tmid'), f.get('tmid_e'))}",
+                       f"Rp/R*={_pm(f.get('rprs'), f.get('rprs_e'))}",
+                       f"inc={_pm(f.get('inc'), f.get('inc_e'))}",
+                       f"Am1={_pm(f.get('a1'), f.get('a1_e'))}",
+                       f"Am2={_pm(f.get('a2'), f.get('a2_e'))}"]
+        results_xc = {"Tc": _xc(f.get("tmid"), f.get("tmid_e"),
+                                units="BJD_TDB"),
+                      "Rp/R*": _xc(f.get("rprs"), f.get("rprs_e")),
+                      "inc": _xc(f.get("inc"), f.get("inc_e")),
+                      "Am1": _xc(f.get("a1"), f.get("a1_e")),
+                      "Am2": _xc(f.get("a2"), f.get("a2_e")),
+                      "Duration": _xc(f.get("dur_d"), f.get("dur_e"),
+                                      units="days")}
+        p = os.path.join(root, f"AAVSO_{fname}_{date}.txt")
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write("#TYPE=EXOPLANET\n"
+                     f"#OBSCODE={x.get('obscode') or ''}\n"
+                     "#SECONDARY_OBSCODES=\n"
+                     f"#SOFTWARE=Svenesis LightCurve {version}\n"
+                     "#DELIM=,\n"
+                     "#DATE_TYPE=BJD_TDB\n"
+                     f"#OBSTYPE={x.get('obstype') or 'CCD'}\n"
+                     f"#STAR_NAME={sname}\n"
+                     f"#EXOPLANET_NAME={pname}\n"
+                     f"#BINNING={x.get('binning') or 1}\n"
+                     f"#EXPOSURE_TIME={x.get('exp_s') if x.get('exp_s') is not None else -1}\n"
+                     f"#COMP_STAR-XC={json.dumps(comp_xc)}\n"
+                     f"#NOTES={x.get('notes') or ''}"
+                     f"{'; ' if x.get('notes') else ''}{am_label}\n"
+                     "#DETREND_PARAMETERS=AIRMASS, AIRMASS CORRECTION "
+                     "FUNCTION\n"
+                     "#MEASUREMENT_TYPE=Rnflux\n"
+                     f"#FILTER={x.get('aavso_filter') or ''}\n"
+                     f"#FILTER-XC={json.dumps(filter_xc)}\n"
+                     "#PRIORS=" + ",".join(priors_txt) + "\n"
+                     f"#PRIORS-XC={json.dumps(priors_xc)}\n"
+                     "#RESULTS=" + ",".join(results_txt) + "\n"
+                     f"#RESULTS-XC={json.dumps(results_xc)}\n"
+                     "# Use of this data is governed by the AAVSO Data "
+                     "Usage Guidelines: aavso.org/data-usage-guidelines\n"
+                     "#DATE,DIFF,ERR,DETREND_1,DETREND_2\n")
+            for i in range(s["time"].size):
+                fh.write(f"{round(float(s['time'][i]), 8)},"
+                         f"{_r(s['flux'][i], 7)},{_r(s['err'][i], 7)},"
+                         f"{_r(s['airmass'][i], 7)},"
+                         f"{_r(s['trend_flux'][i], 7)}\n")
+        written.append(p)
+    else:
+        notes.append("no AAVSO_*.txt: the run did not pass the gates the "
+                     "main AAVSO file has (BJD_TDB times, an unsaturated "
+                     "target, a usable yield)")
+
+    # --- FinalLightCurve png/pdf + csv ----------------------------------
+    have_phase = np.isfinite(s["phase"]).any()
+    xs = s["phase"] if have_phase else s["time"]
+    fig = _agg_figure(9.0, 8.0)
+    if fig is not None:
+        ax_lc = fig.add_subplot(4, 1, (1, 3))
+        ax_res = fig.add_subplot(4, 1, 4, sharex=ax_lc)
+        fig.subplots_adjust(top=0.92, bottom=0.09, left=0.14, right=0.98,
+                            hspace=0)
+        resid = s["detrended"] - s["transit_flux"]
+        sig = float(np.nanstd(resid))
+        ax_lc.errorbar(xs, s["detrended"], yerr=sig, ls="none", marker="o",
+                       color="k", ms=3, alpha=0.5, zorder=1)
+        order = np.argsort(xs)
+        ax_lc.plot(xs[order], s["transit_flux"][order], "r", lw=2,
+                   zorder=1000)
+        ax_lc.set_title(pname)
+        ax_lc.set_ylabel("Relative Flux", fontsize=14)
+        ax_lc.tick_params(labelbottom=False)
+        ax_res.plot(xs, resid * 100.0, "k.", alpha=0.2,
+                    label=r"$\sigma$ = {:.2f} %".format(sig * 100.0))
+        ax_res.axhline(0.0, color="r", lw=1)
+        ax_res.set_ylabel("Residuals [%]", fontsize=14)
+        ax_res.set_xlabel("Phase" if have_phase else "Time [BJD_TDB]",
+                          fontsize=14)
+        ax_res.legend(loc="best", fontsize=9)
+        written += _save_figure(
+            fig, os.path.join(root, f"FinalLightCurve_{fname}_{date}.png"),
+            os.path.join(root, f"FinalLightCurve_{fname}_{date}.pdf"))
+    p = os.path.join(temp, f"FinalLightCurve_{fname}_{date}.csv")
+    with open(p, "w", encoding="utf-8") as fh:
+        fh.write(f"# FINAL TIMESERIES OF {pname}\n")
+        fh.write("# BJD_TDB,Orbital Phase,Flux,Uncertainty,Model,Airmass\n")
+        for i in range(s["time"].size):
+            fh.write(f"{s['time'][i]}, {s['phase'][i]}, {s['detrended'][i]}, "
+                     f"{s['detrended_err'][i]}, {s['transit_flux'][i]}, "
+                     f"{s['trend_flux'][i]}\n")
+    written.append(p)
+
+    # --- FinalParams json ----------------------------------------------
+    scatter_pct = 100.0 * float(np.nanstd(s["detrended"] - s["transit_flux"]))
+    params = {
+        "Mid-Transit Time (Tmid)": _pm(f.get("tmid"), f.get("tmid_e"),
+                                       "BJD_TDB"),
+        "Ratio of Planet to Stellar Radius (Rp/R*)":
+            _pm(f.get("rprs"), f.get("rprs_e")),
+        "Transit depth (Rp/Rs)^2":
+            (_pm(100.0 * f["rprs"] ** 2,
+                 None if f.get("rprs_e") is None
+                 else 100.0 * 2.0 * f["rprs"] * f["rprs_e"], "[%]")
+             if f.get("rprs") is not None else ""),
+        "Orbital Inclination (inc)": _pm(f.get("inc"), f.get("inc_e")),
+        "Airmass coefficient 1 (a1)": _pm(f.get("a1"), f.get("a1_e")),
+        "Airmass coefficient 2 (a2)": _pm(f.get("a2"), f.get("a2_e")),
+        "Scatter in the residuals of the lightcurve fit is":
+            f"{round_to_two(scatter_pct)} %",
+    }
+    comps = list(x.get("comps_active") or r.get("comps") or [])
+    if comps:
+        params["Best Comparison Star"] = (
+            f"#1 - ({float(comps[0][0]):.1f}, {float(comps[0][1]):.1f})")
+    params["Airmass model"] = am_label
+    if r.get("aperture_px"):
+        params["Optimal Aperture"] = f"{float(r['aperture_px']):.2f}"
+        params["Optimal Annulus"] = f"{float(x.get('annulus') or 0.0):.2f}"
+    params["Transit Duration (day)"] = _pm(f.get("dur_d"), f.get("dur_e"))
+    if f.get("source"):
+        params["Fit"] = f["source"]
+    p = os.path.join(temp, f"FinalParams_{fname}_{date}.json")
+    with open(p, "w", encoding="utf-8") as fh:
+        json.dump({"FINAL PLANETARY PARAMETERS": params}, fh, indent=4)
+    written.append(p)
+
+    # --- normalised flux table and plot ---------------------------------
+    p = os.path.join(temp, f"NormalizedFlux_{fname}_{date}.txt")
+    with open(p, "w", encoding="utf-8") as fh:
+        fh.write("BJD,Norm Flux,Norm Err,AM\n")
+        for i in range(s["time"].size):
+            fh.write(f"{round(float(s['time'][i]), 8)},{_r(s['flux'][i], 7)},"
+                     f"{_r(s['err'][i], 6)},{_r(s['airmass'][i], 2)}\n")
+    written.append(p)
+    fig = _agg_figure(8.0, 6.0)
+    if fig is not None:
+        ax = fig.add_subplot(111)
+        ax.set_title(f"{pname} Normalized Flux vs. Time {date}")
+        ax.set_xlabel("Time [BJD_TDB]")
+        ax.set_ylabel("Normalized Flux")
+        ax.errorbar(s["time"], s["flux"], yerr=_finite(s["err"], 0.0),
+                    ls="none", fmt="bo", ms=3)
+        written += _save_figure(fig, os.path.join(
+            temp, f"NormalizedFluxTime_{fname}_{date}.pdf"))
+
+    # --- what needs the per-star record -----------------------------------
+    if raw is not None and np.asarray(raw.get("flux")).ndim == 2:
+        s_adu = float(raw.get("adu_scale") or 1.0)      # counts, not /65535
+        flux = np.asarray(raw["flux"], dtype=float) * s_adu
+        ferr = np.asarray(raw["ferr"], dtype=float) * s_adu
+        xpos = np.asarray(raw["x"], dtype=float)
+        ypos = np.asarray(raw["y"], dtype=float)
+        sky = np.asarray(raw["sky"], dtype=float) * s_adu
+        peak = np.asarray(raw.get("peak", np.full(flux.shape, np.nan)),
+                          dtype=float) * s_adu
+        jd_raw = np.asarray(raw["jd"], dtype=float)
+        keep = [bool(k) for k in raw.get("keep", [])]
+        active = [i + 1 for i, k in enumerate(keep) if k]
+        good = np.isfinite(flux[0]) & np.isfinite(jd_raw)
+        tt = jd_raw[good]
+        comp_sum = flux[active][:, good].sum(axis=0) if active \
+            else np.full(good.sum(), np.nan)
+        comp_err = np.sqrt((ferr[active][:, good] ** 2).sum(axis=0)) \
+            if active else np.full(good.sum(), np.nan)
+        for kind, y, ye, title in (
+                ("TargetRawFlux", flux[0][good], ferr[0][good],
+                 f"{pname} Raw Flux Values {date}"),
+                ("CompRawFlux", comp_sum, comp_err,
+                 f"Comparison Star Raw Flux Values {date}")):
+            fig = _agg_figure(8.0, 6.0)
+            if fig is None:
+                break
+            ax = fig.add_subplot(111)
+            ax.set_title(title)
+            ax.set_xlabel("Time [JD_UTC]")
+            ax.set_ylabel("Flux [ADU]")
+            ax.errorbar(tt, y, yerr=_finite(ye, 0.0), fmt="o", ms=3)
+            written += _save_figure(fig, os.path.join(
+                temp, f"{kind}_{fname}_{date}.pdf"))
+        best = active[0] if active else None
+        if best is not None:
+            fig = _agg_figure(12.0, 10.0)
+            if fig is not None:
+                t0 = np.nanmin(tt) if tt.size else 0.0
+                panels = [
+                    (f"{pname} X-Centroid Position", "X-Centroid [px]",
+                     xpos[0][good]),
+                    (f"{pname} Y-Centroid Position", "Y-Centroid [px]",
+                     ypos[0][good]),
+                    ("Comparison Star X-Centroid Position",
+                     "X-Centroid [px]", xpos[best][good]),
+                    ("Comparison Star Y-Centroid Position",
+                     "Y-Centroid [px]", ypos[best][good]),
+                    ("Distance between Target and Comparison X-Centroids",
+                     "X-Centroid Distance [px]",
+                     np.abs(xpos[0][good] - xpos[best][good])),
+                    ("Distance between Target and Comparison Y-Centroids",
+                     "Y-Centroid Distance [px]",
+                     np.abs(ypos[0][good] - ypos[best][good]))]
+                for k, (title, ylab, yy) in enumerate(panels):
+                    ax = fig.add_subplot(3, 2, k + 1)
+                    ax.set_title(title, fontsize=14)
+                    ax.set_xlabel(f"Time [JD_UTC-{t0:.5f}]", fontsize=12)
+                    ax.set_ylabel(ylab, fontsize=12)
+                    ax.plot(tt - t0, yy, "k.")
+                fig.subplots_adjust(hspace=0.5, wspace=0.3)
+                written += _save_figure(fig, os.path.join(
+                    temp, f"CentroidPositions&Distances_{fname}_{date}.pdf"))
+        seeing = x.get("seeing")
+        frame_idx = raw.get("frame_index")
+        see = np.full(jd_raw.size, np.nan)
+        if seeing is not None and frame_idx is not None:
+            sarr = np.asarray(seeing, dtype=float)
+            for k, fi in enumerate(frame_idx):
+                if 0 <= int(fi) < sarr.size:
+                    see[k] = sarr[int(fi)]
+        airmass_raw = np.full(jd_raw.size, np.nan)
+        if np.isfinite(s["airmass"]).any():
+            # The result's airmass is per kept point; match by time.
+            jd_res = np.asarray(r.get("jd_utc"), dtype=float)
+            if jd_res.size == s["airmass"].size:
+                for k in range(jd_raw.size):
+                    if np.isfinite(jd_raw[k]) and jd_res.size:
+                        j = int(np.argmin(np.abs(jd_res - jd_raw[k])))
+                        if abs(jd_res[j] - jd_raw[k]) < 1.0 / 86400.0:
+                            airmass_raw[k] = s["airmass"][j]
+        stars_to_plot = [(0, pname, "target")] + [
+            (i, f"Comp Star {n}", f"comp{n}")
+            for n, i in enumerate(active, start=1)]
+        for si, title, key in stars_to_plot:
+            fig = _agg_figure(12.0, 10.0)
+            if fig is None:
+                break
+            fig.suptitle(f"Observing Statistics - {title} - {date}")
+            g = good & np.isfinite(flux[si])
+            t0 = np.nanmin(jd_raw[g]) if g.any() else 0.0
+            panels = [("X-Centroid [px]", xpos[si][g]),
+                      ("Y-Centroid [px]", ypos[si][g]),
+                      ("Seeing [px]", see[g]),
+                      ("Airmass", airmass_raw[g]),
+                      ("Amplitude [ADU]", peak[si][g] - sky[si][g]),
+                      ("Background [ADU]", sky[si][g])]
+            for k, (ylab, yy) in enumerate(panels):
+                ax = fig.add_subplot(3, 2, k + 1)
+                ax.set(xlabel="Time [JD_UTC]", ylabel=ylab)
+                ax.plot(jd_raw[g], yy, "k.")
+            fig.subplots_adjust(hspace=0.35, wspace=0.3, top=0.93)
+            written += _save_figure(
+                fig, os.path.join(temp, f"Observing_Statistics_{key}_{date}.png"),
+                os.path.join(temp, f"Observing_Statistics_{key}_{date}.pdf"))
+        # PlateStatus: one row per frame, one column per reason a frame
+        # gave no target measurement.
+        status = list(raw.get("status") or [""] * jd_raw.size)
+        # A frame the target survived but the ensemble did not (an
+        # active comparison missing or clipped) gave no point either.
+        raw_flux = np.asarray(raw["flux"], dtype=float)
+        for k in range(min(len(status), jd_raw.size)):
+            if not status[k] and np.isfinite(raw_flux[0, k]) and active \
+                    and not np.isfinite(raw_flux[active][:, k]).all():
+                status[k] = "comparison_missing"
+        cols = sorted({st for st in status if st})
+        p = os.path.join(temp, f"PlateStatus_{fname}_{date}.csv")
+        names = list(raw.get("files") or [""] * jd_raw.size)
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write("# filename,time," + ",".join(cols) + "\n")
+            for k in range(jd_raw.size):
+                tcell = f"{jd_raw[k]}" if np.isfinite(jd_raw[k]) else ""
+                line = f"\"{names[k]}\",{tcell}"
+                for c in cols:
+                    line += f",{status[k] == c}"
+                fh.write(line + "\n")
+        written.append(p)
+    else:
+        notes.append("raw-flux, centroid, observing-statistics and "
+                     "plate-status files need the script's own photometry "
+                     "(Siril's light_curve keeps no per-star record)")
+
+    # --- field plot -------------------------------------------------------
+    ref = r.get("ref_path")
+    if ref and os.path.isfile(ref):
+        stars = x.get("stars") or []
+        target_xy = stars[0] if stars else r.get("target_xy")
+        comps_xy = stars[1:] if stars else [(c[0], c[1]) for c in comps]
+        scale = x.get("image_scale") or "image scale unknown"
+        written += write_exotic_fov(
+            ref, target_xy, comps_xy, float(r.get("aperture_px") or 0.0),
+            float(x.get("annulus") or 0.0), pname, scale,
+            os.path.join(temp, f"FOV_{fname}_{date}_AsinhStretch"))
+
+    # --- posterior corner plot ------------------------------------------
+    hops = (r.get("fit") or {}).get("hops") if r.get("fit") else None
+    if hops and hops.get("samples") is not None and hops.get("param_names"):
+        written += write_corner_pdf(
+            hops["samples"], list(hops["param_names"]),
+            os.path.join(temp, f"Triangle_{fname}_{date}.png"))
+    else:
+        notes.append("no Triangle_*.png: the corner plot needs the "
+                     "HOPS-mode posterior")
+    notes.append("AID_AAVSO_*.txt not written: it needs AAVSO chart "
+                 "comparison stars (AUID, chart id), which this script "
+                 "does not fetch")
+    return written, notes
 
 
 # ---------------------------------------------------------------------------
@@ -10539,6 +12361,14 @@ class SvenesisLightCurveWindow(QMainWindow):
             "Your AAVSO observer code. Left empty the file is still "
             "written, with the field marked, and you can fill it in later.")
         row.addWidget(self.ed_obscode, 1)
+        row.addWidget(QLabel("Camera"))
+        self.cmb_obstype = QComboBox()
+        self.cmb_obstype.addItems(["CCD", "DSLR"])
+        self.cmb_obstype.setToolTip(
+            "AAVSO's #OBSTYPE. CCD also for a CMOS camera (Exoplanet Watch "
+            "asks for CCD there and the camera type in the notes), DSLR "
+            "for a colour camera's channel.")
+        row.addWidget(self.cmb_obstype)
         lay.addLayout(row)
         # The target NAME and the archive lookup live in group 3, where
         # they belong: they decide the target POSITION, not the submission.
@@ -10911,6 +12741,7 @@ class SvenesisLightCurveWindow(QMainWindow):
             "screen_comps": self.chk_screen.isChecked(),
             "write_aavso": self.chk_aavso.isChecked(),
             "obscode": self.ed_obscode.text().strip(),
+            "obstype": self.cmb_obstype.currentText(),
             "resolve_target": self.chk_resolve.isChecked(),
             "target_name": self.ed_target_name.text().strip(),
             "filter_name": self.ed_filter.text().strip(),
@@ -11451,6 +13282,8 @@ class SvenesisLightCurveWindow(QMainWindow):
         self.chk_aavso.setChecked(str(st.value("aavso", "true")) == "true")
         self.ed_obscode.setText(str(st.value("obscode", DEFAULT_OBSCODE)
                                     or DEFAULT_OBSCODE))
+        self.cmb_obstype.setCurrentText(str(st.value("obstype", "CCD"))
+                                        or "CCD")
         self.ed_target_name.setText(str(st.value("target_name", "") or ""))
         self.chk_resolve.setChecked(
             str(st.value("resolve_target", "true")).lower() != "false")
@@ -11488,6 +13321,7 @@ class SvenesisLightCurveWindow(QMainWindow):
                     "true" if self.chk_screen.isChecked() else "false")
         st.setValue("aavso", "true" if self.chk_aavso.isChecked() else "false")
         st.setValue("obscode", self.ed_obscode.text().strip())
+        st.setValue("obstype", self.cmb_obstype.currentText())
         st.setValue("target_name", self.ed_target_name.text().strip())
         st.setValue("resolve_target", self.chk_resolve.isChecked())
         st.setValue("filter_name", self.ed_filter.text().strip())
@@ -11651,7 +13485,14 @@ MEASUREMENT_TYPE=Rnflux), DIFF as relative normalised flux with the
 airmass and the fitted systematics model as detrend columns, AAVSO's
 filter code from the form or the frames (a RED wheel is TR, an
 unfiltered run CV), and T0,
-both depth conventions (central and (Rp/R★)²) and Rp/R★ in the header. The <b>Save results</b> button
+both depth conventions (central and (Rp/R★)²) and Rp/R★ in the header. A
+TESS candidate is flagged in the log and in <tt>#NOTES</tt>: AAVSO's
+form validates the planet name against the archive's confirmed-planet
+table and refuses a TOI until it is confirmed (there is no letter to add);
+ExoFOP-TESS is the venue for candidates. <tt>field.png</tt> is the
+picture the form asks for: the plate-solved reference frame with the
+target and the comparison stars marked, north/east and a 5′ bar, under
+2 MB. The <b>Save results</b> button
 writes two files in one click: <tt>results.txt</tt> in the exact
 layout HOPS leaves in its fitting folder (the parameter table, then
 #Filter/#Epoch, then two residual-statistics blocks — anything that

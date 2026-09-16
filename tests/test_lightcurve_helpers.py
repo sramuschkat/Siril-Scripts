@@ -4223,7 +4223,7 @@ check(all(k in _aav3 for k in ("#STAR_NAME=", "#EXOPLANET_NAME=", "#EXPOSURE_TIM
 _afc = ns["aavso_filter_code"]
 check(_afc("RED") == "TR" and _afc("Green") == "TG" and _afc("blue") == "TB" and _afc("R") == "R" and _afc("Rc") == "R"
       and _afc("r'") == "SR" and _afc("V") == "V" and _afc("") == "CV" and _afc("Luminance") == "CV" and _afc("Ha") == "HA"
-      and _afc("Astrodon Exoplanet-BB") == "CR" and _afc("something long") == "CV",
+      and _afc("Astrodon Exoplanet-BB") == "CBB" and _afc("something long") == "CV",
       "AAVSO filter codes: tri-colour for RGB wheels, standard bands by name, CV for an unfiltered run")
 check("aavso_filter_code(" in src[src.index("def _write_aavso"):src.index("def _write_csv")]
       and 'r.get("filter", "")' in src[src.index("def _write_aavso"):src.index("def _write_csv")],
@@ -4253,6 +4253,331 @@ _chosen, _notes = ns["choose_masters"](_groups, _lt)
 check("flat" in _chosen and "dark" not in _chosen and _chosen.get("offset", {}).get("files") == ["df1"]
       and any("dark REJECTED" in n and "temperature" in n for n in _notes),
       "choose_masters: warm flat taken, cold dark rejected with its reason, the flat-dark at the flat's temperature chosen")
+
+_acn = ns["aavso_candidate_note"]
+check("TFOPWG PC" in _acn({"disposition": "PC", "name": "TOI-7425.01"}, "TOI-7425.01")
+      and "ExoFOP" in _acn({"disposition": "PC"}, "TOI-7425.01")
+      and _acn({"hostname": "HAT-P-32", "name": "HAT-P-32 b"}, "HAT-P-32 b") == ""
+      and _acn({}, "TOI-4033.01") != "" and _acn({"hostname": "TOI-1234"}, "TOI-1234 b") == "",
+      "a TESS candidate's AAVSO file is flagged as one the upload form will refuse; confirmed planets are not")
+check("candidate_note" in src[src.index("def _write_aavso"):src.index("def _write_csv")],
+      "the AAVSO writer carries the candidate note into #NOTES and the log")
+
+print("\n9k) the field image AAVSO asks for")
+import tempfile as _tf2
+_fo = ns["field_orientation"]
+class _St:
+    def __init__(s, x, y, ra, dec): s.xpos, s.ypos, s.ra, s.dec = x, y, ra, dec
+_sc = 2.0 / 3600.0                                    # 2"/px, north up, east left (mirrored y-down)
+_stars_o = [_St(x, y, 30.0 - (x - 500) * _sc / math.cos(math.radians(40)), 40.0 + (y - 500) * _sc)
+            for x in range(100, 1000, 150) for y in range(100, 1000, 150)]
+_o = _fo(_stars_o)
+check(_o is not None and abs(_o[0] - 90.0) < 0.5 and abs(_o[2] - 2.0) < 0.02,
+      f"orientation from plate-solved stars: north along +y, 2.00\"/px (got {_o})")
+check(_fo(_stars_o[:5]) is None and _fo([_St(1, 2, 0.0, 0.0)] * 20) is None,
+      "too few or unsolved stars give no orientation rather than a wrong one")
+_td2 = _tf2.mkdtemp()
+_img = _rng.normal(100.0, 5.0, (900, 1200))
+_yy, _xx = np.mgrid[0:900, 0:1200]
+for (_sx, _sy, _amp) in ((600, 450, 5000.0), (200, 200, 3000.0), (1000, 700, 2500.0), (300, 800, 2000.0)):
+    _img += _amp * np.exp(-0.5 * (((_xx - _sx) / 1.8) ** 2 + ((_yy - _sy) / 1.8) ** 2))
+_fits_p = os.path.join(_td2, "ref.fit")
+__import__("astropy.io.fits").io.fits.PrimaryHDU(_img.astype(np.float32)).writeto(_fits_p)
+_out = os.path.join(_td2, "field.png")
+_ok, _note = ns["write_field_image"](_fits_p, (600, 450), [(200, 200), (1000, 700), (300, 800)], _out,
+                                     title="TEST — target and 3 comparison star(s)", aperture_px=2.6, orientation=_o)
+check(_ok and os.path.isfile(_out) and 0 < os.path.getsize(_out) < 1_900_000 and _note.endswith("kB"),
+      f"the field image is written as a PNG under AAVSO's 2 MB ({_note})")
+_ok2, _note2 = ns["write_field_image"](_fits_p, (600, 450), [], os.path.join(_td2, "f2.png"), max_side=300, max_bytes=20_000)
+check(_ok2 and "shrinks" in _note2 or (_ok2 and os.path.getsize(os.path.join(_td2, "f2.png")) <= 20_000),
+      "an image that cannot be shrunk under the limit is still written and says so")
+check(not ns["write_field_image"](os.path.join(_td2, "missing.fit"), (1, 1), [], os.path.join(_td2, "x.png"))[0],
+      "a missing reference frame is reported, not raised")
+check("self._write_field_image(result)" in src and "field.png" in src[src.index("def _write_field_image"):],
+      "the worker writes field.png beside the CSV on every run")
+
+print("\n9l) the EXOTIC- and HOPS-layout folders")
+import tempfile as _tf3, glob as _glob, json as _json
+_edt, _hdt, _r2 = ns["exotic_date_text"], ns["hops_date_text"], ns["round_to_two"]
+check(_edt("2025-10-15T21:03:11.123") == "15-October-2025" and _edt("garbage") == "" and _edt("2025-13-01") == "",
+      "EXOTIC's date text is spelled like its template, 15-October-2025, from DATE-OBS")
+_jd0 = 2460963.5 + 0.9                                 # 2025-10-15 21:36 UTC
+check(_hdt(_jd0) == datetime.datetime(2000, 1, 1, 12, tzinfo=datetime.timezone.utc).__class__.fromtimestamp(
+          (_jd0 - 2440587.5) * 86400.0, tz=datetime.timezone.utc).strftime("%Y-%m-%d") == "2025-10-15"
+      and _hdt(float("nan")) == "" and _hdt(None) == "",
+      "HOPS's date is the ISO date of the first exposure's JD_UTC")
+check(_r2(0.123456, 0.00123) == 0.1235 and _r2(12.3456, 1.5) == 12.35 and _r2(0.05123) == 0.051
+      and _r2(3.14159, 0.0) == 3.14 and _r2("x") == "x",
+      "EXOTIC's rounding: two significant figures of the uncertainty decide the decimals")
+
+# --- a synthetic run: 60 points, a 1.2 % transit, an airmass ramp, 3 stars ---
+_n = 60
+_t = 2460963.5 + 0.9 + np.linspace(0.0, 0.2, _n)
+_mid = float(_t[_n // 2])
+_dur = 0.08
+_intr = np.abs(_t - _mid) < 0.5 * _dur
+_X = 1.2 + 0.6 * ((_t - _t[0]) / 0.2) ** 2
+_trend_mag = 0.02 * (_X - _X.min())
+_transit_mag = np.where(_intr, 0.013, 0.0)
+_rng3 = np.random.default_rng(7)
+_mag = _trend_mag + _transit_mag + _rng3.normal(0, 0.002, _n)
+_err = np.full(_n, 0.002)
+_model_mag = _trend_mag + _transit_mag
+_flux_k = 10 ** (-0.4 * (_mag - np.median(_mag[~_intr])))
+_trend_flux = 10 ** (-0.4 * (_trend_mag - np.median(_trend_mag[~_intr])))
+_transit_flux = 10 ** (-0.4 * _transit_mag)
+_names = ["n", "airmass", "rp_over_rs", "mid_time"]
+_samples = np.column_stack([_rng3.normal(1.0, 0.001, 500), _rng3.normal(-0.018, 0.002, 500),
+                            _rng3.normal(0.11, 0.003, 500), _rng3.normal(_mid, 0.0005, 500)])
+_chain = _samples.reshape(50, 10, 4)
+_eph = {"name": "HAT-P-32 b", "hostname": "HAT-P-32", "period_d": 2.15, "t0_bjd": _mid - 4 * 2.15,
+        "a_rs": 6.05, "inc_deg": 88.9, "ecc": 0.0, "peri_deg": 90.0, "rprs_archive": 0.149,
+        "depth_pct": 2.2, "duration_h": 3.1, "teff_k": 6000.0, "logg": 4.3, "ra_deg": 31.0, "dec_deg": 46.7}
+_rows = [("n", "fit", 1.0, 0.001, 0.001, 1.0, 0.5, 2.0), ("airmass", "fit", -0.018, 0.002, 0.002, 0, -1, 1),
+         ("a_1", "fix", 0.6), ("a_2", "fix", -0.1), ("a_3", "fix", 0.3), ("a_4", "fix", -0.15),
+         ("rp_over_rs", "fit", 0.11, 0.003, 0.003, 0.149, 0.07, 0.3), ("period", "fix", 2.15),
+         ("sma_over_rs", "fix", 6.05), ("eccentricity", "fix", 0.0), ("inclination", "fix", 88.9),
+         ("periastron", "fix", 90.0), ("mid_time", "fit", _mid, 0.0005, 0.0005, _mid, _mid - 0.1, _mid + 0.1)]
+_fit = {"detected": True, "t0": _mid, "t0_sigma_d": 0.0005, "duration_d": _dur, "duration_h": _dur * 24,
+        "rprs": 0.11, "rprs_sigma": 0.003, "trend": _trend_mag, "detrended": _mag - _trend_mag,
+        "model_mag": _model_mag, "bases": ["airmass"], "basis_coeffs": [-0.018], "coeff_sigmas": [0.001, 0.002],
+        "baseline": 0.0, "airmass_slope": 0.02, "ld_u1": 0.4, "ld_u2": 0.2, "depth_mmag": 13.0,
+        "depth_sigma_mmag": 1.0, "red_noise_beta": 1.1,
+        "hops": {"rows": _rows, "names": ["airmass"], "outliers": 1, "scale_factor": 1.05, "acceptance": 0.3,
+                 "iterations": 500, "walkers": 10, "burn_in": 100, "exp_s": 120.0, "sub_steps": 1,
+                 "rp_m": 0.003, "rp_p": 0.003, "mid_m": 0.0005, "mid_p": 0.0005, "ldc": [0.6, -0.1, 0.3, -0.15],
+                 "detrend": "airmass", "t": _t, "flux": _flux_k, "flux_err": _err * 0.921 * 1.05,
+                 "model_flux": _trend_flux * _transit_flux, "trend_flux": _trend_flux,
+                 "transit_flux": _transit_flux, "samples": _samples, "chain": _chain, "param_names": _names}}
+_td3 = _tf3.mkdtemp()
+_r = {"out_dir": _td3, "jd": _t, "jd_utc": _t - 0.004, "time_system": "BJD_TDB", "mag": _mag, "err": _err,
+      "airmass": _X, "detrended": _mag - _trend_mag, "ephemeris": _eph, "fit": _fit, "filter": "R",
+      "comps": [(200.0, 200.0, 80.0), (1000.0, 700.0, 60.0)], "target_xy": (600.0, 450.0), "aperture_px": 2.6,
+      "ref_path": _fits_p, "n_clipped": 0, "aavso_path": os.path.join(_td3, "AAVSO_exoplanet.txt"), "n_points": _n}
+# per-star record: 62 frames, two of them lost, one comp dropped
+_nf = _n + 2
+_files = [f"L_{k:03d}.fits" for k in range(_nf)]
+_jd_raw = np.concatenate([_t - 0.004, [_t[-1] - 0.004 + 0.004, np.nan]])
+_status = [""] * _nf; _status[_n] = "target_saturated"; _status[_n + 1] = "unreadable"
+_fl = np.vstack([np.full(_nf, 50000.0) * np.concatenate([_flux_k, [1.0, np.nan]]),
+                 np.full(_nf, 30000.0), np.full(_nf, 20000.0), np.full(_nf, 9000.0)])
+_fl[:, _n + 1] = np.nan; _fl[0, _n] = np.nan
+_raw = {"files": _files, "frame_index": list(range(_nf)), "jd": _jd_raw, "exp_s": np.full(_nf, 120.0),
+        "x": np.tile([[600.0], [200.0], [1000.0], [300.0]], (1, _nf)) + _rng3.normal(0, 0.1, (4, _nf)),
+        "y": np.tile([[450.0], [200.0], [700.0], [800.0]], (1, _nf)), "flux": _fl, "ferr": np.sqrt(np.abs(_fl)),
+        "sky": np.full((4, _nf), 100.0), "sky_err": np.full((4, _nf), 5.0), "peak": np.full((4, _nf), 3000.0),
+        "status": _status, "stars": [(600.0, 450.0), (200.0, 200.0), (1000.0, 700.0), (300.0, 800.0)],
+        "keep": [True, True, False], "aperture": 2.6, "r_in": 7.5, "r_out": 11.3, "gain": 2.0}
+_x = {"raw": _raw, "version": "9.9.9", "planet": "HAT-P-32 b", "star": "HAT-P-32",
+      "date_obs": "2025-10-15T21:36:00", "filter": "COUSINS_R", "aavso_filter": "R", "exp_s": 120.0,
+      "binning": 1, "gain": 2.0, "ra_deg": 31.0, "dec_deg": 46.7, "target_name": "HAT-P-32",
+      "obscode": "RSVA", "obstype": "CCD", "notes": "test", "annulus": 7.5,
+      "stars": _raw["stars"][:3], "seeing": np.full(_nf, 3.2), "image_scale": "1.234 arcsec/pixel"}
+
+_fs = ns["exotic_fit_summary"](_r)
+check(_fs["source"] == "HOPS-mode posterior" and abs(_fs["tmid_e"] - 0.0005) < 1e-12 and _fs["a2"] == -0.018
+      and _fs["ldc"] == [0.6, -0.1, 0.3, -0.15] and _fs["inc"] == 88.9,
+      "EXOTIC's parameters come from the HOPS-mode posterior when the run has one")
+_fit_blind = {k: v for k, v in _fit.items() if k != "hops"}
+_fsb = ns["exotic_fit_summary"]({"fit": _fit_blind, "ephemeris": _eph})
+check(_fsb["source"] == "blind fit" and abs(_fsb["a2"] + 0.4 * math.log(10) * 0.02) < 1e-12
+      and abs(_fsb["a2_e"] - 0.4 * math.log(10) * 0.002) < 1e-12 and _fsb["rprs_e"] == 0.003,
+      "…and from the blind fit otherwise, the magnitude slope turned into an exponent")
+_s = ns["exotic_series"](_r)
+_ratio = _s["detrended"] / (_s["flux"] / _s["trend_flux"])
+check(np.allclose(_ratio, _ratio[0]) and abs(np.nanmedian(_s["detrended"][~_intr]) - 1.0) < 1e-9
+      and np.allclose(_s["transit_flux"], _transit_flux) and abs(np.nanmax(_s["transit_flux"]) - 1.0) < 1e-12
+      and abs(_s["phase"][_n // 2]) < 1e-12 and np.isfinite(_s["err"]).all(),
+      "EXOTIC's columns: detrended = flux / airmass model at out-of-transit median 1, the transit model pure at 1, phase 0 at mid-time")
+_fit_off = dict(_fit, model_mag=_model_mag - 0.0054, trend=_trend_mag)      # a baseline constant in the model only
+_s_off = ns["exotic_series"](dict(_r, fit=_fit_off))
+check(abs(np.nanmax(_s_off["transit_flux"]) - 1.0) < 1e-12 and abs(np.nanmedian(_s_off["detrended"][~_intr]) - 1.0) < 1e-9
+      and abs(np.nanmedian((_s_off["detrended"] - _s_off["transit_flux"])[~_intr])) < 2e-3,
+      "a baseline constant in the model but not in the trend no longer lifts the model above the data")
+
+_wh, _nh = ns["write_hops_folder"](_r, _x)
+_hp = os.path.join(_td3, "HOPS", "PHOTOMETRY_1")
+_ap = np.loadtxt(os.path.join(_hp, "PHOTOMETRY_APERTURE.txt"))
+_jd_start, _rel, _rel_err, _valid = ns["hops_photometry_arrays"](_raw)
+check(_ap.shape == (_n, 3) and abs(_ap[0, 0] - (_jd_raw[0] - 60.0 / 86400.0)) < 1e-9
+      and np.allclose(_ap[:, 1], (_fl[0] / (_fl[1] + _fl[2]))[:_n]),
+      "PHOTOMETRY_APERTURE.txt: exposure-START JD_UTC, target over the raw sum of the ACTIVE comps, 60 valid rows")
+_a_lines = open(os.path.join(_hp, "PHOTOMETRY_a.txt")).read().splitlines()
+check(len(_a_lines) == _n and all(len(l.split()) == 2 + 6 * 4 for l in _a_lines) and _a_lines[0].startswith("L_000.fits ")
+      and abs(float(_a_lines[0].split()[18]) - 100.0 * math.pi * 2.6 ** 2) < 1e-6
+      and abs(float(_a_lines[0].split()[22]) - 5.0 * math.sqrt(math.pi * 2.6 ** 2)) < 1e-6,
+      "PHOTOMETRY_a.txt: file name, time, then x/y/flux/err/sky/sky-err blocks for all four stars, sky as HOPS's aperture totals")
+for _f in ("FOV.pdf", "RESULTS.pdf", "ExoClock_info.txt", "photometry_output_description.txt", "log.yaml"):
+    check(os.path.getsize(os.path.join(_hp, _f)) > 0, f"HOPS photometry folder has {_f}")
+_yaml = open(os.path.join(_hp, "log.yaml")).read()
+check("photometry_complete: true" in _yaml and "target_ra_dec: 02:04:00.00 +46:42:00.0" in _yaml
+      and "planet: HAT-P-32b" in _yaml and "camera_gain: 2.0" in _yaml,
+      "log.yaml carries HOPS's keys with this run's values (RA/Dec sexagesimal, planet without the space)")
+_fd = os.path.join(_hp, "PHOTOMETRY_APERTURE_FITTING")
+for _f in ("results.txt", "model.txt", "detrended_model.txt", "corner.pdf", "traces.pdf",
+           "fitting_output_description.txt", "log.yaml"):
+    check(os.path.getsize(os.path.join(_fd, _f)) > 0, f"HOPS fitting folder has {_f}")
+check(os.path.isfile(os.path.join(_fd, "detrended_model.jpg")) or any("jpg" in n for n in _nh),
+      "detrended_model.jpg is written (or its absence explained)")
+_m = np.loadtxt(os.path.join(_fd, "model.txt")); _dm = np.loadtxt(os.path.join(_fd, "detrended_model.txt"))
+check(_m.shape == (_n, 6) and np.allclose(_m[:, 5], _m[:, 2] - _m[:, 4]) and abs(_m[_n // 2, 1]) < 1e-12
+      and np.allclose(_dm[:, 2], _m[:, 2] / _trend_flux) and np.allclose(_dm[:, 4], _transit_flux),
+      "model.txt / detrended_model.txt: time, phase, flux, error, model, residuals in HOPS's order")
+check(open(os.path.join(_fd, "results.txt")).read().startswith("#") and "rp_over_rs" in open(os.path.join(_fd, "results.txt")).read(),
+      "results.txt is the HOPS-layout results text")
+_ex = sorted(os.path.basename(p) for p in _glob.glob(os.path.join(_td3, "HOPS", "HOPS_*.txt")))
+check(_ex == ["HOPS_PHOTOMETRY_1_PHOTOMETRY_APERTURE_2025-10-15_HAT-P-32b_COUSINS_R_120.0s_for_ETD.txt",
+              "HOPS_PHOTOMETRY_1_PHOTOMETRY_APERTURE_2025-10-15_HAT-P-32b_COUSINS_R_120.0s_for_ExoClock.txt"],
+      f"the two export files carry HOPS's name pattern ({_ex})")
+_ec = open(os.path.join(_td3, "HOPS", _ex[1])).read().splitlines()
+_et = open(os.path.join(_td3, "HOPS", _ex[0])).read().splitlines()
+check(_ec[:4] == ["#Planet: HAT-P-32b", "#Time format: JD_UTC", "#Time stamp: Exposure start", "#Flux format: Flux"]
+      and _et[1:3] == ["#Time format: JD_UTC (geocentric)", "#Time stamp: Mid-exposure"]
+      and abs(float(_et[7].split("\t")[0]) - float(_ec[7].split("\t")[0]) - 60.0 / 86400.0) < 1e-9
+      and abs(float(_et[7].split("\t")[2]) - float(_ec[7].split("\t")[2])) < 1e-12 and any("physical" in n for n in _nh),
+      "ExoClock export at exposure start; ETD shifted by half an exposure, errors physical (not HOPS's / sqrt(gain))")
+check(any("GAUSS" in n for n in _nh), "the missing PSF-photometry files are said out loud")
+
+_we, _ne = ns["write_exotic_folder"](_r, _x)
+_ep = os.path.join(_td3, "EXOTIC"); _tp = os.path.join(_ep, "temp")
+_aa = open(os.path.join(_ep, "AAVSO_HAT-P-32 b_15-October-2025.txt")).read().splitlines()
+_keys = [l.split("=")[0] for l in _aa if l.startswith("#") and "=" in l]
+check(_keys[:21] == ["#TYPE", "#OBSCODE", "#SECONDARY_OBSCODES", "#SOFTWARE", "#DELIM", "#DATE_TYPE", "#OBSTYPE",
+                     "#STAR_NAME", "#EXOPLANET_NAME", "#BINNING", "#EXPOSURE_TIME", "#COMP_STAR-XC", "#NOTES",
+                     "#DETREND_PARAMETERS", "#MEASUREMENT_TYPE", "#FILTER", "#FILTER-XC", "#PRIORS", "#PRIORS-XC",
+                     "#RESULTS", "#RESULTS-XC"],
+      f"the EXOTIC-folder AAVSO file has EXOTIC's header keys in EXOTIC's order ({_keys[:21]})")
+_px = _json.loads([l for l in _aa if l.startswith("#PRIORS-XC=")][0][11:])
+_rx = _json.loads([l for l in _aa if l.startswith("#RESULTS-XC=")][0][12:])
+check(_px["Period"] == {"value": "2.15", "uncertainty": None, "units": "days"} and _px["u0"]["value"] == "0.6"
+      and _rx["Tc"]["units"] == "BJD_TDB" and _rx["Duration"]["value"] == "0.08" and _rx["Am2"]["value"] == "-0.018",
+      "PRIORS-XC / RESULTS-XC are EXOTIC's JSON dicts with null for an unknown uncertainty")
+_hdr_end = [i for i, l in enumerate(_aa) if l.startswith("#DATE,DIFF")][0]
+check(_aa[_hdr_end] == "#DATE,DIFF,ERR,DETREND_1,DETREND_2" and len(_aa) - _hdr_end - 1 == _n
+      and len(_aa[_hdr_end + 1].split(",")) == 5 and "#SOFTWARE=Svenesis LightCurve 9.9.9" in _aa,
+      "five data columns, one row per point, this script named as the software")
+for _f in ("FinalLightCurve_HAT-P-32 b_15-October-2025.png", "FinalLightCurve_HAT-P-32 b_15-October-2025.pdf"):
+    check(os.path.getsize(os.path.join(_ep, _f)) > 0, f"EXOTIC folder has {_f}")
+for _f in ("FinalLightCurve_HAT-P-32 b_15-October-2025.csv", "FinalParams_HAT-P-32 b_15-October-2025.json",
+           "NormalizedFlux_HAT-P-32 b_15-October-2025.txt", "NormalizedFluxTime_HAT-P-32 b_15-October-2025.pdf",
+           "TargetRawFlux_HAT-P-32 b_15-October-2025.pdf", "CompRawFlux_HAT-P-32 b_15-October-2025.pdf",
+           "CentroidPositions&Distances_HAT-P-32 b_15-October-2025.pdf",
+           "Observing_Statistics_target_15-October-2025.png", "Observing_Statistics_comp1_15-October-2025.pdf",
+           "Observing_Statistics_comp2_15-October-2025.png", "PlateStatus_HAT-P-32 b_15-October-2025.csv",
+           "FOV_HAT-P-32 b_15-October-2025_AsinhStretch.png", "FOV_HAT-P-32 b_15-October-2025_AsinhStretch.pdf",
+           "Triangle_HAT-P-32 b_15-October-2025.png"):
+    check(os.path.getsize(os.path.join(_tp, _f)) > 0, f"EXOTIC temp/ has {_f}")
+check(not os.path.exists(os.path.join(_tp, "Observing_Statistics_comp3_15-October-2025.png")),
+      "a dropped comparison gets no observing-statistics plot")
+_csv = open(os.path.join(_tp, "FinalLightCurve_HAT-P-32 b_15-October-2025.csv")).read().splitlines()
+check(_csv[0] == "# FINAL TIMESERIES OF HAT-P-32 b" and _csv[1] == "# BJD_TDB,Orbital Phase,Flux,Uncertainty,Model,Airmass"
+      and len(_csv) == _n + 2 and len(_csv[2].split(", ")) == 6, "FinalLightCurve csv: EXOTIC's two header lines, six columns")
+_pj = _json.load(open(os.path.join(_tp, "FinalParams_HAT-P-32 b_15-October-2025.json")))["FINAL PLANETARY PARAMETERS"]
+check(_pj["Mid-Transit Time (Tmid)"].endswith("BJD_TDB") and _pj["Ratio of Planet to Stellar Radius (Rp/R*)"] == "0.11 +/- 0.003"
+      and _pj["Transit depth (Rp/Rs)^2"] == "1.21 +/- 0.066 [%]" and _pj["Optimal Aperture"] == "2.60"
+      and _pj["Transit Duration (day)"] == "0.08" and _pj["Fit"] == "HOPS-mode posterior",
+      "FinalParams json: EXOTIC's keys, EXOTIC's rounding")
+_ps = open(os.path.join(_tp, "PlateStatus_HAT-P-32 b_15-October-2025.csv")).read().splitlines()
+check(_ps[0] == "# filename,time,target_saturated,unreadable" and len(_ps) == _nf + 1
+      and _ps[_n + 1].startswith('"L_060.fits",') and _ps[_n + 1].endswith(",True,False")
+      and _ps[_n + 2].endswith(",,False,True"),
+      "PlateStatus: one row per frame, one True/False column per reason, EXOTIC's quoting")
+_nfx = open(os.path.join(_tp, "NormalizedFlux_HAT-P-32 b_15-October-2025.txt")).read().splitlines()
+check(_nfx[0] == "BJD,Norm Flux,Norm Err,AM" and len(_nfx) == _n + 1 and len(_nfx[1].split(",")) == 4,
+      "NormalizedFlux txt: EXOTIC's four columns")
+check(any("AID_AAVSO" in n for n in _ne), "the AID file that needs AAVSO chart stars is declared absent, not faked")
+
+# without the per-star record and without HOPS mode: the folders still exist, the gaps are named
+_td4 = _tf3.mkdtemp()
+_r2 = dict(_r, out_dir=_td4, fit=_fit_blind); _r2.pop("aavso_path")
+_x2 = dict(_x, raw=None, stars=[])
+_wh2, _nh2 = ns["write_hops_folder"](_r2, _x2)
+_we2, _ne2 = ns["write_exotic_folder"](_r2, _x2)
+check(os.path.isfile(os.path.join(_td4, "HOPS", "PHOTOMETRY_1", "PHOTOMETRY_APERTURE.txt"))
+      and not os.path.isdir(os.path.join(_td4, "HOPS", "PHOTOMETRY_1", "PHOTOMETRY_APERTURE_FITTING"))
+      and any("not fitted in HOPS mode" in n for n in _nh2) and any("light_curve" in n for n in _nh2)
+      and len(_glob.glob(os.path.join(_td4, "HOPS", "HOPS_*.txt"))) == 2,
+      "Siril-engine run, blind fit: HOPS curve from the magnitudes, no fitting folder, both exports, gaps named")
+check(not _glob.glob(os.path.join(_td4, "EXOTIC", "AAVSO_*.txt")) and any("gates" in n for n in _ne2)
+      and os.path.isfile(os.path.join(_td4, "EXOTIC", "temp", "FinalParams_HAT-P-32 b_15-October-2025.json"))
+      and not _glob.glob(os.path.join(_td4, "EXOTIC", "temp", "Triangle_*")) and any("Triangle" in n for n in _ne2),
+      "…and the EXOTIC folder skips the AAVSO file the main gate refused and the corner plot without a posterior")
+_eph_toi = dict(_eph, rprs_archive=None, depth_pct=1.467, period_d=3.8608551)
+_td5 = _tf3.mkdtemp()
+_we3, _ = ns["write_exotic_folder"](dict(_r, out_dir=_td5, ephemeris=_eph_toi), _x)
+_aa3 = open(os.path.join(_td5, "EXOTIC", "AAVSO_HAT-P-32 b_15-October-2025.txt")).read().splitlines()
+_pr3 = [l for l in _aa3 if l.startswith("#PRIORS=")][0]
+check("Period=3.8608551," in _pr3 and "Rp/R*=0.1" in _pr3 and "Rp/R*=," not in _pr3,
+      f"a prior without an uncertainty keeps its full precision, and a TOI's Rp/R* prior comes from its depth ({_pr3})")
+check('"gain": float(gain_hdr)' in src[src.index("def _native_photometry"):src.index("def _run_light_curve")],
+      "the per-star record carries the camera's e-/ADU, not the internal gain with the float scaling folded in "
+      "(the ETD export divides the errors by its square root)")
+_ead = ns["east_angle_deg"]
+check(abs(_ead(*ns["field_orientation"](_stars_o)[:2]) - 180.0) < 1e-6
+      and abs(_ead(*ns["field_orientation"]([_St(x, y, 30.0 + (x - 500) * _sc / math.cos(math.radians(40)), 40.0 + (y - 500) * _sc)
+                                             for x in range(100, 1000, 150) for y in range(100, 1000, 150)])[:2])) < 1e-6,
+      "the E arrow points along -x on a direct field and +x on its mirror (it was 180 deg off for every parity)")
+_sep = ns["angular_sep_arcsec"]
+check(abs(_sep(359.99, 0.0, 0.01, 0.0) - 72.0) < 1e-6 and abs(_sep(0.01, 0.0, 359.99, 0.0) - 72.0) < 1e-6,
+      "a separation across RA 0h is 72 arcsec, not a full circle")
+_hdr_ra = ns["header_target_radec"]([{"objctra": "23 59 59.0", "objctdec": "+10 00 00", "kind": "light"},
+                                     {"objctra": "00 00 01.0", "objctdec": "+10 00 00", "kind": "light"}]) \
+    if "header_target_radec" in ns else None
+check(_hdr_ra is None or (_hdr_ra[0] is not None and (_hdr_ra[0] < 0.01 or _hdr_ra[0] > 359.99)),
+      "header positions straddling 0h median to 0h, not to 180 deg")
+_sx6 = ns["_deg_to_sexagesimal"]
+check(_sx6(14.999999, 89.99999) == "01:00:00.00 +90:00:00.0" and _sx6(31.0, 46.7) == "02:04:00.00 +46:42:00.0"
+      and _sx6(359.9999999, -0.5) == "00:00:00.00 -00:30:00.0",
+      "sexagesimal carries the rounded seconds instead of printing 59:60.00")
+check(ns["_safe_name"]("Ha/OIII") == "Ha_OIII" and ns["_safe_name"]("K2-18 b") == "K2-18 b" and ns["_safe_name"]("") == "unnamed"
+      and ns["_safe_name"](" a:b*c? ") == "a_b_c",
+      "file-name parts drop the characters no file system takes; the text inside the files is untouched")
+_fit_sc = dict(_fit_blind, basis_scales=[0.25], basis_coeffs=[-0.0045], coeff_sigmas=[0.001, 0.0005], airmass_slope=-0.018)
+_fs_sc = ns["exotic_fit_summary"]({"fit": _fit_sc, "ephemeris": _eph})
+check(abs(_fs_sc["a2_e"] - 0.4 * math.log(10) * 0.0005 / 0.25) < 1e-12,
+      "the Am2 bar is per airmass (coefficient sigma / basis scale), not per standardised column")
+_rt = ns["hops_results_text"](dict(_r, fit=_fit_sc))
+_air_row = [l for l in _rt.splitlines() if l.startswith("airmass") or l.lstrip("# ").startswith("airmass")]
+check(_air_row and "-0.018" in _air_row[0] and "0.002" in _air_row[0],
+      f"results.txt's blind branch quotes the airmass coefficient per airmass, with its bar ({_air_row[:1]})")
+_x_act = dict(_x, comps_active=[(1000.0, 700.0)])
+_td6 = _tf3.mkdtemp()
+ns["write_exotic_folder"](dict(_r, out_dir=_td6), _x_act)
+_aa6 = open(os.path.join(_td6, "EXOTIC", "AAVSO_HAT-P-32 b_15-October-2025.txt")).read()
+_pj6 = _json.load(open(os.path.join(_td6, "EXOTIC", "temp", "FinalParams_HAT-P-32 b_15-October-2025.json")))["FINAL PLANETARY PARAMETERS"]
+check('"x": "1000.0"' in _aa6 and _pj6["Best Comparison Star"].startswith("#1 - (1000.0")
+      and "Am1/Am2 from the HOPS-mode fit" in _aa6 and "(X - 1.200)" in _aa6 and _pj6["Airmass model"].startswith("Am1/Am2 from the HOPS-mode fit"),
+      "COMP_STAR-XC and Best Comparison Star name a comp the photometry used; Am1/Am2 are labelled with their law in #NOTES and the JSON")
+_raw_cm = dict(_raw, flux=_fl.copy()); _raw_cm["flux"][1, 5] = np.nan          # active comp missing on frame 5
+_td7 = _tf3.mkdtemp()
+ns["write_exotic_folder"](dict(_r, out_dir=_td7), dict(_x, raw=_raw_cm))
+_ps7 = open(os.path.join(_td7, "EXOTIC", "temp", "PlateStatus_HAT-P-32 b_15-October-2025.csv")).read().splitlines()
+check(_ps7[0] == "# filename,time,comparison_missing,target_saturated,unreadable" and _ps7[6].endswith(",True,False,False"),
+      "PlateStatus marks a frame lost to a missing comparison star")
+_rawx = ns["write_hops_folder"](dict(_r, out_dir=_tf3.mkdtemp()), dict(_x, planet="K2-18/b", filter="Ha/OIII"))[0]
+check(any(os.path.basename(p_).endswith("_K2-18_b_Ha_OIII_120.0s_for_ETD.txt") for p_ in _rawx),
+      "a '/' in the planet or filter name no longer aborts the HOPS folder")
+_np = src[src.index("def _native_photometry"):src.index("def _run_light_curve")]
+check("reserves = moved_res" in _np and "draw_map = (det_hom" in _np and 'self._photometry_stars = list(draw)' in _np
+      and _np.index("self._photometry_stars = list(draw)") > _np.index("if len(kept_stars) - 1 < n_want")
+      and '"adu_scale": 65535.0 if float_normalised else 1.0' in _np and "in (4095, 16383)" in _np,
+      "reserve stars move with the rest after setref, the drawn star list is in the detection frame and set after every fallback exit, "
+      "counts are scaled back for the per-star files, 12/14-bit clip levels are found on float data too")
+check(src.count('_unlink_quiet(os.path.join(r["out_dir"], "AAVSO_exoplanet.txt"))') == 3 and src.count("_unlink_quiet(out)") == 2
+      and '_clear_tree_files(os.path.join(r["out_dir"], label))' in src and "shutil.rmtree(os.path.join(r[" not in src,
+      "a refused AAVSO file or field image is removed, and both tool folders start empty on every run (files unlinked, directories kept)")
+_td8 = _tf3.mkdtemp(); os.makedirs(os.path.join(_td8, "sub")); open(os.path.join(_td8, "sub", "old.txt"), "w").write("x"); open(os.path.join(_td8, "top.txt"), "w").write("x")
+ns["_clear_tree_files"](_td8)
+check(os.path.isdir(os.path.join(_td8, "sub")) and not os.listdir(os.path.join(_td8, "sub")) and os.listdir(_td8) == ["sub"],
+      "clearing a tool folder removes its files and keeps its directories")
+check('os.environ.setdefault("PYTHONSAFEPATH", "1")' in src and src.index('PYTHONSAFEPATH') < src.index("_resource_tracker.ensure_running()"),
+      "the resource tracker helper is spawned with the current directory kept off its path")
+check('"obstype": self.cmb_obstype.currentText()' in src and 'st.setValue("obstype"' in src,
+      "#OBSTYPE has a GUI control that is saved with the settings")
+check("self._write_tool_folders(result)" in src and 'r["aavso_path"] = path' in src
+      and "self._native_raw = {" in src[src.index("def _native_photometry"):src.index("def _run_light_curve")]
+      and '"samples": flat, "chain": chain[burn:]' in src,
+      "the worker writes both folders after the AAVSO file, from the native photometry's per-star record")
 
 print()
 if fails:
