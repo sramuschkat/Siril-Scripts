@@ -1,6 +1,6 @@
 # Svenesis LightCurve — User Instructions
 
-**Version 1.0.7** | Siril Python Script for Exoplanet Transit Photometry
+**Version 1.0.8** | Siril Python Script for Exoplanet Transit Photometry
 
 > *A folder of sub-exposures in, a light curve out — and an honest answer to the only question that matters: is there a transit in it?*
 
@@ -607,7 +607,7 @@ It never removes more than **5 %** of a run. Past that the outliers *are* the da
 
 ### The AAVSO file
 
-`AAVSO_exoplanet.txt` lands beside the CSV, in Exoplanet Watch's own format: `#TYPE=EXOPLANET`, observer code, filter, `#DATE_TYPE=BJD_TDB`, the **resolved** target name (never a stale form entry), then `DATE,DIFF,ERR,DETREND_1`. Mid-transit time and its error, the central depth and its error, **`#RPRS`, `#RPRS_ERR` and `#DEPTH_RPRS2_PCT`** (the convention EXOTIC and AIJ quote — see §9), duration and the red-noise β travel in the header.
+`AAVSO_exoplanet.txt` lands beside the CSV, in Exoplanet Watch's own format and EXOTIC's layout: `#TYPE=EXOPLANET`, observer code, the four fields the upload form **requires** — `#STAR_NAME` (the archive's host name, else the planet name without its letter or TOI suffix), `#EXOPLANET_NAME` (the **resolved** name, never a stale form entry), `#EXPOSURE_TIME` and `#MEASUREMENT_TYPE=Rnflux` — binning, filter, `#DATE_TYPE=BJD_TDB`, `#PRIORS` and `#RESULTS` lines, then `DATE,DIFF,ERR,DETREND_1,DETREND_2`: DIFF is the raw differential series as **relative normalised flux** (out-of-transit median 1; AAVSO allows `Rflux`, `Dmag` and `Rnflux`, and EXOTIC writes `Rnflux`), DETREND_1 the airmass and DETREND_2 this script's fitted systematics model, so DIFF/DETREND_2 is the detrended curve. Mid-transit time and its error, the central depth and its error, **`#RPRS`, `#RPRS_ERR` and `#DEPTH_RPRS2_PCT`** (the convention EXOTIC and AIJ quote — see §9), duration and the red-noise β travel in the header.
 
 **Refused unless the times are BJD_TDB.** The header declares that system; writing JD_UTC under it would hand a submission an eight-minute error nobody could see.
 

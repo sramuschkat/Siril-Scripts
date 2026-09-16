@@ -497,7 +497,7 @@ Reads the current plate-solved image from Siril, identifies the main astronomica
 
 ## Svenesis LightCurve
 
-**File:** `Svenesis-LightCurve.py` (v1.0.7) — **[Detailed Instructions](Instructions/Svenesis-LightCurve-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-LightCurve-Instructions_de.md)**
+**File:** `Svenesis-LightCurve.py` (v1.0.8) — **[Detailed Instructions](Instructions/Svenesis-LightCurve-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-LightCurve-Instructions_de.md)**
 
 Exoplanet transit photometry inside Siril, in the spirit of [EXOTIC](https://github.com/rzellem/EXOTIC) (NASA's Exoplanet Watch pipeline) and [HOPS](https://github.com/ExoWorldsSpies/hops) — and tested against EXOTIC on its own sample data, with matching results. Point it at the folder holding one night's sub-exposures of an exoplanet host star. It measures how that star's brightness changed relative to other stars in the same field, removes the systematic trends it can account for, fits a transit — and tells you whether the dip is real.
 
@@ -539,7 +539,7 @@ The legend quotes T0 and Rp/R★ with errors and names the detrending bases; spi
 
 ### Output
 
-`lightcurve/lightcurve.csv` (JD, raw, centred, detrended, error, airmass), the plot as PNG — and, when the times are BJD_TDB, an `AAVSO_exoplanet.txt` in Exoplanet Watch's format with T0 ± error, both depth conventions, Rp/R★ ± error and duration in the header. The **Save results** button writes two files in one click: `results.txt` in the exact layout HOPS leaves in its fitting folder (the column-aligned parameter table with covariance error bars, the `#Filter`/`#Epoch` block, both residual-statistics blocks including a pure-numpy Shapiro–Wilk W verified against scipy — anything that parses a HOPS `results.txt` parses this one unchanged; in HOPS-compatible mode it is HOPS's own table — a₁..a₄, sma_over_rs, inclination, the real outlier count and scale factor, asymmetric posterior bars), and `report.txt`, the full plain-text report with the comparison stars, every rejection and its reason, the method, and the result.
+`lightcurve/lightcurve.csv` (JD, raw, centred, detrended, error, airmass), the plot as PNG — and, when the times are BJD_TDB, an `AAVSO_exoplanet.txt` in Exoplanet Watch's format and EXOTIC's layout — the four fields the upload form requires (`STAR_NAME`, `EXOPLANET_NAME`, `EXPOSURE_TIME`, `MEASUREMENT_TYPE=Rnflux`), DIFF as relative normalised flux with the airmass and the fitted systematics model as detrend columns, `#PRIORS`/`#RESULTS`, plus T0 ± error, both depth conventions, Rp/R★ ± error and duration in the header. The **Save results** button writes two files in one click: `results.txt` in the exact layout HOPS leaves in its fitting folder (the column-aligned parameter table with covariance error bars, the `#Filter`/`#Epoch` block, both residual-statistics blocks including a pure-numpy Shapiro–Wilk W verified against scipy — anything that parses a HOPS `results.txt` parses this one unchanged; in HOPS-compatible mode it is HOPS's own table — a₁..a₄, sma_over_rs, inclination, the real outlier count and scale factor, asymmetric posterior bars), and `report.txt`, the full plain-text report with the comparison stars, every rejection and its reason, the method, and the result.
 
 ### Tests
 

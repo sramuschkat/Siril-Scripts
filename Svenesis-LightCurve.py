@@ -1,6 +1,6 @@
 """
 Svenesis LightCurve
-Script Version: 1.0.7
+Script Version: 1.0.8
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -90,6 +90,20 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.0.8 - The AAVSO file passes the upload form
+      - AAVSO's Exoplanet Database form requires #STAR_NAME,
+        #EXOPLANET_NAME, #EXPOSURE_TIME and #MEASUREMENT_TYPE; a
+        submitter's upload bounced on exactly those.  The file now
+        carries them and follows EXOTIC's layout: DIFF as relative
+        normalised flux (#MEASUREMENT_TYPE=Rnflux; AAVSO also allows
+        Rflux and Dmag), the airmass as DETREND_1, this script's fitted
+        systematics model as DETREND_2 (DIFF / DETREND_2 is the
+        detrended curve), #BINNING, #PRIORS and #RESULTS lines.
+      - #FILTER is AAVSO's code, from the form or the frames' FILTER
+        keyword: a RED wheel is TR (GREEN TG, BLUE TB), R/Rc is R, r' is
+        SR, an unfiltered run is CV, Astrodon ExoPlanet-BB is CR.  A
+        blank form field used to write CV over a RED run.
+
 1.0.7 - HOPS-compatible mode, Claret coefficients from Phoenix, and
         three review passes over the whole script
       - Fit mode dropdown: "Svenesis — blind detection" (default) or
@@ -268,7 +282,7 @@ from matplotlib.ticker import FuncFormatter
 
 from sirilpy import LogColor
 
-VERSION = "1.0.7"
+VERSION = "1.0.8"
 
 # The full manual on GitHub, linked from the help dialog.  The in-app
 # tabs are the quick reference; the manual carries the measurements
@@ -1010,6 +1024,75 @@ def timestamp_diagnosis(infos):
         f"is {0.5 * exp:.0f} s late."), 0.0
 
 
+# AAVSO's filter codes for the passbands this script knows; RGB wheels
+# are AAVSO's tri-colour codes, an unfiltered run is CV (clear, V
+# zero point) and Astrodon's ExoPlanet-BB is CR (clear, R zero point).
+AAVSO_FILTER_CODES = {
+    "JOHNSON_U": "U", "JOHNSON_B": "B", "JOHNSON_V": "V",
+    "COUSINS_R": "R", "COUSINS_I": "I",
+    "sdss_u": "SU", "sdss_g": "SG", "sdss_r": "SR", "sdss_i": "SI",
+    "sdss_z": "SZ", "2mass_j": "J", "2mass_h": "H", "2mass_ks": "K",
+    "clear": "CV", "luminance": "CV", "exoplanets_bb": "CR",
+}
+
+
+def aavso_filter_code(text) -> str:
+    """The AAVSO filter code for a filter as the header or the form
+    names it: RED/GREEN/BLUE are the tri-colour codes TR/TG/TB, HOPS's
+    and the survey spellings map through the passband table, a short
+    unknown name passes through upper-cased, anything else is CV."""
+    key = re.sub(r"\s*[\(\[].*$", "", _filter_key(text)).strip()
+    if key in ("red", "r (rgb)", "rgb red"):
+        return "TR"
+    if key in ("green", "rgb green"):
+        return "TG"
+    if key in ("blue", "rgb blue"):
+        return "TB"
+    band = hops_filter_name(text)
+    if band and band in AAVSO_FILTER_CODES:
+        return AAVSO_FILTER_CODES[band]
+    raw = (text or "").strip().upper()
+    if raw and len(raw) <= 3 and raw.isalnum():
+        return raw
+    return "CV"
+
+
+def host_star_name(planet_name: str, hostname: str = "") -> str:
+    """The star a planet name belongs to, for AAVSO's #STAR_NAME.
+
+    The archive's hostname wins; otherwise a trailing planet letter
+    ("HAT-P-32 b") or a TOI candidate suffix ("TOI-4033.01") is cut."""
+    if hostname and hostname.strip():
+        return hostname.strip()
+    name = (planet_name or "").strip()
+    m = re.match(r"^(TOI-?\d+)\.\d+$", name, re.I)
+    if m:
+        return m.group(1)
+    return re.sub(r"\s+[b-z]$", "", name)
+
+
+def aavso_rnflux(mag, err, oot_mask=None):
+    """Differential magnitudes to the relative normalised flux AAVSO's
+    Exoplanet Database takes (``#MEASUREMENT_TYPE=Rnflux``, the type
+    EXOTIC writes): flux = 10^(-0.4 m) scaled so the out-of-transit
+    median is 1, the error propagated (dF = F ln10/2.5 dm)."""
+    mag = np.asarray(mag, dtype=float)
+    err = np.asarray(err, dtype=float)
+    flux = 10.0 ** (-0.4 * mag)
+    ref = flux
+    if oot_mask is not None:
+        m = np.asarray(oot_mask, dtype=bool)
+        if m.size == flux.size and np.count_nonzero(m & np.isfinite(flux)) >= 5:
+            ref = flux[m]
+    norm = float(np.nanmedian(ref)) if np.any(np.isfinite(ref)) else 1.0
+    if not (norm > 0):
+        norm = 1.0
+    flux = flux / norm
+    ferr = flux * (math.log(10.0) / 2.5) * err if err.size == flux.size \
+        else np.full(flux.shape, np.nan)
+    return flux, ferr
+
+
 def utc_offset_hours(date_obs: str, date_loc: str):
     """The site's UTC offset in hours, or None when it cannot be known.
 
@@ -1647,6 +1730,7 @@ def archive_lookup(name: str, timeout: float = ARCHIVE_TIMEOUT_S,
         return None, f"the archive knows {planet!r} but has no position for it"
     return {
         "name": rows[0].get("pl_name", planet) or planet,
+        "hostname": str(rows[0].get("hostname") or "").strip(),
         "ra_deg": ra, "dec_deg": dec,
         "period_d": _num("pl_orbper"),
         "t0_bjd": _num("pl_tranmid"),
@@ -9232,22 +9316,93 @@ class LightCurveWorker(QThread):
                        LogColor.SALMON)
             return
         fit = r.get("fit")
+        eph = r.get("ephemeris") or {}
         obscode = str(self.opts.get("obscode", "") or "").strip().upper()
         path = os.path.join(r["out_dir"], "AAVSO_exoplanet.txt")
         partial = path + ".partial"
         X = r["airmass"]
-        detr = r["detrended"]
         err = r["err"]
         jd = r["jd"]
+        # AAVSO's upload form REQUIRES STAR_NAME, EXOPLANET_NAME,
+        # EXPOSURE_TIME and MEASUREMENT_TYPE (a submitter's form bounced
+        # on exactly those four).  AAVSO's format allows three
+        # measurement types: Rflux (relative flux), Dmag (differential
+        # magnitude) and Rnflux (normalised relative flux).  EXOTIC
+        # writes Rnflux, so does this file, and the DIFF column is
+        # the RAW differential series as flux, out-of-transit median 1,
+        # with the airmass as DETREND_1 and this script's fitted
+        # systematics model as DETREND_2 (DIFF / DETREND_2 is the
+        # detrended curve), the way EXOTIC lays its file out.
+        planet_name = (self.opts.get("resolved_target_name")
+                       or eph.get("name")
+                       or self.opts.get("target_name", "") or "UNKNOWN")
+        star_name = host_star_name(planet_name, eph.get("hostname", ""))
+        info0 = (getattr(self, "_light_infos", None) or [{}])[0]
+        try:
+            exp_s = float(info0.get("exp_s") or 0.0)
+        except (TypeError, ValueError):
+            exp_s = 0.0
+        try:
+            binning = int(info0.get("binning") or 1)
+        except (TypeError, ValueError):
+            binning = 1
+        detected = fit is not None and fit.get("detected")
+        oot = None
+        if detected and fit.get("t0") is not None and fit.get("duration_d"):
+            oot = np.abs(jd - float(fit["t0"])) > 0.5 * float(fit["duration_d"])
+        flux, ferr = aavso_rnflux(r["mag"], err, oot)
+        trend = None
+        if fit is not None and fit.get("trend") is not None:
+            tr = np.asarray(fit["trend"], dtype=float)
+            if tr.size == jd.size:
+                trend = 10.0 ** (-0.4 * (tr - np.nanmedian(tr)))
         try:
             with open(partial, "w", encoding="utf-8") as fh:
                 fh.write("#TYPE=EXOPLANET\n")
                 fh.write(f"#OBSCODE={obscode or 'PLEASE_FILL_IN'}\n")
+                fh.write("#SECONDARY_OBSCODES=\n")
                 fh.write(f"#SOFTWARE=Svenesis LightCurve {VERSION}\n")
                 fh.write("#DELIM=,\n")
                 fh.write("#DATE_TYPE=BJD_TDB\n")
                 fh.write(f"#OBSTYPE={self.opts.get('obstype', 'CCD')}\n")
-                fh.write(f"#FILTER={self.opts.get('filter_name', '') or 'CV'}\n")
+                fh.write(f"#STAR_NAME={star_name}\n")
+                fh.write(f"#EXOPLANET_NAME={planet_name}\n")
+                fh.write(f"#BINNING={binning}x{binning}\n")
+                fh.write(f"#EXPOSURE_TIME={exp_s:g}\n")
+                # The form's filter first, the frames' FILTER keyword as
+                # the fallback, both as AAVSO's code: a RED wheel is TR,
+                # not the CV a blank field used to become.
+                fh.write("#FILTER=" + aavso_filter_code(
+                    self.opts.get("filter_name", "") or r.get("filter", ""))
+                    + "\n")
+                fh.write("#COMP_STAR-XC=null\n")
+                fh.write("#DETREND_PARAMETERS=AIRMASS"
+                         + (", SYSTEMATICS MODEL ("
+                            + "+".join(fit.get("bases") or ["none"]) + ")"
+                            if trend is not None else "") + "\n")
+                fh.write("#MEASUREMENT_TYPE=Rnflux\n")
+                priors = []
+                if eph.get("period_d"):
+                    priors.append(f"Period={float(eph['period_d']):.6f}")
+                if eph.get("a_rs"):
+                    priors.append(f"a/R*={float(eph['a_rs']):.3f}")
+                if eph.get("inc_deg"):
+                    priors.append(f"inc={float(eph['inc_deg']):.2f}")
+                if eph.get("ecc") is not None:
+                    priors.append(f"ecc={float(eph['ecc'] or 0.0):.3f}")
+                if priors:
+                    fh.write("#PRIORS=" + ",".join(priors) + "\n")
+                if detected:
+                    res = [f"Tc={fit['t0']:.6f}"
+                           + (f" +/- {fit['t0_sigma_d']:.6f}" if np.isfinite(
+                               fit.get("t0_sigma_d", float("nan"))) else "")]
+                    if fit.get("rprs") is not None:
+                        res.append(f"Rp/R*={fit['rprs']:.4f}"
+                                   + (f" +/- {fit['rprs_sigma']:.4f}"
+                                      if fit.get("rprs_sigma") is not None
+                                      else ""))
+                    res.append(f"Duration={fit['duration_h'] / 24.0:.5f}")
+                    fh.write("#RESULTS=" + ",".join(res) + "\n")
                 # The RESOLVED name, not the box: the box can hold the
                 # previous target's name, and a submission under the wrong
                 # star is worse than one under 'UNKNOWN'.
@@ -9293,13 +9448,18 @@ class LightCurveWorker(QThread):
                          + (f"{fit['red_noise_beta']:.2f}" if fit else "n/a")
                          + f"; false alarm at the {MIN_DETECTION_SIGMA:.1f} "
                            f"sigma floor {100 * MEASURED_FALSE_ALARM:.2f}%\n")
-                fh.write("#DATE,DIFF,ERR,DETREND_1\n")
+                fh.write("#DATE,DIFF,ERR,DETREND_1"
+                         + (",DETREND_2" if trend is not None else "") + "\n")
                 for i in range(jd.size):
                     x = (f"{X[i]:.4f}" if X is not None
                          and np.isfinite(X[i]) else "NA")
-                    e = (f"{err[i]:.6f}" if i < err.size
-                         and np.isfinite(err[i]) else "NA")
-                    fh.write(f"{jd[i]:.6f},{detr[i]:.6f},{e},{x}\n")
+                    e = (f"{ferr[i]:.7f}" if i < ferr.size
+                         and np.isfinite(ferr[i]) else "NA")
+                    row = f"{jd[i]:.6f},{flux[i]:.7f},{e},{x}"
+                    if trend is not None:
+                        row += (f",{trend[i]:.7f}" if np.isfinite(trend[i])
+                                else ",NA")
+                    fh.write(row + "\n")
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(partial, path)
@@ -11462,8 +11622,11 @@ the engine measures under 30% of the frames, and says so.</li>
 <h3 style='color:#88aaff'>What you get</h3>
 <p><tt>lightcurve/lightcurve.csv</tt> with every point (raw, centred, detrended,
 airmass), the plot as PNG — and, when the times are BJD_TDB, an AAVSO
-Exoplanet Watch file with T0, both depth conventions (central and
-(Rp/R★)²) and Rp/R★ in the header. The <b>Save results</b> button
+Exoplanet Watch file in EXOTIC's layout: the four fields the upload form
+requires (STAR_NAME, EXOPLANET_NAME, EXPOSURE_TIME,
+MEASUREMENT_TYPE=Rnflux), DIFF as relative normalised flux with the
+airmass and the fitted systematics model as detrend columns, and T0,
+both depth conventions (central and (Rp/R★)²) and Rp/R★ in the header. The <b>Save results</b> button
 writes two files in one click: <tt>results.txt</tt> in the exact
 layout HOPS leaves in its fitting folder (the parameter table, then
 #Filter/#Epoch, then two residual-statistics blocks — anything that

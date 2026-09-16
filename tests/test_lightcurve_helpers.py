@@ -4205,6 +4205,30 @@ check(ns["PLC_PASSBANDS"] == {"clear": "clear", "luminance": "luminance", "exopl
       and ns["SVO_FILTER_IDS"].get("clear") is None,
       "clear, luminance and exoplanets_bb route to pylightcurve, not SVO")
 
+print("\n9i) AAVSO upload form: required fields, Rnflux, EXOTIC's layout")
+_hs = ns["host_star_name"]
+check(_hs("HAT-P-32 b") == "HAT-P-32" and _hs("TOI-4033.01") == "TOI-4033" and _hs("WASP-12 b", "WASP-12") == "WASP-12"
+      and _hs("Kepler-1 b", "  TrES-3 ") == "TrES-3" and _hs("TOI-2040.01") == "TOI-2040",
+      "the host star name comes from the archive's hostname, else the planet letter or TOI suffix is cut")
+_rf = ns["aavso_rnflux"]
+_m = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.02, 0.02]); _e = np.full(8, 0.002)
+_fl, _fe = _rf(_m, _e, np.array([1, 1, 1, 1, 1, 1, 0, 0], dtype=bool))
+check(abs(_fl[0] - 1.0) < 1e-12 and abs(_fl[6] - 10 ** (-0.008)) < 1e-9 and abs(_fe[0] - 0.002 * math.log(10) / 2.5) < 1e-12,
+      "differential magnitudes become relative normalised flux (OOT median 1) with the error propagated")
+_aav3 = src[src.index("def _write_aavso"):src.index("def _write_csv")]
+check(all(k in _aav3 for k in ("#STAR_NAME=", "#EXOPLANET_NAME=", "#EXPOSURE_TIME=", "#MEASUREMENT_TYPE=Rnflux", "#BINNING=", "#SECONDARY_OBSCODES=", "#DETREND_PARAMETERS=AIRMASS", "#PRIORS=", "#RESULTS="))
+      and _aav3.count("#MEASUREMENT_TYPE=") == 1 and "#DATE,DIFF,ERR,DETREND_1" in _aav3,
+      "the AAVSO header writes every field the upload form requires, once")
+
+_afc = ns["aavso_filter_code"]
+check(_afc("RED") == "TR" and _afc("Green") == "TG" and _afc("blue") == "TB" and _afc("R") == "R" and _afc("Rc") == "R"
+      and _afc("r'") == "SR" and _afc("V") == "V" and _afc("") == "CV" and _afc("Luminance") == "CV" and _afc("Ha") == "HA"
+      and _afc("Astrodon Exoplanet-BB") == "CR" and _afc("something long") == "CV",
+      "AAVSO filter codes: tri-colour for RGB wheels, standard bands by name, CV for an unfiltered run")
+check("aavso_filter_code(" in src[src.index("def _write_aavso"):src.index("def _write_csv")]
+      and 'r.get("filter", "")' in src[src.index("def _write_aavso"):src.index("def _write_csv")],
+      "the AAVSO writer falls back to the frames' FILTER keyword before CV")
+
 print()
 if fails:
     print(f"{len(fails)} FAILURE(S)")

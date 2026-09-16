@@ -1,6 +1,6 @@
 # Svenesis LightCurve — Anleitung
 
-**Version 1.0.7** | Siril Python-Skript für Exoplaneten-Transitphotometrie
+**Version 1.0.8** | Siril Python-Skript für Exoplaneten-Transitphotometrie
 
 > *Ein Ordner Subs hinein, eine Lichtkurve heraus — und eine ehrliche Antwort auf die einzige Frage, die zählt: steckt da ein Transit drin?*
 
@@ -600,7 +600,7 @@ Es entfernt nie mehr als **5 %** eines Laufs. Darüber *sind* die Ausreißer die
 
 ### Die AAVSO-Datei
 
-`AAVSO_exoplanet.txt` landet neben der CSV, im Format von Exoplanet Watch: `#TYPE=EXOPLANET`, Beobachtercode, Filter, `#DATE_TYPE=BJD_TDB`, der **aufgelöste** Zielname (nie ein veralteter Formulareintrag), dann `DATE,DIFF,ERR,DETREND_1`. Transitmitte samt Fehler, die zentrale Tiefe samt Fehler, **`#RPRS`, `#RPRS_ERR` und `#DEPTH_RPRS2_PCT`** (die Konvention, die EXOTIC und AIJ angeben — siehe §9), Dauer und das Rotrausch-β stehen im Kopf.
+`AAVSO_exoplanet.txt` landet neben der CSV, im Format von Exoplanet Watch und im Layout von EXOTIC: `#TYPE=EXOPLANET`, Beobachtercode, die vier Felder, die das Upload-Formular **verlangt** — `#STAR_NAME` (der Hostname des Archivs, sonst der Planetenname ohne Buchstaben oder TOI-Suffix), `#EXOPLANET_NAME` (der **aufgelöste** Name, nie ein veralteter Formulareintrag), `#EXPOSURE_TIME` und `#MEASUREMENT_TYPE=Rnflux` — Binning, Filter, `#DATE_TYPE=BJD_TDB`, `#PRIORS`- und `#RESULTS`-Zeilen, dann `DATE,DIFF,ERR,DETREND_1,DETREND_2`: DIFF ist die rohe Differenzreihe als **relativer normierter Fluss** (Out-of-Transit-Median 1; AAVSO erlaubt `Rflux`, `Dmag` und `Rnflux`, EXOTIC schreibt `Rnflux`), DETREND_1 die Luftmasse und DETREND_2 das gefittete Systematikmodell dieses Skripts, DIFF/DETREND_2 ist also die entrendete Kurve. Transitmitte samt Fehler, die zentrale Tiefe samt Fehler, **`#RPRS`, `#RPRS_ERR` und `#DEPTH_RPRS2_PCT`** (die Konvention, die EXOTIC und AIJ angeben — siehe §9), Dauer und das Rotrausch-β stehen im Kopf.
 
 **Verweigert, solange die Zeiten nicht BJD_TDB sind.** Der Kopf deklariert dieses System; JD_UTC darunter zu schreiben hieße, einer Einreichung einen Acht-Minuten-Fehler mitzugeben, den niemand sehen kann.
 
