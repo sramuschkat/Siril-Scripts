@@ -4229,6 +4229,31 @@ check("aavso_filter_code(" in src[src.index("def _write_aavso"):src.index("def _
       and 'r.get("filter", "")' in src[src.index("def _write_aavso"):src.index("def _write_csv")],
       "the AAVSO writer falls back to the frames' FILTER keyword before CV")
 
+print("\n9j) temperature is demanded only where the thermal signal is what gets removed")
+_sm = ns["signature_matches"]
+_lt = {"instrument": "Cam", "dims": (100, 100), "binning": 1, "gain_v": 100.0, "temp_v": -10.0, "exp_s": 60.0}
+_dk = dict(_lt, temp_v=-20.0)
+_fl = {"instrument": "Cam", "dims": (100, 100), "binning": 1, "gain_v": 100.0, "temp_v": 5.0, "exp_s": 3.0}
+_df = dict(_fl, temp_v=5.0); _df_cold = dict(_fl, temp_v=-15.0)
+_bi = {"instrument": "Cam", "dims": (100, 100), "binning": 1, "gain_v": 100.0, "temp_v": -25.0, "exp_s": 0.001}
+check(not _sm(_dk, _lt)[0] and "temperature" in _sm(_dk, _lt)[1],
+      "a dark 10 K colder than the lights is refused — dark current is thermal")
+check(_sm(_fl, _lt, check_exposure=False, check_temperature=False)[0],
+      "a flat 15 K warmer than the lights is accepted — a flat is a ratio")
+check(_sm(_df, _fl, check_exposure=True, check_temperature=True)[0]
+      and not _sm(_df_cold, _fl, check_exposure=True, check_temperature=True)[0],
+      "a flat-dark must match the flat's temperature and exposure")
+check(_sm(_bi, _fl, check_exposure=False, check_temperature=False)[0],
+      "a bias against a flat needs neither temperature nor exposure")
+_groups = {ns["KIND_DARK"]: [{"info": _dk, "files": ["d1"]}],
+           ns["KIND_FLAT"]: [{"info": _fl, "files": ["f1"]}],
+           ns["KIND_DARKFLAT"]: [{"info": _df_cold, "files": ["x"]}, {"info": _df, "files": ["df1"]}],
+           ns["KIND_BIAS"]: [{"info": _bi, "files": ["b1"]}]}
+_chosen, _notes = ns["choose_masters"](_groups, _lt)
+check("flat" in _chosen and "dark" not in _chosen and _chosen.get("offset", {}).get("files") == ["df1"]
+      and any("dark REJECTED" in n and "temperature" in n for n in _notes),
+      "choose_masters: warm flat taken, cold dark rejected with its reason, the flat-dark at the flat's temperature chosen")
+
 print()
 if fails:
     print(f"{len(fails)} FAILURE(S)")

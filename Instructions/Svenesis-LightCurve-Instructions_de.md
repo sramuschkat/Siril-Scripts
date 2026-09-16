@@ -1,6 +1,6 @@
 # Svenesis LightCurve — Anleitung
 
-**Version 1.0.8** | Siril Python-Skript für Exoplaneten-Transitphotometrie
+**Version 1.0.9** | Siril Python-Skript für Exoplaneten-Transitphotometrie
 
 > *Ein Ordner Subs hinein, eine Lichtkurve heraus — und eine ehrliche Antwort auf die einzige Frage, die zählt: steckt da ein Transit drin?*
 
@@ -136,7 +136,7 @@ Oder direkt auf `LIGHT/2026-08-14/LUMINOS/` — dann werden die Flats trotzdem g
 
 ### Was übereinstimmen muss
 
-Frames teilen sich einen Master nur, wenn **Belichtungszeit, Gain, Temperatur, Binning, Bildgröße und Kamera** übereinstimmen. Master werden in `lightcurve/calib/` unter Namen gecacht, die all das tragen — könnten zwei verschiedene Master denselben Namen haben, gäbe der Cache beim zweiten Lauf stillschweigend den falschen zurück.
+Frames teilen sich einen Master nur, wenn **Belichtungszeit, Gain, Temperatur, Binning, Bildgröße und Kamera** übereinstimmen. Ein Master wird dann über Kamera, Bildgröße, Binning und Gain den Lights zugeordnet; **Belichtungszeit und Temperatur werden nur dort verlangt, wo das thermische Signal des Sensors das ist, was der Master entfernt** — Dark gegen Light, Flat-Dark gegen Flat. Ein Flat ist ein Verhältnis (Vignettierung, Staub, Pixelempfindlichkeit), ein Bias ist Ausleserauschen; ein Flat aus einer wärmeren Nacht kalibriert also weiterhin. Flats trotzdem nahe am *Fokus* der Sitzung aufnehmen: Temperatur bewegt den Fokussierer, und Staubschatten ändern damit ihre Größe — ein optischer Grund, kein thermischer. Master werden in `lightcurve/calib/` unter Namen gecacht, die all das tragen — könnten zwei verschiedene Master denselben Namen haben, gäbe der Cache beim zweiten Lauf stillschweigend den falschen zurück.
 
 Was abgelehnt wird, wird ausgesprochen. Ein Master, der gefunden und dann verworfen wurde, hinterlässt einen Lauf, der *genau* so aussieht wie einer ohne jeden Master:
 
@@ -600,7 +600,7 @@ Es entfernt nie mehr als **5 %** eines Laufs. Darüber *sind* die Ausreißer die
 
 ### Die AAVSO-Datei
 
-`AAVSO_exoplanet.txt` landet neben der CSV, im Format von Exoplanet Watch und im Layout von EXOTIC: `#TYPE=EXOPLANET`, Beobachtercode, die vier Felder, die das Upload-Formular **verlangt** — `#STAR_NAME` (der Hostname des Archivs, sonst der Planetenname ohne Buchstaben oder TOI-Suffix), `#EXOPLANET_NAME` (der **aufgelöste** Name, nie ein veralteter Formulareintrag), `#EXPOSURE_TIME` und `#MEASUREMENT_TYPE=Rnflux` — Binning, Filter, `#DATE_TYPE=BJD_TDB`, `#PRIORS`- und `#RESULTS`-Zeilen, dann `DATE,DIFF,ERR,DETREND_1,DETREND_2`: DIFF ist die rohe Differenzreihe als **relativer normierter Fluss** (Out-of-Transit-Median 1; AAVSO erlaubt `Rflux`, `Dmag` und `Rnflux`, EXOTIC schreibt `Rnflux`), DETREND_1 die Luftmasse und DETREND_2 das gefittete Systematikmodell dieses Skripts, DIFF/DETREND_2 ist also die entrendete Kurve. Transitmitte samt Fehler, die zentrale Tiefe samt Fehler, **`#RPRS`, `#RPRS_ERR` und `#DEPTH_RPRS2_PCT`** (die Konvention, die EXOTIC und AIJ angeben — siehe §9), Dauer und das Rotrausch-β stehen im Kopf.
+`AAVSO_exoplanet.txt` landet neben der CSV, im Format von Exoplanet Watch und im Layout von EXOTIC: `#TYPE=EXOPLANET`, Beobachtercode, die vier Felder, die das Upload-Formular **verlangt** — `#STAR_NAME` (der Hostname des Archivs, sonst der Planetenname ohne Buchstaben oder TOI-Suffix), `#EXOPLANET_NAME` (der **aufgelöste** Name, nie ein veralteter Formulareintrag), `#EXPOSURE_TIME` und `#MEASUREMENT_TYPE=Rnflux` — Binning, Filter, `#DATE_TYPE=BJD_TDB`, `#PRIORS`- und `#RESULTS`-Zeilen, dann `DATE,DIFF,ERR,DETREND_1,DETREND_2`: DIFF ist die rohe Differenzreihe als **relativer normierter Fluss** (Out-of-Transit-Median 1; AAVSO erlaubt `Rflux`, `Dmag` und `Rnflux`, EXOTIC schreibt `Rnflux`), DETREND_1 die Luftmasse und DETREND_2 das gefittete Systematikmodell dieses Skripts, DIFF/DETREND_2 ist also die entrendete Kurve. `#FILTER` ist AAVSOs Code, aus dem Filterfeld oder sonst dem FILTER-Header der Frames: RED/GREEN/BLUE eines RGB-Rads werden `TR`/`TG`/`TB`, R oder Rc `R`, r' `SR`, V `V`, ein ungefilterter Lauf `CV`, Astrodon ExoPlanet-BB `CR`. Transitmitte samt Fehler, die zentrale Tiefe samt Fehler, **`#RPRS`, `#RPRS_ERR` und `#DEPTH_RPRS2_PCT`** (die Konvention, die EXOTIC und AIJ angeben — siehe §9), Dauer und das Rotrausch-β stehen im Kopf.
 
 **Verweigert, solange die Zeiten nicht BJD_TDB sind.** Der Kopf deklariert dieses System; JD_UTC darunter zu schreiben hieße, einer Einreichung einen Acht-Minuten-Fehler mitzugeben, den niemand sehen kann.
 

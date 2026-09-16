@@ -1,6 +1,6 @@
 # Svenesis LightCurve — User Instructions
 
-**Version 1.0.8** | Siril Python Script for Exoplanet Transit Photometry
+**Version 1.0.9** | Siril Python Script for Exoplanet Transit Photometry
 
 > *A folder of sub-exposures in, a light curve out — and an honest answer to the only question that matters: is there a transit in it?*
 
@@ -136,7 +136,7 @@ Or point straight at `LIGHT/2026-08-14/LUMINOS/` — then the flats are still fo
 
 ### What must agree
 
-Frames share a master only when their **exposure, gain, temperature, binning, image size and camera** agree. Masters are cached in `lightcurve/calib/` under names carrying all of it — if two different masters could share a name, the cache would hand back the wrong one on the second run, silently.
+Frames share a master only when their **exposure, gain, temperature, binning, image size and camera** agree. A master is then matched to the lights by camera, size, binning and gain; **exposure and temperature are demanded only where the sensor's thermal signal is what the master removes** — dark against light, flat-dark against flat. A flat is a ratio (vignetting, dust, pixel response) and a bias is read noise, so a flat shot on a warmer night still calibrates. Keep flats near the session's *focus* anyway: temperature moves the focuser, and dust shadows change size with it — an optical reason, not a thermal one. Masters are cached in `lightcurve/calib/` under names carrying all of it — if two different masters could share a name, the cache would hand back the wrong one on the second run, silently.
 
 What gets refused is said out loud. A master that was found and then rejected leaves a run that looks *exactly* like one where no master existed:
 
@@ -607,7 +607,7 @@ It never removes more than **5 %** of a run. Past that the outliers *are* the da
 
 ### The AAVSO file
 
-`AAVSO_exoplanet.txt` lands beside the CSV, in Exoplanet Watch's own format and EXOTIC's layout: `#TYPE=EXOPLANET`, observer code, the four fields the upload form **requires** — `#STAR_NAME` (the archive's host name, else the planet name without its letter or TOI suffix), `#EXOPLANET_NAME` (the **resolved** name, never a stale form entry), `#EXPOSURE_TIME` and `#MEASUREMENT_TYPE=Rnflux` — binning, filter, `#DATE_TYPE=BJD_TDB`, `#PRIORS` and `#RESULTS` lines, then `DATE,DIFF,ERR,DETREND_1,DETREND_2`: DIFF is the raw differential series as **relative normalised flux** (out-of-transit median 1; AAVSO allows `Rflux`, `Dmag` and `Rnflux`, and EXOTIC writes `Rnflux`), DETREND_1 the airmass and DETREND_2 this script's fitted systematics model, so DIFF/DETREND_2 is the detrended curve. Mid-transit time and its error, the central depth and its error, **`#RPRS`, `#RPRS_ERR` and `#DEPTH_RPRS2_PCT`** (the convention EXOTIC and AIJ quote — see §9), duration and the red-noise β travel in the header.
+`AAVSO_exoplanet.txt` lands beside the CSV, in Exoplanet Watch's own format and EXOTIC's layout: `#TYPE=EXOPLANET`, observer code, the four fields the upload form **requires** — `#STAR_NAME` (the archive's host name, else the planet name without its letter or TOI suffix), `#EXOPLANET_NAME` (the **resolved** name, never a stale form entry), `#EXPOSURE_TIME` and `#MEASUREMENT_TYPE=Rnflux` — binning, filter, `#DATE_TYPE=BJD_TDB`, `#PRIORS` and `#RESULTS` lines, then `DATE,DIFF,ERR,DETREND_1,DETREND_2`: DIFF is the raw differential series as **relative normalised flux** (out-of-transit median 1; AAVSO allows `Rflux`, `Dmag` and `Rnflux`, and EXOTIC writes `Rnflux`), DETREND_1 the airmass and DETREND_2 this script's fitted systematics model, so DIFF/DETREND_2 is the detrended curve. `#FILTER` is AAVSO's code, from the form's filter or else the frames' FILTER keyword: RED/GREEN/BLUE of an RGB wheel are `TR`/`TG`/`TB`, R or Rc is `R`, r' is `SR`, V is `V`, an unfiltered run is `CV`, Astrodon ExoPlanet-BB is `CR`. Mid-transit time and its error, the central depth and its error, **`#RPRS`, `#RPRS_ERR` and `#DEPTH_RPRS2_PCT`** (the convention EXOTIC and AIJ quote — see §9), duration and the red-noise β travel in the header.
 
 **Refused unless the times are BJD_TDB.** The header declares that system; writing JD_UTC under it would hand a submission an eight-minute error nobody could see.
 

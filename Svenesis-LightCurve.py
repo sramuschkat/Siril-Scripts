@@ -1,6 +1,6 @@
 """
 Svenesis LightCurve
-Script Version: 1.0.8
+Script Version: 1.0.9
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -90,6 +90,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.0.9 - Flats and bias no longer need the lights' temperature
+      - Flats no longer have to match the lights' sensor temperature, and
+        a bias no longer has to match the flats'.  A flat is a ratio and a
+        bias is read noise; the temperature clause reached them only
+        because one shared matcher had a switch for the exposure and none
+        for the temperature (docstring said otherwise; a user asked why).
+        Temperature stays where the thermal signal is what gets removed:
+        dark against light, flat-dark against flat.
+
 1.0.8 - The AAVSO file passes the upload form
       - AAVSO's Exoplanet Database form requires #STAR_NAME,
         #EXOPLANET_NAME, #EXPOSURE_TIME and #MEASUREMENT_TYPE; a
@@ -282,7 +291,7 @@ from matplotlib.ticker import FuncFormatter
 
 from sirilpy import LogColor
 
-VERSION = "1.0.8"
+VERSION = "1.0.9"
 
 # The full manual on GitHub, linked from the help dialog.  The in-app
 # tabs are the quick reference; the manual carries the measurements
@@ -5056,13 +5065,22 @@ def calib_signature(info: dict, with_temp: bool = False) -> tuple:
             info.get("instrument") or None)
 
 
-def signature_matches(master: dict, target: dict, check_exposure=True):
+def signature_matches(master: dict, target: dict, check_exposure=True,
+                      check_temperature=True):
     """``(ok, why)`` -- may ``master`` calibrate frames like ``target``?
 
     A missing gain, temperature or size is "unknown, don't block": refusing
     a usable master because a keyword is absent would be worse than the
     mismatch it guards against.  Exposure is the exception for darks, where
     3 s against 60 s is exactly the mismatch that must not slip through.
+
+    Temperature is checked only where the sensor's thermal signal is what
+    the master removes: dark against light, flat-dark against flat.  A
+    flat is a ratio -- vignetting, dust, pixel response -- and a bias is
+    read noise; neither depends on sensor temperature, so a flat shot on
+    a warmer night still calibrates.  (Temperature does move the focuser
+    and with it the size of dust shadows, which is an optical reason to
+    shoot flats near the session's conditions, not a thermal one.)
 
     Returns the reason as well as the verdict, because a master that was
     found and then rejected is the case where silence hurts most -- the run
@@ -5081,7 +5099,7 @@ def signature_matches(master: dict, target: dict, check_exposure=True):
     if mg is not None and tg is not None and mg != tg:
         return False, f"different gain ({mg:g} vs {tg:g})"
     mt, tt = master.get("temp_v"), target.get("temp_v")
-    if mt is not None and tt is not None \
+    if check_temperature and mt is not None and tt is not None \
             and abs(mt - tt) > CALIB_TEMP_TOLERANCE_C:
         return False, f"different temperature ({mt:g} C vs {tt:g} C)"
     if check_exposure:
@@ -5336,9 +5354,12 @@ def choose_masters(groups: dict, light_info: dict) -> tuple:
     * **Bias is never applied together with a dark.**  The dark already
       contains the offset, so subtracting both removes it twice.  The bias
       is still used, but for the FLATS: Lc = (L - D) / (F - O).
-    * **The flat does not have to match the lights' exposure.**  A flat is
-      a ratio; its own exposure says nothing about the lights.  Only its
-      camera, size, binning and filter matter.
+    * **The flat does not have to match the lights' exposure or
+      temperature.**  A flat is a ratio; its own exposure says nothing
+      about the lights, and its thermal signal is the flat-dark's
+      business.  Only its camera, size, binning and filter matter.
+      Temperature is demanded where it belongs: dark against light,
+      flat-dark against flat.  A bias against a flat needs neither.
     """
     chosen, notes = {}, []
 
@@ -5363,7 +5384,8 @@ def choose_masters(groups: dict, light_info: dict) -> tuple:
     flat = None
     for grp in groups.get(KIND_FLAT, []):
         ok, why = signature_matches(grp["info"], light_info,
-                                    check_exposure=False)
+                                    check_exposure=False,
+                                    check_temperature=False)
         if ok:
             flat = grp
             notes.append(f"flat: {len(grp['files'])} frame(s), {why}")
@@ -5382,7 +5404,8 @@ def choose_masters(groups: dict, light_info: dict) -> tuple:
             for grp in groups.get(kind, []):
                 ok, _why = signature_matches(
                     grp["info"], flat["info"],
-                    check_exposure=(kind == KIND_DARKFLAT))
+                    check_exposure=(kind == KIND_DARKFLAT),
+                    check_temperature=(kind == KIND_DARKFLAT))
                 if ok:
                     offset = grp
                     notes.append(f"flat offset: {kind}, "
@@ -11625,7 +11648,9 @@ airmass), the plot as PNG — and, when the times are BJD_TDB, an AAVSO
 Exoplanet Watch file in EXOTIC's layout: the four fields the upload form
 requires (STAR_NAME, EXOPLANET_NAME, EXPOSURE_TIME,
 MEASUREMENT_TYPE=Rnflux), DIFF as relative normalised flux with the
-airmass and the fitted systematics model as detrend columns, and T0,
+airmass and the fitted systematics model as detrend columns, AAVSO's
+filter code from the form or the frames (a RED wheel is TR, an
+unfiltered run CV), and T0,
 both depth conventions (central and (Rp/R★)²) and Rp/R★ in the header. The <b>Save results</b> button
 writes two files in one click: <tt>results.txt</tt> in the exact
 layout HOPS leaves in its fitting folder (the parameter table, then
@@ -11703,7 +11728,14 @@ convention, the correction the headers established is applied there too,
 so both engines land on the same times.</p>
 <p>Frames are grouped by what must agree before they can share a master —
 exposure, gain, temperature, binning, image size, camera — then stacked and
-cached under names carrying all of it, and reused on the next run. A group
+cached under names carrying all of it, and reused on the next run. A
+master is matched to the lights by camera, size, binning and gain;
+exposure and temperature are demanded only where the sensor's thermal
+signal is what the master removes — dark against light, flat-dark against
+flat. A flat is a ratio and a bias is read noise, so a flat shot on a
+warmer night still calibrates (keep flats near the session's focus
+anyway: temperature moves the focuser, and dust shadows change size with
+it). A group
 of exactly one file is adopted as a ready-made master rather than stacked.
 The pixel work is Siril's <tt>calibrate</tt>; there is no bias/dark/flat
 arithmetic in this script, for the same reason there is no photometry in
