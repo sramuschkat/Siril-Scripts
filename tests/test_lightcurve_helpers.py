@@ -3544,16 +3544,20 @@ check(_pl("0.7, -0.5, 0.9, -0.4") == [0.7, -0.5, 0.9, -0.4]
       "the Claret field takes four numbers with commas or spaces and "
       "refuses anything else — a typo cannot become a different star")
 _hm = None
+_ld = None
 for _node in tree.body:
     if isinstance(_node, ast.ClassDef) and _node.name == "LightCurveWorker":
         for _m in _node.body:
             if isinstance(_m, ast.FunctionDef) and _m.name == "_hops_mode":
                 _hm = ast.get_source_segment(src, _m)
-check(_hm is not None, "the worker owns a _hops_mode method")
+            if isinstance(_m, ast.FunctionDef) and _m.name == "_limb_darkening":
+                _ld = ast.get_source_segment(src, _m)
+check(_hm is not None and _ld is not None,
+      "the worker owns _hops_mode and _limb_darkening methods")
 
 
 class _LC:
-    SALMON, GREEN = "s", "g"
+    SALMON, GREEN, BLUE = "s", "g", "b"
 
 
 class _Prog:
@@ -3572,7 +3576,9 @@ class _FakeWorker:
 _hns = dict(ns)
 _hns["LogColor"] = _LC
 exec(textwrap.dedent(_hm), _hns)
+exec(textwrap.dedent(_ld), _hns)
 _FakeWorker._hops_mode = _hns["_hops_mode"]
+_FakeWorker._limb_darkening = _hns["_limb_darkening"]
 _w = _FakeWorker({"fit_mode": "hops", "hops_detrend": "airmass",
                   "hops_iterations": 300})
 _blind = {"significance": 9.0, "detected": True, "rprs": 0.15,
@@ -4595,6 +4601,144 @@ check("self._write_tool_folders(result)" in src and 'r["aavso_path"] = path' in 
       and "self._native_raw = {" in src[src.index("def _native_photometry"):src.index("def _run_light_curve")]
       and '"samples": flat, "chain": chain[burn:]' in src,
       "the worker writes both folders after the AAVSO file, from the native photometry's per-star record")
+
+print("\n9m) methodology round: limb darkening, weights, seeing, drift, scintillation, ephemeris bars, HOPS beta")
+_c2q, _q2c = ns["claret_to_quad"], ns["quad_to_claret"]
+_u = _c2q(_q2c(0.35, 0.23))
+check(abs(_u[0] - 0.35) < 1e-6 and abs(_u[1] - 0.23) < 1e-6,
+      "a quadratic profile written as Claret coefficients comes back as the same (u1, u2)")
+_cl = [0.5, -0.2, 0.8, -0.35]
+_u1, _u2 = _c2q(_cl)
+_mu = np.sqrt(1.0 - np.linspace(0, 0.999, 300) ** 2)
+_prof = 1.0 - sum(a * (1.0 - _mu ** (0.5 * (k + 1))) for k, a in enumerate(_cl))
+_quad = 1.0 - _u1 * (1.0 - _mu) - _u2 * (1.0 - _mu) ** 2
+check(0 < _u1 + _u2 < 1 and float(np.sqrt(np.mean((_prof - _quad) ** 2))) < 0.02,
+      "a Phoenix-like four-coefficient profile is matched by its closest quadratic pair to 2 % rms over the disc")
+_sc = ns["scintillation_mag"]
+_s = _sc(np.array([1.0, 1.5, 2.0]), 60.0, 300.0, 0.0)
+_expect = 2.5 / math.log(10) * 0.09 * 30.0 ** (-2 / 3) * 1.5 ** 1.75 / math.sqrt(120.0)
+check(abs(_s[1] - _expect) < 1e-9 and _s[2] > _s[1] > _s[0] and 0.0015 < _s[1] < 0.0022
+      and np.all(np.isnan(_sc(np.array([1.5]), 60.0, None))) and np.all(np.isnan(_sc(np.array([1.5]), 0.0, 300.0))),
+      "Young's scintillation: 1.9 mmag per 60 s at X = 1.5 on 30 cm, rising with airmass, NaN without an aperture or exposure")
+check(abs(_sc(np.array([1.5]), 60.0, 300.0, 2000.0)[0] / _s[1] - math.exp(-0.25)) < 1e-9,
+      "the site's height thins the scintillation with an 8 km scale height")
+_tau = ns["chain_autocorr_time"]
+_rng = np.random.default_rng(3)
+_white = _rng.normal(size=(2000, 10, 2))
+# 20 000 steps: the estimator (emcee's) is biased low on a chain shorter
+# than ~100 tau, which is exactly what the convergence check is for.
+_ar = np.empty((20000, 10, 1)); _ar[0] = 0.0
+for _i in range(1, 20000):
+    _ar[_i] = 0.9 * _ar[_i - 1] + _rng.normal(size=(10, 1))
+_tw, _ta = _tau(_white), _tau(_ar)
+check(_tw.shape == (2,) and np.all(_tw < 3.0) and 14.0 < _ta[0] < 26.0 and np.all(np.isnan(_tau(np.zeros((4, 3, 1))))),
+      "the autocorrelation time is ~1 for white walkers, ~19 for an AR(1) chain with phi 0.9, NaN for a chain too short to say",
+      f"white {_tw}, AR(1) {_ta}")
+_ft = ns["fit_transit"]
+_rng = np.random.default_rng(11)
+_tt = 2460000.0 + np.linspace(0, 0.25, 160)
+_tmpl = ns["ld_template"](0.10, 0.0, 0.35, 0.23)
+_true = 0.012 * ns["ld_shape"](_tt, 2460000.125, 0.10, _tmpl)
+_noise = np.where(_tt < 2460000.125, 0.003, 0.006)
+_mm = _true + _rng.normal(size=_tt.size) * _noise
+_f0 = _ft(_tt, _mm)
+_f1 = _ft(_tt, _mm, err=np.full(_tt.size, 0.004))
+_f2 = _ft(_tt, _mm, err=_noise)
+check(_f0 is not None and _f1 is not None and not _f1["weighted"] and abs(_f1["depth_mag"] - _f0["depth_mag"]) < 1e-12
+      and abs(_f1["t0"] - _f0["t0"]) < 1e-12 and abs(_f1["depth_sigma_mmag"] - _f0["depth_sigma_mmag"]) < 1e-9,
+      "constant errors leave the fit exactly as the unweighted one (weights normalise to 1)")
+check(_f2 is not None and _f2["weighted"] and _f2["detected"]
+      and abs(_f2["depth_mmag"] - 12.0) < 3 * _f2["depth_sigma_mmag"]
+      and abs(_f2["t0"] - 2460000.125) * 86400 < 3 * _f2["t0_sigma_s"]
+      and abs(_f2["depth_mag"] - _f0["depth_mag"]) < 2.0 * _f0["depth_sigma_mmag"] / 1000.0,
+      "errors that double mid-run weight the solve: the transit is still recovered within its bars and agrees with the unweighted fit")
+_f3 = _ft(_tt, _mm, err=np.where(_tt < 2460000.03, 1e-9, 0.004))
+check(_f3 is not None and _f3["weighted"] and _f3["detected"],
+      "an absurd error bar cannot dominate the solve — the weights are clipped")
+_esm = ns["ephemeris_sigma_min"]
+check(abs(_esm(100, 0.001, 1e-5) - math.sqrt(2e-6) * 1440.0) < 1e-9 and math.isnan(_esm(100, None, None))
+      and abs(_esm(0, 0.001, 1e-5) - 1.44) < 1e-9,
+      "the ephemeris bar is the T0 error and the period error grown over the epochs, in quadrature, in minutes")
+_ocl = ns["oc_lines"]
+_r_oc = {"ephemeris": {"period_d": 2.0, "t0_bjd": 2460000.0, "name": "X b", "t0_err_d": 0.001, "period_err_d": 1e-5},
+         "time_system": "BJD_TDB"}
+_f_oc = {"t0": 2460200.0 + 3.0 / 1440.0, "t0_sigma_s": 60.0}
+_lines = [p for p, _h in _ocl(_r_oc, _f_oc)]
+_r_oc2 = {"ephemeris": {"period_d": 2.0, "t0_bjd": 2460000.0, "name": "X b"}, "time_system": "BJD_TDB"}
+_lines2 = [p for p, _h in _ocl(_r_oc2, _f_oc)]
+check(any("1.3 sigma from the prediction" in l for l in _lines) and any("the ephemeris itself predicts" in l for l in _lines)
+      and any("3.0 sigma from the prediction" in l for l in _lines2) and any("lists no error" in l for l in _lines2),
+      "O-C sigma counts the ephemeris's own bar: a 3-minute drift is 1.3 sigma against T0 +/- 2 min, not 3.0 — and says so either way")
+check("pl_tranmiderr1,pl_orbpererr1" in src and src.count('"t0_err_d": _abs_or_none(_num("pl_tranmiderr1"))') == 2
+      and ns["_abs_or_none"](-0.002) == 0.002 and ns["_abs_or_none"](None) is None and ns["_abs_or_none"]("x") is None,
+      "both archive queries fetch the T0 and period errors, magnitudes whatever the sign")
+_sv = ns["saturation_verdict"]
+_cube = np.zeros((3, 40, 40)); _cube[1, 20, 20] = 65535.0; _cube[0, 20, 20] = 1000.0
+_cube = _cube.astype(np.uint16)
+check(_sv(_cube, 20, 20, channel=1)[0] is True and _sv(_cube, 20, 20, channel=0)[0] is False and _sv(_cube, 20, 20)[0] is False,
+      "the saturation check reads the channel the photometry measures on a debayered OSC frame")
+_ins = ns["inspect_frame"]
+check(_ins("/x/L.fits", header={"IMAGETYP": "LIGHT", "APTDIA": 300.0})["aptdia"] == 300.0
+      and _ins("/x/L.fits", header={"IMAGETYP": "LIGHT", "APTDIA": 5.0})["aptdia"] is None
+      and _ins("/x/L.fits", header={"IMAGETYP": "LIGHT"})["aptdia"] is None,
+      "APTDIA is read from the header in millimetres, and a value no telescope has is ignored")
+_pa = ns["_parse_aperture_mm"]
+check(_pa("300") == 300.0 and _pa("30 cm") == 300.0 and abs(_pa("12in") - 304.8) < 1e-9 and _pa("0.3 m") == 300.0
+      and _pa("") is None and _pa("abc") is None and _pa("5") is None,
+      "the aperture field accepts mm, cm, m and inches and refuses nonsense")
+_nat = src[src.index("def _native_photometry"):src.index("def _run_light_curve")]
+check('for name in ("fwhm", "sky", "n_stars", "xpos", "ypos"):' in src and 'quality[key] = col' in _nat
+      and '("xpos", xpos[0]), ("ypos", ypos[0])' in _nat,
+      "the target's centroid per frame is offered to the fit as x/y drift bases through the same frame pairing")
+check("d = d[min(max(ch, 0), d.shape[0] - 1)]" in _nat and 'self.opts.get("channel", 0)' in _nat,
+      "the native engine measures the chosen channel of a debayered OSC frame, not plane 0")
+check("run_med = float(np.median(qf))" in _nat and "fwhm = max(fwhm_ref, run_med)" in _nat and "RUN_FWHM_RATIO_RANGE" in _nat,
+      "the aperture grid is scaled to the run's median seeing, never smaller than the reference frame's, inside a trust range")
+check("APERTURE_MAX_SEEING_R" in _nat and "np.corrcoef(mag[pair], fw_k[pair])" in _nat and "stable = [c for c in cands" in _nat,
+      "an aperture whose curve tracks the seeing is passed over for a less correlated one")
+check("TARGET_LINEAR_HEADROOM" in _nat and "self._target_headroom = frac" in _nat and "CMOS" in _nat,
+      "the target's brightest peak is compared with the linearity margin and warned about")
+_hm_src = src[src.index("    def _hops_mode(self"):src.index("    def _hops_mode(self") + 20000]
+check("red_noise_beta(np.asarray(res[\"t\"], float)" in _hm_src and "rp_sig *= beta_h" in _hm_src and "mid_sig *= beta_h" in _hm_src
+      and "chain_autocorr_time(res.get(\"chain\"))" in _hm_src and '"converged": bool(' in _hm_src and "HOPS_MIN_CHAIN_TAUS" in _hm_src,
+      "HOPS mode scales its headline bars by the Pont beta and reports the chain length in autocorrelation times")
+_fs_src = src[src.index("        X, airmass_note = self._airmass_series(jd_utc)"):src.index("        fit = fit_transit(jd, mag, bases=bases, u1=u1_fit")]
+check("scintillation_mag(X, exp_for_scint, ap_mm" in _fs_src and "err = np.hypot(err, np.where(np.isfinite(sc), sc, 0.0))" in _fs_src
+      and "err=err if err.size == jd.size else None" in src and 'fit["ld_note"] = ld_source' in src,
+      "scintillation joins the error bars before both fits see them; the blind fit is weighted and names its limb-darkening source")
+_wl = _FakeWorker({"hops_ldc": ns["quad_to_claret"](0.35, 0.23)})
+_ch = _wl._limb_darkening({"teff_k": 6000, "logg": 4.3})
+check(abs(_ch[0] - 0.35) < 1e-6 and abs(_ch[1] - 0.23) < 1e-6 and _ch[2] is not None and "as entered" in _ch[4]
+      and _wl._limb_darkening({}) is _ch,
+      "entered Claret coefficients serve the blind fit as their closest quadratic pair, computed once per run")
+_wd = _FakeWorker({"filter_name": "V"})
+_cd = _wd._limb_darkening({"name": "x"})
+check(_cd[2] is None and _cd[0] == ns["LD_U1"] and "no Teff/log g" in _cd[4] and any("script defaults" in m for m in _wd.log),
+      "no archive temperature: the defaults stand, nothing is downloaded, and the log says why")
+check(ns["hops_filter_name"]("") == "clear",
+      "a blank filter is HOPS's clear passband, so an unfiltered run still gets its own Phoenix coefficients")
+_wo = _FakeWorker({"filter_name": "V", "auto_ldc": False})
+check("switched off" in _wo._limb_darkening({"teff_k": 6000, "logg": 4.3})[4],
+      "the Phoenix computation can be switched off and the report says so")
+_wh = _FakeWorker({"filter_name": "Ha"})
+check("no broadband passband" in _wh._limb_darkening({"teff_k": 6000, "logg": 4.3})[4],
+      "a narrowband filter is refused with the reason instead of a wrong table")
+_gui = src[src.index("class LightCurveWindow"):] if "class LightCurveWindow" in src else src
+check('"aperture_mm": _parse_aperture_mm(self.ed_aperture_mm.text())' in src and '"auto_ldc": self.chk_auto_ldc.isChecked()' in src
+      and 'st.setValue("aperture_mm"' in src and 'st.setValue("auto_ldc"' in src
+      and "self._hops_widgets = [self.cmb_hops_detrend, self.spin_hops_iter]" in src,
+      "the aperture field and the Phoenix switch are options that persist, and the Claret field serves both fit modes")
+check("   limb darkening {fit['ld_note']}" in src and "   weighting      " in src and "   red noise      headline bars x" in src
+      and "   convergence    chain" in src,
+      "the report names the limb-darkening source, the weighting, the HOPS-mode red-noise factor and the chain length")
+_tdad = _tf3.mkdtemp(); os.makedirs(os.path.join(_tdad, "sub"))
+for _n in ("a.txt", "._a.txt", "sub/b.txt", "sub/._b.txt"):
+    open(os.path.join(_tdad, _n), "w").write("x")
+ns["_clear_tree_files"](_tdad)
+check(os.path.isdir(os.path.join(_tdad, "sub")) and not any(os.listdir(os.path.join(_tdad, "sub")))
+      and "except FileNotFoundError:\n                pass" in src[src.index("def _clear_tree_files"):src.index("def _unlink_quiet")]
+      and 'key=lambda n: n.startswith("._")' in src,
+      "folder clearing removes data files before their AppleDouble siblings and stays silent about one that vanished with its file")
 
 print()
 if fails:

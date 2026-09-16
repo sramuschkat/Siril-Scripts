@@ -1,6 +1,6 @@
 """
 Svenesis LightCurve
-Script Version: 1.0.11
+Script Version: 1.0.12
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -92,6 +92,54 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.0.12 - Methodology round: what a review of the astronomy found
+      - Limb darkening is no longer 0.35/0.23 for every star and every
+        filter in blind mode.  Both fit modes take the coefficients from
+        the best source at hand: the Claret field, else the Phoenix
+        computation for the archive's Teff/log g and the run's filter
+        (run automatically, cached after the first download), else the
+        defaults -- and the log and the report name the source.  The
+        blind fit uses the quadratic pair closest to the Claret profile
+        (area-weighted least squares over the disc; exact for a profile
+        that is quadratic to begin with).  A switch in group 5.
+      - The aperture grid is scaled to the run's MEDIAN seeing, not the
+        reference frame's -- the registration reference is the best-
+        seeing frame, and a grid scaled to it was skewed small on every
+        other frame.  A radius whose curve tracks the seeing (|r| > 0.5
+        against the per-frame FWHM) is passed over for a less correlated
+        one: point-to-point scatter cannot see slow flux loss.
+      - The target's own centroid per frame is offered to the fit as
+        x/y drift bases (native engine), through the same collinearity
+        guard as the rest.
+      - The blind fit is WEIGHTED by the per-point errors, relatively
+        (mean 1, clipped 0.2-5): the noisy end of a run no longer costs
+        10-30 % of bar width.  The residual scatter still sets the
+        noise level, so the calibrated detection threshold stands, and
+        with constant errors every number is the unweighted one.
+      - O-C: the archive's T0 and period errors are fetched, grown over
+        the epochs and counted with the measured bar before the sigma
+        verdict.  The report prints the ephemeris's own bar.
+      - HOPS mode: the headline bars are multiplied by the Pont red-
+        noise beta of the fit's residuals (results.txt keeps HOPS's
+        white-noise percentiles), and the chain's length in
+        autocorrelation times is reported, with the iteration count to
+        set when it is under 50.
+      - OSC: the native engine measures the channel chosen in group 4
+        on a debayered frame; it used to take plane 0 regardless.  The
+        saturation check reads the same channel.
+      - A target that peaks above 80 % of the clip level on its
+        brightest frame is warned about: CMOS sensors turn non-linear
+        well below saturation.
+      - On an exFAT volume the EXOTIC/HOPS folder clearing logged one
+        FileNotFoundError per AppleDouble `._` sibling that macOS had
+        already removed with its file; data files go first now and a
+        vanished sibling is silent.
+      - Scintillation (Young's formula) joins the error bars whenever
+        the telescope aperture is known -- APTDIA in the header or a new
+        field in group 5 -- and reaches the AAVSO ERR column, the
+        exports and the HOPS-mode weights.  The log says when it is
+        missing.
+
 1.0.11 - Runs on an exFAT volume, and the calibration step says what it does
       - The calibration step announces its work BEFORE doing it: each
         master build (frames, steps) and the calibrate of the lights
@@ -384,7 +432,7 @@ from matplotlib.ticker import FuncFormatter
 
 from sirilpy import LogColor
 
-VERSION = "1.0.11"
+VERSION = "1.0.12"
 
 # The full manual on GitHub, linked from the help dialog.  The in-app
 # tabs are the quick reference; the manual carries the measurements
@@ -711,6 +759,41 @@ FIT_INGRESS_FRACTIONS = (0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50)
 # because the fitted depth depends on it.
 LD_U1 = 0.35
 LD_U2 = 0.23
+# Scintillation, Young (1967) as Dravins et al. (1998) write it: relative
+# flux noise 0.09 D^(-2/3) X^(7/4) exp(-h / 8000 m) / sqrt(2 t), D in cm,
+# t in seconds.  Added in quadrature to the CCD-equation error once the
+# telescope aperture is known (APTDIA in the header, or the field in
+# group 5); without it the per-point error of a bright target is low by
+# up to sqrt(2) at X > 1.5, and that reaches the AAVSO ERR column and
+# the HOPS-mode weights.  The blind fit's level is set by the residual
+# scatter, so it does not depend on this term.
+SCINTILLATION_COEFF = 0.09
+SCINTILLATION_SCALE_HEIGHT_M = 8000.0
+# The blind fit is WEIGHTED by the per-point errors, relatively: the
+# weights are normalised to mean 1 and clipped to this range, so they
+# carry the shape of the noise across the run (the low-altitude end is
+# noisier) without letting a mis-estimated bar dominate the solve.  The
+# residual MAD still sets the noise LEVEL everything is judged by, which
+# keeps the calibrated detection threshold what it was.
+FIT_WEIGHT_CLIP = (0.2, 5.0)
+# A target whose brightest frame reaches this fraction of the clip level
+# is warned about: CMOS sensors turn non-linear well below the clip, and
+# a depth measured in the non-linear range comes out shallow.
+TARGET_LINEAR_HEADROOM = 0.8
+# The aperture grid is scaled to the run's MEDIAN seeing rather than the
+# reference frame's: `register -2pass` picks the best-seeing frame as
+# reference, and a grid scaled to it is skewed small on every other
+# frame of the night.  The per-frame values are believed only inside
+# this range of the reference's, in case they arrive in another unit.
+RUN_FWHM_RATIO_RANGE = (0.5, 3.0)
+# Aperture choice: point-to-point scatter is blind to slow, seeing-driven
+# flux loss, so a radius whose light curve correlates with the seeing
+# beyond this |r| is not eligible while a less correlated one exists.
+APERTURE_MAX_SEEING_R = 0.5
+# HOPS mode: the post-burn-in chain should span at least this many
+# autocorrelation times (emcee's rule of thumb is 50) before its
+# percentiles are trusted; shorter chains are said so in the log.
+HOPS_MIN_CHAIN_TAUS = 50.0
 # The shape family the fit searches, in place of the trapezoid's eight
 # ingress fractions -- same count, but each one is a real transit
 # geometry rather than a shape with a free corner.
@@ -1982,7 +2065,8 @@ def archive_lookup(name: str, timeout: float = ARCHIVE_TIMEOUT_S,
         return None, "no target name to look up"
     cols = ("pl_name,hostname,ra,dec,pl_orbper,pl_tranmid,pl_trandur,"
             "pl_trandep,st_teff,st_logg,sy_vmag,"
-            "pl_ratdor,pl_orbincl,pl_orbeccen,pl_orblper,pl_ratror")
+            "pl_ratdor,pl_orbincl,pl_orbeccen,pl_orblper,pl_ratror,"
+            "pl_tranmiderr1,pl_orbpererr1")
     # Compare with hyphens and spaces stripped from BOTH sides.  People
     # type what their capture software wrote -- OBJECT read 'HATP-32' on
     # EXOTIC's own demo set -- while the archive holds 'HAT-P-32 b'.  Every
@@ -2029,6 +2113,9 @@ def archive_lookup(name: str, timeout: float = ARCHIVE_TIMEOUT_S,
         "ra_deg": ra, "dec_deg": dec,
         "period_d": _num("pl_orbper"),
         "t0_bjd": _num("pl_tranmid"),
+        # The ephemeris's own bars, for the O-C verdict.
+        "t0_err_d": _abs_or_none(_num("pl_tranmiderr1")),
+        "period_err_d": _abs_or_none(_num("pl_orbpererr1")),
         "duration_h": _num("pl_trandur"),
         "depth_pct": _num("pl_trandep"),
         "teff_k": _num("st_teff"),
@@ -2083,7 +2170,8 @@ def toi_lookup(name: str, timeout: float = ARCHIVE_TIMEOUT_S,
         return None, "not a TOI designation"
     base = int(m.group(1))
     cols = ("toi,tfopwg_disp,ra,dec,pl_orbper,pl_tranmid,pl_trandurh,"
-            "pl_trandep,st_teff,st_logg,st_tmag")
+            "pl_trandep,st_teff,st_logg,st_tmag,pl_tranmiderr1,"
+            "pl_orbpererr1")
     # The toi column is numeric, so the WHERE clause is built from parsed
     # integers only — nothing user-typed reaches the query as text.
     if m.group(2):
@@ -2128,6 +2216,8 @@ def toi_lookup(name: str, timeout: float = ARCHIVE_TIMEOUT_S,
         "ra_deg": ra, "dec_deg": dec,
         "period_d": _num("pl_orbper"),
         "t0_bjd": _num("pl_tranmid"),
+        "t0_err_d": _abs_or_none(_num("pl_tranmiderr1")),
+        "period_err_d": _abs_or_none(_num("pl_orbpererr1")),
         "duration_h": _num("pl_trandurh"),      # already hours
         "depth_pct": (depth_ppm / 1e4 if depth_ppm is not None else None),
         "teff_k": _num("st_teff"),
@@ -2135,6 +2225,16 @@ def toi_lookup(name: str, timeout: float = ARCHIVE_TIMEOUT_S,
         "vmag": _num("st_tmag"),                # TESS mag, display only
         "disposition": str(rows[0].get("tfopwg_disp", "") or "").strip(),
     }, ""
+
+
+def _abs_or_none(v):
+    """The archive's err1 columns are positive, err2 negative; either
+    sign is a magnitude here."""
+    try:
+        return abs(float(v)) if v is not None and math.isfinite(float(v)) \
+            else None
+    except (TypeError, ValueError):
+        return None
 
 
 def o_minus_c(measured_bjd: float, t0_bjd: float, period_d: float):
@@ -2157,6 +2257,25 @@ def o_minus_c(measured_bjd: float, t0_bjd: float, period_d: float):
     epoch = int(round((measured_bjd - t0_bjd) / period_d))
     predicted = t0_bjd + epoch * period_d
     return (measured_bjd - predicted) * 1440.0, epoch
+
+
+def ephemeris_sigma_min(epoch, t0_err_d, period_err_d):
+    """How well the archive ephemeris itself predicts this transit, in
+    minutes: the T0 error and the period error grown over ``epoch``
+    orbits, in quadrature.  NaN when the archive gives neither.  An O-C
+    judged against the measured bar alone calls a stale ephemeris a
+    timing anomaly; against this it is what it is."""
+    parts = []
+    for v, k in ((t0_err_d, 1.0), (period_err_d, float(epoch or 0))):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v) and v > 0:
+            parts.append((v * k) ** 2)
+    if not parts:
+        return float("nan")
+    return math.sqrt(sum(parts)) * 1440.0
 
 
 def ld_template(rp: float, b: float = 0.0, u1: float = LD_U1,
@@ -3048,6 +3167,86 @@ def _lens_area(R, rp: float, z):
 # Gauss-Legendre nodes for the one remaining numerical integral of the
 # analytic occultation (30 nodes: pylightcurve's "precision 3").
 _GL_NODES, _GL_WEIGHTS = np.polynomial.legendre.leggauss(30)
+
+
+def _parse_aperture_mm(text):
+    """A telescope aperture typed as '300', '300 mm', '30cm' or '12in';
+    None when blank or unreadable."""
+    t = (text or "").strip().lower().replace(",", ".")
+    m = re.match(r"^\s*([0-9]*\.?[0-9]+)\s*(mm|cm|m|in|inch|\")?\s*$", t)
+    if not m:
+        return None
+    v = float(m.group(1))
+    unit = m.group(2) or "mm"
+    v *= {"mm": 1.0, "cm": 10.0, "m": 1000.0, "in": 25.4, "inch": 25.4,
+          "\"": 25.4}[unit]
+    return v if 10.0 <= v <= 20000.0 else None
+
+
+def claret_to_quad(coeffs):
+    """The quadratic pair (u1, u2) closest to a four-coefficient Claret
+    profile: least squares on I(mu)/I(1), weighted by disc AREA (uniform
+    in r, weight r), which is where a transit's depth is decided.  Exact
+    when the profile is quadratic to begin with (a1 = a3 = 0).  This is
+    how the blind fit, whose template family is quadratic, uses the
+    Phoenix coefficients HOPS mode uses directly."""
+    a = [float(c) for c in list(coeffs)[:4]]
+    r = np.linspace(0.0, 0.999, 400)
+    mu = np.sqrt(1.0 - r * r)
+    drop = sum(ak * (1.0 - mu ** (0.5 * (k + 1))) for k, ak in enumerate(a))
+    design = np.column_stack([1.0 - mu, (1.0 - mu) ** 2])
+    w = np.sqrt(r)[:, None]
+    sol = np.linalg.lstsq(design * w, np.asarray(drop) * w[:, 0],
+                          rcond=None)[0]
+    return float(sol[0]), float(sol[1])
+
+
+def scintillation_mag(airmass, exp_s, aperture_mm, height_m=0.0):
+    """Young's scintillation noise per point, in magnitudes, or NaN
+    where the aperture or the exposure is unknown."""
+    X = np.asarray(airmass, dtype=float)
+    try:
+        d_cm = float(aperture_mm) / 10.0
+        t = float(exp_s)
+        h = float(height_m or 0.0)
+    except (TypeError, ValueError):
+        return np.full(X.shape, np.nan)
+    if not (d_cm > 0 and t > 0):
+        return np.full(X.shape, np.nan)
+    with np.errstate(invalid="ignore"):
+        rel = (SCINTILLATION_COEFF * d_cm ** (-2.0 / 3.0)
+               * np.where(X > 0, X, np.nan) ** 1.75
+               * math.exp(-h / SCINTILLATION_SCALE_HEIGHT_M)
+               / math.sqrt(2.0 * t))
+    return 2.5 / math.log(10.0) * rel
+
+
+def chain_autocorr_time(chain):
+    """Integrated autocorrelation time per parameter of a (steps,
+    walkers, dims) chain, from the walker-averaged series with Sokal's
+    window (c = 5) -- emcee's estimator.  NaN where it cannot be had."""
+    c = np.asarray(chain, dtype=float)
+    if c.ndim != 3 or c.shape[0] < 8:
+        return np.full(c.shape[-1] if c.ndim == 3 else 0, np.nan)
+    n = c.shape[0]
+    out = []
+    for k in range(c.shape[2]):
+        x = c[:, :, k].mean(axis=1)
+        x = x - x.mean()
+        if not np.any(x):
+            out.append(float("nan"))
+            continue
+        f = np.fft.rfft(x, n=2 * n)
+        acf = np.fft.irfft(f * np.conj(f))[:n]
+        if not acf[0] > 0:
+            out.append(float("nan"))
+            continue
+        acf = acf / acf[0]
+        taus = 2.0 * np.cumsum(acf) - 1.0
+        m = np.arange(n) < 5.0 * taus
+        idx = int(np.argmax(~m)) if np.any(~m) else n - 1
+        out.append(float(max(taus[idx], 1.0)))
+    return np.asarray(out)
 
 
 def claret_coefficients(law: str, coeffs):
@@ -4073,7 +4272,7 @@ def hops_results_text(r: dict) -> str:
 def t0_uncertainty(t, mag, t0: float, duration: float, template,
                    sigma: float, grid_step: float, beta: float = 1.0,
                    durations=None, fixed=None, gram=None, rhs=None,
-                   mm=None):
+                   mm=None, sw=None):
     """1-sigma on the mid-transit time, in days, or NaN.
 
     From the CURVATURE of the chi-square surface along T0, measured by
@@ -4136,8 +4335,10 @@ def t0_uncertainty(t, mag, t0: float, duration: float, template,
     for i, off in enumerate(offsets):
         best = np.inf
         for d in durs:
-            got = _solve_simultaneous(mag, ld_shape(t, t0 + off, d, template),
-                                      fixed, gram, rhs, mm)
+            shape = ld_shape(t, t0 + off, d, template)
+            if sw is not None:
+                shape = shape * sw          # the same weighted surface
+            got = _solve_simultaneous(mag, shape, fixed, gram, rhs, mm)
             if got is not None and got[2] < best:
                 best = got[2]
         if math.isfinite(best):
@@ -4242,7 +4443,8 @@ def _solve_simultaneous(mag, shape, fixed, gram, rhs, mm):
     return c[:k], float(c[k]), max(0.0, ssr)
 
 
-def fit_transit(t, mag, bases=None, u1: float = LD_U1, u2: float = LD_U2):
+def fit_transit(t, mag, bases=None, u1: float = LD_U1, u2: float = LD_U2,
+                err=None):
     """Fit a limb-darkened transit AND the systematics, together.
 
     Returns a dict, or ``None`` when there is not enough data to try.
@@ -4275,6 +4477,16 @@ def fit_transit(t, mag, bases=None, u1: float = LD_U1, u2: float = LD_U2):
     The search is still a grid over ``(T0, duration, shape)`` with
     everything linear solved in closed form at every node.  Same answer
     every run, no optimiser, no convergence to fail.
+
+    **The solve is weighted** when ``err`` is given.  Ordinary least
+    squares is unbiased but ignores that the low-altitude end of a run
+    is noisier than the rest, and pays with bars 10-30 % wider than the
+    data support on a night whose noise doubles.  The weights are the
+    inverse squared errors made RELATIVE (mean 1) and clipped, so they
+    shape the solve without a mis-estimated bar dominating it; the
+    residual MAD still sets the noise level, which keeps the calibrated
+    detection threshold what it was.  With ``err`` None every number
+    below is the unweighted one.
     """
     t = np.asarray(t, dtype=float)
     mag = np.asarray(mag, dtype=float)
@@ -4292,9 +4504,25 @@ def fit_transit(t, mag, bases=None, u1: float = LD_U1, u2: float = LD_U2):
     if span <= 0:
         return None
 
-    gram = fixed.T @ fixed
-    rhs = fixed.T @ mag
-    mm = float(mag @ mag)
+    sw = np.ones(t.size)
+    if err is not None and np.asarray(err).size == good.size:
+        e = np.asarray(err, dtype=float)[good]
+        fin = np.isfinite(e) & (e > 0)
+        if int(fin.sum()) >= 3:
+            e_med = float(np.median(e[fin]))
+            if e_med > 0:
+                w = np.where(fin, (e_med / np.where(fin, e, e_med)) ** 2, 1.0)
+                w = np.clip(w, FIT_WEIGHT_CLIP[0], FIT_WEIGHT_CLIP[1])
+                w = w / float(np.mean(w))
+                sw = np.sqrt(w)
+    weighted = bool(np.any(np.abs(sw - 1.0) > 1e-9))
+    # Row-scaling by sqrt(w) turns the weighted problem into an ordinary
+    # one, so the closed-form node solve is untouched.
+    fixed_w = fixed * sw[:, None]
+    mag_w = mag * sw
+    gram = fixed_w.T @ fixed_w
+    rhs = fixed_w.T @ mag_w
+    mm = float(mag_w @ mag_w)
 
     templates = [((rp, b), ld_template(rp, b, u1, u2))
                  for rp in LD_RP_GRID for b in LD_B_GRID]
@@ -4318,7 +4546,8 @@ def fit_transit(t, mag, bases=None, u1: float = LD_U1, u2: float = LD_U2):
                 shape = ld_shape(t, t0, dur, tmpl)
                 if np.count_nonzero(shape > 0.5) < 3:
                     continue
-                got = _solve_simultaneous(mag, shape, fixed, gram, rhs, mm)
+                got = _solve_simultaneous(mag_w, shape * sw, fixed_w,
+                                          gram, rhs, mm)
                 if got is None:
                     continue
                 coeffs, depth, ssr = got
@@ -4353,7 +4582,8 @@ def fit_transit(t, mag, bases=None, u1: float = LD_U1, u2: float = LD_U2):
                     shape = ld_shape(t, t0, dur, tmpl)
                     if np.count_nonzero(shape > 0.5) < 3:
                         continue
-                    got = _solve_simultaneous(mag, shape, fixed, gram, rhs, mm)
+                    got = _solve_simultaneous(mag_w, shape * sw, fixed_w,
+                                              gram, rhs, mm)
                     if got is None or got[1] <= 0:
                         continue
                     if got[2] < best["ssr"]:
@@ -4380,6 +4610,13 @@ def fit_transit(t, mag, bases=None, u1: float = LD_U1, u2: float = LD_U2):
     sigma = float(rms_resid * math.sqrt(t.size / float(dof)))
     if not (np.isfinite(sigma) and sigma > 0):
         sigma = float(np.sqrt(np.sum(resid * resid) / dof))
+    # The scatter of the WEIGHTED residuals prices the weighted
+    # covariance; with unit weights it is sigma itself.
+    sigma_w = sigma
+    if weighted:
+        sigma_w = float(_mad_std(resid * sw) * math.sqrt(t.size / float(dof)))
+        if not (np.isfinite(sigma_w) and sigma_w > 0):
+            sigma_w = sigma
 
     sig = stacked_significance(t, detrended, best["t0"], best["duration"],
                                sigma)
@@ -4404,22 +4641,22 @@ def fit_transit(t, mag, bases=None, u1: float = LD_U1, u2: float = LD_U2):
     coeff_sigmas = None
     if sigma > 0 and n_in > 0 and n_out > 0:
         try:
-            a_full = np.column_stack([fixed, shape])
+            a_full = np.column_stack([fixed_w, shape * sw])
             g_inv = np.linalg.inv(a_full.T @ a_full)
-            depth_sigma = beta * sigma * math.sqrt(max(g_inv[-1, -1], 0.0))
+            depth_sigma = beta * sigma_w * math.sqrt(max(g_inv[-1, -1], 0.0))
             # The same covariance also prices the baseline and each
             # systematic coefficient — kept for the HOPS-format results
             # file, where a fitted parameter must carry its error bar.
-            coeff_sigmas = [float(beta * sigma
+            coeff_sigmas = [float(beta * sigma_w
                                   * math.sqrt(max(g_inv[k, k], 0.0)))
                             for k in range(fixed.shape[1])]
         except np.linalg.LinAlgError:
             depth_sigma = beta * sigma * math.sqrt(1.0 / n_in + 1.0 / n_out)
 
-    t0_sigma = t0_uncertainty(t, mag, best["t0"], best["duration"],
-                              tmpl, sigma, coarse_t0, beta,
-                              durations=dur_grid, fixed=fixed, gram=gram,
-                              rhs=rhs, mm=mm)
+    t0_sigma = t0_uncertainty(t, mag_w, best["t0"], best["duration"],
+                              tmpl, sigma_w, coarse_t0, beta,
+                              durations=dur_grid, fixed=fixed_w, gram=gram,
+                              rhs=rhs, mm=mm, sw=sw if weighted else None)
     chi2_nu = chi2_per_dof(resid, n_free + 2, ~inside)
     _n_oot = int(np.count_nonzero(~inside))
     chi2_nu_sigma = chi2_nu_scatter(
@@ -4473,6 +4710,7 @@ def fit_transit(t, mag, bases=None, u1: float = LD_U1, u2: float = LD_U2):
         "impact_b": best["b"],
         "ld_u1": float(u1),
         "ld_u2": float(u2),
+        "weighted": weighted,
         "depth_mag": best["depth"],
         "depth_mmag": best["depth"] * 1000.0,
         "depth_pct": (1.0 - 10.0 ** (-0.4 * best["depth"])) * 100.0,
@@ -5037,7 +5275,7 @@ def _sat_fraction(why: str):
 
 
 def saturation_verdict(data, x: float, y: float,
-                       half: int = SATURATION_BOX_PX):
+                       half: int = SATURATION_BOX_PX, channel: int = 0):
     """Is the star at ``(x, y)`` clipped?  ``(saturated, evidence)``.
 
     Read from the PIXELS, not from Siril's ``has_saturated`` flag.  The
@@ -5054,7 +5292,7 @@ def saturation_verdict(data, x: float, y: float,
         return None, "no pixel data"
     arr = np.asarray(data)
     if arr.ndim > 2:
-        arr = arr[0]
+        arr = arr[min(max(int(channel or 0), 0), arr.shape[0] - 1)]
     h, w = arr.shape[-2], arr.shape[-1]
     xi, yi = int(round(float(x))), int(round(float(y)))
     if not (0 <= xi < w and 0 <= yi < h):
@@ -5099,14 +5337,32 @@ def oc_lines(r, fit):
     sig_s = fit.get("t0_sigma_s", float("nan"))
     sig_min = sig_s / 60.0 if np.isfinite(sig_s) else float("nan")
     bar = f" +/- {sig_min:.1f} min" if np.isfinite(sig_min) else ""
+    # The prediction has a bar of its own: the archive's T0 error plus
+    # its period error grown over the epochs since.  The verdict is
+    # judged against BOTH in quadrature -- against the measured bar
+    # alone a 2-minute drift on an ephemeris that is itself good to
+    # 3 minutes used to read as "2.0 sigma from the prediction".
+    pred_min = ephemeris_sigma_min(epoch, eph.get("t0_err_d"),
+                                   eph.get("period_err_d"))
     verdict = ""
     if np.isfinite(sig_min) and sig_min > 0:
-        n_sig = abs(drift) / sig_min
+        total = (math.hypot(sig_min, pred_min) if np.isfinite(pred_min)
+                 else sig_min)
+        n_sig = abs(drift) / total
         verdict = (f"  ({n_sig:.1f} sigma from the prediction)" if n_sig >= 1.0
                    else "  (consistent with the prediction)")
     out = [(f"   O-C            {drift:+.2f} min{bar}{verdict}", None),
            (f"                  epoch {epoch} of {eph.get('name', '?')}, "
             f"P = {eph['period_d']:.6f} d", None)]
+    if np.isfinite(pred_min):
+        out.append((f"                  the ephemeris itself predicts this "
+                    f"transit to +/- {pred_min:.1f} min (archive T0 and "
+                    f"period errors over {epoch} epochs); the sigma above "
+                    "counts both bars", None))
+    elif eph.get("t0_bjd"):
+        out.append(("                  the archive lists no error on its T0 "
+                    "or period, so the sigma above counts only the "
+                    "measured bar", None))
     if abs(drift) > 60.0:
         out.append(("                  more than an hour off — over "
                     f"{epoch} epochs a stale period eventually mislabels "
@@ -5279,7 +5535,7 @@ def inspect_frame(path: str, header=None) -> dict:
     out = {"path": path, "kind": None, "exp_s": None, "gain_v": None,
            "temp_v": None, "binning": 1, "dims": None, "instrument": None,
            "filter": "", "date_obs": "", "date_loc": "", "object": "",
-           "objctra": "", "objctdec": "", "datamax": None}
+           "objctra": "", "objctdec": "", "datamax": None, "aptdia": None}
     h = header if header is not None else _read_header(path)
     if h is None:
         out["kind"] = classify_path(path)
@@ -5312,6 +5568,17 @@ def inspect_frame(path: str, header=None) -> dict:
         if key in h:
             try:
                 out["datamax"] = float(h[key])
+            except (TypeError, ValueError):
+                pass
+            break
+    # The telescope aperture in mm (N.I.N.A., SGP and APT write APTDIA),
+    # for the scintillation term of the error bars.
+    for key in ("APTDIA", "APTDIAM", "APERTURE"):
+        if key in h:
+            try:
+                v = float(h[key])
+                if 10.0 <= v <= 20000.0:
+                    out["aptdia"] = v
             except (TypeError, ValueError):
                 pass
             break
@@ -6814,6 +7081,82 @@ class LightCurveWorker(QThread):
                    LogColor.GREEN)
         return np.asarray(jd)[good], mag_h, err_h
 
+    def _limb_darkening(self, eph):
+        """``(u1, u2, claret, source, note)`` -- the quadratic pair the
+        blind fit uses and the Claret set HOPS mode uses, from the best
+        source at hand: the coefficients entered in group 5, else the
+        Phoenix computation for the archive's Teff/log g and the run's
+        filter (a download the first time, cached afterwards), else the
+        script's defaults.  Computed once per run and logged.  This used
+        to be 0.35/0.23 for every star and every filter in blind mode,
+        a 3-6 % systematic on Rp/R* that no bar ever reported."""
+        cached = getattr(self, "_ldc_choice", None)
+        if cached is not None:
+            return cached
+        eph = eph or {}
+        claret = self.opts.get("hops_ldc")
+        note = ""
+        if claret and len(claret) == 4:
+            claret = [float(c) for c in claret]
+            note = (self.opts.get("hops_ldc_note")
+                    or "Claret a1..a4 as entered")
+        else:
+            claret = None
+            teff, logg = eph.get("teff_k"), eph.get("logg")
+            filt = self.opts.get("filter_name", "") or ""
+            band = (hops_filter_name(filt)
+                    if self.opts.get("auto_ldc", True) else None)
+            has_curve = bool(band) and (bool(SVO_FILTER_IDS.get(band))
+                                        or band in PLC_PASSBANDS)
+            if has_curve and teff and logg:
+                self._emit(
+                    f"  Limb darkening: computing Claret coefficients from "
+                    f"Phoenix models for Teff {float(teff):g} K, log g "
+                    f"{float(logg):g}, {band} passband (the first call "
+                    "downloads ~4 x 21 MB into ~/.svenesis; later calls "
+                    "are seconds)…", LogColor.BLUE)
+                try:
+                    vals, why = claret_from_phoenix(
+                        float(teff), float(logg), band,
+                        progress=lambda m: self._emit("    " + m,
+                                                      LogColor.BLUE))
+                except Exception as exc:               # noqa: BLE001
+                    _log_swallowed(exc)
+                    vals, why = None, f"{type(exc).__name__}: {exc}"
+                if vals:
+                    claret = [float(c) for c in vals]
+                    alias = hops_filter_note(filt)
+                    note = why + (f" ({alias})" if alias else "")
+                else:
+                    note = f"Phoenix coefficients unavailable: {why}"
+            elif not self.opts.get("auto_ldc", True):
+                note = "Phoenix computation switched off in group 5"
+            elif not (teff and logg):
+                note = ("the archive gives no Teff/log g for this star, so "
+                        "no Phoenix computation")
+            elif not band:
+                note = (f"the filter '{filt}' has no broadband passband "
+                        "curve, so no Phoenix computation" if filt else
+                        "no filter name known, so no Phoenix computation")
+            else:
+                note = (f"no public transmission curve for the {band} "
+                        "passband, so no Phoenix computation")
+        if claret is not None:
+            u1, u2 = claret_to_quad(claret)
+            source = (f"quadratic u1 = {u1:.3f}, u2 = {u2:.3f} fitted to the "
+                      f"Claret profile ({note})")
+            colour = LogColor.BLUE
+        else:
+            u1 = float(self.opts.get("ld_u1", LD_U1))
+            u2 = float(self.opts.get("ld_u2", LD_U2))
+            source = (f"script defaults u1 = {u1:.2f}, u2 = {u2:.2f} (a "
+                      "Sun-like star in a broad visual band)"
+                      + (f" — {note}" if note else ""))
+            colour = LogColor.SALMON
+        self._emit(f"  Limb darkening: {source}.", colour)
+        self._ldc_choice = (u1, u2, claret, source, note)
+        return self._ldc_choice
+
     def _hops_mode(self, jd, mag, err, blind: dict, X, eph,
                    time_system: str, flip_bases=None):
         """The HOPS-compatible fit on the finished photometry.
@@ -6867,17 +7210,14 @@ class LightCurveWorker(QThread):
                          "inclination for this planet")
         geom = {"period_d": period, "a_rs": float(a_rs), "ecc": ecc,
                 "inc_deg": float(inc), "peri_deg": peri}
-        ldc = self.opts.get("hops_ldc")
-        if ldc and len(ldc) == 4:
-            ldc = [float(c) for c in ldc]
-            ldc_note = (self.opts.get("hops_ldc_note")
-                        or "Claret a1..a4 as entered")
+        u1_q, u2_q, ldc, _ld_src, ld_note = self._limb_darkening(eph)
+        if ldc is not None:
+            ldc_note = ld_note
         else:
-            u1 = float(self.opts.get("ld_u1", LD_U1))
-            u2 = float(self.opts.get("ld_u2", LD_U2))
-            ldc = quad_to_claret(u1, u2)
-            ldc_note = (f"the quadratic law (u1 = {u1:.2f}, u2 = {u2:.2f}) "
-                        "written as Claret coefficients")
+            ldc = quad_to_claret(u1_q, u2_q)
+            ldc_note = (f"the quadratic law (u1 = {u1_q:.2f}, u2 = {u2_q:.2f}) "
+                        "written as Claret coefficients"
+                        + (f"; {ld_note}" if ld_note else ""))
         choice = str(self.opts.get("hops_detrend", "airmass")).lower()
         tmin = float(np.nanmin(jd))
         x_t = jd - tmin
@@ -6975,6 +7315,33 @@ class LightCurveWorker(QThread):
         rp, rp_sig = float(res["rp"]), 0.5 * (res["rp_m"] + res["rp_p"])
         mid, mid_sig = float(res["mid_time"]), 0.5 * (res["mid_m"]
                                                        + res["mid_p"])
+        # Two things HOPS's bars leave out.  Red noise: the posterior
+        # widths assume white noise, and the same Pont beta the blind fit
+        # applies is applied to the headline bars here (results.txt keeps
+        # HOPS's own white-noise percentiles, as HOPS writes them).
+        # Convergence: 15 walkers x 2000 steps is a fixed budget with no
+        # check; the integrated autocorrelation time says whether the
+        # percentiles are from a settled chain.
+        _resid_flux = ((np.asarray(res["flux"], float)
+                        - np.asarray(res["model_flux"], float))
+                       / max(float(res["flux_median"]), 1e-12))
+        beta_h, _beta_rows = red_noise_beta(np.asarray(res["t"], float),
+                                            _resid_flux,
+                                            float(res["duration_d"]))
+        beta_h = float(max(1.0, beta_h)) if np.isfinite(beta_h) else 1.0
+        rp_sig *= beta_h
+        mid_sig *= beta_h
+        taus = chain_autocorr_time(res.get("chain"))
+        tau_max = (float(np.nanmax(taus))
+                   if taus.size and np.any(np.isfinite(taus)) else float("nan"))
+        n_taus = (float(np.asarray(res["chain"]).shape[0]) / tau_max
+                  if np.isfinite(tau_max) and tau_max > 0 else float("nan"))
+        # Independent draws across ALL walkers: what the 16/84
+        # percentiles actually stand on.  emcee's 50-tau rule is per
+        # walker and is what the verdict uses; the count says how far
+        # the bars can still wander (about 1/sqrt(n_eff) of themselves).
+        n_eff = (n_taus * float(res.get("walkers") or 1)
+                 if np.isfinite(n_taus) else float("nan"))
         dur = float(res["duration_d"])
         rho = (1.0 - ecc * ecc) / (1.0 + ecc * math.sin(math.radians(peri)))
         b = geom["a_rs"] * rho * math.cos(math.radians(geom["inc_deg"]))
@@ -7015,9 +7382,10 @@ class LightCurveWorker(QThread):
                 "rescaled value, ~1 by construction"),
             "baseline": 0.0,
             "basis_coeffs": [float(c) for c in res["coeffs"]],
-            "coeff_sigmas": [0.5 * (m + p_) for m, p_ in
+            "coeff_sigmas": [0.5 * (m + p_) * beta_h for m, p_ in
                              zip(res["m_err"][:1 + len(res["names"])],
                                  res["p_err"][:1 + len(res["names"])])],
+            "red_noise_beta": beta_h,
             "bases": list(res["names"]),
             "base_note": f"HOPS {choice} detrending",
             "airmass_slope": slope,
@@ -7044,6 +7412,10 @@ class LightCurveWorker(QThread):
                 "mid_guess": mid_guess, "mid_note": mid_note,
                 "rp_m": res["rp_m"], "rp_p": res["rp_p"],
                 "mid_m": res["mid_m"], "mid_p": res["mid_p"],
+                "beta": beta_h, "tau_max": tau_max, "n_taus": n_taus,
+                "n_eff": n_eff,
+                "converged": bool(np.isfinite(n_taus)
+                                  and n_taus >= HOPS_MIN_CHAIN_TAUS),
                 "depth_flux": res["depth_flux"],
                 "t": res["t"], "flux": res["flux"],
                 "flux_err": res["flux_err"],
@@ -7066,6 +7438,22 @@ class LightCurveWorker(QThread):
             f"{res['outliers']} outlier(s) removed; error bars scaled by "
             f"{res['scale_factor']:.3f}; acceptance "
             f"{res['acceptance']:.2f}.", LogColor.GREEN)
+        self._emit(
+            f"  HOPS-mode bars x {beta_h:.2f} for red noise (Pont beta on "
+            "the fit's residuals; HOPS's own percentiles stay in "
+            "results.txt).", LogColor.BLUE if beta_h <= 1.05 else S)
+        if np.isfinite(n_taus):
+            self._emit(
+                f"  Sampler: longest autocorrelation time {tau_max:.0f} "
+                f"steps, the chain is {n_taus:.0f} of them long "
+                f"(~{n_eff:.0f} independent draws across the walkers, "
+                f"bars stable to ~{100.0 / math.sqrt(max(n_eff, 1.0)):.0f} %)"
+                + (" — settled." if n_taus >= HOPS_MIN_CHAIN_TAUS else
+                   f" — fewer than {HOPS_MIN_CHAIN_TAUS:.0f}; raise the "
+                   "iterations to about "
+                   f"{int(math.ceil(HOPS_MIN_CHAIN_TAUS * tau_max / 0.8 / 500.0) * 500)} "
+                   "for stable percentiles."),
+                LogColor.BLUE if n_taus >= HOPS_MIN_CHAIN_TAUS else S)
         if res.get("duration_note"):
             self._emit("  NOTE: " + res["duration_note"] + ".", S)
         if res.get("n_nonfinite"):
@@ -7189,7 +7577,9 @@ class LightCurveWorker(QThread):
                     if getattr(hdu, "data", None) is not None:
                         data = hdu.data
                         break
-                return saturation_verdict(data, x, y)
+                return saturation_verdict(
+                    data, x, y,
+                    channel=int(self.opts.get("channel", 0) or 0))
         except Exception as exc:            # noqa: BLE001 -- never abort
             _log_swallowed(exc)
             return None, f"could not read {os.path.basename(ref_path)}"
@@ -7922,6 +8312,32 @@ class LightCurveWorker(QThread):
         except Exception as exc:                # noqa: BLE001
             _log_swallowed(exc)
             return None
+        # The grid is scaled to the run's median seeing, not the
+        # reference frame's: the registration reference is the best-
+        # seeing frame, and 2.5 x its FWHM is 1.25 x on a night whose
+        # seeing doubles -- the whole grid skewed small exactly where
+        # the flux loss is worst.  Siril's per-frame FWHM is already in
+        # hand from the registration pass.
+        fwhm_ref = float(fwhm)
+        fwhm_note = "the reference frame"
+        q_fwhm = (getattr(self, "_frame_quality", None) or {}).get("fwhm")
+        if q_fwhm is not None:
+            qf = np.asarray(q_fwhm, dtype=float)
+            qf = qf[np.isfinite(qf) & (qf > 0)]
+            if qf.size >= 5:
+                run_med = float(np.median(qf))
+                lo, hi = RUN_FWHM_RATIO_RANGE
+                if lo * fwhm_ref <= run_med <= hi * fwhm_ref:
+                    fwhm = max(fwhm_ref, run_med)
+                    fwhm_note = (f"the run's median over {qf.size} frame(s), "
+                                 f"reference frame {fwhm_ref:.2f} px")
+                else:
+                    fwhm_note = (f"the reference frame — the per-frame "
+                                 f"median {run_med:.2f} lies outside "
+                                 f"{lo:g}-{hi:g} x the reference's "
+                                 f"{fwhm_ref:.2f} px and was not trusted")
+        self._emit(f"  Aperture grid scaled to FWHM {float(fwhm):.2f} px "
+                   f"({fwhm_note}).", LogColor.BLUE)
         radii = sorted({round(max(1.5, float(fwhm) * g), 2)
                         for g in APERTURE_FWHM_GRID})
         r_in = AUTORING_INNER_FWHM * max(float(fwhm), 1.0)
@@ -8175,6 +8591,13 @@ class LightCurveWorker(QThread):
                 unreadable += 1
                 status[k] = "unreadable"
                 continue
+            if d.ndim == 3:
+                # A debayered OSC frame is three planes.  The channel
+                # chosen in group 4 is measured -- it used to be plane 0
+                # (red) whatever the setting, which only reached Siril's
+                # fallback engine.
+                ch = int(self.opts.get("channel", 0) or 0)
+                d = d[min(max(ch, 0), d.shape[0] - 1)]
             # The time comes from the frame's OWN header, which is already
             # open -- not from sirilpy's ImgData.date_obs, which came back
             # empty on a real N.I.N.A. run: the engine then measured 83
@@ -8282,6 +8705,55 @@ class LightCurveWorker(QThread):
                 "comps, or calibration that keeps values above 1, avoid "
                 "it.", LogColor.SALMON)
 
+        # The target's own centroid, per frame, becomes two detrending
+        # bases: a drifting field samples a different patch of the flat
+        # every frame, and a 0.5 % flat residual over tens of pixels is a
+        # several-mmag slow trend correlated with nothing else in the
+        # design.  Keyed by sequence frame index like the other quality
+        # columns, so the same pairing serves it.
+        quality = getattr(self, "_frame_quality", None)
+        if quality and quality.get("fwhm") is not None:
+            n_q = int(np.asarray(quality["fwhm"]).size)
+            for key, arr in (("xpos", xpos[0]), ("ypos", ypos[0])):
+                col = np.full(n_q, np.nan)
+                for k, (fi, _h, _w, _p) in enumerate(frames):
+                    if 0 <= int(fi) < n_q:
+                        col[int(fi)] = arr[k]
+                quality[key] = col
+        # Linearity margin.  The clip test catches a SATURATED core; a
+        # CMOS sensor is non-linear well below that, and a target that
+        # peaks at 90 % of the clip on its brightest frame passes every
+        # test above while its depth comes out shallow.
+        self._target_headroom = float("nan")
+        if sat_adu:
+            pk = peakv[0]
+            pk = pk[np.isfinite(pk)]
+            if pk.size:
+                clip_level = float(sat_adu) / SAT_FRACTION
+                frac = float(pk.max()) / clip_level if clip_level > 0 else 0.0
+                self._target_headroom = frac
+                if frac >= TARGET_LINEAR_HEADROOM:
+                    n_hi = int(np.count_nonzero(
+                        pk >= TARGET_LINEAR_HEADROOM * clip_level))
+                    self._emit(
+                        f"  WARNING: the target peaks at {100 * frac:.0f} % "
+                        f"of the clip level on its brightest frame "
+                        f"({n_hi} frame(s) above "
+                        f"{100 * TARGET_LINEAR_HEADROOM:.0f} %). CMOS "
+                        "sensors turn non-linear well below the clip, and "
+                        "a depth measured there comes out shallow — a "
+                        "shorter exposure or a lower gain keeps the target "
+                        f"under {100 * TARGET_LINEAR_HEADROOM:.0f} %.",
+                        LogColor.SALMON)
+        # The seeing per photometered frame, for the aperture choice
+        # below: point-to-point scatter cannot see slow flux loss.
+        fw_k = np.full(n_frames, np.nan)
+        if quality and quality.get("fwhm") is not None:
+            qf_all = np.asarray(quality["fwhm"], dtype=float)
+            for k, (fi, _h, _w, _p) in enumerate(frames):
+                if 0 <= int(fi) < qf_all.size:
+                    fw_k[k] = qf_all[int(fi)]
+
         # Comps judged at the middle radius, kept or dropped by measured
         # scatter; the verdict is then reused for every radius.
         mid_r = radii[len(radii) // 2]
@@ -8307,6 +8779,7 @@ class LightCurveWorker(QThread):
 
         best = None
         aper_rows = []
+        cands = []
         for r in radii:
             cf = [flux[r][i + 1] for i in range(len(keep)) if keep[i]]
             ce = [ferr[r][i + 1] for i in range(len(keep)) if keep[i]]
@@ -8314,19 +8787,49 @@ class LightCurveWorker(QThread):
                                              ferr[r][0], ce)
             p2p = point_to_point_sigma(mag)
             npts = int(np.isfinite(mag).sum())
+            # How much of this aperture's light curve is the seeing: a
+            # radius that is too small loses flux slowly as the FWHM
+            # grows, a trend the point-to-point scatter never sees.
+            r_see = float("nan")
+            pair = np.isfinite(mag) & np.isfinite(fw_k)
+            if int(pair.sum()) >= 10 and np.std(fw_k[pair]) > 0 \
+                    and np.std(mag[pair]) > 0:
+                r_see = float(np.corrcoef(mag[pair], fw_k[pair])[0, 1])
             aper_rows.append((float(r), npts,
                               1000.0 * p2p if math.isfinite(p2p)
                               else float("nan")))
             self._emit(f"    aperture {r:5.2f} px  {npts:4d} point(s)  "
                        + ("     —" if not math.isfinite(p2p)
-                          else f"{1000.0 * p2p:6.2f} mmag"), LogColor.BLUE)
-            if math.isfinite(p2p) and (best is None or p2p < best[0]):
-                best = (p2p, r, mag, err, npts)
-        if best is None:
+                          else f"{1000.0 * p2p:6.2f} mmag")
+                       + (f"  seeing r = {r_see:+.2f}"
+                          if math.isfinite(r_see) else ""), LogColor.BLUE)
+            if math.isfinite(p2p):
+                cands.append((p2p, r, mag, err, npts, r_see))
+        if not cands:
             self._emit("  No aperture produced a finite light curve — "
                        "Siril's light_curve takes over.", LogColor.SALMON)
             return None
-        p2p, r_best, mag, err, npts = best
+        # Lowest point-to-point scatter among the apertures whose curve
+        # does not follow the seeing; if none qualifies, the plain
+        # scatter optimum, said so.
+        stable = [c for c in cands if not (math.isfinite(c[5])
+                                            and abs(c[5]) > APERTURE_MAX_SEEING_R)]
+        seeing_note = ""
+        if stable:
+            best = min(stable, key=lambda c: c[0])
+            skipped = len(cands) - len(stable)
+            if skipped:
+                seeing_note = (f"{skipped} smaller-scatter aperture(s) "
+                               f"passed over because their curve tracks "
+                               f"the seeing (|r| > {APERTURE_MAX_SEEING_R:g})")
+        else:
+            best = min(cands, key=lambda c: c[0])
+            seeing_note = ("every aperture's curve tracks the seeing "
+                           f"(|r| > {APERTURE_MAX_SEEING_R:g}); the fwhm "
+                           "basis has to carry it")
+        p2p, r_best, mag, err, npts, _rsee = best
+        if seeing_note:
+            self._emit(f"  Aperture choice: {seeing_note}.", LogColor.SALMON)
         # HOPS's light curve from the same fluxes at the same aperture:
         # target over the raw comp sum.  Kept for the HOPS-compatible
         # mode, which swaps it in downstream.
@@ -8937,6 +9440,8 @@ class LightCurveWorker(QThread):
 
     def _run(self) -> None:
         folder = self.folder
+        self._ldc_choice = None
+        self._scint_note = ""
         self.progress.emit(2, "Reading headers…")
         found = _fits_files(folder)
         if not found:
@@ -9482,6 +9987,46 @@ class LightCurveWorker(QThread):
 
         X, airmass_note = self._airmass_series(jd_utc)
 
+        # Scintillation into the per-point errors, when the telescope
+        # aperture is known.  The CCD equation above measures star and
+        # sky photons; the atmosphere adds 3-4 mmag per 60 s at X = 1.5
+        # on a 30 cm telescope, as much as the photon noise of a bright
+        # target.  It reaches the AAVSO ERR column, the exports, the
+        # weights of both fits -- not the blind fit's noise level, which
+        # the residual scatter sets.
+        self._scint_note = ""
+        ap_mm = self.opts.get("aperture_mm")
+        ap_src = "group 5"
+        if not ap_mm:
+            infos0 = getattr(self, "_light_infos", None) or [{}]
+            ap_mm = infos0[0].get("aptdia") if infos0 else None
+            ap_src = "the header's APTDIA"
+        exp_for_scint = 0.0
+        raw_exp = (getattr(self, "_native_raw", None) or {}).get("exp_s")
+        if raw_exp is not None and np.asarray(raw_exp).size:
+            exp_for_scint = float(np.nanmedian(np.asarray(raw_exp, float)))
+        if not exp_for_scint:
+            infos0 = getattr(self, "_light_infos", None) or [{}]
+            exp_for_scint = float((infos0[0].get("exp_s") if infos0 else 0)
+                                  or 0.0)
+        if X is not None and ap_mm and exp_for_scint > 0 \
+                and err.size == jd.size:
+            sc = scintillation_mag(X, exp_for_scint, ap_mm,
+                                   self.opts.get("site_height_m", 0.0))
+            if sc.shape == err.shape and np.any(np.isfinite(sc)):
+                err = np.hypot(err, np.where(np.isfinite(sc), sc, 0.0))
+                self._scint_note = (
+                    f"scintillation (Young) for a {float(ap_mm):g} mm "
+                    f"aperture, {exp_for_scint:g} s, "
+                    f"{float(np.nanmedian(sc)) * 1000:.1f} mmag at the "
+                    "median airmass, added in quadrature")
+                self._emit("  Error bars: " + self._scint_note
+                           + f" (aperture from {ap_src}).", LogColor.BLUE)
+        elif X is not None and not ap_mm:
+            self._emit("  Error bars carry no scintillation term: the "
+                       "telescope aperture is unknown (no APTDIA in the "
+                       "header, group 5 field blank).", LogColor.SALMON)
+
         # Every basis the fit may use, gathered in one place.  Airmass from
         # the sky position and the site; seeing, sky level and star count
         # from Siril's own per-frame registration data, paired to the rows
@@ -9518,7 +10063,7 @@ class LightCurveWorker(QThread):
                 multi_note = (f"only {hit} of {jd.size} point(s) could be "
                               "paired with a frame")
             else:
-                for name in ("fwhm", "sky", "n_stars"):
+                for name in ("fwhm", "sky", "n_stars", "xpos", "ypos"):
                     arr = quality.get(name)
                     if arr is None or arr.size == 0:
                         continue
@@ -9550,9 +10095,13 @@ class LightCurveWorker(QThread):
         # sequence had to guard against by anchoring on the out-of-transit
         # rows.  It also carries the baseline's uncertainty into the depth
         # and the mid-time instead of treating the baseline as exact.
-        fit = fit_transit(jd, mag, bases=bases,
-                          u1=float(self.opts.get("ld_u1", LD_U1)),
-                          u2=float(self.opts.get("ld_u2", LD_U2)))
+        u1_fit, u2_fit, _claret, ld_source, _ld_note = \
+            self._limb_darkening(eph)
+        fit = fit_transit(jd, mag, bases=bases, u1=u1_fit, u2=u2_fit,
+                          err=err if err.size == jd.size else None)
+        if fit is not None:
+            fit["ld_note"] = ld_source
+            fit["scint_note"] = self._scint_note
         if fit is not None and self.opts.get("fit_mode") == "hops":
             # The blind fit ran first and keeps the detection verdict;
             # HOPS mode replaces the MEASUREMENT (depth, mid-time, shape)
@@ -10703,9 +11252,16 @@ def _clear_tree_files(root: str) -> None:
     if not os.path.isdir(root):
         return
     for dirpath, _dirs, files in os.walk(root):
-        for name in files:
+        # The data files first: macOS removes a file's AppleDouble
+        # sibling together with the file, so a listing that still names
+        # `._x` after `x` is gone would log 39 FileNotFoundErrors per
+        # run on an exFAT volume.  A sibling that outlives its file is
+        # removed second; one that has already vanished is not news.
+        for name in sorted(files, key=lambda n: n.startswith("._")):
             try:
                 os.remove(os.path.join(dirpath, name))
+            except FileNotFoundError:
+                pass
             except OSError as exc:
                 _log_swallowed(exc)
 
@@ -12310,6 +12866,24 @@ class SvenesisLightCurveWindow(QMainWindow):
         row.addStretch()
         lay.addLayout(row)
 
+        # Short label: the long one widened the panel past the window
+        # and put a horizontal scrollbar on the whole left pane.
+        self.chk_auto_ldc = QCheckBox("Limb darkening from Phoenix models")
+        self.chk_auto_ldc.setChecked(True)
+        self.chk_auto_ldc.setToolTip(
+            "Both fit modes take their limb-darkening coefficients from "
+            "the best source at hand: the Claret field below when it is "
+            "filled, else — with this on — the Phoenix 2018 computation "
+            "for the star named in group 3 and the filter in group 6 "
+            "(the first call per star downloads about four 21 MB model "
+            "files into ~/.svenesis), else the script's quadratic "
+            "defaults for a Sun-like star in a broad visual band. The "
+            "blind fit uses the quadratic pair closest to the Claret "
+            "profile; the report names the source. The defaults are a "
+            "3-6 % systematic on Rp/R* for a star or filter they do not "
+            "describe.")
+        lay.addWidget(self.chk_auto_ldc)
+
         hgrid = QGridLayout()
         hgrid.addWidget(QLabel("HOPS detrending:"), 0, 0)
         self.cmb_hops_detrend = QComboBox()
@@ -12341,9 +12915,11 @@ class SvenesisLightCurveWindow(QMainWindow):
                                        QSizePolicy.Policy.Fixed)
         self.ed_hops_ldc.setToolTip(
             "Four Claret limb-darkening coefficients for your filter, as "
-            "HOPS takes them from ExoTETHyS. Leave blank and the "
-            "quadratic law this script uses is written exactly as Claret "
-            "coefficients (a2 = u1 + 2 u2, a4 = -u2).")
+            "HOPS takes them from ExoTETHyS; used by both fit modes (the "
+            "blind fit takes the closest quadratic pair). Leave blank and "
+            "the Phoenix computation above, or failing that the quadratic "
+            "defaults written exactly as Claret coefficients (a2 = u1 + "
+            "2 u2, a4 = -u2), take over.")
         hgrid.addWidget(self.ed_hops_ldc, 1, 1, 1, 3)
         self.btn_hops_ldc = QPushButton("Compute Claret (Phoenix)")
         self.btn_hops_ldc.setToolTip(
@@ -12360,8 +12936,10 @@ class SvenesisLightCurveWindow(QMainWindow):
                         Qt.AlignmentFlag.AlignLeft)
         hgrid.setColumnStretch(1, 1)
         lay.addLayout(hgrid)
-        self._hops_widgets = [self.cmb_hops_detrend, self.spin_hops_iter,
-                              self.ed_hops_ldc, self.btn_hops_ldc]
+        # The Claret field and its button serve BOTH modes now (the blind
+        # fit takes the closest quadratic pair), so only the HOPS-only
+        # controls follow the mode switch.
+        self._hops_widgets = [self.cmb_hops_detrend, self.spin_hops_iter]
         self._hops_ldc_note = ""
         self._hops_filter_note = ""
         self._hops_ldc_text = ""
@@ -12389,6 +12967,18 @@ class SvenesisLightCurveWindow(QMainWindow):
         self.ed_lon = QLineEdit()
         self.ed_lon.setPlaceholderText("8.7  (east +)")
         grid.addWidget(self.ed_lon, 0, 3)
+        grid.addWidget(QLabel("Telescope aperture:"), 1, 0)
+        self.ed_aperture_mm = QLineEdit()
+        self.ed_aperture_mm.setPlaceholderText("mm, e.g. 300 (or APTDIA)")
+        self.ed_aperture_mm.setToolTip(
+            "The telescope's clear aperture in millimetres, for the "
+            "scintillation term of the error bars (Young's formula: "
+            "3-4 mmag per 60 s at airmass 1.5 on a 30 cm telescope, as "
+            "much as the photon noise of a bright target). Blank: the "
+            "header's APTDIA keyword is used when the capture program "
+            "wrote one; otherwise the bars carry no scintillation and "
+            "the log says so.")
+        grid.addWidget(self.ed_aperture_mm, 1, 1)
         lay.addLayout(grid)
 
         row = QHBoxLayout()
@@ -12778,7 +13368,7 @@ class SvenesisLightCurveWindow(QMainWindow):
         self._ldc_thread.start()
 
     def _on_hops_ldc_done(self, vals, note: str) -> None:
-        self.btn_hops_ldc.setEnabled(self.cmb_fit_mode.currentIndex() == 1)
+        self.btn_hops_ldc.setEnabled(True)
         if not vals:
             self.lbl_status.setText("HOPS coefficients: " + note)
             QMessageBox.warning(self, "Svenesis LightCurve", note)
@@ -12813,6 +13403,8 @@ class SvenesisLightCurveWindow(QMainWindow):
             "target_dec_deg": dec if np.isfinite(dec) else None,
             "site_lat_deg": lat if np.isfinite(lat) else None,
             "site_lon_deg": lon if np.isfinite(lon) else None,
+            "aperture_mm": _parse_aperture_mm(self.ed_aperture_mm.text()),
+            "auto_ldc": self.chk_auto_ldc.isChecked(),
             "n_comps": self.spin_comps.value(),
             "min_comp_snr": self.spin_snr.value(),
             "channel": self.spin_channel.value(),
@@ -13155,6 +13747,15 @@ class SvenesisLightCurveWindow(QMainWindow):
             # indent too far out, so a run with no fit crashed the save
             # button on fit.get, and an unclaimed run printed T0, O-C and
             # chi2/nu under a caveat that said they were not a measurement.
+            if fit.get("ld_note"):
+                A(f"   limb darkening {fit['ld_note']}")
+            if fit.get("mode") != "hops":
+                A("   weighting      "
+                  + ("per-point errors (relative, clipped) shape the "
+                     "solve; the residual scatter sets its level"
+                     if fit.get("weighted") else "unweighted least squares"))
+            if fit.get("scint_note"):
+                A(f"   error bars     {fit['scint_note']}")
             A(f"   False alarm    {100 * MEASURED_FALSE_ALARM:.2f} % at the "
               f"{MIN_DETECTION_SIGMA:.1f} sigma floor")
             A(f"                  (measured, {MEASURED_FALSE_ALARM_RUNS} "
@@ -13267,6 +13868,20 @@ class SvenesisLightCurveWindow(QMainWindow):
                   "algorithm emcee uses; seeded, so a rerun repeats)")
                 A("                  values and bars are the 16/50/84 "
                   "percentiles of the posterior, as HOPS reports them")
+                if hops.get("beta") is not None:
+                    A(f"   red noise      headline bars x {hops['beta']:.2f} "
+                      "(Pont beta on the fit's residuals; results.txt "
+                      "keeps HOPS's white-noise percentiles)")
+                if hops.get("n_taus") is not None and \
+                        np.isfinite(hops.get("n_taus", float("nan"))):
+                    A(f"   convergence    chain {hops['n_taus']:.0f} "
+                      f"autocorrelation times long (longest tau "
+                      f"{hops['tau_max']:.0f} steps, ~"
+                      f"{hops.get('n_eff', float('nan')):.0f} independent "
+                      "draws across the walkers; "
+                      + ("settled" if hops.get("converged") else
+                         f"fewer than {HOPS_MIN_CHAIN_TAUS:.0f} — raise the "
+                         "iterations") + ")")
                 A("   NOTE           this mode MEASURES the catalogue's "
                   "planet; the detection verdict above")
                 A("                  is still the blind test's, and only "
@@ -13342,6 +13957,9 @@ class SvenesisLightCurveWindow(QMainWindow):
         self.ed_dec.setText(str(st.value("target_dec", "")))
         self.ed_lat.setText(str(st.value("site_lat", "")))
         self.ed_lon.setText(str(st.value("site_lon", "")))
+        self.ed_aperture_mm.setText(str(st.value("aperture_mm", "")))
+        self.chk_auto_ldc.setChecked(
+            str(st.value("auto_ldc", "true")).lower() == "true")
         try:
             self.spin_comps.setValue(int(st.value("n_comps", DEFAULT_N_COMPS)))
             self.spin_snr.setValue(float(st.value("min_snr", MIN_COMP_SNR)))
@@ -13388,6 +14006,9 @@ class SvenesisLightCurveWindow(QMainWindow):
         st.setValue("target_dec", self.ed_dec.text())
         st.setValue("site_lat", self.ed_lat.text())
         st.setValue("site_lon", self.ed_lon.text())
+        st.setValue("aperture_mm", self.ed_aperture_mm.text())
+        st.setValue("auto_ldc",
+                    "true" if self.chk_auto_ldc.isChecked() else "false")
         st.setValue("n_comps", self.spin_comps.value())
         st.setValue("min_snr", self.spin_snr.value())
         st.setValue("channel", self.spin_channel.value())

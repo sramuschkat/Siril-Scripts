@@ -1,6 +1,6 @@
 # Svenesis LightCurve — Anleitung
 
-**Version 1.0.11** | Siril Python-Skript für Exoplaneten-Transitphotometrie
+**Version 1.0.12** | Siril Python-Skript für Exoplaneten-Transitphotometrie
 
 > *Ein Ordner Subs hinein, eine Lichtkurve heraus — und eine ehrliche Antwort auf die einzige Frage, die zählt: steckt da ein Transit drin?*
 
@@ -247,7 +247,7 @@ Ein korrekter Header wird **bestätigt**, nicht gedreht. Ohne Höhe zum Prüfen 
 
 1. **Neu zentrieren.** Die Registrierung sagt, wo der Stern ungefähr steht; der Lichtschwerpunkt in einem kleinen Fenster liefert die exakte Position. Das ist das „Follow Star", das Sirils `light_curve` fehlt. Wandert der gefundene Schwerpunkt weiter als 6 px von der Vorhersage weg, hat er sich auf einen Nachbarstern eingerastet — die Messung wird verworfen statt verfälscht.
 2. **Messen.** Der Fluss wird in einer Kreis-Apertur mit Subpixel-Kantengewichtung aufsummiert; der Himmel kommt aus einem sigma-geclippten Ring darum (Ausreißer im Ring — etwa ein schwacher Stern — werden vor der Mittelung entfernt).
-3. **Die Apertur wählen.** Mehrere Aperturgrößen werden im selben Durchgang mitgemessen; es gewinnt die mit dem geringsten **Punkt-zu-Punkt-Rauschen** — der Streuung aufeinanderfolgender Differenzen. Ein Transit ist langsam und bewegt dieses Maß kaum; eine gewöhnliche Standardabweichung dagegen enthält die Transittiefe selbst, und eine danach gewählte Apertur würde bevorzugen, was den Transit *auswäscht*.
+3. **Die Apertur wählen.** Mehrere Aperturgrößen werden im selben Durchgang mitgemessen; es gewinnt die mit dem geringsten **Punkt-zu-Punkt-Rauschen** — der Streuung aufeinanderfolgender Differenzen. Ein Transit ist langsam und bewegt dieses Maß kaum; eine gewöhnliche Standardabweichung dagegen enthält die Transittiefe selbst, und eine danach gewählte Apertur würde bevorzugen, was den Transit *auswäscht*. Zwei Verfeinerungen seit v1.0.12: Die Radien skalieren mit dem **Median**-Seeing des Laufs statt mit dem Referenzframe — Siril wählt als Referenz den Frame mit dem besten Seeing, und ein daran skaliertes Raster ist auf jedem anderen Frame der Nacht zu klein — und ein Radius, dessen Kurve **dem Seeing folgt** (|r| > 0,5 gegen die FWHM pro Frame), wird zugunsten eines weniger korrelierten übergangen, weil Punkt-zu-Punkt-Rauschen diesen langsamen Flussverlust nicht sieht. Das Log druckt die Seeing-Korrelation neben jedem Radius und sagt, wenn es einen übergangen hat.
 4. **Das Ensemble bilden.** Jeder Vergleichsstern wird auf seinen eigenen Median normiert — verpasst einer ein Frame, fehlt dem Ensemble nur sein Anteil, statt dass die Summe eine Stufe macht (und eine Stufe hat exakt die Form eines Ingress). Danach wird jeder an seiner Gesamt-Streuung gegen die Kollegen gemessen und bei Auffälligkeit verworfen, denn gerade ein langsam veränderlicher Vergleichsstern schreibt dem Ziel einen falschen Transit hinein.
 
 Die Fehlerbalken kommen aus der CCD-Gleichung — Photonenrauschen des Sterns plus gemessenes Himmelsrauschen — mit jedem Term gemessen, keinem angenommen.
@@ -283,6 +283,8 @@ Genau diese Zahl sammeln ExoClock und ETD. Bisher maß der Fit T0 mit kalibriert
 
 Zwei Sicherungen: **verweigert**, wenn die Zeiten nicht BJD_TDB sind — die Epoche des Archivs ist BJD_TDB, eine JD_UTC davon abzuziehen legte acht Minuten Versatz in eine Größe, die in Minuten interessiert — und die **Epoche steht immer neben der Abweichung**, weil sich eine veraltete Periode über Tausende Epochen irgendwann im Transit vergreift.
 
+**Und die Vorhersage hat einen eigenen Balken.** Der T0-Fehler des Archivs und sein Periodenfehler, über die seitdem vergangenen Epochen gewachsen, werden mit der Ephemeride geholt und vor dem Urteil quadratisch mit dem gemessenen Balken zusammengezählt — gegen den gemessenen Balken allein las sich eine Abweichung von 2 Minuten bei einer Ephemeride, die selbst nur auf 3 Minuten gut ist, als „2,0 Sigma von der Vorhersage“. Der Report druckt den Ephemeridenbalken in einer eigenen Zeile oder sagt, dass das Archiv keinen nennt.
+
 Woher die Position auch kam, der nächste Schritt meldet weiterhin, wie weit sie von einer echten *Detektion* entfernt landet:
 
 > *Target at (1503.4, 1505.6) — nearest detection, 0.9" from the position you gave.*
@@ -300,8 +302,8 @@ Still danebenzielen kann hier nichts.
 | **1 · Subs** | Ordnerwahl, Symlink/Kopie |
 | **2 · Calibration** | Kalibrierung ein/aus, Library-Ordner für Darks/Bias, CFA-Schalter (§3a) |
 | **3 · Target star** | Auswahlmodus (startet auf *From the frames*), Planetenname, Archivabfrage, Pixel- oder RA/Dec-Felder |
-| **4 · Photometry** | Anzahl Vergleiche, SNR-Grenze, Kanal, automatische Ringradien, Aperturwahl |
-| **5 · Analysis** | Fit-Modus (blinder Nachweis oder HOPS-kompatibel), HOPS-Detrending, Iterationen, Claret-Koeffizienten mit *Compute Claret (Phoenix)*, Airmass-Detrend, Standort, Binning |
+| **4 · Photometry** | Anzahl Vergleiche, SNR-Grenze, Kanal (die Ebene, die der Kern auf einem debayerten OSC-Lauf misst), automatische Ringradien, Aperturwahl |
+| **5 · Analysis** | Fit-Modus (blinder Nachweis oder HOPS-kompatibel), Phoenix-Randverdunkelungsschalter, HOPS-Detrending, Iterationen, Claret-Koeffizienten mit *Compute Claret (Phoenix)* (beide Modi), Airmass-Detrend, Standort, Teleskopöffnung, Binning |
 | **6 · Submission** | Beobachtercode und Filter für die AAVSO-Datei |
 
 **Rechtes Panel**, vier Reiter: **Light curve** (Kurve, Fit, Residuen), **Result** (alles in Worten), **Stars** (Ziel und Vergleiche mit SNR), **Log** (jedes Kommando und jede Ablehnung).
@@ -380,13 +382,14 @@ Die Lösung ist kein besserer Algorithmus, sondern mehr Baseline: früher anfang
 
 ### Mehr als Luftmasse: was Siril ohnehin misst
 
-Die Luftmasse ist nicht das Einzige, was durch die Nacht driftet. Drei weitere Größen tun es, und Siril misst alle drei für jeden Frame bei der Registrierung — dieses Skript las sie für die Meridian-Flip-Prüfung und warf sie weg:
+Die Luftmasse ist nicht das Einzige, was durch die Nacht driftet. Drei weitere Größen tun es, und Siril misst alle drei für jeden Frame bei der Registrierung — dieses Skript las sie für die Meridian-Flip-Prüfung und warf sie weg — und seit v1.0.12 steuert der Photometriekern zwei eigene bei:
 
 | Basis | Warum sie die Kurve bewegt |
 |---|---|
 | **FWHM** | Schlechteres Seeing zieht den Stern auseinander, eine feste Apertur fängt dann einen kleineren Anteil seines Lichts. Am stärksten bei untersampelten Sternen |
 | **Himmelspegel** | Mond, Dämmerung und Lichtverschmutzung ändern, was der Annulus abzieht — der Fehler skaliert mit der Aperturfläche |
 | **Sternzahl** | Selbst keine Systematik — sondern das, wonach eine durchziehende Wolke *in den Daten aussieht* |
+| **x-/y-Position** | Der Zentroid des Zielsterns pro Frame. Ein driftendes Feld tastet in jedem Frame eine andere Stelle des Flats ab, und 0,5 % Flat-Restfehler über einige zehn Pixel sind ein langsamer Trend von mehreren mmag, der mit nichts anderem in der Designmatrix korreliert — die größte unmodellierte Systematik eines ungeführten Laufs. Nur im eigenen Kern; dieselbe Kollinearitätssperre streicht eine der beiden, wenn die Drift eine Gerade ist |
 
 Sie werden gemeinsam in einer Ausgleichsrechnung gefittet, jede Basis zentriert und skaliert, damit Luftmasse (1–3), FWHM (2–5 px) und Himmel (Hunderte ADU) in eine Matrix passen.
 
@@ -416,6 +419,8 @@ Die gesuchten Formen sind jetzt echte Geometrien: vier Planet-Stern-Radienverhä
 
 **Sonst ändert sich nichts.** Jede Form ist eine *Schablone* auf normierter Phase, einmal gebaut und pro Knoten interpoliert — das Modell bleibt **linear in der Tiefe**, der geschlossene Löser, der Determinismus und die Zusicherung „kein Optimierer" überleben alle drei. Ein physikalisch freies Rp/R★ würde Tiefe und Form koppeln und alle drei kosten. (Die Bedeckung wird *radial* integriert — der vom Planeten überdeckte Bogen bei Radius r hat eine geschlossene Form — also keine elliptischen Integrale, keine neue Abhängigkeit, und gegen eine unabhängige 2-D-Integration verifiziert.)
 
+**Welche Randverdunkelung.** Die Schablonenfamilie ist quadratisch, und bis v1.0.11 waren ihre Koeffizienten 0,35/0,23 für jeden Stern und jeden Filter — richtig für einen sonnenähnlichen Stern im breiten visuellen Band, eine Systematik von 3–6 % auf Rp/R★ für alles andere, und kein Fehlerbalken hat das je gesagt. Beide Fit-Modi nehmen die Koeffizienten jetzt aus der besten verfügbaren Quelle: dem Claret-Feld in Gruppe 5, wenn es gefüllt ist, sonst der **Phoenix-Berechnung** für Teff und log g aus dem Archiv und den Filter des Laufs — dieselbe Maschinerie wie *Compute Claret (Phoenix)*, automatisch ausgeführt (der erste Aufruf pro Stern lädt etwa vier Modelldateien à 21 MB nach `~/.svenesis`; spätere dauern Sekunden) — sonst den Vorgabewerten. Der blinde Fit nutzt das dem Claret-Profil nächste quadratische Paar (flächengewichtete Ausgleichsrechnung über die Scheibe, exakt, wenn das Profil ohnehin quadratisch ist), und Log und Report nennen die Quelle. Ein Schalter in Gruppe 5 stellt die automatische Berechnung ab.
+
 > **Das Rp/R★ der Schablone ist ein Formindex, kein Planetenradius.** Bei freier Dauer passt eine kleinere Schablone gestreckt fast genauso gut, dieser Wert liegt also systematisch unter der Wahrheit. Die **Tiefe** ist die Messung, und beide Reports sagen das.
 
 ### Zwei Tiefen-Konventionen, beide gemeldet
@@ -442,6 +447,8 @@ Luftmasse, Seeing, Himmelspegel und Sternzahl stehen jetzt in **derselben Design
 - **Die Unsicherheit der Baseline landet dort, wo sie hingehört**, in Tiefe und Mittelzeit.
 
 Und es ist **schneller**. Von Knoten zu Knoten ändert sich nur die Transitspalte, die Gram-Matrix des Rests wird einmal berechnet: 11,1 µs pro Knoten gegen vorher 13,8, ein ganzer Fit in 0,56 s statt 1,0.
+
+**Und gewichtet, seit v1.0.12.** Die Lösung nimmt die Fehler pro Punkt als *relative* Gewichte (Mittel 1, begrenzt auf 0,2–5). Das horizontnahe Ende eines Laufs ist verrauschter als der Rest, und eine ungewichtete Ausgleichsrechnung — unverzerrt, aber blind dafür — zahlte in einer Nacht mit verdoppeltem Rauschen mit 10–30 % zu breiten Balken. Die Gewichte formen die Lösung; das Rauschniveau setzt weiterhin die Residuenstreuung, die kalibrierte Nachweisschwelle bleibt also exakt, was sie war, und bei konstanten Fehlern ist jede Zahl bis zur letzten Stelle die ungewichtete. Der Report sagt, welche es war.
 
 ### Ein Gitter, kein Optimierer
 
@@ -492,7 +499,7 @@ Alles oben beantwortet die Frage *gibt es einen Transit?* HOPS — die Pipeline 
 | Belichtung | Modell zur Belichtungsmitte | Modell **über jede Belichtung gemittelt** in 10-s-Teilschritten, exakt HOPS' Regel, mit der Belichtungszeit aus den Headern |
 | Detrending | Additiv in Magnituden, an den Punkten außerhalb des Transits verankert | HOPS' drei Wahlmöglichkeiten — Luftmasse, linear in der Zeit, quadratisch in der Zeit — **multiplikativ** im Flussmodell, mit HOPS' Reihennamen — plus die **Meridian-Flip-Stufe**, wenn ein Flip erkannt wurde, damit der Versatz zwischen den beiden Sensorbereichen mit dem Transit gefittet wird, statt als Transit gelesen zu werden |
 | Ausreißer | Spike-Ausschluss vor dem Fit | HOPS' iterativer Filter: Punkte jenseits 3 σ der normierten Residuen werden entfernt und der Fit wiederholt, bis keiner mehr übrig ist |
-| Fehlerbalken | Kovarianz × Rotrausch-Faktor | So skaliert, dass χ²/ν = 1, dann wird die Posterior-Verteilung mit einem affin-invarianten Ensemble-Sampler **abgetastet** (der Goodman–Weare-Stretch-Move, den emcee implementiert): drei Walker pro Parameter, die ersten 20 % verworfen, Werte und asymmetrische Balken bei den Perzentilen 16/50/84 |
+| Fehlerbalken | Kovarianz × Rotrausch-Faktor | So skaliert, dass χ²/ν = 1, dann wird die Posterior-Verteilung mit einem affin-invarianten Ensemble-Sampler **abgetastet** (der Goodman–Weare-Stretch-Move, den emcee implementiert): drei Walker pro Parameter, die ersten 20 % verworfen, Werte und asymmetrische Balken bei den Perzentilen 16/50/84. Zwei Dinge, die HOPS auslässt, seit v1.0.12 ergänzt: Die Kopfzeilen-Balken (Report, AAVSO-Datei, EXOTIC-Ordner) werden mit demselben Pont-Rotrausch-β multipliziert wie beim blinden Fit — die Perzentile setzen weißes Rauschen voraus —, während `results.txt` HOPS' eigene Werte behält; und die Kettenlänge in **Autokorrelationszeiten** wird gemeldet (emcees Schätzer auf der Walker-gemittelten Kette), mit der einzustellenden Iterationszahl, wenn sie unter 50 liegt |
 | `results.txt` | Das Modell dieses Skripts in HOPS' Layout | **HOPS' eigene Parametertabelle** — n, die Detrending-Koeffizienten, a₁..a₄, rp_over_rs, period, sma_over_rs, eccentricity, inclination, periastron, mid_time — mit der echten Zahl entfernter Ausreißer, dem Skalierungsfaktor und Residuen im relativen Fluss; eine `#WARNING:`-Zeile, wenn ein gefitteter Kontakt außerhalb des Laufs liegt |
 
 Bahn und Bedeckungsmodell sind gegen pylightcurves eigene `planet_orbit` und `transit_flux_drop` verifiziert (1e-14 auf der Bahn; das Bedeckungsintegral ist **analytisch** — pylightcurves Formulierung, Sektor plus Lunen mit geschlossenen Radialintegralen und einer 30-Punkt-Gauß-Legendre-Quadratur für den Bogenterm — und reproduziert pylightcurves eigene Funktion auf 1e-15 und die als Referenz behaltene Ring-Integration auf 3e-6, bei einem Viertel der Kosten; die Transitdauer sucht die Kontakte per Bisektion auf der tatsächlichen Bahn, was die Kreisbahnformel bei e = 0,4 um 0,2 min verfehlt), der Sampler gegen eine bekannte Gaußverteilung und synthetische Transits. Der ganze Modus lief anschließend **Kopf an Kopf** gegen pylightcurves eigene Fitting-Klasse mit emcee auf denselben Daten: Ausreißerzahl und Skalierungsfaktor identisch, n, der Luftmassen-Koeffizient, Rp/R★ und die Transitmitte innerhalb 0,1 σ, Fehlerbalken auf wenige Prozent gleich. Die Priors sind HOPS' eigene (Mitte ±0,2 d, Rp/R★ innerhalb eines Faktors 10 um den Katalogwert, Normierung aus dem Flussbereich). Anders als bei HOPS ist der Sampler **geseedet**: ein zweiter Lauf liefert dieselben Zahlen. Das Feld Iterationen steht auf 2000 (HOPS: 5000) — Balken auf wenige Prozent stabil, in deutlich unter einer Minute.
@@ -557,6 +564,8 @@ Sechs Radien von **0,75 bis 2,5 × FWHM** werden je einmal über Sirils eigenes 
 
 Kostet sechs zusätzliche Durchgänge. Unter **4 · Photometry** abschaltbar, wenn dir Tempo wichtiger ist.
 
+Das Raster des eigenen Kerns (0,9–2,5 × FWHM, ein Durchgang) skaliert mit dem Median-Seeing des Laufs und wird auf Seeing-Korrelation geprüft, wie §4a beschreibt.
+
 ### Vergleichssterne werden gemessen, nicht nur gefiltert
 
 Jeder Kandidat wird **gegen die anderen** photometriert — dieselbe Differenzmessung, die das Ziel bekommt — und an der robusten Streuung seiner eigenen Kurve beurteilt. Ein Stern, der gegen seine Kollegen schwankt, schreibt dieses Schwanken invertiert in die Zielkurve, und nichts sonst in diesem Skript würde es je bemerken.
@@ -602,7 +611,7 @@ Es entfernt nie mehr als **5 %** eines Laufs. Darüber *sind* die Ausreißer die
 
 ### Die AAVSO-Datei
 
-`AAVSO_exoplanet.txt` landet neben der CSV, im Format von Exoplanet Watch und im Layout von EXOTIC: `#TYPE=EXOPLANET`, Beobachtercode, die vier Felder, die das Upload-Formular **verlangt** — `#STAR_NAME` (der Hostname des Archivs, sonst der Planetenname ohne Buchstaben oder TOI-Suffix), `#EXOPLANET_NAME` (der **aufgelöste** Name, nie ein veralteter Formulareintrag), `#EXPOSURE_TIME` und `#MEASUREMENT_TYPE=Rnflux` — Binning, Filter, `#DATE_TYPE=BJD_TDB`, `#PRIORS`- und `#RESULTS`-Zeilen, dann `DATE,DIFF,ERR,DETREND_1,DETREND_2`: DIFF ist die rohe Differenzreihe als **relativer normierter Fluss** (Out-of-Transit-Median 1; AAVSO erlaubt `Rflux`, `Dmag` und `Rnflux`, EXOTIC schreibt `Rnflux`), DETREND_1 die Luftmasse und DETREND_2 das gefittete Systematikmodell dieses Skripts, DIFF/DETREND_2 ist also die entrendete Kurve. `#FILTER` ist AAVSOs Code, aus dem Filterfeld oder sonst dem FILTER-Header der Frames: RED/GREEN/BLUE eines RGB-Rads werden `TR`/`TG`/`TB`, R oder Rc `R`, r' `SR`, V `V`, ein ungefilterter Lauf `CV`, Astrodon ExoPlanet-BB `CBB` (AAVSOs Code für clear-blue-blocking, den auch EXOTIC verwendet). Transitmitte samt Fehler, die zentrale Tiefe samt Fehler, **`#RPRS`, `#RPRS_ERR` und `#DEPTH_RPRS2_PCT`** (die Konvention, die EXOTIC und AIJ angeben — siehe §9), Dauer und das Rotrausch-β stehen im Kopf.
+`AAVSO_exoplanet.txt` landet neben der CSV, im Format von Exoplanet Watch und im Layout von EXOTIC: `#TYPE=EXOPLANET`, Beobachtercode, die vier Felder, die das Upload-Formular **verlangt** — `#STAR_NAME` (der Hostname des Archivs, sonst der Planetenname ohne Buchstaben oder TOI-Suffix), `#EXOPLANET_NAME` (der **aufgelöste** Name, nie ein veralteter Formulareintrag), `#EXPOSURE_TIME` und `#MEASUREMENT_TYPE=Rnflux` — Binning, Filter, `#DATE_TYPE=BJD_TDB`, `#PRIORS`- und `#RESULTS`-Zeilen, dann `DATE,DIFF,ERR,DETREND_1,DETREND_2`: DIFF ist die rohe Differenzreihe als **relativer normierter Fluss** (Out-of-Transit-Median 1; AAVSO erlaubt `Rflux`, `Dmag` und `Rnflux`, EXOTIC schreibt `Rnflux`), DETREND_1 die Luftmasse und DETREND_2 das gefittete Systematikmodell dieses Skripts, DIFF/DETREND_2 ist also die entrendete Kurve. `#FILTER` ist AAVSOs Code, aus dem Filterfeld oder sonst dem FILTER-Header der Frames: RED/GREEN/BLUE eines RGB-Rads werden `TR`/`TG`/`TB`, R oder Rc `R`, r' `SR`, V `V`, ein ungefilterter Lauf `CV`, Astrodon ExoPlanet-BB `CBB` (AAVSOs Code für clear-blue-blocking, den auch EXOTIC verwendet). Transitmitte samt Fehler, die zentrale Tiefe samt Fehler, **`#RPRS`, `#RPRS_ERR` und `#DEPTH_RPRS2_PCT`** (die Konvention, die EXOTIC und AIJ angeben — siehe §9), Dauer und das Rotrausch-β stehen im Kopf. `ERR` enthält die **Szintillation** (Youngs Formel) quadratisch zur CCD-Gleichung addiert, sobald die Teleskopöffnung bekannt ist — `APTDIA` im Header oder das Feld in Gruppe 5: 3–4 mmag pro 60 s bei Luftmasse 1,5 an einem 30-cm-Teleskop, so viel wie das Photonenrauschen eines hellen Ziels — und das Log sagt, wenn der Term fehlt.
 
 **Auch das Bild, das das Formular verlangt, wird geschrieben.** AAVSO will mindestens ein Bild des plattengelösten Felds mit Ziel und Vergleichssternen, insgesamt unter 2 MB. `lightcurve/field.png` ist genau das: der Referenzframe, gestreckt, das Ziel grün eingekreist, die tatsächlich benutzten Vergleichssterne gelb als C1… nummeriert, Nord/Ost-Pfeile und ein 5′-Balken aus der Plattenlösung, dazu Ziel, Datum, Filter und Maßstab im Titel. Es verkleinert sich selbst, bis es unter der Grenze liegt.
 
@@ -670,6 +679,7 @@ Bei einer Detektion wird der Vergleich Kontakt für Kontakt ausbuchstabiert: Gem
 | **Leicht defokussieren** | Gegenintuitiv, aber Standard: den Stern über mehr Pixel zu verteilen mittelt Flatfield-Fehler weg und schafft Sättigungsreserve. FWHM 4–6 px ist ein guter Zielwert |
 | **Nicht dithern** | Das Gegenteil des Stacking-Rats. Dithern schiebt den Stern auf Pixel mit anderer Empfindlichkeit — Rauschen, das man nicht braucht, wenn der Stern ohnehin stillsteht |
 | **Durchgehend gleiche Belichtung** | Ein Wechsel mitten im Lauf ändert Sättigungsreserve und Szintillationsstatistik gleichzeitig |
+| **Ziel unter 80 % der Clipgrenze** | CMOS-Sensoren werden deutlich unterhalb der Sättigung nichtlinear, und eine dort gemessene Tiefe fällt zu flach aus. Der Lauf warnt, wenn der hellste Frame des Ziels 80 % überschreitet |
 | **Kalibrieren** | Vor allem Flats |
 
 ---

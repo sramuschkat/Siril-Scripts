@@ -1,6 +1,6 @@
 # Svenesis LightCurve — User Instructions
 
-**Version 1.0.11** | Siril Python Script for Exoplanet Transit Photometry
+**Version 1.0.12** | Siril Python Script for Exoplanet Transit Photometry
 
 > *A folder of sub-exposures in, a light curve out — and an honest answer to the only question that matters: is there a transit in it?*
 
@@ -247,7 +247,7 @@ A correct header is **confirmed**, not flipped. With no altitude to check agains
 
 1. **Re-centroid.** The registration says roughly where the star is; the centre of light inside a small window gives the exact position. That is the "follow star" Siril's `light_curve` lacks. If the found centre walks more than 6 px from the prediction, it has locked onto a neighbouring star — the measurement is discarded rather than corrupted.
 2. **Measure.** The flux is summed inside a circular aperture with subpixel edge weighting; the sky comes from a sigma-clipped ring around it (outliers in the ring — a faint star, say — are removed before averaging).
-3. **Choose the aperture.** Several aperture sizes are measured in the same pass; the one with the lowest **point-to-point noise** — the scatter of consecutive differences — wins. A transit is slow and barely moves this measure; a plain standard deviation, by contrast, contains the transit depth itself, and an aperture chosen on it would prefer whatever *washes the transit out*.
+3. **Choose the aperture.** Several aperture sizes are measured in the same pass; the one with the lowest **point-to-point noise** — the scatter of consecutive differences — wins. A transit is slow and barely moves this measure; a plain standard deviation, by contrast, contains the transit depth itself, and an aperture chosen on it would prefer whatever *washes the transit out*. Two refinements since v1.0.12: the radii are scaled to the run's **median** seeing rather than the reference frame's — Siril picks the best-seeing frame as reference, and a grid scaled to it is skewed small on every other frame of the night — and a radius whose curve **tracks the seeing** (|r| > 0.5 against the per-frame FWHM) is passed over for a less correlated one, because point-to-point noise cannot see that slow flux loss. The log prints the seeing correlation beside each radius and says when it passed one over.
 4. **Build the ensemble.** Each comparison star is normalised to its own median — if one misses a frame, the ensemble only loses its share instead of the sum taking a step (and a step has exactly the shape of an ingress). Each is then judged by its total scatter against its peers and dropped if it misbehaves, because a slowly variable comp is precisely the one that writes a fake transit into the target.
 
 The error bars come from the CCD equation — the star's photon noise plus the measured sky noise — with every term measured, none assumed.
@@ -283,6 +283,8 @@ This is the number ExoClock and ETD collect. Until now the fit measured T0 with 
 
 Two guards: **refused** unless the times are BJD_TDB — the archive's epoch is BJD_TDB, and subtracting a JD_UTC from it would put an 8-minute offset into a quantity measured in minutes — and the **epoch is always printed beside the drift**, because over thousands of epochs a stale period eventually mislabels which transit this was.
 
+**And the prediction has a bar of its own.** The archive's T0 error and its period error, grown over the epochs since, are fetched with the ephemeris and counted with the measured bar in quadrature before the verdict — against the measured bar alone, a 2-minute drift on an ephemeris that is itself good to 3 minutes used to read as “2.0 sigma from the prediction”. The report prints the ephemeris bar on its own line, or says that the archive lists none.
+
 Whatever the position came from, the next step still reports how far it lands from a real *detected* star:
 
 > *Target at (1503.4, 1505.6) — nearest detection, 0.9" from the position you gave.*
@@ -300,8 +302,8 @@ Nothing here can mis-point quietly.
 | **1 · Subs** | Folder picker, symlink/copy toggle |
 | **2 · Calibration** | Calibration on/off, library folder for darks/bias, CFA toggle (§3a) |
 | **3 · Target star** | Selection mode (starts on *From the frames*), planet name, archive lookup, pixel or RA/Dec fields |
-| **4 · Photometry** | Comparison count, SNR floor, channel, auto ring radii, aperture scan |
-| **5 · Analysis** | Fit mode (blind detection or HOPS-compatible), HOPS detrending, iterations, Claret coefficients with *Compute Claret (Phoenix)*, airmass detrend, site, plot binning |
+| **4 · Photometry** | Comparison count, SNR floor, channel (the plane the engine measures on a debayered OSC run), auto ring radii, aperture scan |
+| **5 · Analysis** | Fit mode (blind detection or HOPS-compatible), the Phoenix limb-darkening switch, HOPS detrending, iterations, Claret coefficients with *Compute Claret (Phoenix)* (both modes), airmass detrend, site, telescope aperture, plot binning |
 | **6 · Submission** | Observer code and filter for the AAVSO file |
 
 **Right panel**, four tabs:
@@ -387,13 +389,14 @@ The fix is not a cleverer algorithm. It is more baseline: start earlier, finish 
 
 ### Beyond airmass: what Siril already measured
 
-Airmass is not the only thing that drifts through a night. Three more do, and Siril measures all three for every frame during registration — this script was reading them for the meridian-flip check and throwing them away:
+Airmass is not the only thing that drifts through a night. Three more do, and Siril measures all three for every frame during registration — this script was reading them for the meridian-flip check and throwing them away — and since v1.0.12 the photometry engine adds two of its own:
 
 | Basis | Why it moves the light curve |
 |---|---|
 | **FWHM** | Worse seeing spreads the star, and a fixed aperture then holds a smaller share of its light. Strongest on an undersampled star |
 | **Sky level** | Moon, twilight and light pollution change what the annulus subtracts, and the error scales with the aperture area |
 | **Star count** | Not a systematic itself — it is what a passing cloud *looks like* from inside the data |
+| **x / y position** | The target's own centroid per frame. A drifting field samples a different patch of the flat every frame, and a 0.5 % flat residual over tens of pixels is a several-mmag slow trend correlated with nothing else in the design — the largest unmodelled systematic on an unguided run. Native engine only; the same collinearity guard drops one of the pair when the drift is a straight line |
 
 They are fitted together with one least-squares solve, each basis centred and scaled so airmass (1–3), FWHM (2–5 px) and sky (hundreds of ADU) can share a matrix.
 
@@ -423,6 +426,8 @@ The shapes searched are now real geometries: four planet-to-star radius ratios c
 
 **Nothing else changed.** Each shape is a *template* on normalised phase, built once and interpolated at each node, so the model stays **linear in depth** — the closed-form solve, the determinism and the no-optimiser guarantee all survive. A physically free Rp/R★ would couple depth and shape and cost all three. (The occultation is integrated *radially* — the arc a planet covers at radius r has a closed form — so there are no elliptic integrals, no new dependency, and it is verified against an independent 2-D integration.)
 
+**Which limb darkening.** The template family is quadratic, and until v1.0.11 its coefficients were 0.35/0.23 for every star and every filter — right for a Sun-like host in a broad visual band, a 3–6 % systematic on Rp/R★ for anything else, and no error bar ever said so. Both fit modes now take the coefficients from the best source at hand: the Claret field in group 5 when it is filled, else the **Phoenix computation** for the archive's Teff and log g and the run's filter — the same machinery as *Compute Claret (Phoenix)*, run automatically (the first call per star downloads about four 21 MB model files into `~/.svenesis`; later calls take seconds) — else the defaults. The blind fit uses the quadratic pair closest to the Claret profile (area-weighted least squares over the disc, exact when the profile is quadratic to begin with), and the log and the report name the source. A switch in group 5 turns the automatic computation off.
+
 > **The template's Rp/R★ is a shape index, not a planet radius.** With the duration free, a smaller template stretched fits nearly as well, so that value sits systematically below the truth. The **depth** is the measurement, and both reports say so.
 
 ### Two depth conventions, both reported
@@ -449,6 +454,8 @@ Airmass, seeing, sky level and star count now sit in the **same design matrix** 
 - **The baseline's uncertainty ends up where it belongs**, in the depth and the mid-time.
 
 It is also **faster**. Only the transit column changes from node to node, so the Gram matrix of everything else is computed once: 11.1 µs per node against the old 13.8, and a whole fit in 0.56 s against 1.0.
+
+**And weighted, since v1.0.12.** The solve takes the per-point errors as *relative* weights (mean 1, clipped to 0.2–5). The low-altitude end of a run is noisier than the rest, and unweighted least squares — unbiased, but blind to that — paid with bars 10–30 % wider than the data support on a night whose noise doubles. The weights shape the solve; the residual scatter still sets the noise level, so the calibrated detection threshold is exactly what it was, and with constant errors every number is the unweighted one to the last digit. The report says which.
 
 ### A grid, not an optimiser
 
@@ -499,7 +506,7 @@ Everything above answers *is there a transit?* HOPS — the ExoWorldsSpies pipel
 | Exposure | Model at mid-exposure | Model **averaged over each exposure** in 10 s sub-steps, exactly HOPS's rule, with the exposure time from the headers |
 | Detrending | Additive in magnitude, anchored on the out-of-transit points | HOPS's three choices — airmass, linear in time, quadratic in time — **multiplied** into the flux model, with HOPS's series names — plus the **meridian-flip step** when one was detected, so the offset between the two sensor patches is fitted with the transit rather than read as one |
 | Outliers | Spike rejection before the fit | HOPS's iterative filter: points beyond 3 σ of the normalised residuals are removed and the fit repeated until none remain |
-| Error bars | Covariance × red-noise factor | Scaled so that χ²/ν = 1, then the posterior is **sampled** with an affine-invariant ensemble sampler (the Goodman–Weare stretch move that emcee implements): three walkers per parameter, the first 20 % discarded, values and asymmetric bars at the 16/50/84 percentiles |
+| Error bars | Covariance × red-noise factor | Scaled so that χ²/ν = 1, then the posterior is **sampled** with an affine-invariant ensemble sampler (the Goodman–Weare stretch move that emcee implements): three walkers per parameter, the first 20 % discarded, values and asymmetric bars at the 16/50/84 percentiles. Two things HOPS leaves out, added since v1.0.12: the headline bars (report, AAVSO file, EXOTIC folder) are multiplied by the same Pont red-noise β the blind fit applies — the percentiles assume white noise — while `results.txt` keeps HOPS's own values; and the chain's length in **autocorrelation times** is reported (emcee's estimator on the walker-averaged chain), with the iteration count to set when it is under 50 |
 | `results.txt` | This script's model in HOPS's layout | **HOPS's own parameter table** — n, the detrending coefficients, a₁..a₄, rp_over_rs, period, sma_over_rs, eccentricity, inclination, periastron, mid_time — with the real outlier count and scale factor, residuals in relative flux; a `#WARNING:` line when a fitted contact lies outside the run |
 
 The orbit and the occultation model are verified against pylightcurve's own `planet_orbit` and `transit_flux_drop` (1e-14 on the orbit; the occultation integral is **analytic** — pylightcurve's formulation, sector plus lunes with closed-form radial integrals and one 30-node Gauss–Legendre quadrature for the arc term — and reproduces pylightcurve's own function to 1e-15 and the ring integration, kept as the reference, to 3e-6 at a quarter of the cost; the transit duration finds the contacts on the actual orbit by bisection, which the circular-orbit formula misses by 0.2 min at e = 0.4), and the sampler against a known Gaussian and synthetic transits. The whole mode was then run **head to head** against pylightcurve's own fitting class with emcee on the same data: outlier count and scale factor identical, n, the airmass coefficient, Rp/R★ and the mid-time within 0.1 σ, error bars within a few percent. The priors are HOPS's verbatim (mid-time ±0.2 d, Rp/R★ within a factor 10 of the catalogue value, normalisation from the flux range). Unlike HOPS the sampler is **seeded**, so a rerun repeats its numbers. The iterations field defaults to 2000 (HOPS: 5000) — bars stable to a few percent in well under a minute.
@@ -564,6 +571,8 @@ Six radii from **0.75 to 2.5 × FWHM** are each photometered through Siril's own
 
 Costs six extra passes. Switch it off under **4 · Photometry** if you would rather have the speed.
 
+The native engine's own grid (0.9–2.5 × FWHM, one pass) is scaled to the run's median seeing and screened for seeing correlation as §4a describes.
+
 ### Comparison stars are measured, not just filtered
 
 Each candidate is photometered **against the others** — the same differential measurement the target gets — and judged on the robust scatter of its own curve. A star that wobbles against its peers writes that wobble, inverted, into the target's curve, and nothing else in this script would ever notice.
@@ -609,7 +618,7 @@ It never removes more than **5 %** of a run. Past that the outliers *are* the da
 
 ### The AAVSO file
 
-`AAVSO_exoplanet.txt` lands beside the CSV, in Exoplanet Watch's own format and EXOTIC's layout: `#TYPE=EXOPLANET`, observer code, the four fields the upload form **requires** — `#STAR_NAME` (the archive's host name, else the planet name without its letter or TOI suffix), `#EXOPLANET_NAME` (the **resolved** name, never a stale form entry), `#EXPOSURE_TIME` and `#MEASUREMENT_TYPE=Rnflux` — binning, filter, `#DATE_TYPE=BJD_TDB`, `#PRIORS` and `#RESULTS` lines, then `DATE,DIFF,ERR,DETREND_1,DETREND_2`: DIFF is the raw differential series as **relative normalised flux** (out-of-transit median 1; AAVSO allows `Rflux`, `Dmag` and `Rnflux`, and EXOTIC writes `Rnflux`), DETREND_1 the airmass and DETREND_2 this script's fitted systematics model, so DIFF/DETREND_2 is the detrended curve. `#FILTER` is AAVSO's code, from the form's filter or else the frames' FILTER keyword: RED/GREEN/BLUE of an RGB wheel are `TR`/`TG`/`TB`, R or Rc is `R`, r' is `SR`, V is `V`, an unfiltered run is `CV`, Astrodon ExoPlanet-BB is `CBB` (AAVSO's clear-blue-blocking code, the one EXOTIC uses). Mid-transit time and its error, the central depth and its error, **`#RPRS`, `#RPRS_ERR` and `#DEPTH_RPRS2_PCT`** (the convention EXOTIC and AIJ quote — see §9), duration and the red-noise β travel in the header.
+`AAVSO_exoplanet.txt` lands beside the CSV, in Exoplanet Watch's own format and EXOTIC's layout: `#TYPE=EXOPLANET`, observer code, the four fields the upload form **requires** — `#STAR_NAME` (the archive's host name, else the planet name without its letter or TOI suffix), `#EXOPLANET_NAME` (the **resolved** name, never a stale form entry), `#EXPOSURE_TIME` and `#MEASUREMENT_TYPE=Rnflux` — binning, filter, `#DATE_TYPE=BJD_TDB`, `#PRIORS` and `#RESULTS` lines, then `DATE,DIFF,ERR,DETREND_1,DETREND_2`: DIFF is the raw differential series as **relative normalised flux** (out-of-transit median 1; AAVSO allows `Rflux`, `Dmag` and `Rnflux`, and EXOTIC writes `Rnflux`), DETREND_1 the airmass and DETREND_2 this script's fitted systematics model, so DIFF/DETREND_2 is the detrended curve. `#FILTER` is AAVSO's code, from the form's filter or else the frames' FILTER keyword: RED/GREEN/BLUE of an RGB wheel are `TR`/`TG`/`TB`, R or Rc is `R`, r' is `SR`, V is `V`, an unfiltered run is `CV`, Astrodon ExoPlanet-BB is `CBB` (AAVSO's clear-blue-blocking code, the one EXOTIC uses). Mid-transit time and its error, the central depth and its error, **`#RPRS`, `#RPRS_ERR` and `#DEPTH_RPRS2_PCT`** (the convention EXOTIC and AIJ quote — see §9), duration and the red-noise β travel in the header. `ERR` carries **scintillation** (Young's formula) in quadrature with the CCD equation whenever the telescope aperture is known — `APTDIA` in the header, or the field in group 5: 3–4 mmag per 60 s at airmass 1.5 on a 30 cm telescope, as much as the photon noise of a bright target — and the log says when the term is missing.
 
 **The picture the form asks for is written too.** AAVSO wants at least one image showing the plate-solved field with the target and the comparison stars, under 2 MB in all. `lightcurve/field.png` is exactly that: the reference frame, stretched, with the target circled in green, the comparison stars the photometry actually used numbered C1… in yellow, north/east arrows and a 5′ bar from the plate solution, and the target, date, filter and scale in the title. It shrinks itself until it is under the limit.
 
@@ -677,6 +686,7 @@ On a detection the comparison is spelled out contact by contact: the measured st
 | **Defocus slightly** | Counter-intuitive but standard: spreading the star over more pixels averages over flat-field errors and buys saturation headroom. FWHM 4–6 px is a good target |
 | **Do not dither** | The opposite of the stacking advice. Dithering moves the star onto different pixels with different responses — noise you do not need when the star never moves anyway |
 | **Same exposure throughout** | Changing it mid-run changes the saturation margin and the scintillation statistics at once |
+| **Target under 80 % of the clip level** | CMOS sensors turn non-linear well below saturation, and a depth measured there comes out shallow. The run warns when the target's brightest frame exceeds 80 % |
 | **Calibrate** | Flats above all |
 
 ---
