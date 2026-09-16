@@ -4574,6 +4574,23 @@ check('os.environ.setdefault("PYTHONSAFEPATH", "1")' in src and src.index('PYTHO
       "the resource tracker helper is spawned with the current directory kept off its path")
 check('"obstype": self.cmb_obstype.currentText()' in src and 'st.setValue("obstype"' in src,
       "#OBSTYPE has a GUI control that is saved with the settings")
+_td9 = _tf3.mkdtemp(); _arr9 = np.array([[2461284.61301353, 0.0894041906, 3.716561868e-4], [1.5, -2.0, 0.0]])
+ns["_savetxt"](os.path.join(_td9, "a.txt"), _arr9); np.savetxt(os.path.join(_td9, "b.txt"), _arr9)
+ns["_savetxt"](os.path.join(_td9, "c.txt"), np.column_stack([np.array([1.0, 2.0]), np.array([3.0, 4.0])]), fmt=["%.6f", "%.8f"])
+np.savetxt(os.path.join(_td9, "d.txt"), np.column_stack([np.array([1.0, 2.0]), np.array([3.0, 4.0])]), fmt="%.6f %.8f")
+check(open(os.path.join(_td9, "a.txt")).read() == open(os.path.join(_td9, "b.txt")).read()
+      and open(os.path.join(_td9, "c.txt")).read() == open(os.path.join(_td9, "d.txt")).read() and "np.savetxt(" not in src,
+      "the plain-open text writer is byte-identical to np.savetxt (default %.18e and per-column formats) and replaces it everywhere")
+_run_src = src[src.index("    def _run(self) -> None:"):]
+check("os.chdir(folder)" in _run_src and _run_src.index("cwd = os.getcwd()") < _run_src.index("shutil.rmtree(work, ignore_errors=True)"),
+      "the run steps out of a working directory inside the work folder before removing it")
+_fit_geo = dict(_fit, hops=dict(_fit["hops"], geom={"a_rs": 12.88, "inc_deg": 90.0, "ecc": 0.0, "peri_deg": 90.0}))
+_eph_geo = dict(_eph, a_rs=None, inc_deg=None)
+_fs_geo = ns["exotic_fit_summary"]({"fit": _fit_geo, "ephemeris": _eph_geo})
+_td10 = _tf3.mkdtemp(); ns["write_exotic_folder"](dict(_r, out_dir=_td10, fit=_fit_geo, ephemeris=_eph_geo), _x)
+_aa10 = open(os.path.join(_td10, "EXOTIC", "AAVSO_HAT-P-32 b_15-October-2025.txt")).read()
+check(_fs_geo["inc"] == 90.0 and _fs_geo["a_rs"] == 12.88 and "a/R*=12.88,inc=90," in _aa10 and ",inc=90," in [l for l in _aa10.splitlines() if l.startswith("#RESULTS=")][0],
+      "a candidate without archive a/R* or inclination quotes the orbit the HOPS-mode fit actually used, not blanks")
 check("self._write_tool_folders(result)" in src and 'r["aavso_path"] = path' in src
       and "self._native_raw = {" in src[src.index("def _native_photometry"):src.index("def _run_light_curve")]
       and '"samples": flat, "chain": chain[burn:]' in src,

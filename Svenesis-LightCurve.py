@@ -1,6 +1,6 @@
 """
 Svenesis LightCurve
-Script Version: 1.0.10
+Script Version: 1.0.11
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -92,6 +92,31 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.0.11 - Runs on an exFAT volume, and the calibration step says what it does
+      - The calibration step announces its work BEFORE doing it: each
+        master build (frames, steps) and the calibrate of the lights
+        (frame count, the exact command) get a line up front, so the
+        long stretch of Siril's own output has a caption (a user asked:
+        "a lot of work is done, but no trace in the log").
+      - On a FSKit exFAT volume under macOS the HOPS folder failed with
+        EPERM and PHOTOMETRY_APERTURE.txt was left at 0 bytes.  The
+        cause was np.savetxt calling os.getcwd() while this interpreter's
+        working directory was the previous run's work folder, which the
+        run had just removed.  Every text table now goes through a
+        plain-open writer (byte-identical to np.savetxt), the run steps
+        out of a working directory it is about to delete, the EXOTIC/
+        and HOPS/ folders are emptied file by file instead of deleted
+        and recreated, and a folder failure logs the file and the raise
+        site.  The resource-tracker helper is spawned with
+        PYTHONSAFEPATH so the same stale directory cannot kill it (the
+        PermissionError tracebacks at script start).
+      - EXOTIC folder: #PRIORS/#RESULTS quote a/R* and inclination from
+        the orbit the HOPS-mode fit used when the archive has none (a
+        TESS candidate); #FILTER-XC's description is the frames' own
+        filter name, not HOPS's nearest passband.
+      - The raw-flux plots no longer trigger matplotlib's redundant-
+        linestyle warning.
+
 1.0.10 - EXOTIC and HOPS folders, the field image, the TESS candidate note
       - A TESS candidate's AAVSO file says, in the log and in #NOTES,
         that AAVSO's upload form validates the planet name against the
@@ -359,7 +384,7 @@ from matplotlib.ticker import FuncFormatter
 
 from sirilpy import LogColor
 
-VERSION = "1.0.10"
+VERSION = "1.0.11"
 
 # The full manual on GitHub, linked from the help dialog.  The in-app
 # tabs are the quick reference; the manual carries the measurements
@@ -2592,7 +2617,7 @@ def plc_passband(name: str, cache_dir=None, progress=None,
                 raise ValueError("the passband archive is not a zip file")
     w, t = pass_from_zip(zip_path, PLC_PASSBANDS.get(name, name))
     if path:
-        np.savetxt(path, np.column_stack([w, t]), fmt="%.6f %.8f")
+        _savetxt(path, np.column_stack([w, t]), fmt=["%.6f", "%.8f"])
     return w, t
 
 
@@ -2708,7 +2733,7 @@ def svo_passband(svo_id: str, cache_dir=None, timeout: float = 60.0):
         xml = resp.read().decode("utf-8", "replace")
     w, t = parse_svo_votable(xml)
     if path:
-        np.savetxt(path, np.column_stack([w, t]), fmt="%.6f %.8f")
+        _savetxt(path, np.column_stack([w, t]), fmt=["%.6f", "%.8f"])
     return w, t
 
 
@@ -7253,6 +7278,14 @@ class LightCurveWorker(QThread):
             return None
 
         proc = os.path.join(os.path.dirname(stage), "process")
+        # Said BEFORE the work: the stack of a 100-frame bias takes a
+        # while, and until now the log showed only Siril's own lines
+        # for it, with the script's summary arriving after the fact.
+        self._emit(f"    building {kind} master from {staged} frame(s): "
+                   "link, " + ("offset correction, " if kind == KIND_FLAT
+                               else "")
+                   + "stack with winsorized rejection — Siril's lines "
+                   "below are this step.", LogColor.BLUE)
         try:
             self._cmd("cd", self._q(stage))
             self._cmd("link", kind, "-out=../process")
@@ -7395,6 +7428,9 @@ class LightCurveWorker(QThread):
                        f"({evidence}) and are about to be calibrated a "
                        f"SECOND time. Check that this is what you want.",
                        LogColor.SALMON)
+        self._emit(f"  Calibrating {len(files)} light(s): "
+                   + " ".join(args) + " — Siril writes the pp_ frames "
+                   "now; its lines below are this step.", LogColor.BLUE)
         self._cmd(*args)
         self._calib_note = ", ".join(
             f"{kind}={os.path.basename(path)}" for kind, path in used)
@@ -8949,6 +8985,20 @@ class LightCurveWorker(QThread):
         work = os.path.join(folder, WORK_DIRNAME)
         out_dir = os.path.join(folder, OUT_DIRNAME)
         proc = os.path.join(work, "process")
+        # This interpreter's working directory is wherever Siril left
+        # it -- after a previous run, inside the work folder that is
+        # about to be removed.  A deleted working directory makes every
+        # os.getcwd() fail (numpy, tempfile and matplotlib call it), on
+        # a FSKit exFAT volume with EPERM.  Step out first.
+        try:
+            cwd = os.getcwd()
+        except OSError:
+            cwd = None
+        if cwd is None or cwd == work or cwd.startswith(work + os.sep):
+            try:
+                os.chdir(folder)
+            except OSError as exc:
+                _log_swallowed(exc)
         if os.path.isdir(work):
             shutil.rmtree(work, ignore_errors=True)
         os.makedirs(proc, exist_ok=True)
@@ -10176,9 +10226,18 @@ def exotic_fit_summary(r: dict) -> dict:
     out = {"detected": bool(fit.get("detected")),
            "inc": eph.get("inc_deg"), "inc_e": None,
            "dur_d": fit.get("duration_d"), "dur_e": None,
-           "ldc": None}
+           "ldc": None, "a_rs": eph.get("a_rs")}
     hops = fit.get("hops")
     if hops and hops.get("rows"):
+        # The orbit the fit actually used: for a TESS candidate the
+        # archive has no a/R* or inclination and the HOPS mode derives
+        # them from the duration (b = 0), so those are the values to
+        # quote, not blanks.
+        geom = hops.get("geom") or {}
+        if out["inc"] is None and geom.get("inc_deg") is not None:
+            out["inc"] = float(geom["inc_deg"])
+        if out["a_rs"] is None and geom.get("a_rs") is not None:
+            out["a_rs"] = float(geom["a_rs"])
         rows = {row[0]: row for row in hops["rows"]}
         n_row = rows.get("n")
         a_row = rows.get("airmass")
@@ -10606,6 +10665,26 @@ def _write_text(path: str, text: str) -> str:
     return path
 
 
+def _savetxt(path: str, arr, fmt="%.18e") -> None:
+    """``np.savetxt`` without numpy's DataSource: the same rows, the
+    same default format (``%.18e``, space-separated), written through a
+    plain ``open``.  numpy's writer starts with ``os.path.abspath('.')``,
+    and when this process's working directory has been deleted under it
+    (Siril leaves the interpreter in the previous run's work folder,
+    which the run removes) that raised EPERM on a FSKit exFAT volume
+    and left PHOTOMETRY_APERTURE.txt at 0 bytes while every file
+    written through ``open`` beside it was fine.  ``fmt`` is one format
+    for every column or one per column."""
+    a = np.asarray(arr, dtype=float)
+    if a.ndim == 1:
+        a = a[:, None]
+    fmts = ([fmt] * a.shape[1] if isinstance(fmt, str)
+            else [str(f) for f in fmt])
+    with open(path, "w", encoding="utf-8") as fh:
+        for row in a:
+            fh.write(" ".join(f % v for f, v in zip(fmts, row)) + "\n")
+
+
 def _safe_name(text) -> str:
     """A planet or filter name as a file-name component: separators and
     the characters no file system takes become '_'; the text inside the
@@ -10695,7 +10774,7 @@ def write_hops_folder(r: dict, x: dict) -> tuple:
         jd_start, rel, rel_err, valid = hops_photometry_arrays(raw)
         lc = np.column_stack([jd_start[valid], rel[valid], rel_err[valid]])
         p = os.path.join(phot_dir, HOPS_LC_FILE)
-        np.savetxt(p, lc)
+        _savetxt(p, lc)
         written.append(p)
         s = float(raw.get("adu_scale") or 1.0)
         flux = np.asarray(raw["flux"], dtype=float)
@@ -10740,7 +10819,7 @@ def write_hops_folder(r: dict, x: dict) -> tuple:
         valid = np.isfinite(jd_start) & np.isfinite(rel)
         lc = np.column_stack([jd_start[valid], rel[valid], rel_err[valid]])
         p = os.path.join(phot_dir, HOPS_LC_FILE)
-        np.savetxt(p, lc)
+        _savetxt(p, lc)
         written.append(p)
         notes.append("PHOTOMETRY_a.txt, FOV.pdf and RESULTS.pdf need the "
                      "script's own photometry (Siril's light_curve keeps "
@@ -10845,11 +10924,11 @@ def write_hops_folder(r: dict, x: dict) -> tuple:
         mid = float(fit.get("t0") or np.nanmedian(t))
         phase = (t - mid) / period if period > 0 else t - mid
         p = os.path.join(fit_dir, "model.txt")
-        np.savetxt(p, np.column_stack([t, phase, fl, fe, model, fl - model]))
+        _savetxt(p, np.column_stack([t, phase, fl, fe, model, fl - model]))
         written.append(p)
         safe_trend = np.where(trend != 0, trend, np.nan)
         p = os.path.join(fit_dir, "detrended_model.txt")
-        np.savetxt(p, np.column_stack([t, phase, fl / safe_trend,
+        _savetxt(p, np.column_stack([t, phase, fl / safe_trend,
                                        fe / safe_trend, transit,
                                        fl / safe_trend - transit]))
         written.append(p)
@@ -11039,14 +11118,15 @@ def write_exotic_folder(r: dict, x: dict) -> tuple:
         ldc = f.get("ldc") or [None] * 4
         priors_txt = [f"Period={_pm(eph.get('period_d'))}",
                       f"Rp/R*={_pm(rprs_prior)}",
-                      f"a/R*={_pm(eph.get('a_rs'))}",
-                      f"inc={_pm(eph.get('inc_deg'))}",
+                      f"a/R*={_pm(f.get('a_rs', eph.get('a_rs')))}",
+                      f"inc={_pm(f.get('inc', eph.get('inc_deg')))}",
                       f"ecc={_pm(eph.get('ecc') or 0.0)}"]
         priors_txt += [f"u{i}={_pm(ldc[i])}" for i in range(4)]
         priors_xc = {"Period": _xc(eph.get("period_d"), units="days"),
                      "Rp/R*": _xc(rprs_prior),
-                     "a/R*": _xc(eph.get("a_rs")),
-                     "inc": _xc(eph.get("inc_deg"), units="degrees"),
+                     "a/R*": _xc(f.get("a_rs", eph.get("a_rs"))),
+                     "inc": _xc(f.get("inc", eph.get("inc_deg")),
+                                units="degrees"),
                      "ecc": _xc(eph.get("ecc") or 0.0)}
         for i in range(4):
             priors_xc[f"u{i}"] = _xc(ldc[i])
