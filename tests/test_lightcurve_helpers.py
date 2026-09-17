@@ -2963,7 +2963,7 @@ check('"\\ndetrend: " + "+".join(bases_used)' in _render2
       "never had the chance")
 check('self.opts["site_name"] = str(' in src
       and 'SITENAME' in src[src.index("def _resolve_site"):
-                            src.index("def _resolve_site") + 3000],
+                            src.index("def _resolve_site") + 5000],
       "_resolve_site keeps the observatory's SITENAME for the title")
 check('if self.opts.get("site_name"):' in src,
       "and the title appends it only when the frames state one — "
@@ -4704,7 +4704,7 @@ check("red_noise_beta(np.asarray(res[\"t\"], float)" in _hm_src and "rp_sig *= b
       "HOPS mode scales its headline bars by the Pont beta and reports the chain length in autocorrelation times")
 _fs_src = src[src.index("        X, airmass_note = self._airmass_series(jd_utc)"):src.index("        fit = fit_transit(jd, mag, bases=bases, u1=u1_fit")]
 check("scintillation_mag(X, exp_for_scint, ap_mm" in _fs_src and "err = np.hypot(err, np.where(np.isfinite(sc), sc, 0.0))" in _fs_src
-      and "err=err if err.size == jd.size else None" in src and 'fit["ld_note"] = ld_source' in src,
+      and "err_fit = err if err.size == jd.size else None" in src and "err=err_fit, anchor=anchor" in src and 'fit["ld_note"] = ld_source' in src,
       "scintillation joins the error bars before both fits see them; the blind fit is weighted and names its limb-darkening source")
 _wl = _FakeWorker({"hops_ldc": ns["quad_to_claret"](0.35, 0.23)})
 _ch = _wl._limb_darkening({"teff_k": 6000, "logg": 4.3})
@@ -4740,7 +4740,217 @@ check(os.path.isdir(os.path.join(_tdad, "sub")) and not any(os.listdir(os.path.j
       and 'key=lambda n: n.startswith("._")' in src,
       "folder clearing removes data files before their AppleDouble siblings and stays silent about one that vanished with its file")
 
+print("\n9n) a TheSkyX set: star row convention, sexagesimal site, label before the designation, camera names")
+_src_conv = ns["star_row_convention"]
+_rng = np.random.default_rng(5)
+_img = _rng.normal(100.0, 3.0, size=(200, 300))
+_yy, _xx = np.mgrid[0:200, 0:300]
+_pts = [(int(x), int(y)) for x, y in zip(_rng.integers(10, 290, 20), _rng.integers(10, 190, 20))]
+for _x, _y in _pts:
+    _img += 800.0 * np.exp(-((_xx - _x) ** 2 + (_yy - _y) ** 2) / 4.0)
+_v1 = _src_conv(_img, [(x, y) for x, y in _pts])
+_v2 = _src_conv(_img, [(x, 199 - y) for x, y in _pts])
+_v3 = _src_conv(_img, [])
+check(_v1[0] is True and _v1[1] >= 18 and _v2[0] is False and _v2[2] >= 18 and _v3[0] is None,
+      "the star row convention is measured on the pixels: rows read as rows, flipped rows read as flipped, nothing in gives no verdict",
+      f"{_v1} {_v2} {_v3}")
+_I = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+_r2f, _f2r = ns["ref_to_frame"], ns["frame_to_ref"]
+_a = _r2f(_I, 40.0, 30.0, 300, 200); _b = _r2f(_I, 40.0, 30.0, 300, 200, star_rows=False)
+_c = _f2r(_I, _b[0], _b[1], 300, 200, star_rows=False)
+check(abs(_a[1] - 30.0) < 1e-9 and abs(_b[1] - 169.0) < 1e-9 and abs(_c[1] - 30.0) < 1e-9 and abs(_c[0] - 40.0) < 1e-9,
+      "ref_to_frame keeps a file-row y under the identity and flips a display-row y; frame_to_ref is its inverse in both readings")
+_site = ns["site_from_header"]({"SITELAT": "+38 55 48.51", "SITELONG": "+76 29 17.78"})
+check(_site is not None and abs(_site[0] - 38.9301) < 1e-3 and abs(_site[1] - 76.4883) < 1e-3,
+      "a sexagesimal SITELAT/SITELONG pair is read as degrees instead of falling back to the form")
+_hdr_sx = {"SITELAT": "+38 55 48.51", "SITELONG": "+76 29 17.78", "CENTALT": 32.160475, "OBJCTRA": "06 30 54.293", "OBJCTDEC": "+29 40 13.18", "DATE-OBS": "2016-01-05T23:54:18.500"}
+_lon2, _note2 = ns["longitude_sign_check"](_hdr_sx, _site[0], _site[1])
+check(_lon2 < 0 and "FLIPPED" in _note2 and "WEST" in _note2,
+      "TheSkyX's west-positive longitude is flipped by the altitude the same header records")
+_sc = ns["same_camera"]
+check(_sc("ASCOM: H694", "Trius-SX694")[0] and "694" in _sc("ASCOM: H694", "Trius-SX694")[1]
+      and not _sc("ASCOM: H694", "ASI294MM")[0] and not _sc("Ares-M PRO", "Main")[0] and _sc("ZWO ASI294MM Pro", "ZWO ASI294MM Pro")[0],
+      "two spellings of one sensor share the model number and count as one camera; different numbers or no number stay different")
+_ok_sig, _why_sig = ns["signature_matches"]({"instrument": "ASCOM: H694", "dims": (1375, 1100), "binning": 2, "exp_s": 45.0, "kind": "dark"},
+                                             {"instrument": "Trius-SX694", "dims": (1375, 1100), "binning": 2, "exp_s": 45.0, "kind": "light"},
+                                             check_temperature=False)
+check(_ok_sig and "same camera" in _why_sig,
+      "a master whose INSTRUME differs only in spelling calibrates, and the reason names the shared model number")
+_dc = ns["designation_candidates"]
+check(_dc("ESPC WASP-12") == ["WASP-12"] and _dc("TFOP TOI-1234.01") == ["TOI-1234.01"] and _dc("WASP-12") == []
+      and _dc("My Obs HAT-P-32") == ["Obs HAT-P-32", "HAT-P-32"],
+      "a label in front of the designation yields the designation as the retry, one or two words deep, never an empty or letter-less rest")
+_nat = src[src.index("def _native_photometry"):src.index("def _run_light_curve")]
+check(_nat.count("star_rows=star_rows") >= 5 and 'star_rows = bool(getattr(self, "_star_rows", True))' in _nat
+      and "self._measure_star_rows(ref_path, stars)" in src and "self._star_rows = True" in src[src.index("    def _run(self) -> None:"):]
+      and "row = float(np.asarray(data).shape[-2]) - 1.0 - float(y)" in src
+      and "for alt in designation_candidates(pl):" in src,
+      "the measured convention reaches every seed, the reserve, the headroom probe, the saturation box and the field image; the archive retries without the label")
+
 print()
+
+print("\n9o) the rerun of the TheSkyX set: a form site far from the header's, a designation retry that fails")
+_dist = ns["site_distance_km"]
+check(abs(_dist(38.93, -76.488, 31.5469, -99.3822) - 2210) < 30,
+      "Maryland to central Texas is ~2200 km by the haversine",
+      f"{_dist(38.93, -76.488, 31.5469, -99.3822):.0f}")
+check(_dist(51.0, 179.9, 51.0, -179.9) < 20 and _dist(0.0, 0.0, 0.0, 0.0) == 0.0,
+      "the longitude difference is wrapped: 179.9 E and 179.9 W are neighbours")
+check(ns["SITE_DISAGREE_KM"] == 50.0, "the form/header site tolerance is 50 km")
+_site_src = src[src.index("def _resolve_site"):src.index("def _resolve_site") + 4000]
+check("site_distance_km(f_lat, f_lon, lat, lon)" in _site_src
+      and "Using the site in the form, but it is" in _site_src
+      and "was set aside" in _site_src
+      and _site_src.index("Site read from the") < _site_src.index("Site from the form")
+      and 'self.opts.get("site_force_form")' in _site_src,
+      "the header's site is used first and a far-off form site is reported; the form wins only as fallback or on the override")
+check("site_found = pyqtSignal(float, float, str)" in src and "sig.emit(float(lat), float(lon), str(where))" in src
+      and "self._worker.site_found.connect(self._on_site_found)" in src and 'self.ed_lat.setText(f"{lat:.4f}")' in src,
+      "a site read from the frames is sent to the form and overwrites the fields")
+check('"site_force_form": self.chk_site_force.isChecked()' in src and 'st.setValue("site_force"' in src
+      and "Use the form's site even when the headers carry one" in src,
+      "the site override is a checkbox in group 5, wired to the options and saved with the settings")
+_retry_src = src[src.index("found, why = archive_lookup(pl)"):]
+_retry_src = _retry_src[:_retry_src.index("looks_like_toi(pl):", 200)]
+check('unreachable = "could not be reached" in why' in _retry_src
+      and "not unreachable and not looks_like_toi(pl)" in _retry_src
+      and "tried again: {why_alt}" in _retry_src
+      and _retry_src.index("and the archive knows it") < _retry_src.index("tried again"),
+      "the designation retry is skipped after a network failure, and a retry that fails is logged")
+
+
+print("\n9p) a known planet is fitted anchored, bases earn their place by the BIC, a kept basis is checked on the comparison stars")
+_ft, _sel = ns["fit_transit"], ns["select_bases_bic"]
+_anc, _shared = ns["ephemeris_anchor"], ns["basis_shared_by_comps"]
+_rng = np.random.default_rng(11)
+_n = 180
+_t = 2461284.55 + np.linspace(0.0, 0.30, _n)                 # a 7.2 h run with baseline on both sides
+_P, _T0ref = 3.8608551, 2459740.36526
+_t0_true = _T0ref + 400 * _P                                  # 2461284.7073, inside the run
+_dur = 2.571 / 24.0
+_tm = ns["ld_template"](0.12, 0.0, 0.525, 0.139)
+_sh = np.asarray(ns["ld_shape"](_t, _t0_true, _dur, _tm), float)
+_sh = _sh / _sh.max()
+_depth = 0.017
+_x = np.linspace(0.0, 7.0, _n) + _rng.normal(0.0, 0.1, _n)     # a 7 px drift, monotonic like TOI-2040's night
+_X = 1.2 + 2.0 * ((_t - _t.min()) / 0.30 - 0.5) ** 2                # meridian mid-run: airmass falls, then rises
+_e = np.full(_n, 0.004)
+_mag = _depth * _sh + 0.01 * (_X - 1.0) + _rng.normal(0.0, 0.004, _n)
+_eph = {"period_d": _P, "t0_bjd": _T0ref, "duration_h": 2.571}
+_a, _why = _anc(_eph, _t, "BJD_TDB")
+check(_a is not None and _a["epoch"] == 400 and abs(_a["t0"] - _t0_true) < 1e-6
+      and _a["window_min"] == 30.0 and abs(_a["duration_d"] * 24.0 - 2.571) < 1e-9,
+      "the anchor lands on epoch 400 with a 30 min window and the archive's duration", f"{_a} {_why}")
+check(_anc(_eph, _t, "JD_UTC")[0] is None, "no anchor on JD_UTC times")
+check(_anc({"period_d": _P, "t0_bjd": _T0ref + 1.0}, _t, "BJD_TDB")[0] is None,
+      "no anchor when the predicted mid-time lies outside the run")
+_ag = _anc({"period_d": _P, "t0_bjd": _T0ref, "a_rs": 9.0, "inc_deg": 88.0, "rprs_archive": 0.12}, _t, "BJD_TDB")[0]
+check(_ag is not None and _ag["duration_d"] is not None and 0.05 < _ag["duration_d"] * 24.0 < 5.0,
+      "without an archive duration the orbit's geometry supplies one", str(_ag))
+_chosen, _rows = _sel(_t, _mag, {"airmass": _X}, {"xpos": _x}, u1=0.525, u2=0.139, err=_e, anchor=_a)
+check("xpos" not in _chosen and _rows and _rows[0][0] == "xpos" and not _rows[0][2] and _rows[0][1] > -2.0,
+      "a drift that merely resembles the transit is rejected by the BIC", str(_rows))
+_fit = _ft(_t, _mag, bases=_chosen, u1=0.525, u2=0.139, err=_e, anchor=_a)
+check(_fit is not None and _fit["anchored"] and abs(_fit["depth_mag"] - _depth) < 0.15 * _depth
+      and abs(_fit["t0"] - _t0_true) * 1440.0 < 6.0 and _fit["detected"],
+      "the anchored fit recovers the depth within 15 % and the mid-time within 6 min",
+      f"{_fit['depth_mag']:.4f} {(_fit['t0'] - _t0_true) * 1440:.1f} min {_fit['significance']:.1f}s")
+check("bic" in _fit and _fit["n_params"] == 3 and np.isfinite(_fit["bic"]) and _fit["anchor"]["epoch"] == 400,
+      "the fit reports its BIC, its parameter count and the anchor it used")
+_mag2 = _mag + 0.002 * (_x - _x.mean())                        # a REAL 2 mmag/px dependence on x
+_chosen2, _rows2 = _sel(_t, _mag2, {"airmass": _X}, {"xpos": _x}, u1=0.525, u2=0.139, err=_e, anchor=_a)
+_fit2 = _ft(_t, _mag2, bases=_chosen2, u1=0.525, u2=0.139, err=_e, anchor=_a)
+check("xpos" in _chosen2 and _rows2[0][2] and _rows2[0][1] <= -2.0 and _fit2 is not None
+      and abs(_fit2["depth_mag"] - _depth) < 0.15 * _depth,
+      "a real 2 mmag/px dependence is kept by the BIC and the depth still comes out", f"{_rows2} {_fit2['depth_mag']:.4f}")
+_free = _ft(_t, _mag, bases={"airmass": _X}, u1=0.525, u2=0.139, err=_e)
+check(_free is not None and not _free["anchored"] and _free["anchor"] is None, "a fit without an anchor says so")
+_i = _fit2["bases"].index("xpos")
+_slope = _fit2["basis_coeffs"][_i] / _fit2["basis_scales"][_i]
+_ssig = _fit2["coeff_sigmas"][1 + _i] / _fit2["basis_scales"][_i]
+check(abs(_slope * 1000.0 - 2.0) < 0.7, "the kept basis's coefficient, back in mag per pixel, is the 2 mmag/px put in", f"{_slope * 1000:.2f}")
+_fl = np.empty((4, _n))
+_fl[0] = 1e5 * 10 ** (-0.4 * _mag2)
+for _k, _s in ((1, 0.0025), (2, -0.0015), (3, 0.002)):        # star-specific slopes of the target's size
+    _fl[_k] = 8e4 * 10 ** (-0.4 * (_s * (_x - _x.mean()) + _rng.normal(0.0, 0.003, _n)))
+_raw = {"flux": _fl, "ferr": np.sqrt(_fl), "jd": _t, "exp_s": np.full(_n, 60.0),
+        "x": np.vstack([_x] * 4), "y": np.zeros((4, _n)), "keep": [True, True, True]}
+_res = _shared(_raw, _t, "xpos", _x, _X, _slope, _ssig)
+check(_res is not None and _res["shared"] and _res["n"] == 3,
+      "comparison stars with x dependences of the target's size share the basis", str(_res))
+_fl3 = _fl.copy()
+for _k in (1, 2, 3):
+    _fl3[_k] = 8e4 * 10 ** (-0.4 * _rng.normal(0.0, 0.003, _n))
+_res3 = _shared(dict(_raw, flux=_fl3), _t, "xpos", _x, _X, _slope, _ssig)
+check(_res3 is not None and not _res3["shared"],
+      "comparison stars without the dependence do not share it: the basis is the target's alone", str(_res3))
+check(_shared(dict(_raw, keep=[True, False, False]), _t, "xpos", _x, _X, _slope, _ssig) is None,
+      "one active comparison star is not an ensemble, so there is no verdict")
+_wsrc = src[src.index("anchor, anchor_why = ephemeris_anchor(eph, jd, time_system)"):]
+_wsrc = _wsrc[:_wsrc.index("self._comp_share_check(fit, bases, jd_utc, X)") + 60]
+check("select_bases_bic(" in _wsrc and "Bases by BIC" in _wsrc and "Anchored on the ephemeris" in _wsrc
+      and "Free scan as a cross-check" in _wsrc and 'k in ("airmass", "flip")' in _wsrc
+      and _wsrc.index("select_bases_bic(") < _wsrc.index("fit = fit_transit("),
+      "the worker anchors, selects by BIC before the fit, cross-checks with a free scan and measures kept bases on the comparison stars")
+check("bases (BIC)" in src and "free scan      T0" in src and "comp_share" in src,
+      "the report carries the BIC table, the comparison-star verdicts and the free scan")
+
+
+print("\n9q) comparison stars by the fit's residual (EXOTIC's criterion)")
+_selc = ns["select_comps_by_residual"]
+_rng = np.random.default_rng(23)
+_n = 160
+_t = 2461284.55 + np.linspace(0.0, 0.30, _n)
+_t0c = 2459740.36526 + 400 * 3.8608551
+_shc = np.asarray(ns["ld_shape"](_t, _t0c, 2.571 / 24.0, ns["ld_template"](0.12, 0.0, 0.525, 0.139)), float)
+_shc = _shc / _shc.max()
+_Xc = 1.2 + 2.0 * ((_t - _t.min()) / 0.30 - 0.5) ** 2
+_ftar = 1e5 * 10 ** (-0.4 * (0.017 * _shc + 0.01 * (_Xc - 1.0) + _rng.normal(0.0, 0.003, _n)))
+_comps = [8e4 * 10 ** (-0.4 * (0.01 * (_Xc - 1.0) + _rng.normal(0.0, 0.003, _n))) for _ in range(3)]
+_bad = 1.5e5 * 10 ** (-0.4 * (0.01 * (_Xc - 1.0) + 0.02 * np.sin(2 * np.pi * (_t - _t.min()) / 0.2) + _rng.normal(0.0, 0.003, _n)))
+_all = _comps + [_bad]
+_ac = _anc({"period_d": 3.8608551, "t0_bjd": 2459740.36526, "duration_h": 2.571}, _t, "BJD_TDB")[0]
+_act, _rows, _magc, _errc, _res = _selc(_t, _ftar, _all, np.sqrt(_ftar), [np.sqrt(c) for c in _all], bases={"airmass": _Xc}, u1=0.525, u2=0.139, anchor=_ac)
+check(3 not in _act and len(_act) == 3 and len(_rows) == 1 and _rows[0][0] == 3 and _rows[0][2] < _rows[0][1],
+      "the bright comp with a 20 mmag slow wobble is dropped by the fit's residual, the three clean ones stay", f"{_act} {_rows} {_res:.1f}")
+_fitc = _ft(_t, np.asarray(_magc) - np.nanmedian(_magc), bases={"airmass": _Xc}, u1=0.525, u2=0.139, err=np.asarray(_errc), anchor=_ac)
+check(_fitc is not None and abs(_fitc["depth_mag"] - 0.017) < 0.15 * 0.017, "and the depth on the cleaned ensemble is the injected one", f"{_fitc['depth_mag']:.4f}")
+_act2, _rows2, _m2, _e2, _r2 = _selc(_t, _ftar, _comps, np.sqrt(_ftar), [np.sqrt(c) for c in _comps], bases={"airmass": _Xc}, u1=0.525, u2=0.139, anchor=_ac)
+check(len(_act2) == 3 and not _rows2, "three clean comps: nothing is dropped", str(_rows2))
+_act3, _rows3, *_ = _selc(_t, _ftar, _all[:2], np.sqrt(_ftar), [np.sqrt(c) for c in _all[:2]], bases={"airmass": _Xc}, anchor=_ac)
+check(len(_act3) == 2 and not _rows3, "two comps are never reduced to one")
+_rs = src[src.index("    def _reselect_comps("):src.index("    def _comp_share_check(")]
+check('"stars_ref": [(float(sx), float(sy)) for sx, sy in stars],' in src and 'raw.get("stars_ref") or raw.get("stars")' in _rs,
+      "a dropped comparison star is named in the reference frame's coordinates, the ones the scatter list uses")
+check("select_comps_by_residual(" in _rs and 'raw["keep"] = new_keep' in _rs and "EXOTIC's" in _rs
+      and "mag, err, X = self._reselect_comps(jd, jd_utc, mag, err, X," in src
+      and src.index("mag, err, X = self._reselect_comps(") < src.index("scintillation_mag(X, exp_for_scint, ap_mm"),
+      "the worker reselects the comparisons on the per-star fluxes before the scintillation term and the fit, and the raw record follows")
+
+print("\n9r) the aperture: within a noise tie, the larger radius")
+_atb = ns["aperture_tie_break"]
+check(abs(ns["APERTURE_NOISE_TIE"] - 0.03) < 1e-12, "the tie is 3 % of the least point-to-point noise")
+# TOI-2040.01, 11:55: 2.04 px measured 11.02 mmag, 3.70 px 11.27 (1.9 % apart)
+_r55 = [1.67, 2.04, 2.50, 2.96, 3.70, 4.63]
+_n55 = [12.25, 11.02, 12.13, 11.62, 11.27, 12.24]
+check(_atb(_n55, _r55) == 4, "TOI-2040.01's 11:55 grid: 3.70 px is taken over 2.04 px, 1.9 % apart in noise", str(_atb(_n55, _r55)))
+check(_atb(_n55, _r55, tie=0.0) == 1, "with no tie the least noise wins as before")
+check(_atb(_n55, _r55, tie=0.10) == 4 and _atb(_n55, _r55, tie=0.12) == 5, "4.63 px (11.1 % more noise) is out of a 10 % tie and inside a 12 % one")
+check(_atb([5.0, 5.1, 4.0], [1.0, 2.0, 3.0]) == 2, "the least-noise radius wins outright when nothing ties")
+check(_atb([4.0, float("nan"), 4.05], [2.0, 3.0, 1.0]) == 0, "a NaN noise is not in the tie and a smaller tied radius does not win")
+check(_atb([float("nan"), None], [1.0, 2.0]) is None, "no finite noise: no choice")
+check(_atb([4.0, 4.0], [2.0, 2.0]) == 0 and _atb([4.1, 4.0], [2.0, 2.0]) == 1, "equal radii: the lower noise wins")
+_nat_ap = src[src.index("        pool = stable if stable else cands"):src.index("        # HOPS's light curve from the same fluxes")]
+check("best = pool[aperture_tie_break([c[0] for c in pool]," in _nat_ap and "if best is not least:" in _nat_ap
+      and "within the {APERTURE_NOISE_TIE:.0%} tie" in _nat_ap,
+      "the native engine breaks its aperture tie towards the larger radius and says which one measured less")
+check("point-to-point noise{tie_note}; sky annulus" in src, "the tie note rides on the aperture line of the log")
+_scan_ap = src[src.index("        least = min(eligible, key=lambda t: (t[2], -t[1]))"):src.index("        return (aper, APERTURE_INNER_RATIO * aper,")]
+check("aperture_tie_break(" in _scan_ap and "[t[2] for t in eligible], [t[0] for t in eligible]" in _scan_ap and "if aper != least[0]:" in _scan_ap,
+      "Siril's own scan (the light_curve fallback) breaks its ties the same way and logs it")
+check('VERSION = "1.0.14"' in src and "1.0.14 - The aperture: within a noise tie, the larger radius" in src,
+      "version 1.0.14 with its changelog entry")
+
 if fails:
     print(f"{len(fails)} FAILURE(S)")
     for f in fails:

@@ -1,6 +1,6 @@
 """
 Svenesis LightCurve
-Script Version: 1.0.12
+Script Version: 1.0.14
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -92,6 +92,66 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.0.14 - The aperture: within a noise tie, the larger radius
+      - Point-to-point noise decides the aperture, and it decides on
+        the fast noise alone.  Two radii 2 % apart in that measure are
+        the same aperture to it, and the smaller one may still lose a
+        slow, seeing-shaped share of the star that neither the noise
+        nor the 0.5 correlation screen sees.  Now, among the radii
+        within 3 % of the least noise (and past the seeing screen), the
+        LARGEST wins; the log says which radius measured less and by
+        how much.  Measured on TOI-2040.01: 2.04 px (1.1 x FWHM) beat
+        3.70 px by 1.9 %, took the depth to 1.18 %, and the same night
+        at 3.65 px gave 1.33 % against TESS's 1.47 %.  Siril's own scan
+        (the light_curve fallback) breaks its ties the same way.
+1.0.13 - The fit of a known planet, done the way the references do it
+      - ANCHORED on the ephemeris.  With an archive ephemeris the
+        mid-time is searched only within a window round the prediction
+        (the ephemeris error grown over the epochs, times 3, at least
+        30 min) and the duration within 15 % of the archive's (or the
+        orbit's, from a/R* and inclination); the period is fixed.  Only
+        the depth and the systematics are free, as EXOTIC and TFOP fit
+        a known planet.  The free scan still runs as a cross-check and
+        is logged and reported.
+      - Bases by the BIC.  Airmass (and the flip step) always; seeing,
+        sky, star count and the x/y drift only when each lowers the
+        BIC by 2 or more with the transit in the model -- forward
+        selection, one log line with every delta.  Offering all of
+        them unasked (1.0.12) handed a 6 sigma transit of TOI-2040.01
+        to a 7 px drift: with a free duration the drift basis
+        stretched the transit to 3.5 h and left 1 sigma without
+        lowering the residual scatter.  Anchored, the BIC rejects it
+        (+4.9) and the depth comes out at 1.42 % against TESS's 1.47 %,
+        the mid-time 0.1 min from the prediction.  On the EXOTIC
+        HAT-P-32 set the x drift earns its place (-3.0) and stays.
+      - A kept basis is measured on the comparison stars, each against
+        the ensemble of the others, on its own centroid for x/y; a
+        dependence only the target shows is called out in red.  The
+        report carries the anchor, the BIC table, the comparison-star
+        verdicts and the free scan.
+      - The 1.0.12 claim that the transit "cannot be absorbed into a
+        correlated basis" held for a sequential detrend, not for a
+        basis shaped like the transit in the same design; it is
+        withdrawn in the documentation.
+      - The observatory position comes from the frames FIRST.  The form
+        used to win over SITELAT/SITELONG as the way to correct a wrong
+        header; in practice it held the last observatory (a Maryland
+        and an Arizona set both ran with the Texas site typed in).  Now
+        the header wins when it has one, the form is the fallback, and
+        a new checkbox in group 5 makes the form the override on
+        purpose.  A form site more than 50 km from the header's is
+        reported either way, and a site read from the frames is written
+        into the form fields, overwriting what was there, so the form
+        shows the position the run used and keeps it in the settings.
+      - Comparison stars by the fit's residual, EXOTIC's criterion on
+        an ensemble.  Worst first, a comp is dropped while the anchored
+        fit's residual scatter falls by 2 % or more without it; at
+        least two stay; the log names each drop with the residual
+        before and after, and the exports and the field image follow.
+        On the EXOTIC HAT-P-32 set the scatter veto (3x the others)
+        had let a bright comp with 27 mmag of slow structure through;
+        it carried a third of the ensemble and took Rp/R* from 0.156
+        to 0.164 against EXOTIC's 0.154.
 1.0.12 - Methodology round: what a review of the astronomy found
       - Limb darkening is no longer 0.35/0.23 for every star and every
         filter in blind mode.  Both fit modes take the coefficients from
@@ -130,6 +190,27 @@ CHANGELOG:
       - A target that peaks above 80 % of the clip level on its
         brightest frame is warned about: CMOS sensors turn non-linear
         well below saturation.
+      - A TheSkyX data set (Dennis Conti's WASP-12 b guide set) exposed
+        four input assumptions.  Whether Siril's star y is a file row or
+        a flipped one is now MEASURED on the reference frame after
+        detection (star_row_convention) and used by every seed, the
+        saturation box and the field image -- it held only when the
+        plate solve had flipped the reference, and without a flip all
+        apertures measured empty sky with WASP-12 as a comparison star.
+        SITELAT/SITELONG written sexagesimally ('+38 55 48.51') are read
+        as degrees, so the altitude-based sign check can flip the
+        west-positive longitude instead of the form's site taking over.
+        A label in front of the designation ('ESPC WASP-12') no longer
+        loses the archive: the lookup retries with one, then two leading
+        words dropped.  Two spellings of one sensor ('ASCOM: H694' and
+        'Trius-SX694') that share the model number count as the same
+        camera, so the calibration frames are no longer rejected.
+        Two things the rerun of that set showed: a site typed into the
+        form still wins, but a form site more than 50 km from the
+        header's is now called out in red (airmass and BJD follow the
+        form), and a designation retry that fails -- there, an SSL
+        timeout -- says so instead of leaving only the first miss in
+        the log; after a network failure the retry is skipped.
       - On an exFAT volume the EXOTIC/HOPS folder clearing logged one
         FileNotFoundError per AppleDouble `._` sibling that macOS had
         already removed with its file; data files go first now and a
@@ -432,7 +513,7 @@ from matplotlib.ticker import FuncFormatter
 
 from sirilpy import LogColor
 
-VERSION = "1.0.12"
+VERSION = "1.0.14"
 
 # The full manual on GitHub, linked from the help dialog.  The in-app
 # tabs are the quick reference; the manual carries the measurements
@@ -468,6 +549,12 @@ LON_SIGN_TOLERANCE_DEG = 5.0
 # arcminute scale means the name and the pointing describe different
 # things, and that is worth a line rather than a silent preference.
 TARGET_DISAGREE_ARCSEC = 120.0
+# Same idea for the observatory: a site typed into the form wins over the
+# header (it is how a wrong header gets corrected), but a form site more
+# than this far from where the frames say they were taken is far more
+# often the LAST observatory than a correction -- and the airmass series
+# and the BJD conversion both silently follow it.
+SITE_DISAGREE_KM = 50.0
 # Pre-filled AAVSO observer code.  Saved settings still win: this is only
 # what a fresh install starts with.
 DEFAULT_OBSCODE = "V57"
@@ -732,6 +819,14 @@ APERTURE_SCAN_FWHM = (0.75, 1.0, 1.3, 1.6, 2.0, 2.5)
 # by selection.  At 80% the bias is 8.08 -> 7.49, which is small enough to
 # live with.
 APERTURE_MIN_YIELD_RATIO = 0.8
+# Radii whose point-to-point noise lies within this fraction of the least
+# are one aperture to that measure, and the LARGEST of them is used.
+# Point-to-point noise is blind to slow structure by design; the slow flux
+# loss of a small aperture as the seeing moves is exactly what it cannot
+# see, and the |r| > 0.5 seeing screen only catches the gross case.  On
+# TOI-2040.01 a 1.1 x FWHM radius won by 1.9 % over 2.0 x FWHM and read
+# 1.18 % deep where 2.0 x FWHM read 1.33 % (TESS: 1.47 %).
+APERTURE_NOISE_TIE = 0.03
 APERTURE_INNER_RATIO = 2.0
 APERTURE_OUTER_RATIO = 3.0
 CLIP_WINDOW = 9
@@ -740,6 +835,33 @@ CLIP_KAPPA = 4.0
 # curve to make it look better is the opposite of the job.
 CLIP_MAX_FRACTION = 0.05
 MULTI_DETREND_MIN_ANCHOR = 12
+# Basis selection and the ephemeris anchor (1.0.13).  A basis enters the
+# fit only when it lowers the Bayesian Information Criterion by this much
+# (Kass & Raftery 1995, "positive" evidence) -- the rule AIJ's users apply
+# by hand and TFOP asks for.  A named target with an archive ephemeris is
+# fitted ANCHORED: the mid-time within a window round the prediction (the
+# ephemeris error grown over the epochs, times ANCHOR_T0_SIGMAS, at least
+# ANCHOR_T0_WINDOW_MIN minutes), the duration within ANCHOR_DURATION_TOL
+# of the archive's.  Measured on a 2026-08-31 night of TOI-2040.01: with a
+# free mid-time and duration, a 7 px drift of the star offered as a basis
+# stretched the 2.6 h transit to 3.5 h and took a 6 sigma detection to
+# 1 sigma without lowering the residual scatter; anchored, the same basis
+# is rejected by the BIC (+2.2) and the depth agrees with TESS.
+BIC_KEEP_DELTA = 2.0
+ANCHOR_T0_SIGMAS = 3.0
+ANCHOR_T0_WINDOW_MIN = 30.0
+ANCHOR_DURATION_TOL = 0.15
+# A kept basis is checked against the comparison stars: the target's slope
+# on it must sit within this many sigma of what the ensemble shows, or the
+# basis is fitting something only the target has -- the transit.
+COMP_SHARE_SIGMAS = 2.0
+# EXOTIC's criterion for the comparison stars, automated: a comp leaves
+# the ensemble when the residual scatter of the anchored transit fit
+# falls by at least this fraction without it.  Measured on the EXOTIC
+# HAT-P-32 set: one bright comp with 27 mmag of slow structure carried a
+# third of the ensemble and took Rp/R* from 0.156 to 0.164; the scatter
+# veto (3x the others) let it through.  At least two comps always stay.
+COMP_RESIDUAL_GAIN = 0.02
 T0_ERROR_CADENCES = 5.0
 T0_ERROR_SAMPLES = 21
 # The local pass around the winning node.  The coarse T0 step is 105 s on a
@@ -2015,6 +2137,17 @@ def angular_sep_arcsec(ra1, dec1, ra2, dec2) -> float:
     return math.hypot(dra * math.cos(d), dec1 - dec2) * 3600.0
 
 
+def site_distance_km(lat1, lon1, lat2, lon2) -> float:
+    """Great-circle distance between two sites, in km (haversine on a
+    6371 km sphere; the 0.5 % ellipsoid error is nothing at the 50 km
+    scale this is asked about)."""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = p2 - p1
+    dl = math.radians(((lon2 - lon1 + 180.0) % 360.0) - 180.0)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2.0 * 6371.0 * math.asin(min(1.0, math.sqrt(a)))
+
+
 def normalise_planet_name(raw) -> str:
     """A header's OBJECT into the form the NASA archive indexes.
 
@@ -2031,6 +2164,23 @@ def normalise_planet_name(raw) -> str:
     if m:
         return f"{m.group(1)} {m.group(2).lower()}"
     return txt
+
+
+def designation_candidates(name: str):
+    """The names worth asking the archive for when ``name`` misses:
+    the same string with one, then two leading words removed.  Capture
+    programs prefix a project or list label ("ESPC WASP-12", "TFOP
+    TOI-1234.01") and the archive matches whole names only.  A word is
+    only dropped while what remains still looks like a designation
+    (letters then digits)."""
+    words = re.sub(r"\s+", " ", str(name or "")).strip().split(" ")
+    out = []
+    for k in (1, 2):
+        if len(words) > k:
+            rest = " ".join(words[k:])
+            if re.search(r"[A-Za-z].*[0-9]", rest):
+                out.append(rest)
+    return out
 
 
 def target_key(raw) -> str:
@@ -3867,6 +4017,282 @@ def hops_mode_fit(t, mag, err_mag, geom: dict, ldc, detrend: dict,
     }
 
 
+def _eph_num(eph, *keys):
+    """The first finite number under any of ``keys`` in an ephemeris
+    dict, else NaN."""
+    for k in keys:
+        try:
+            v = float((eph or {}).get(k))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v):
+            return v
+    return float("nan")
+
+
+def ephemeris_anchor(eph, t, time_system: str = "BJD_TDB"):
+    """The anchor for `fit_transit` from an archive ephemeris, or
+    ``(None, why)``.
+
+    The mid-time window is the ephemeris error grown over the epochs
+    (`ephemeris_sigma_min`) times ANCHOR_T0_SIGMAS, never under
+    ANCHOR_T0_WINDOW_MIN minutes: the archive's timing error is often
+    missing, and a window that a stale ephemeris cannot reach would
+    anchor the fit on the wrong minute.  The duration is the archive's
+    first-to-fourth contact, else the one the orbit gives (a/R*,
+    inclination), else left free.  Only BJD_TDB times can carry an
+    archive T0; on JD_UTC the anchor would be minutes off.
+    """
+    if not eph:
+        return None, "no ephemeris for this target"
+    period = _eph_num(eph, "period_d")
+    t0 = _eph_num(eph, "t0_bjd")
+    if not (period > 0 and math.isfinite(t0)):
+        return None, "the ephemeris has no period or T0"
+    if str(time_system or "") != "BJD_TDB":
+        return None, ("the run's times are not BJD_TDB, so the archive's "
+                      "T0 cannot be placed on them")
+    tt = np.asarray(t, dtype=float)
+    tt = tt[np.isfinite(tt)]
+    if tt.size < 2:
+        return None, "no times"
+    centre = 0.5 * (float(tt.min()) + float(tt.max()))
+    epoch = int(round((centre - t0) / period))
+    pred = t0 + epoch * period
+    sig_min = ephemeris_sigma_min(epoch, eph.get("t0_err_d"),
+                                  eph.get("period_err_d"))
+    window_min = max(ANCHOR_T0_WINDOW_MIN,
+                     ANCHOR_T0_SIGMAS * sig_min
+                     if math.isfinite(sig_min) else 0.0)
+    w = window_min / 1440.0
+    if pred + w < float(tt.min()) or pred - w > float(tt.max()):
+        return None, (f"the predicted mid-transit {pred:.5f} (epoch "
+                      f"{epoch}) lies outside the run")
+    dur_d = _eph_num(eph, "duration_h") / 24.0
+    if not (math.isfinite(dur_d) and dur_d > 0):
+        a_rs = _eph_num(eph, "a_rs")
+        inc = _eph_num(eph, "inc_deg")
+        if a_rs > 0 and math.isfinite(inc):
+            rp = _eph_num(eph, "rprs_archive", "rprs")
+            ecc = _eph_num(eph, "ecc", "eccentricity")
+            peri = _eph_num(eph, "omega_deg", "peri_deg", "orblper")
+            try:
+                dur_d = float(transit_duration_days(
+                    rp if 0 < rp < 1 else 0.1, period, a_rs,
+                    ecc if 0 <= ecc < 1 else 0.0, inc,
+                    peri if math.isfinite(peri) else 90.0))
+            except (TypeError, ValueError, ZeroDivisionError):
+                dur_d = float("nan")
+    return {"t0": float(pred), "t0_window_d": float(w),
+            "duration_d": (float(dur_d) if math.isfinite(dur_d)
+                           and dur_d > 0 else None),
+            "duration_tol": ANCHOR_DURATION_TOL, "epoch": int(epoch),
+            "window_min": float(window_min),
+            "sigma_min": float(sig_min)}, ""
+
+
+def select_bases_bic(t, mag, always, candidates, u1: float = LD_U1,
+                     u2: float = LD_U2, err=None, anchor=None):
+    """Forward selection of systematics bases by the BIC, the transit in
+    the model throughout.  ``(chosen, rows)``: ``chosen`` maps name to
+    column (``always`` plus what earned its place), ``rows`` lists
+    ``(name, delta_bic, kept)`` -- the kept ones in the order they
+    entered, the rejected ones with their delta in the round that
+    stopped the selection.
+
+    A candidate is admitted when it lowers the BIC by BIC_KEEP_DELTA or
+    more relative to the model so far; the best candidate of each round
+    goes first.  The comparison is symmetric: a basis that fits the
+    transit as well as it fits noise gains nothing here, because the
+    transit column is in both models.
+    """
+    chosen = {k: v for k, v in (always or {}).items() if v is not None}
+    pool = {k: v for k, v in (candidates or {}).items() if v is not None}
+    base = fit_transit(t, mag, bases=chosen, u1=u1, u2=u2, err=err,
+                       anchor=anchor)
+    if base is None:
+        return chosen, []
+    best = float(base["bic"])
+    rows = []
+    while pool:
+        trial = []
+        for name, col in pool.items():
+            f = fit_transit(t, mag, bases={**chosen, name: col}, u1=u1,
+                            u2=u2, err=err, anchor=anchor)
+            if f is None or name not in (f.get("bases") or []):
+                trial.append((float("inf"), name))
+                continue
+            trial.append((float(f["bic"]) - best, name))
+        trial.sort(key=lambda x: (x[0], x[1]))
+        d, name = trial[0]
+        if math.isfinite(d) and d <= -BIC_KEEP_DELTA:
+            rows.append((name, float(d), True))
+            chosen[name] = pool.pop(name)
+            best += d
+            continue
+        for d2, n2 in trial:
+            rows.append((n2, float(d2) if math.isfinite(d2)
+                         else float("nan"), False))
+        break
+    return chosen, rows
+
+
+def basis_shared_by_comps(raw, jd_rows, name, basis_rows, airmass_rows,
+                          target_slope, target_sigma):
+    """Whether the comparison stars show the target's dependence on a
+    basis.  ``None`` when it cannot be measured, else a dict with the
+    comparison slopes (mag per basis unit), their median and spread, and
+    ``shared``.
+
+    The one test that separates an instrumental dependence from a
+    transit wearing a basis's clothes: a flat-field or pixel-phase
+    effect moves every star that drifts across the same pixels, a
+    transit moves one.  Each active comparison is measured against the
+    ensemble of the others, on its OWN centroid for the x/y bases and on
+    the frame's value for the rest, with the airmass column alongside so
+    extinction does not masquerade as the basis.
+    """
+    try:
+        flux = np.asarray(raw["flux"], dtype=float)
+        jd_frames = np.asarray(raw["jd"], dtype=float)
+        keep = [bool(k) for k in raw.get("keep", [])]
+    except (KeyError, TypeError, ValueError):
+        return None
+    if flux.ndim != 2 or flux.shape[0] < 3 or jd_frames.size != flux.shape[1]:
+        return None
+    jd_rows = np.asarray(jd_rows, dtype=float)
+    if jd_rows.size < 10:
+        return None
+    idx = match_frames_to_curve(jd_rows, jd_frames, tol_s=2.0)
+    ok = idx >= 0
+    if int(ok.sum()) < 10:
+        return None
+    active = [i + 1 for i, k in enumerate(keep) if k and i + 1 < flux.shape[0]]
+    if len(active) < 2:
+        return None
+    per_star = None
+    if name in ("xpos", "ypos"):
+        try:
+            per_star = np.asarray(raw["x" if name == "xpos" else "y"],
+                                  dtype=float)
+        except (KeyError, TypeError, ValueError):
+            return None
+    elif basis_rows is None:
+        return None
+    airm = (np.asarray(airmass_rows, dtype=float)
+            if airmass_rows is not None
+            and np.asarray(airmass_rows).size == jd_rows.size else None)
+    slopes, sigmas = [], []
+    for i in active:
+        others = [j for j in active if j != i]
+        fi = flux[i][idx[ok]]
+        fo = np.sum(flux[others][:, idx[ok]], axis=0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            rel = -2.5 * np.log10(fi / fo)
+        col = (per_star[i][idx[ok]] if per_star is not None
+               else np.asarray(basis_rows, dtype=float)[ok])
+        cols = [np.ones(rel.size), col]
+        if airm is not None:
+            cols.insert(1, airm[ok])
+        A = np.column_stack(cols)
+        good = np.all(np.isfinite(A), axis=1) & np.isfinite(rel)
+        if int(good.sum()) < 10 or float(np.std(col[good])) < 1e-12:
+            continue
+        A, y = A[good], rel[good]
+        try:
+            beta, *_ = np.linalg.lstsq(A, y, rcond=None)
+            r = y - A @ beta
+            s2 = float(r @ r) / max(1, y.size - A.shape[1])
+            cov = np.linalg.inv(A.T @ A) * s2
+        except np.linalg.LinAlgError:
+            continue
+        slopes.append(float(beta[-1]))
+        sigmas.append(float(math.sqrt(max(cov[-1, -1], 0.0))))
+    if len(slopes) < 2:
+        return None
+    med = float(np.median(slopes))
+    mad = 1.4826 * float(np.median(np.abs(np.asarray(slopes) - med)))
+    spread = max(mad, float(np.median(sigmas)))
+    try:
+        ts = float(target_sigma)
+    except (TypeError, ValueError):
+        ts = float("nan")
+    tol = COMP_SHARE_SIGMAS * math.hypot(spread, ts if math.isfinite(ts)
+                                         else 0.0)
+    shared = bool(abs(float(target_slope) - med) <= tol)
+    return {"name": name, "slopes": slopes, "sigmas": sigmas,
+            "median": med, "spread": spread, "target": float(target_slope),
+            "target_sigma": ts, "shared": shared, "n": len(slopes)}
+
+
+def select_comps_by_residual(jd, target_flux, comp_fluxes, target_err=None,
+                             comp_errs=None, bases=None, u1: float = LD_U1,
+                             u2: float = LD_U2, anchor=None, err_extra=None):
+    """EXOTIC's criterion for the comparison stars, on an ensemble.
+
+    EXOTIC tries every comparison star and keeps the one whose fitted
+    light curve leaves the smallest residual scatter; a HOPS or AIJ user
+    looks at each comparison's curve and unticks the bad one.  This is
+    the automated ensemble version: worst-first, a comp is dropped while
+    dropping it lowers the residual scatter of the transit fit
+    (anchored when an anchor is given) by COMP_RESIDUAL_GAIN or more.
+    At least two stay.  Returns ``(active, rows, mag, err, residual)``:
+    the kept indices into ``comp_fluxes``, one ``(index, before, after)``
+    per drop in mmag, the curve on the final ensemble and its residual.
+
+    The score is the fit's residual, not the comp's own scatter: a comp
+    whose slow structure happens to mirror the transit lifts the depth
+    without lifting its own scatter much, and only the fit sees it.
+    """
+    jd = np.asarray(jd, dtype=float)
+    n = len(comp_fluxes)
+    active = list(range(n))
+    bases = {k: np.asarray(v, dtype=float) for k, v in (bases or {}).items()
+             if v is not None and np.asarray(v).size == jd.size}
+    extra = (np.asarray(err_extra, dtype=float)
+             if err_extra is not None and np.asarray(err_extra).size == jd.size
+             else None)
+
+    def curve(sub):
+        cf = [comp_fluxes[i] for i in sub]
+        ce = [comp_errs[i] for i in sub] if comp_errs is not None else None
+        return ensemble_relative_mags(target_flux, cf, target_err, ce)
+
+    def score(sub):
+        mag, err = curve(sub)
+        mag = np.asarray(mag, dtype=float)
+        ok = np.isfinite(mag) & np.isfinite(jd)
+        if int(ok.sum()) < 10:
+            return float("inf"), mag, err
+        e = None
+        if err is not None:
+            e = np.asarray(err, dtype=float)
+            if extra is not None:
+                e = np.hypot(e, np.where(np.isfinite(extra), extra, 0.0))
+        f = fit_transit(jd[ok], mag[ok] - float(np.median(mag[ok])),
+                        bases={k: v[ok] for k, v in bases.items()},
+                        u1=u1, u2=u2, err=e[ok] if e is not None else None,
+                        anchor=anchor)
+        if f is None:
+            return float("inf"), mag, err
+        return float(f["sigma_postfit_mmag"]), mag, err
+
+    rows = []
+    cur, mag, err = score(active)
+    while len(active) > 2 and math.isfinite(cur):
+        trial = sorted((score([j for j in active if j != i])[0], i)
+                       for i in active)
+        best, i = trial[0]
+        if math.isfinite(best) and best < cur * (1.0 - COMP_RESIDUAL_GAIN):
+            rows.append((int(i), float(cur), float(best)))
+            active.remove(i)
+            cur = best
+            continue
+        break
+    mag, err = curve(active)
+    return active, rows, mag, err, cur
+
+
 def stacked_significance(t, mag, t0: float, duration: float,
                          sigma_postfit: float) -> float:
     """Significance of the in/out contrast, in sigma.
@@ -4444,7 +4870,7 @@ def _solve_simultaneous(mag, shape, fixed, gram, rhs, mm):
 
 
 def fit_transit(t, mag, bases=None, u1: float = LD_U1, u2: float = LD_U2,
-                err=None):
+                err=None, anchor=None):
     """Fit a limb-darkened transit AND the systematics, together.
 
     Returns a dict, or ``None`` when there is not enough data to try.
@@ -4538,6 +4964,35 @@ def fit_transit(t, mag, bases=None, u1: float = LD_U1, u2: float = LD_U2,
     dur_grid = np.linspace(FIT_MIN_DURATION_FRAC * span,
                            FIT_MAX_DURATION_FRAC * span,
                            FIT_DURATION_STEPS)
+    # ANCHORED: a known planet's mid-time is searched only within the
+    # window round the ephemeris prediction and its duration only near
+    # the archive's -- the fit a known planet gets everywhere else
+    # (EXOTIC, AIJ/TFOP).  A free mid-time and duration are for a signal
+    # nobody has an ephemeris for; on a known one they hand the transit
+    # to whichever basis can stretch it.
+    anchored = False
+    if anchor:
+        try:
+            a_t0 = float(anchor.get("t0"))
+            a_w = float(anchor.get("t0_window_d") or 0.0)
+        except (TypeError, ValueError):
+            a_t0, a_w = float("nan"), 0.0
+        if (math.isfinite(a_t0) and a_w > 0 and a_t0 + a_w > t.min()
+                and a_t0 - a_w < t.max()):
+            t0_grid = np.linspace(max(float(t.min()), a_t0 - a_w),
+                                  min(float(t.max()), a_t0 + a_w),
+                                  FIT_T0_STEPS)
+            anchored = True
+            try:
+                a_dur = float(anchor.get("duration_d") or float("nan"))
+                a_tol = float(anchor.get("duration_tol",
+                                         ANCHOR_DURATION_TOL))
+            except (TypeError, ValueError):
+                a_dur, a_tol = float("nan"), ANCHOR_DURATION_TOL
+            if math.isfinite(a_dur) and a_dur > 0:
+                dur_grid = np.linspace(max(1e-9, a_dur * (1.0 - a_tol)),
+                                       a_dur * (1.0 + a_tol),
+                                       FIT_DURATION_STEPS)
 
     best = None
     for dur in dur_grid:
@@ -4702,10 +5157,26 @@ def fit_transit(t, mag, bases=None, u1: float = LD_U1, u2: float = LD_U2,
                 _rprs_sig = math.hypot(_rprs_sig,
                                        0.5 * (max(_alt) - min(_alt)))
 
+    # Model comparison: the BIC of THIS design, so that two fits of the
+    # same data with different bases can be ranked.  k counts what
+    # differs between such fits (baseline, bases, depth); the mid-time,
+    # duration and shape variant are searched the same way in every one.
+    n_params = int(fixed.shape[1]) + 1
+    bic = (float(t.size) * math.log(max(float(best["ssr"]), 1e-300)
+                                    / float(t.size))
+           + n_params * math.log(float(t.size)))
     return {
         "t0": best["t0"],
         "duration_d": best["duration"],
         "duration_h": best["duration"] * 24.0,
+        "anchored": anchored,
+        "anchor": ({k: (float(v) if isinstance(v, (int, float))
+                        and not isinstance(v, bool) else v)
+                    for k, v in dict(anchor).items()}
+                   if anchored else None),
+        "ssr": float(best["ssr"]),
+        "n_params": n_params,
+        "bic": bic,
         "rp_over_rs": best["rp"],
         "impact_b": best["b"],
         "ld_u1": float(u1),
@@ -5017,10 +5488,14 @@ def site_from_header(header):
     def _num(*keys):
         for k in keys:
             if k in header:
+                raw = header[k]
                 try:
-                    v = float(header[k])
+                    v = float(raw)
                 except (TypeError, ValueError):
-                    continue
+                    # TheSkyX and others write '+38 55 48.51': degrees,
+                    # minutes, seconds.  A site that is IN the header but
+                    # unreadable used to fall back to the form silently.
+                    v = _sexagesimal(str(raw))
                 if math.isfinite(v):
                     return v
         return None
@@ -5632,6 +6107,28 @@ def calib_signature(info: dict, with_temp: bool = False) -> tuple:
             info.get("instrument") or None)
 
 
+def same_camera(a, b):
+    """``(same, note)`` for two INSTRUME strings.  Exact after trimming is
+    the ordinary case.  The other real case is one sensor named two
+    ways by two programs -- 'ASCOM: H694' on the calibration frames and
+    'Trius-SX694' on the lights of one night -- which share the model
+    number; those are taken as the same camera and said so.  Two names
+    with different model numbers, or none in common, stay different."""
+    def _norm(t):
+        t = re.sub(r"(?i)\b(ascom|camera|driver|ccd|cmos)\b", " ", str(t or ""))
+        return re.sub(r"[^a-z0-9]+", "", t.lower())
+    na, nb = _norm(a), _norm(b)
+    if na == nb:
+        return True, ""
+    da = set(re.findall(r"\d{3,}", str(a or "")))
+    db = set(re.findall(r"\d{3,}", str(b or "")))
+    shared = da & db
+    if shared and not (da - db and db - da):
+        return True, (f"'{a}' and '{b}' taken as the same camera — "
+                      f"same model number {sorted(shared)[0]}")
+    return False, ""
+
+
 def signature_matches(master: dict, target: dict, check_exposure=True,
                       check_temperature=True):
     """``(ok, why)`` -- may ``master`` calibrate frames like ``target``?
@@ -5654,8 +6151,11 @@ def signature_matches(master: dict, target: dict, check_exposure=True,
     would look identical to one where no master existed at all.
     """
     mi, ti = master.get("instrument"), target.get("instrument")
+    cam_note = ""
     if mi and ti and mi != ti:
-        return False, f"different camera ({mi} vs {ti})"
+        same, cam_note = same_camera(mi, ti)
+        if not same:
+            return False, f"different camera ({mi} vs {ti})"
     md, td = master.get("dims"), target.get("dims")
     if md and td and md != td:
         return False, f"different image size ({md} vs {td})"
@@ -5675,7 +6175,7 @@ def signature_matches(master: dict, target: dict, check_exposure=True,
             return False, "exposure time unknown on one side"
         if abs(float(me) - float(te)) > 0.01:
             return False, f"different exposure ({me:g} s vs {te:g} s)"
-    return True, "matches"
+    return True, "matches" + (f" ({cam_note})" if cam_note else "")
 
 
 def calibration_roots(lights_dir: str, library: str = "",
@@ -6370,7 +6870,64 @@ def apply_homography(m, x, y):
             (m[3] * x + m[4] * y + m[5]) / den)
 
 
-def ref_to_frame(hom, x, y, width, height):
+def star_row_convention(data, stars, box: int = 3, limit: int = 400):
+    """Are Siril's star y coordinates FILE ROWS or flipped rows?
+
+    ``(star_rows, hits_as_rows, hits_flipped, n_tried)``; ``star_rows`` is
+    None when the two readings tie.  Both are tried on the reference
+    frame's own pixels: under the right one nearly every detected star
+    has a peak above the sky in a small box around its seed, under the
+    wrong one nearly none.
+
+    Why this is measured per run and not fixed: the convention the
+    engine was calibrated on (EXOTIC's HAT-P-32 set) holds when the
+    plate solve flipped the reference in Siril's memory, which leaves
+    `findstar`'s y equal to the file row.  On a TheSkyX set whose solve
+    failed there was no flip, every seed sat one image height away from
+    its star, all four apertures measured empty sky, and WASP-12 came
+    out as a comparison star of a saturated "target".
+    """
+    arr = np.asarray(data)
+    if arr.ndim > 2:
+        arr = arr[0]
+    if arr.ndim != 2 or not stars:
+        return None, 0, 0, 0
+    h, w = arr.shape
+    sub = arr[::max(1, h // 200), ::max(1, w // 200)].astype(float)
+    sky = float(np.median(sub))
+    mad = float(np.median(np.abs(sub - sky))) * 1.4826
+    thr = sky + 5.0 * max(mad, 1e-9)
+    pts = []
+    for st in list(stars)[:limit]:
+        try:
+            if isinstance(st, (tuple, list)):
+                x, y = float(st[0]), float(st[1])
+            else:
+                x, y = float(getattr(st, "xpos")), float(getattr(st, "ypos"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if np.isfinite(x) and np.isfinite(y):
+            pts.append((x, y))
+    if not pts:
+        return None, 0, 0, 0
+
+    def _hits(flip):
+        n = 0
+        for x, y in pts:
+            row = (h - 1.0 - y) if flip else y
+            xi, yi = int(round(x)), int(round(row))
+            if not (box <= xi < w - box and box <= yi < h - box):
+                continue
+            if float(arr[yi - box:yi + box + 1, xi - box:xi + box + 1].max()) > thr:
+                n += 1
+        return n
+    as_rows, flipped = _hits(False), _hits(True)
+    if as_rows == flipped:
+        return None, as_rows, flipped, len(pts)
+    return as_rows > flipped, as_rows, flipped, len(pts)
+
+
+def ref_to_frame(hom, x, y, width, height, star_rows: bool = True):
     """Where a star at reference position ``(x, y)`` sits in this frame.
 
     The convention was MEASURED, not read from documentation, because two
@@ -6387,17 +6944,25 @@ def ref_to_frame(hom, x, y, width, height):
     neither matches applying H forwards in either row order -- the first
     attempt did exactly that, seeded half the centroids onto the wrong
     stars, and produced a light curve with 900 mmag of scatter.
+
+    ``star_rows`` says whether ``y`` is a file row (the case above, where
+    the solve had flipped the reference) or already Siril's display row
+    (no flip): `star_row_convention` measures which on each run.  The
+    homographies are always in display rows, so the first flip is what
+    turns a file row into one; the last flip always turns the frame's
+    display row back into the file row the pixels are indexed by.
     """
     inv = invert_homography(hom)
     if inv is None or not (width and height):
         return None
-    pos = apply_homography(inv, float(x), float(height) - 1.0 - float(y))
+    y_disp = (float(height) - 1.0 - float(y)) if star_rows else float(y)
+    pos = apply_homography(inv, float(x), y_disp)
     if pos is None:
         return None
     return pos[0], float(height) - 1.0 - pos[1]
 
 
-def frame_to_ref(hom, x, y, width, height):
+def frame_to_ref(hom, x, y, width, height, star_rows: bool = True):
     """The inverse trip of `ref_to_frame`: frame position to reference.
 
     Needed because `setref` moves the frame stars are DETECTED on without
@@ -6411,7 +6976,7 @@ def frame_to_ref(hom, x, y, width, height):
     pos = apply_homography(hom, float(x), float(height) - 1.0 - float(y))
     if pos is None:
         return None
-    return pos[0], float(height) - 1.0 - pos[1]
+    return pos[0], (float(height) - 1.0 - pos[1]) if star_rows else pos[1]
 
 
 def refine_centroid(data, x, y, box=CENTROID_BOX, iters=CENTROID_ITERS):
@@ -6526,6 +7091,25 @@ def aperture_photometry(data, x, y, radii, r_in, r_out,
     if sat_adu is not None and peak >= float(sat_adu):
         return rows, sky, sky_sigma, float("inf")
     return rows, sky, sky_sigma, peak
+
+
+def aperture_tie_break(noises, radii, tie=APERTURE_NOISE_TIE):
+    """Index of the radius to use: the largest within a noise tie.
+
+    ``noises`` and ``radii`` are parallel sequences.  The least finite
+    noise sets the bar; every radius whose noise lies within ``tie``
+    (a fraction) of it is in the tie, and the largest radius among them
+    is returned.  Between equal radii the lower noise wins.  ``None``
+    when no noise is finite.
+    """
+    finite = [i for i, n in enumerate(noises)
+              if n is not None and math.isfinite(float(n))]
+    if not finite:
+        return None
+    lo = min(float(noises[i]) for i in finite)
+    ceiling = lo * (1.0 + max(0.0, float(tie)))
+    tied = [i for i in finite if float(noises[i]) <= ceiling]
+    return max(tied, key=lambda i: (float(radii[i]), -float(noises[i])))
 
 
 def point_to_point_sigma(mag):
@@ -7030,6 +7614,10 @@ class LightCurveWorker(QThread):
     log = pyqtSignal(str, object)
     finished_ok = pyqtSignal(dict)
     failed = pyqtSignal(str)
+    # The observatory position the run settled on, when it came from the
+    # frames: the form shows it and keeps it, so the next run of another
+    # set starts from the last real site rather than from a stale one.
+    site_found = pyqtSignal(float, float, str)
 
     def __init__(self, siril, folder: str, opts: dict):
         super().__init__()
@@ -7080,6 +7668,50 @@ class LightCurveWorker(QThread):
                      "and the blind test — now stands on this series.",
                    LogColor.GREEN)
         return np.asarray(jd)[good], mag_h, err_h
+
+    def _measure_star_rows(self, ref_path, stars) -> None:
+        """Decide, on the reference frame's own pixels, whether Siril's
+        star y coordinates are file rows or flipped rows, and keep the
+        verdict in ``self._star_rows`` for every seed, the saturation
+        box and the field image.  The engine assumed one convention for
+        every run; on a TheSkyX set without a plate-solve flip that put
+        all apertures on empty sky."""
+        self._star_rows = True
+        try:
+            from astropy.io import fits
+            with fits.open(ref_path, memmap=False) as hdul:
+                data = None
+                for hdu in hdul:
+                    if getattr(hdu, "data", None) is not None:
+                        data = np.asarray(hdu.data)
+                        break
+        except Exception as exc:                 # noqa: BLE001
+            _log_swallowed(exc)
+            data = None
+        if data is None:
+            self._emit("  Star row convention: the reference frame could "
+                       "not be read — keeping the default (y = file row).",
+                       LogColor.SALMON)
+            return
+        if data.ndim == 3:
+            ch = int(self.opts.get("channel", 0) or 0)
+            data = data[min(max(ch, 0), data.shape[0] - 1)]
+        verdict, as_rows, flipped, n = star_row_convention(data, stars)
+        if verdict is None:
+            self._emit(f"  Star row convention undecided ({as_rows} of {n} "
+                       f"seeds hit a star either way) — keeping the default "
+                       "(y = file row).", LogColor.SALMON)
+            return
+        self._star_rows = bool(verdict)
+        self._emit(
+            "  Star coordinates: y is "
+            + ("the file row" if verdict else "FLIPPED against the file row")
+            + f" — measured on the reference frame: {max(as_rows, flipped)} "
+            f"of {n} seeds land on a star that way, "
+            f"{min(as_rows, flipped)} the other way."
+            + ("" if verdict else " Every seed, the saturation box and the "
+               "field image use the flipped reading."),
+            LogColor.BLUE)
 
     def _limb_darkening(self, eph):
         """``(u1, u2, claret, source, note)`` -- the quadratic pair the
@@ -7156,6 +7788,124 @@ class LightCurveWorker(QThread):
         self._emit(f"  Limb darkening: {source}.", colour)
         self._ldc_choice = (u1, u2, claret, source, note)
         return self._ldc_choice
+
+    def _reselect_comps(self, jd, jd_utc, mag, err, X, airmass_note, eph,
+                        time_system):
+        """Comparison stars by the fit's residual (EXOTIC's criterion),
+        on the native engine's per-star fluxes.  Returns the possibly
+        rebuilt ``(mag, err, X)``; the raw record's ``keep`` follows, so
+        the exports and the field image show the ensemble that was
+        used."""
+        raw = getattr(self, "_native_raw", None)
+        if not raw:
+            return mag, err, X
+        try:
+            flux = np.asarray(raw["flux"], dtype=float)
+            ferr = np.asarray(raw["ferr"], dtype=float)
+            jd_frames = np.asarray(raw["jd"], dtype=float)
+            keep = [bool(k) for k in raw.get("keep", [])]
+        except (KeyError, TypeError, ValueError):
+            return mag, err, X
+        active0 = [i + 1 for i, k in enumerate(keep) if k and i + 1 < flux.shape[0]]
+        if len(active0) < 3 or jd_frames.size != flux.shape[1]:
+            return mag, err, X
+        idx = match_frames_to_curve(np.asarray(jd_utc, dtype=float),
+                                    jd_frames, tol_s=2.0)
+        if not np.all(idx >= 0):
+            self._emit("  Comparison stars by the fit's residual skipped: "
+                       f"{int((idx < 0).sum())} curve row(s) could not be "
+                       "paired with a frame.", LogColor.SALMON)
+            return mag, err, X
+        u1_fit, u2_fit, _c, _src, _n = self._limb_darkening(eph)
+        anchor, _why = ephemeris_anchor(eph, jd, time_system)
+        bases = ({"airmass": X} if X is not None and not airmass_note
+                 else {})
+        active, rows, mag_new, err_new, resid = select_comps_by_residual(
+            jd, flux[0][idx], [flux[i][idx] for i in active0],
+            ferr[0][idx], [ferr[i][idx] for i in active0],
+            bases=bases, u1=u1_fit, u2=u2_fit, anchor=anchor)
+        stars = list(raw.get("stars_ref") or raw.get("stars") or [])
+
+        def _xy(i):
+            return (f"({stars[i][0]:.1f}, {stars[i][1]:.1f})"
+                    if i < len(stars) else f"#{i}")
+        if not rows:
+            self._emit("  Comparison stars by the fit's residual (EXOTIC's "
+                       f"criterion): all {len(active0)} kept — dropping any "
+                       f"one raises the residual above {resid:.1f} mmag.",
+                       LogColor.BLUE)
+            return mag, err, X
+        for k, before, after in rows:
+            self._emit(f"    comp {_xy(active0[k])}  dropped: the fit's "
+                       f"residual falls {before:.1f} → {after:.1f} mmag "
+                       "without it.", LogColor.SALMON)
+        kept = [active0[i] for i in active]
+        self._emit("  Comparison stars by the fit's residual (EXOTIC's "
+                   f"criterion): {len(kept)} of {len(active0)} kept, "
+                   f"residual {resid:.1f} mmag.", LogColor.BLUE)
+        new_keep = list(keep)
+        for i, k in enumerate(keep):
+            if k and (i + 1) not in kept:
+                new_keep[i] = False
+        raw["keep"] = new_keep
+        mag_new = np.asarray(mag_new, dtype=float)
+        err_new = np.asarray(err_new, dtype=float)
+        good = np.isfinite(mag_new)
+        if int(good.sum()) < 10 or mag_new.size != np.asarray(mag).size:
+            return mag, err, X
+        # A row the new ensemble cannot serve keeps its old value rather
+        # than becoming a hole in every array built beside it.
+        mag_out = np.where(good, mag_new, np.asarray(mag, dtype=float)
+                           + float(np.nanmedian(mag_new)))
+        mag_out = mag_out - float(np.nanmedian(mag_out))
+        err_old = np.asarray(err, dtype=float)
+        err_out = (np.where(np.isfinite(err_new), err_new, err_old)
+                   if err_old.size == err_new.size else err_new)
+        return mag_out, err_out, X
+
+    def _comp_share_check(self, fit, bases, jd_utc, X) -> None:
+        """Every kept basis beyond airmass and the flip step, measured on
+        the comparison stars.  Fills ``fit["comp_share"]`` and logs a
+        line per basis: BLUE when the ensemble shares the dependence,
+        RED when only the target has it."""
+        raw = getattr(self, "_native_raw", None)
+        if not raw or not fit:
+            return
+        names = list(fit.get("bases") or [])
+        coeffs = list(fit.get("basis_coeffs") or [])
+        scales = list(fit.get("basis_scales") or [])
+        sig = list(fit.get("coeff_sigmas") or [])
+        units = {"xpos": "px", "ypos": "px", "fwhm": "px of FWHM",
+                 "sky": "ADU of sky", "n_stars": "star"}
+        out = []
+        for i, name in enumerate(names):
+            if name in ("airmass", "flip"):
+                continue
+            if i >= len(coeffs) or i >= len(scales) or not scales[i] > 0:
+                continue
+            slope = float(coeffs[i]) / float(scales[i])
+            s_sig = (float(sig[1 + i]) / float(scales[i])
+                     if len(sig) > 1 + i and sig[1 + i] is not None
+                     else float("nan"))
+            res = basis_shared_by_comps(raw, jd_utc, name, bases.get(name),
+                                        X, slope, s_sig)
+            if not res:
+                continue
+            u = units.get(name, "unit")
+            lo, hi = min(res["slopes"]), max(res["slopes"])
+            text = (f"target {1000 * slope:+.2f} mmag per {u}; "
+                    f"{res['n']} comparison star(s) {1000 * lo:+.2f}…"
+                    f"{1000 * hi:+.2f} (median {1000 * res['median']:+.2f})"
+                    + (" — shared by the ensemble, an instrumental "
+                       "dependence" if res["shared"] else
+                       " — NOT shared: only the target shows it, and a "
+                       "basis only the target follows is fitting the "
+                       "transit"))
+            res["text"] = text
+            out.append(res)
+            self._emit(f"  Basis {name}: {text}.",
+                       LogColor.BLUE if res["shared"] else LogColor.RED)
+        fit["comp_share"] = out
 
     def _hops_mode(self, jd, mag, err, blind: dict, X, eph,
                    time_system: str, flip_bases=None):
@@ -7558,11 +8308,11 @@ class LightCurveWorker(QThread):
     def _target_saturation(self, ref_path: str, x: float, y: float):
         """``(saturated, evidence)`` for the star at ``(x, y)``.
 
-        Reads the reference frame's pixels.  Verified against this data set:
-        the box lands on the target with plain ``[y, x]`` indexing -- the
-        plate solve's "Flipping image" leaves the coordinates `findstar`
-        reports consistent with the file on disk, which is also why
-        `light_curve` finds the comparison stars where they were asked for.
+        Reads the reference frame's pixels.  Whether the star's y is the
+        file row or a flipped one is whatever `star_row_convention`
+        measured after detection (``self._star_rows``): with the plate
+        solve's "Flipping image" the two coincide, without a flip the
+        box used to land one image height away from the target.
         """
         try:
             from astropy.io import fits
@@ -7577,8 +8327,11 @@ class LightCurveWorker(QThread):
                     if getattr(hdu, "data", None) is not None:
                         data = hdu.data
                         break
+                row = float(y)
+                if data is not None and not getattr(self, "_star_rows", True):
+                    row = float(np.asarray(data).shape[-2]) - 1.0 - float(y)
                 return saturation_verdict(
-                    data, x, y,
+                    data, x, row,
                     channel=int(self.opts.get("channel", 0) or 0))
         except Exception as exc:            # noqa: BLE001 -- never abort
             _log_swallowed(exc)
@@ -8078,24 +8831,25 @@ class LightCurveWorker(QThread):
         return stars
 
     def _resolve_site(self, files) -> None:
-        """Fill the observatory position from the frames when it is blank.
+        """The observatory position: from the frames first, the form second.
 
         The subs carry it -- SITELAT/SITELONG/SITEELEV are standard
         N.I.N.A. keywords -- and TWO things need it: the airmass detrend
-        and the BJD_TDB conversion.  Before this, both switched themselves
-        off whenever the user had not typed the coordinates in by hand,
-        and the airmass one did so almost silently.  A value typed into
-        the form still wins: it is the only way to correct a header that
-        is wrong.
+        and the BJD_TDB conversion.  Until 1.0.13 a value in the form won
+        over the header, as the only way to correct a wrong header.  In
+        practice the form held the LAST observatory far more often than a
+        correction: a Maryland set and an Arizona set both ran with the
+        Texas site still typed in, and the right value sat unread in
+        every header.  So the header wins when it has one; the form is
+        the fallback, or the override when its checkbox says so.
         """
-        have = (self.opts.get("site_lat_deg") is not None
-                and self.opts.get("site_lon_deg") is not None)
-        if have:
-            self._emit(f"  Site from the form: "
-                       f"{float(self.opts['site_lat_deg']):+.4f}, "
-                       f"{float(self.opts['site_lon_deg']):+.4f} "
-                       "(east positive).", LogColor.BLUE)
-            return
+        f_lat = f_lon = None
+        if (self.opts.get("site_lat_deg") is not None
+                and self.opts.get("site_lon_deg") is not None):
+            f_lat = float(self.opts["site_lat_deg"])
+            f_lon = float(self.opts["site_lon_deg"])
+        force_form = bool(self.opts.get("site_force_form")) and f_lat is not None
+        header = None
         for path in files[:5]:            # a header can be unreadable
             hdr = _read_header(path)
             site = site_from_header(hdr)
@@ -8103,6 +8857,11 @@ class LightCurveWorker(QThread):
                 continue
             lat, lon, height, where = site
             lon, sign_note = longitude_sign_check(hdr, lat, lon)
+            header = (lat, lon, height, where, sign_note,
+                      str((hdr or {}).get("SITENAME", "") or "").strip())
+            break
+        if header is not None and not force_form:
+            lat, lon, height, where, sign_note, name = header
             self.opts["site_lat_deg"] = lat
             self.opts["site_lon_deg"] = lon
             self.opts["site_height_m"] = height
@@ -8110,13 +8869,47 @@ class LightCurveWorker(QThread):
             # the same SITENAME the log already quotes in "read from the
             # FITS header (…)".  Typed-in coordinates carry no name, and
             # the title simply drops that part.
-            self.opts["site_name"] = str(
-                (hdr or {}).get("SITENAME", "") or "").strip()
+            self.opts["site_name"] = str(name or "").strip()
             self._emit(f"  Site read from the {where}: {lat:+.4f}, "
                        f"{lon:+.4f}, {height:.0f} m."
                        + (f" {sign_note}." if sign_note else ""),
                        LogColor.RED if "FLIPPED" in sign_note
                        else LogColor.BLUE)
+            sig = getattr(self, "site_found", None)
+            if sig is not None:
+                try:
+                    sig.emit(float(lat), float(lon), str(where))
+                except (RuntimeError, TypeError):
+                    pass
+            if f_lat is not None:
+                gap = site_distance_km(f_lat, f_lon, lat, lon)
+                if gap > SITE_DISAGREE_KM:
+                    self._emit(
+                        f"  The site in the form ({f_lat:+.4f}, "
+                        f"{f_lon:+.4f}) is {gap:.0f} km from the header's "
+                        "and was set aside — the frames know where they "
+                        "were taken. Tick 'Use the form's site even when "
+                        "the headers carry one' in group 5 if the header "
+                        "is the one that is wrong.", LogColor.SALMON)
+            return
+        if f_lat is not None:
+            self._emit(f"  Site from the form: {f_lat:+.4f}, {f_lon:+.4f} "
+                       "(east positive)"
+                       + (", overriding the header as requested"
+                          if header is not None else
+                          " — the frames carry none") + ".", LogColor.BLUE)
+            if header is not None:
+                lat, lon = header[0], header[1]
+                gap = site_distance_km(f_lat, f_lon, lat, lon)
+                if gap > SITE_DISAGREE_KM:
+                    self._emit(
+                        f"  Using the site in the form, but it is {gap:.0f} km "
+                        f"from where the {header[3]} puts the observatory "
+                        f"({lat:+.4f}, {lon:+.4f}). Untick the override "
+                        "to use the headers — a site left over from the "
+                        "previous observatory looks exactly like this, "
+                        "and airmass and BJD both follow it.",
+                        LogColor.RED)
             return
         self._emit("  No observatory position in the frames and none given "
                    "— the airmass detrend and the BJD_TDB conversion will "
@@ -8278,6 +9071,9 @@ class LightCurveWorker(QThread):
         # through the detection frame's own homography first, or every
         # seed is off by the full shift between the two frames.
         draw_map = None          # (det_hom, (w, h)) when the stars were moved
+        # Whether Siril's star y is a file row or a flipped one was
+        # measured on the reference frame right after detection.
+        star_rows = bool(getattr(self, "_star_rows", True))
         try:
             det = int(getattr(data, "reference_image", 0) or 0)
             wh = getattr(self, "_frame_wh", None)
@@ -8291,7 +9087,8 @@ class LightCurveWorker(QThread):
                     or abs(det_hom[0] - 1.0) > 1e-3):
                 moved = []
                 for sx, sy in stars:
-                    pos = frame_to_ref(det_hom, sx, sy, wh[0], wh[1])
+                    pos = frame_to_ref(det_hom, sx, sy, wh[0], wh[1],
+                                       star_rows=star_rows)
                     if pos is None:
                         return None
                     moved.append(pos)
@@ -8304,7 +9101,7 @@ class LightCurveWorker(QThread):
                 moved_res = []
                 for sx, sy in reserves:
                     pos = frame_to_ref(det_hom, float(sx), float(sy),
-                                       wh[0], wh[1])
+                                       wh[0], wh[1], star_rows=star_rows)
                     if pos is not None:
                         moved_res.append(pos)
                 reserves = moved_res
@@ -8458,7 +9255,7 @@ class LightCurveWorker(QThread):
                 pass
 
             def _peak_at(sx, sy):
-                pos = ref_to_frame(hom0, sx, sy, w0, h0)
+                pos = ref_to_frame(hom0, sx, sy, w0, h0, star_rows=star_rows)
                 if pos is None:
                     return float("nan")
                 xi, yi = int(round(pos[0])), int(round(pos[1]))
@@ -8630,7 +9427,7 @@ class LightCurveWorker(QThread):
             hgt, wid = d.shape[-2], d.shape[-1]
             target_hit = False
             for si, (sx, sy) in enumerate(stars):
-                pos = ref_to_frame(hom, sx, sy, wid, hgt)
+                pos = ref_to_frame(hom, sx, sy, wid, hgt, star_rows=star_rows)
                 cen = (refine_centroid(d, pos[0], pos[1])
                        if pos is not None else None)
                 if cen is not None and math.hypot(
@@ -8815,15 +9612,24 @@ class LightCurveWorker(QThread):
         stable = [c for c in cands if not (math.isfinite(c[5])
                                             and abs(c[5]) > APERTURE_MAX_SEEING_R)]
         seeing_note = ""
+        pool = stable if stable else cands
+        least = min(pool, key=lambda c: c[0])
+        best = pool[aperture_tie_break([c[0] for c in pool],
+                                       [c[1] for c in pool])]
+        tie_note = ""
+        if best is not least:
+            tie_note = (f"; {least[1]:.2f} px measured "
+                        f"{100.0 * (1.0 - least[0] / best[0]):.1f} % less "
+                        f"noise, within the {APERTURE_NOISE_TIE:.0%} tie, "
+                        "and the larger radius keeps more of the star as "
+                        "the seeing moves")
         if stable:
-            best = min(stable, key=lambda c: c[0])
             skipped = len(cands) - len(stable)
             if skipped:
                 seeing_note = (f"{skipped} smaller-scatter aperture(s) "
                                f"passed over because their curve tracks "
                                f"the seeing (|r| > {APERTURE_MAX_SEEING_R:g})")
         else:
-            best = min(cands, key=lambda c: c[0])
             seeing_note = ("every aperture's curve tracks the seeing "
                            f"(|r| > {APERTURE_MAX_SEEING_R:g}); the fwhm "
                            "basis has to carry it")
@@ -8840,7 +9646,8 @@ class LightCurveWorker(QThread):
         self._emit(
             f"  Aperture {r_best:.2f} px "
             f"({r_best / max(float(fwhm), 1e-9):.2f} x FWHM) chosen by "
-            f"point-to-point noise; sky annulus {r_in:.1f}-{r_out:.1f} px; "
+            f"point-to-point noise{tie_note}; sky annulus "
+            f"{r_in:.1f}-{r_out:.1f} px; "
             f"gain {gain_hdr:g} e-/ADU {gain_src}.", LogColor.GREEN)
         # Centre the curve on its own median.  The raw value is
         # -2.5*log10(flux / a reference normalised to ~1) — an arbitrary
@@ -8901,15 +9708,22 @@ class LightCurveWorker(QThread):
         # the detection frame, i.e. ``ref_path``.  Set only here, after
         # every fallback exit: a run that fell back to Siril's
         # light_curve must not draw stars Siril never measured.
+        # ``draw`` is in FILE ROWS: the field image plots the reference
+        # file with origin="lower", so a star must be given by its row.
         if draw_map is not None:
             dh, (dw, dhh) = draw_map
             draw = []
             for sx, sy in stars:
-                pos = ref_to_frame(dh, sx, sy, dw, dhh)
+                pos = ref_to_frame(dh, sx, sy, dw, dhh, star_rows=star_rows)
                 draw.append((float(pos[0]), float(pos[1])) if pos is not None
                             else (float(sx), float(sy)))
         else:
-            draw = [(float(sx), float(sy)) for sx, sy in stars]
+            wh_draw = getattr(self, "_frame_wh", None)
+            if star_rows or not wh_draw:
+                draw = [(float(sx), float(sy)) for sx, sy in stars]
+            else:
+                draw = [(float(sx), float(wh_draw[1]) - 1.0 - float(sy))
+                        for sx, sy in stars]
         self._photometry_stars = list(draw)
         self._native_raw = {
             "files": [os.path.basename(p) for (_i, _h, _w, p) in frames],
@@ -8919,6 +9733,10 @@ class LightCurveWorker(QThread):
             "ferr": ferr[r_best].copy(), "sky": skyv, "sky_err": skye,
             "peak": peakv, "status": status,
             "stars": list(draw),
+            # The same stars in the REFERENCE frame's coordinates, the
+            # ones every "comp (x, y)" line of the log quotes; ``stars``
+            # is the field-image mapping and reads differently.
+            "stars_ref": [(float(sx), float(sy)) for sx, sy in stars],
             "keep": [bool(k) for k in keep],
             "aperture": float(r_best), "r_in": float(r_in),
             "r_out": float(r_out), "gain": float(gain_hdr),
@@ -9117,7 +9935,16 @@ class LightCurveWorker(QThread):
                   f"the best yield ({top}). Fewer frames measured is a "
                   "seeing-selected sample, and its scatter reads low for "
                   "that reason alone.", LogColor.SALMON)
-        aper, _n, _rms = min(eligible, key=lambda t: (t[2], -t[1]))
+        least = min(eligible, key=lambda t: (t[2], -t[1]))
+        aper, _n, _rms = eligible[aperture_tie_break(
+            [t[2] for t in eligible], [t[0] for t in eligible])]
+        if aper != least[0]:
+            self._emit(
+                f"    {aper:.2f} px taken over {least[0]:.2f} px: "
+                f"{100.0 * (1.0 - least[2] / _rms):.1f} % less noise is "
+                f"within the {APERTURE_NOISE_TIE:.0%} tie, and the larger "
+                "radius keeps more of the star as the seeing moves.",
+                LogColor.BLUE)
         return (aper, APERTURE_INNER_RATIO * aper,
                 APERTURE_OUTER_RATIO * aper, rows)
 
@@ -9243,6 +10070,30 @@ class LightCurveWorker(QThread):
                        f"Archive for the ephemeris (name from {src})…",
                        LogColor.BLUE)
             found, why = archive_lookup(pl)
+            unreachable = "could not be reached" in why
+            if not found and not unreachable and not looks_like_toi(pl):
+                # A project label in front of the designation ("ESPC
+                # WASP-12") is a miss at the archive; the designation
+                # behind it is not.  Not after a network failure, though:
+                # every retry would sit through the same timeout.
+                for alt in designation_candidates(pl):
+                    alt_planet = normalise_planet_name(alt)
+                    found_alt, why_alt = archive_lookup(alt_planet)
+                    if found_alt:
+                        self._emit(f"  {why} — took {alt_planet!r} out of "
+                                   f"{pl!r} (a label in front of the "
+                                   "designation) and the archive knows it.",
+                                   LogColor.BLUE)
+                        found, why = found_alt, why_alt
+                        break
+                    # A retry that fails must say so: the first one on
+                    # this path hit an SSL timeout and left only the
+                    # "no planet called 'ESPC WASP-12'" line behind, as if
+                    # the retry had never run.
+                    self._emit(f"  Took {alt_planet!r} out of {pl!r} and "
+                               f"tried again: {why_alt}.", LogColor.SALMON)
+                    if "could not be reached" in why_alt:
+                        break
             if not found and looks_like_toi(pl):
                 # TOI-XXXX.01 is a CANDIDATE designation — the confirmed-
                 # planet table cannot know it, and losing the whole
@@ -9442,6 +10293,7 @@ class LightCurveWorker(QThread):
         folder = self.folder
         self._ldc_choice = None
         self._scint_note = ""
+        self._star_rows = True
         self.progress.emit(2, "Reading headers…")
         found = _fits_files(folder)
         if not found:
@@ -9551,6 +10403,7 @@ class LightCurveWorker(QThread):
                 LogColor.SALMON)
         stars, ref_path = self._detect_reference_stars(seq, proc)
         self._ref_stars = stars
+        self._measure_star_rows(ref_path, stars)
         self._resolve_site(files)
         fwhm = _median([getattr(st, "fwhmx", 0.0) for st in stars]) or 3.0
         self._ref_fwhm = float(fwhm)
@@ -9986,6 +10839,9 @@ class LightCurveWorker(QThread):
         raw_rms = _mad_std(mag) * 1000.0
 
         X, airmass_note = self._airmass_series(jd_utc)
+        mag, err, X = self._reselect_comps(jd, jd_utc, mag, err, X,
+                                           airmass_note, eph, time_system)
+        raw_rms = _mad_std(mag) * 1000.0
 
         # Scintillation into the per-point errors, when the telescope
         # aperture is known.  The CCD equation above measures star and
@@ -10097,11 +10953,78 @@ class LightCurveWorker(QThread):
         # and the mid-time instead of treating the baseline as exact.
         u1_fit, u2_fit, _claret, ld_source, _ld_note = \
             self._limb_darkening(eph)
+        err_fit = err if err.size == jd.size else None
+        # A known planet is fitted the way EXOTIC and TFOP fit one:
+        # anchored on its ephemeris.  Everything else is discovery mode.
+        anchor, anchor_why = ephemeris_anchor(eph, jd, time_system)
+        if anchor:
+            self._emit(
+                f"  Anchored on the ephemeris: mid-time within "
+                f"±{anchor['window_min']:.0f} min of {anchor['t0']:.5f} "
+                f"(epoch {anchor['epoch']}"
+                + (f", ephemeris sigma {anchor['sigma_min']:.1f} min"
+                   if np.isfinite(anchor["sigma_min"]) else
+                   ", the archive gives no timing error") + ")"
+                + (f", duration {anchor['duration_d'] * 24.0:.2f} h "
+                   f"±{100 * anchor['duration_tol']:.0f} % from the archive"
+                   if anchor.get("duration_d") else
+                   ", duration free (the archive gives none)")
+                + " — period fixed; only the depth and the systematics "
+                  "are free, as EXOTIC and TFOP fit a known planet.",
+                LogColor.BLUE)
+        elif eph:
+            self._emit(f"  Not anchored on the ephemeris: {anchor_why}. "
+                       "Mid-time and duration are searched freely "
+                       "(discovery mode).", LogColor.SALMON)
+        # Every basis beyond airmass (and the flip step, a physical
+        # event) must earn its place by the BIC, the transit in the
+        # model throughout.  Offering all of them unasked handed a 6
+        # sigma transit to a 7 px drift on TOI-2040.01.
+        always = {k: v for k, v in bases.items() if k in ("airmass", "flip")}
+        cands = {k: v for k, v in bases.items() if k not in always}
+        bic_rows = []
+        if cands:
+            bases, bic_rows = select_bases_bic(
+                jd, mag, always, cands, u1=u1_fit, u2=u2_fit, err=err_fit,
+                anchor=anchor)
+            bic_kept = [(n, d) for n, d, k in bic_rows if k]
+            bic_rej = [(n, d) for n, d, k in bic_rows if not k]
+            self._emit(
+                f"  Bases by BIC (a basis must lower it by "
+                f"{BIC_KEEP_DELTA:g}): "
+                + (", ".join(always) + " always" if always else "none always")
+                + ("; kept " + ", ".join(f"{n} ({d:+.1f})"
+                                        for n, d in bic_kept)
+                   if bic_kept else "")
+                + ("; rejected " + ", ".join(
+                    f"{n} ({d:+.1f})" if np.isfinite(d) else f"{n} (unusable)"
+                    for n, d in bic_rej) if bic_rej else "")
+                + ".", LogColor.BLUE)
         fit = fit_transit(jd, mag, bases=bases, u1=u1_fit, u2=u2_fit,
-                          err=err if err.size == jd.size else None)
+                          err=err_fit, anchor=anchor)
         if fit is not None:
             fit["ld_note"] = ld_source
             fit["scint_note"] = self._scint_note
+            fit["bic_rows"] = [(str(n), float(d), bool(k))
+                               for n, d, k in bic_rows]
+            if fit.get("anchored"):
+                # The free scan stays as the cross-check: a discovery-mode
+                # template that lands elsewhere is worth a line.
+                free = fit_transit(jd, mag, bases=bases, u1=u1_fit,
+                                   u2=u2_fit, err=err_fit)
+                if free is not None:
+                    fit["free_scan"] = {
+                        "t0": float(free["t0"]),
+                        "duration_h": float(free["duration_h"]),
+                        "depth_mmag": float(free["depth_mmag"]),
+                        "significance": float(free["significance"])}
+                    self._emit(
+                        f"  Free scan as a cross-check: best template at "
+                        f"T0 {free['t0']:.5f}, {free['depth_mmag']:.1f} mmag "
+                        f"over {free['duration_h']:.2f} h, "
+                        f"{free['significance']:.1f} sigma. The anchored "
+                        "fit above is the result.", LogColor.BLUE)
+            self._comp_share_check(fit, bases, jd_utc, X)
         if fit is not None and self.opts.get("fit_mode") == "hops":
             # The blind fit ran first and keeps the detection verdict;
             # HOPS mode replaces the MEASUREMENT (depth, mid-time, shape)
@@ -12980,6 +13903,17 @@ class SvenesisLightCurveWindow(QMainWindow):
             "the log says so.")
         grid.addWidget(self.ed_aperture_mm, 1, 1)
         lay.addLayout(grid)
+        self.chk_site_force = QCheckBox(
+            "Use the form's site even when the headers carry one")
+        self.chk_site_force.setChecked(False)
+        self.chk_site_force.setToolTip(
+            "Off (the default): the observatory position comes from the "
+            "frames' SITELAT/SITELONG when they have one, and the fields "
+            "above are the fallback for frames without. On: the fields "
+            "override the header — for a capture program that wrote the "
+            "wrong site. A form site more than 50 km from the header's is "
+            "reported either way.")
+        lay.addWidget(self.chk_site_force)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Bin the plot into:"))
@@ -13404,6 +14338,7 @@ class SvenesisLightCurveWindow(QMainWindow):
             "site_lat_deg": lat if np.isfinite(lat) else None,
             "site_lon_deg": lon if np.isfinite(lon) else None,
             "aperture_mm": _parse_aperture_mm(self.ed_aperture_mm.text()),
+            "site_force_form": self.chk_site_force.isChecked(),
             "auto_ldc": self.chk_auto_ldc.isChecked(),
             "n_comps": self.spin_comps.value(),
             "min_comp_snr": self.spin_snr.value(),
@@ -13456,7 +14391,17 @@ class SvenesisLightCurveWindow(QMainWindow):
         self._worker.log.connect(self._log)
         self._worker.finished_ok.connect(self._on_done)
         self._worker.failed.connect(self._on_failed)
+        self._worker.site_found.connect(self._on_site_found)
         self._worker.start()
+
+    def _on_site_found(self, lat: float, lon: float, where: str) -> None:
+        """The site the run read from the frames goes into the form —
+        overwriting what was there — so the fields show the position
+        that was actually used and carry it into the saved settings."""
+        self.ed_lat.setText(f"{lat:.4f}")
+        self.ed_lon.setText(f"{lon:.4f}")
+        self.ed_lat.setToolTip(f"Read from the {where} of the last run.")
+        self.ed_lon.setToolTip(f"Read from the {where} of the last run.")
 
     def _set_running(self, busy: bool) -> None:
         self.btn_run.setEnabled(not busy and bool(self._folder))
@@ -13756,6 +14701,26 @@ class SvenesisLightCurveWindow(QMainWindow):
                      if fit.get("weighted") else "unweighted least squares"))
             if fit.get("scint_note"):
                 A(f"   error bars     {fit['scint_note']}")
+            if fit.get("anchored") and fit.get("anchor"):
+                _a = fit["anchor"]
+                A("   anchor         mid-time within +/-"
+                  f"{float(_a.get('window_min') or 0):.0f} min of the "
+                  f"ephemeris (epoch {_a.get('epoch')}), duration "
+                  + (f"{24.0 * float(_a['duration_d']):.2f} h +/-"
+                     f"{100 * float(_a.get('duration_tol') or 0):.0f} %"
+                     if _a.get("duration_d") else "free"))
+            if fit.get("bic_rows"):
+                A("   bases (BIC)    " + ", ".join(
+                    f"{n} {'kept' if k else 'rejected'} ({d:+.1f})"
+                    for n, d, k in fit["bic_rows"]))
+            for _cs in fit.get("comp_share") or []:
+                A(f"   basis {_cs['name']:<8s} {_cs['text']}")
+            if fit.get("free_scan"):
+                _fs = fit["free_scan"]
+                A(f"   free scan      T0 {_fs['t0']:.5f}, "
+                  f"{_fs['depth_mmag']:.1f} mmag over "
+                  f"{_fs['duration_h']:.2f} h, {_fs['significance']:.1f} "
+                  "sigma (discovery-mode cross-check)")
             A(f"   False alarm    {100 * MEASURED_FALSE_ALARM:.2f} % at the "
               f"{MIN_DETECTION_SIGMA:.1f} sigma floor")
             A(f"                  (measured, {MEASURED_FALSE_ALARM_RUNS} "
@@ -13958,6 +14923,8 @@ class SvenesisLightCurveWindow(QMainWindow):
         self.ed_lat.setText(str(st.value("site_lat", "")))
         self.ed_lon.setText(str(st.value("site_lon", "")))
         self.ed_aperture_mm.setText(str(st.value("aperture_mm", "")))
+        self.chk_site_force.setChecked(
+            str(st.value("site_force", "false")).lower() == "true")
         self.chk_auto_ldc.setChecked(
             str(st.value("auto_ldc", "true")).lower() == "true")
         try:
@@ -14007,6 +14974,8 @@ class SvenesisLightCurveWindow(QMainWindow):
         st.setValue("site_lat", self.ed_lat.text())
         st.setValue("site_lon", self.ed_lon.text())
         st.setValue("aperture_mm", self.ed_aperture_mm.text())
+        st.setValue("site_force",
+                    "true" if self.chk_site_force.isChecked() else "false")
         st.setValue("auto_ldc",
                     "true" if self.chk_auto_ldc.isChecked() else "false")
         st.setValue("n_comps", self.spin_comps.value())

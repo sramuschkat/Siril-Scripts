@@ -497,7 +497,7 @@ Reads the current plate-solved image from Siril, identifies the main astronomica
 
 ## Svenesis LightCurve
 
-**File:** `Svenesis-LightCurve.py` (v1.0.12) — **[Detailed Instructions](Instructions/Svenesis-LightCurve-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-LightCurve-Instructions_de.md)**
+**File:** `Svenesis-LightCurve.py` (v1.0.14) — **[Detailed Instructions](Instructions/Svenesis-LightCurve-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-LightCurve-Instructions_de.md)**
 
 Exoplanet transit photometry inside Siril, in the spirit of [EXOTIC](https://github.com/rzellem/EXOTIC) (NASA's Exoplanet Watch pipeline) and [HOPS](https://github.com/ExoWorldsSpies/hops) — and tested against EXOTIC on its own sample data, with matching results. Point it at the folder holding one night's sub-exposures of an exoplanet host star. It measures how that star's brightness changed relative to other stars in the same field, removes the systematic trends it can account for, fits a transit — and tells you whether the dip is real.
 
@@ -543,7 +543,7 @@ The legend quotes T0 and Rp/R★ with errors and names the detrending bases; spi
 
 ### Tests
 
-`tests/test_lightcurve_helpers.py` runs with plain `python3` — no Siril required. Over 840 checks against input with a known answer: the J2000 epoch, sec z, synthetic transits of stated depths recovered by the full photometry engine and the full fit, twelve pure-noise runs that must not be claimed, the monotonic ramp that the two-sided test exists for, error bars calibrated against 24 independent synthetic nights, and the limb-darkened depth conventions round-tripped through the same model the fit uses.
+`tests/test_lightcurve_helpers.py` runs with plain `python3` — no Siril required. Over 880 checks against input with a known answer: the J2000 epoch, sec z, synthetic transits of stated depths recovered by the full photometry engine and the full fit, twelve pure-noise runs that must not be claimed, the monotonic ramp that the two-sided test exists for, error bars calibrated against 24 independent synthetic nights, and the limb-darkened depth conventions round-tripped through the same model the fit uses.
 
 ---
 
