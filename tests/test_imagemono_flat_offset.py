@@ -206,7 +206,7 @@ ns2["StackWorker"] = _SW
 ns2["DARK_EXPOSURE_TOLERANCE"] = 0.05
 ns2["_sig_sort_key"] = lambda sig: tuple(str(x) for x in sig)
 for _m in ("_flat_offset_pick", "_flat_files", "_flats_cell", "_flat_rows",
-           "_calib_detail",
+           "_calib_detail", "_flats_by_night", "_manifest_on",
            "_dark_for_filter", "_dark_preview", "_dark_rows", "_dark_gaps"):
     exec("from __future__ import annotations\n"
          + _method("ImageMonoTrainWindow", _m), ns2)
@@ -216,6 +216,11 @@ class T:
     # path -> observing night, as the analysis fills it in.  Empty here:
     # the fixtures below are bare paths, so the folder date answers.
     _nights: dict = {}
+    # No NINA-PM manifest: the per-night switch alone decides.
+    _manifest = None
+    _manifest_flats = False
+    _flats_by_night = ns2["_flats_by_night"]
+    _manifest_on = ns2["_manifest_on"]
     _flat_offset_preview = ns2["_flat_offset_preview"]
     _flat_offset_pick = ns2["_flat_offset_pick"]
     _flat_files = ns2["_flat_files"]
@@ -449,7 +454,8 @@ check("(use_darks or use_flats)" in build,
       "darks off must not silently downgrade every flat to a synthetic "
       "offset")
 args = _method("StackWorker", "_calibrate_args")
-i_bias = args.index("self._masters.get(KIND_BIAS)")
+# The line that APPLIES it -- the "no dark" message names the bias too.
+i_bias = args.index("(not dark and self._masters.get(KIND_BIAS)")
 check('self._opts.get("use_darks", True)' in args[i_bias:i_bias + 200],
       "and that bias reaches the LIGHTS only while darks are on")
 # The dark and flat arguments need no gate of their own: with the masters
@@ -509,7 +515,9 @@ opts = _method("ImageMonoTrainWindow", "_current_opts")
 check('"calibrate": self._calibration_on()' in opts,
       "and that is what reaches the run, so it cannot drift")
 tog = _method("ImageMonoTrainWindow", "_on_calib_kind_toggled")
-check("self.chk_flats_by_date.setEnabled(flats)" in tog
+lock = _method("ImageMonoTrainWindow", "_sync_flats_by_date_lock")
+check("self._sync_flats_by_date_lock()" in tog
+      and "self.chk_use_flats.isChecked() and not forced" in lock
       and "self.chk_cosmetic" in tog,
       "each dependent control follows its OWN kind — one switch greyed "
       "them all together, so per-night flats went dead over unusable darks")

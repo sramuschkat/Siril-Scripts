@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.7.20** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.8.0** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.7.20](#17-whats-new-in-1720)
+17. [What's New in 1.8.0](#17-whats-new-in-180)
 
 ---
 
@@ -156,6 +156,36 @@ M16/
 
 Darks and bias belong in a separate **Library** folder (see §7), because they are reusable for months.
 
+### A NINA-PM manifest
+
+If you plan and run the rig with **NINA-PM**, it can export per project a stack manifest, `<project>.svenesis-monotrain.json`. It holds what NINA-PM *knows* and the folder can only hint at: which frames its review or automatic grading rejected and why, which night and mosaic panel each light belongs to, which flat set calibrates which lights, and how Siril's SPCC tables name the rig.
+
+Put the file into the target folder. The analysis looks in the selected folder and up to three folders above it — the same reach as the *Results folder* menu — so with Astro-PM it belongs next to `Originals`. When it finds several, it uses the one that lists the most of the light frames found, not the one with the matching name; two that list them equally well are reported and neither is used. Without a manifest nothing changes.
+
+What it changes, and what it does not:
+
+- **Rejected frames stay out** while *leave out frames NINA-PM rejected* is on (the default). The Log sums them per filter and reason; `output.md` lists every one. Siril's own quality filters still run on what is left.
+- **Each light gets the flat set NINA-PM assigned to it**, one master per night — including a catch-up set shot on a later night, which no date rule can find. *Match flats to the same night* is then decided by the manifest and greyed out. A light without a set is named by filter and night.
+- **SPCC is told the rig as NINA-PM names it**, after the names are checked against Siril's tables (see §10).
+- **A mosaic is stacked one panel per run.** With more than one panel a *Mosaic panel* menu appears under the switches; the run writes into `Stacked/<panel>/` and puts the panel into the master names.
+- **The FITS header stays the authority** on a frame's filter and exposure. Where NINA-PM disagrees, the header wins and the Log names the frame.
+- **A light the manifest does not list** is stacked and named. If the manifest describes only part of the data — some nights, a date range, a result image, or an export without the rejected frames — it is left out instead, so a stand can be stacked again exactly. In a mosaic it is left out too: its panel is unknown.
+
+| Field | What the script does with it |
+|---|---|
+| `lights[].file` | Matches the entry to a frame on disk, by file name |
+| `lights[].status`, `reason`, `detail`, `rejectedBy` | Leaves a frame that is not `ok` out, and reports why |
+| `lights[].night`, `flatSet` | The night the light is calibrated as, and the flat set it is divided by |
+| `lights[].panel` | Which mosaic panel's run takes the light |
+| `lights[].filter`, `exposureS` | Cross-checked against the header only |
+| `flatSets[]` | The flat files of each set, the night it serves, when it was shot, catch-up or not |
+| `equipment.spccSensor`, `filters[].spccFilter` | SPCC sensor and filter names, used after a check against Siril's tables |
+| `filters[].filterType`, `centerWavelengthNm`, `bandwidthNm` | Narrowband bandwidth for SPCC; a role for a filter name the script does not know |
+| `options` | Whether the manifest is a deliberate part of the data |
+| `lights[].metrics`, `warnings` | Reported per filter — guiding, HFR, airmass, meridian flips — never used for weighting |
+
+A filter marked narrowband but wider than 30 nm is treated as a mistake in the project and judged by its name — the first LDN1228 export had L as narrowband at 295 nm.
+
 ---
 
 ## 5. Getting Started — Your First Run
@@ -164,6 +194,8 @@ Darks and bias belong in a separate **Library** folder (see §7), because they a
 2. **Select Target Folder…** — pick the root folder of **one** target. Under **Output**, *Results folder* decides where `Stacked/` is created: inside that folder, or up to three folders above it. With Astro-PM, pick the target's `Originals` folder and choose *1 level up*.
 3. Optionally set a **Library…** folder holding your reusable darks and bias. It is remembered between runs.
 4. Selecting the folder analyses it straight away — **Re-scan Folder** is there for afterwards, once you add frames or change the Library. Three tables follow. **Discovered Lights** lists every filter with its frame count, total integration and camera state — what was shot. **Flats and Dark-Flats** and **Calibration with Darks and Bias** say what those lights will be *given*: the sets that will really be opened, the offset each flat is corrected with, and which filters each dark covers. Each of the two calibration tables carries its own switch, so a session with good flats and a library of darks that fit nothing is no longer an all-or-nothing choice. What is switched off stays listed and turns grey — found is never the same as applied — and a filter that gets **no dark** is named in warning colour under its table.
+
+   If a **NINA-PM manifest** was found, the *Target Folder* box names it and shows its switches, and the Log says which frames it leaves out and which flats it assigns (§4).
 
    The **Calibration** column answers the question the table exists for: *what will happen to these lights?* It reads `Dark + Flat ×3`, `Flat`, `Bias + Flat` or `none` — the masters that will actually reach that filter, in the order `Lc = (L − D) / (F − O)` applies them, with `×3` meaning one master flat per night. It follows every switch below it: flip *Match flats to the same night* and the `×3` appears or goes.
 
@@ -192,7 +224,7 @@ The Log is where the script explains its decisions. When it skips something, deg
 
 ### Left panel, top to bottom
 
-1. **Target folder** — *Select Target Folder…* and *Analyze Folder*
+1. **Target folder** — *Select Target Folder…* and *Re-scan Folder*; when a NINA-PM manifest is found, its two switches and, for a mosaic, the panel menu (§4)
 2. **Calibration** — library path and the calibration switches (§7)
 3. **Stacking** — rejection, weighting, quality filters, framing, background (§8)
 4. **Colour** — palette, channel mapping, composition and auto-finish (§9, §10)
@@ -279,7 +311,7 @@ The pooled master is built even when every night has its own. It is the fallback
 | **Use flats and dark-flats** | Divide the lights by the master flat. The dark-flat (or bias) is the flat's own offset and follows this switch. Off = no flat master is stacked at all. |
 | **Use darks and bias** | Subtract the master dark, and use the bias where no dark applies. Off = neither master is stacked — but the bias is still built when the flats need it as their offset. |
 | **Cosmetic correction (hot pixels)** | `-cc=dark` — removes hot and cold pixels using the dark's own statistics. Requires a dark. |
-| **Match flats to the same night** | Builds one master flat **per night** and divides each night's lights by its own, then merges the calibrated nights again before registration. Turn this on if the optical train was touched between sessions; leave it off to pool flats for a lower-noise master. |
+| **Match flats to the same night** | Builds one master flat **per night** and divides each night's lights by its own, then merges the calibrated nights again before registration. Turn this on if the optical train was touched between sessions; leave it off to pool flats for a lower-noise master. Greyed out while a NINA-PM manifest assigns the flats (§4). |
 
 ### The flat offset chain
 
@@ -669,6 +701,8 @@ spcc_list redfilter
 
 The fields ship **pre-filled for the author's rig** — Player One Ares-M Pro (IMX533 mono) with Antlia LRGB V-Pro and 4.5 nm Edge SHO filters. Overwrite them for your own kit; they are remembered. Leaving them blank falls back to whatever is configured in Siril's own SPCC dialog.
 
+A **NINA-PM manifest** can name the rig itself: `equipment.spccSensor` and `filters[].spccFilter`. Those names are checked against the same tables and, when Siril holds them, used for that run — the fields keep what you typed. A name Siril does not hold is reported and the field's value is used instead.
+
 ### Narrowband gets calibrated too
 
 With SHO or HOO the script runs SPCC in **narrowband mode**, describing each mapped channel by its emission line — Ha 656.3, OIII 500.7, SII 671.6 nm — plus the bandwidth you set (fractional values like 4.5 nm are supported). Ordinary star photometry is meaningless for mapped emission lines, so PCC is never attempted for these palettes.
@@ -756,7 +790,7 @@ Stacked/
 └─ _work/                intermediates — safe to delete
 ```
 
-**Where the folder goes.** *Results folder* in the **Output** group places `Stacked/` inside the folder you selected, or up to three folders above it; the **Output** line shows the exact path. With Astro-PM, select `Originals` and choose *1 level up*, which puts it beside `Originals`. A results folder written before 1.7.20 is called `output/`. It is still recognised and skipped during discovery; rename it to `Stacked` to keep reusing its masters.
+**Where the folder goes.** *Results folder* in the **Output** group places `Stacked/` inside the folder you selected, or up to three folders above it; the **Output** line shows the exact path. With Astro-PM, select `Originals` and choose *1 level up*, which puts it beside `Originals`. A mosaic stacked from a NINA-PM manifest gets one folder per panel, `Stacked/<panel>/`, each with its own masters and reports. A results folder written before 1.7.20 is called `output/`. It is still recognised and skipped during discovery; rename it to `Stacked` to keep reusing its masters.
 
 **`masters/` holds two versions per channel.** The `_fullframe` file is the stack in its own geometry; the plain one has been re-projected onto the common grid and is the one to use for channel combination.
 
@@ -916,7 +950,22 @@ No. Everything is written under `Stacked/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.7.20
+## 17. What's New in 1.8.0
+
+**What NINA-PM knows is read instead of guessed.** If you plan and run the rig with NINA-PM, put its stack manifest (`<project>.svenesis-monotrain.json`) into the target folder; §4 describes the file and every field the script reads. Without one, nothing changes.
+
+- **Frames NINA-PM rejected stay out**, each listed with its reason in the Log and in `output.md`. On LDN1228 that was 26 frames, all *stars below the threshold*, 17 of them L from one cloudy night. *leave out frames NINA-PM rejected* switches it off for a comparison.
+- **Flats per light, as NINA-PM assigned them**, one master per night, catch-up sets from a later night included. *Match flats to the same night* is greyed out while the manifest decides it.
+- **SPCC as NINA-PM names the rig**, checked against Siril's tables first, for this run only — the SPCC fields keep what you typed. A name Siril does not hold, such as the OSC trap `IMX533`, is reported and the fields are used.
+- **Mosaics are stacked one panel per run**, each into `Stacked/<panel>/`.
+- **The header stays the authority.** NINA-PM's filter and exposure are only compared with it, and a disagreement is logged.
+- **Guiding, HFR and airmass** are reported per filter, and frames guided worse than 1.5× the median are counted. They are not used for weighting: that stays with what Siril measures on the image.
+
+The help's *Getting Started* tab still sent you to the `output` folder; it says `Stacked` now.
+
+**Two things the first LDN1228 run said wrong.** With no dark anywhere, *no dark within 5% of 180s lights* came once per calibration part — nineteen times over seven nights — explaining a tolerance to a run that had no dark at all. It now says once per filter that none was found and that darks come from the Library. And both log readers lost their numbers — the star-pair counts and the SPCC fit. A diagnostic line showed why: Siril hands its log over with NUL padding at the end, right where the reader anchors, and that run's Siril was set to German, whose lines (*Befehlsausführung*, *Bild R/G … Sigma*, *Korrespondierende Paare*) the readers did not know. Both are handled now.
+
+## What was new in 1.7.20
 
 The results folder is called **Stacked**, and you choose where it goes.
 

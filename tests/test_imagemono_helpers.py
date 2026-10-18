@@ -8,8 +8,11 @@ behaviour across the whole range.
 Run:  python3 tests/test_imagemono_helpers.py
 """
 import ast
+import copy
 import datetime
 import itertools
+import json
+import tempfile
 import math
 import os
 import re
@@ -23,6 +26,7 @@ src = open(SRC).read()
 tree = ast.parse(src)
 
 ns = {"os": os, "re": re, "math": math, "datetime": datetime, "np": np,
+      "json": json,
       "_log_swallowed": lambda exc: None, "fits": None}
 for node in tree.body:                      # module constants
     if isinstance(node, ast.Assign):
@@ -37,13 +41,19 @@ WANT = ("_format_duration", "_median", "_exp_tag", "_night_key", "_path_date",
         "_palette_roles", "_is_nb_palette", "_fits_ext", "_is_fits_like",
         "_first_with_role", "_detect_palette", "_auto_channel_map",
         "_unfillable_channels", "_align_pairs_warn", "_weight_token",
-        "_parse_spcc_fit", "_log_delta", "_night_of", "_flat_shape",
+        "_parse_spcc_fit", "_log_delta", "_log_text",
+        "_parse_align_pairs", "_night_of", "_flat_shape",
         "_flat_normalise", "_rebin_mean", "_flat_ratio_spread", "_with_fits",
         "_spread_sample", "_palette_filters", "_align_ref_advice",
         "_pixel_scale_deg", "_fov_arcmin", "_rbf_narrowband_advice",
         "_output_dir", "_output_levels", "_looks_like_results",
         "_skip_in_discovery", "_filters_without_flats", "_frame_record",
-        "_calib_master_stale")
+        "_calib_master_stale", "_name_role", "_norm_filter",
+        "_manifest_candidates", "_load_manifest", "_manifest_lights",
+        "_manifest_pick", "_manifest_is_subset", "_manifest_panels",
+        "_manifest_role", "_manifest_nb_doubt", "_manifest_role_overrides",
+        "_manifest_spcc", "_manifest_metrics", "_apply_manifest",
+        "_names_short", "_manifest_log_lines", "_manifest_md")
 for node in tree.body:
     if isinstance(node, ast.FunctionDef) and node.name in WANT:
         exec("from __future__ import annotations\n"
@@ -797,6 +807,274 @@ check(stale(both, fr(night_a, _size), None) == "10 frame(s) added since it was b
       "per-night folders reusing flat_00001.fit still count twice")
 check(fr(["/x/gone.fit"], lambda p: (_ for _ in ()).throw(OSError())) == [["gone.fit", -1]],
       "an unreadable size is recorded as -1, not raised")
+
+print("\n1.8.0 — the NINA-PM manifest")
+# The LDN1228 export exactly as NINA-PM wrote it, and a discovery result
+# built from its own file names, so every light and flat is "on disk".
+FIX = os.path.join(HERE, "fixtures", "LDN1228-LRGB.svenesis-monotrain.json")
+load = ns["_load_manifest"]
+man, problem = load(FIX)
+check(man is not None and problem == "", "the LDN1228 manifest loads")
+ROOT = "/data/LDN1228/Originals"
+
+
+def _scan(m, extra_light=None, extra_flat=None):
+    groups, flats = {}, {}
+    for lt in m["lights"]:
+        p = f"{ROOT}/{lt['night']}/LIGHT/{lt['filter']}/{lt['file']}"
+        g = groups.setdefault(lt["filter"], {
+            "files": [], "by_exp": {}, "sample": {}, "info": {},
+            "dates": [], "exps": [], "exp_total": 0.0})
+        g["files"].append(p)
+        g["by_exp"].setdefault(float(lt["exposureS"]), []).append(p)
+    if extra_light:
+        filt, name, exp = extra_light
+        p = f"{ROOT}/x/LIGHT/{filt}/{name}"
+        groups[filt]["files"].append(p)
+        groups[filt]["by_exp"].setdefault(exp, []).append(p)
+    for fs in m["flatSets"]:
+        for f in fs["flats"]:
+            p = f"{ROOT}/{fs['flatsNight']}/FLAT/{fs['filter']}/{f}"
+            flats.setdefault(fs["filter"], {
+                "files": [], "info": {"filter": fs["filter"], "exp_s": 3.0},
+                "date": ""})["files"].append(p)
+    if extra_flat:
+        flats[extra_flat[0]]["files"].append(
+            f"{ROOT}/old/FLAT/{extra_flat[0]}/{extra_flat[1]}")
+    return groups, {"flat": flats, "darkflat": {}, "dark": {}, "bias": {}}
+
+
+groups, calib = _scan(man, ("RED", "stray.fits", 180.0), ("RED", "old.fits"))
+before = copy.deepcopy((groups, calib))
+apply_m = ns["_apply_manifest"]
+v = apply_m(groups, calib, {}, man)
+r = v["report"]
+check((groups, calib) == before, "the scan itself is left untouched")
+check(r["listed"] == 518 and r["matched"] == 518,
+      "all 518 listed lights are matched by file name")
+check(len(r["rejected"]) == 26
+      and all(x["reason"] == "stars" for x in r["rejected"]),
+      "the 26 frames NINA-PM rejected are found, with their reason")
+counts = {f: len(g["files"]) for f, g in v["groups"].items()}
+check(counts == {"LUMINOS": 247, "RED": 78, "GREEN": 84, "BLUE": 84},
+      "rejected frames leave the stack; the unlisted RED one stays")
+check(r["unlisted"] == ["stray.fits"] and r["unlisted_kept"],
+      "a light the full manifest does not list is named and kept")
+red = v["groups"]["RED"]
+check(red["exp_total"] == 78 * 180.0 and red["exps"] == [180.0],
+      "integration time follows the frames that are left")
+check(v["flats_by_night"], "the manifest assigns the flats per night")
+fl = v["calib"]["flat"]
+check({f: len(g["files"]) for f, g in fl.items()}
+      == {"BLUE": 125, "GREEN": 75, "LUMINOS": 175, "RED": 100},
+      "each filter's flats are exactly the files of its assigned sets")
+check(r["flats_unused"] == 1, "a flat in no assigned set is counted, not used")
+night = ns["_night_of"]
+lum = v["groups"]["LUMINOS"]
+check(lum["dates"] == ["2026-10-08", "2026-10-09", "2026-10-10",
+                       "2026-10-11", "2026-10-14", "2026-10-16",
+                       "2026-10-17"],
+      "the lights' nights come from their flat sets")
+fs3 = [p for p in fl["LUMINOS"]["files"] if "_FLAT_" in p
+       and night(p, v["nights"]) == "2026-10-08"]
+check(len(fs3) == 25, "a flat's night is the night of the set it belongs to")
+check(len(r["flips"]) == 3, "the three meridian flips are carried")
+check(r["metrics"]["LUMINOS"]["n"] == 247
+      and r["metrics"]["LUMINOS"]["guiding_high"] == 13,
+      "conditions are summarised over the frames that are stacked")
+
+v2 = apply_m(groups, calib, {}, man, drop_rejected=False)
+check(len(v2["groups"]["LUMINOS"]["files"]) == 266
+      and not v2["report"]["rejected_dropped"],
+      "switched off, rejected frames are stacked — and still listed")
+
+# Catch-up flats: lights of one night calibrated with flats of a later one.
+cu = copy.deepcopy(man)
+fs = next(f for f in cu["flatSets"] if f["id"] == "fs-0019")
+fs["flatsNight"], fs["catchUp"] = "2026-10-18", True
+g2, c2 = _scan(cu)
+v3 = apply_m(g2, c2, {}, cu)
+late = [p for p in v3["calib"]["flat"]["RED"]["files"] if "/2026-10-18/" in p]
+check(len(late) == 25 and all(night(p, v3["nights"]) == "2026-10-17"
+                              for p in late),
+      "catch-up flats taken a night later pair with the lights they serve")
+check(any(x["catch_up"] for x in v3["report"]["flat_sets"]["RED"]),
+      "and the report marks the set as a catch-up")
+
+# A subset export: an unlisted light is left out on purpose.
+sub = copy.deepcopy(man)
+sub["options"]["nights"] = ["2026-10-08"]
+check(ns["_manifest_is_subset"](sub) and not ns["_manifest_is_subset"](man),
+      "a manifest limited to some nights is recognised as a subset")
+v4 = apply_m(groups, calib, {}, sub)
+check("stray.fits" in v4["report"]["unlisted"]
+      and len(v4["groups"]["RED"]["files"]) == 77,
+      "a subset leaves unlisted lights out, so a stand repeats exactly")
+noRej = copy.deepcopy(man)
+noRej["options"]["includeRejected"] = False
+check(ns["_manifest_is_subset"](noRej),
+      "an export without the rejected frames is a subset too")
+
+# The header wins over the manifest, and says so.
+mm = copy.deepcopy(man)
+mm["lights"][0]["filter"], mm["lights"][1]["exposureS"] = "RED", 30
+v5 = apply_m(groups, calib, {}, mm)
+check(len(v5["report"]["mismatch"]) == 2
+      and len(v5["groups"]["LUMINOS"]["files"]) == 247,
+      "a filter or exposure disagreement is reported; the header decides")
+
+# A light without a flat set is named per night.
+nf = copy.deepcopy(man)
+for lt in nf["lights"]:
+    if lt["filter"] == "BLUE" and lt["night"] == "2026-10-16":
+        lt["flatSet"] = None
+v6 = apply_m(groups, calib, {}, nf)
+check(v6["report"]["no_flat_set"] == {"BLUE": ["2026-10-16"]},
+      "lights without a flat set are named by filter and night")
+
+# Mosaic: one panel per run.
+mo = copy.deepcopy(man)
+mo["project"]["panels"].append({"name": "P2", "index": 1, "deleted": False})
+for lt in mo["lights"][:10]:
+    lt["panel"] = "P2"
+check(ns["_manifest_panels"](mo) == ["Main", "P2"],
+      "panels with lights come in project order")
+check(ns["_manifest_panels"](man) == ["Main"], "LDN1228 is a single field")
+v7 = apply_m(groups, calib, {}, mo, panel="Main")
+p2_ok = sum(1 for lt in mo["lights"][:10] if lt["status"] == "ok")
+check(sum(v7["report"]["other_panels"].values()) == 10
+      and sum(len(g["files"]) for g in v7["groups"].values())
+      == 492 - p2_ok,
+      "the other panel's lights are left for their own run")
+v8 = apply_m(groups, calib, {}, mo, panel="P2")
+check(sum(len(g["files"]) for g in v8["groups"].values()) == p2_ok
+      and v8["report"]["listed"] == 10,
+      "and the second panel's run takes exactly its own")
+check(v8["report"]["unlisted"] == ["stray.fits"]
+      and v8["report"]["unlisted_why"] == "mosaic",
+      "a light of no known panel goes into no panel's run, and is named")
+
+# Choosing among several manifests: by the frames they list.
+names = {os.path.basename(p) for g in groups.values() for p in g["files"]}
+other = {"lights": [{"file": "M31_LIGHT_0001.fits"}]}
+pick = ns["_manifest_pick"]
+path, chosen, notes = pick([(0, "/a/x" + ns["MANIFEST_SUFFIX"], other),
+                            (1, "/a/LDN" + ns["MANIFEST_SUFFIX"], man)], names)
+check(chosen is man and any("none of the light" in n for n in notes),
+      "the manifest that lists these frames wins; the other is named")
+path, chosen, notes = pick([(1, "/a/one.json", man), (1, "/b/two.json", man)],
+                           names)
+check(chosen is None and any("equally well" in n for n in notes),
+      "two equally good manifests at one level are a tie, not a guess")
+path, chosen, _n = pick([(0, "/a/near.json", man), (1, "/b/far.json", man)],
+                        names)
+check(path == "/a/near.json", "at equal evidence the nearer one is used")
+
+# Finding them: the selected folder and the folders above it.
+with tempfile.TemporaryDirectory() as tmp:
+    orig = os.path.join(tmp, "LDN1228", "Originals")
+    os.makedirs(orig)
+    target_m = os.path.join(tmp, "LDN1228", "LDN1228" + ns["MANIFEST_SUFFIX"])
+    with open(target_m, "w") as fh:
+        fh.write("{}")
+    open(os.path.join(orig, "notes.json"), "w").close()
+    found = ns["_manifest_candidates"](orig)
+    check(found == [(1, target_m)],
+          "an Astro-PM manifest one level up is found; other JSON is not")
+    bad = os.path.join(orig, "broken" + ns["MANIFEST_SUFFIX"])
+    with open(bad, "w") as fh:
+        fh.write("{not json")
+    check(load(bad)[0] is None and "could not be read" in load(bad)[1],
+          "a broken file is refused with a reason, never raised")
+    with open(bad, "w") as fh:
+        json.dump({"format": "something-else", "version": 1}, fh)
+    check("is not a" in load(bad)[1], "a foreign JSON file is refused")
+newer = copy.deepcopy(man)
+newer["version"] = 2
+check(any("newer than this script" in t for t, _k in
+          ns["_manifest_log_lines"](dict(r, version=2))),
+      "a newer format version is read, and said")
+
+# Roles and SPCC.
+over = ns["_manifest_role_overrides"]
+check(over(man) == ({}, []),
+      "a manifest whose names already work changes no role")
+odd = {"filters": [{"shortName": "NB1", "filterType": "narrowband",
+                    "centerWavelengthNm": 656.3, "bandwidthNm": 3},
+                   {"shortName": "LUMINOS", "filterType": "narrowband",
+                    "centerWavelengthNm": 567.5, "bandwidthNm": 295}]}
+roles, notes = over(odd)
+check(roles == {"NB1": "ha"},
+      "an unknown narrowband name is mapped by its centre wavelength")
+check(any("295 nm wide" in n for n in notes),
+      "L marked narrowband (the first LDN1228 export) is caught, not obeyed")
+spcc = ns["_manifest_spcc"]
+SENS = {"Sony IMX411/455/461/533/571"}
+FILT = {"Antlia L", "Antlia R", "Antlia G", "Antlia B"}
+sp = spcc(man, SENS, FILT)
+check((sp["sensor"], sp["red"], sp["green"], sp["blue"])
+      == ("Sony IMX411/455/461/533/571", "Antlia R", "Antlia G", "Antlia B")
+      and not sp["notes"],
+      "the LDN1228 SPCC names are taken when Siril's tables hold them")
+wrong = copy.deepcopy(man)
+wrong["equipment"]["spccSensor"] = "IMX533"
+sp = spcc(wrong, SENS, FILT)
+check(sp["sensor"] == "" and any("IMX533" in n for n in sp["notes"]),
+      "the OSC trap 'IMX533' is refused, and the settings' sensor stays")
+sp = spcc(man)
+check(sp["sensor"] and any("unchecked" in n for n in sp["notes"]),
+      "without Siril's tables the names are used, and that is said")
+nb = {"filters": [{"shortName": "OIII", "filterType": "narrowband",
+                   "centerWavelengthNm": 500.7, "bandwidthNm": 4.5}]}
+check(spcc(nb, SENS, FILT)["bandwidths"] == {"oiii": 4.5},
+      "a narrowband filter contributes its bandwidth by line")
+
+# The report never raises and says the headline facts.
+lines = ns["_manifest_log_lines"](dict(r, spcc=spcc(man, SENS, FILT)),
+                                  "/x/LDN1228" + ns["MANIFEST_SUFFIX"])
+text = "\n".join(t for t, _k in lines)
+check("518 of 518" in text and "26 light(s) rejected" in text
+      and "LUMINOS 19× stars" in text,
+      "the log names the counts and the reasons")
+check(all(k in ("ok", "info", "warn") for _t, k in lines),
+      "every line carries a known colour")
+md = "\n".join(ns["_manifest_md"](r, "LDN1228" + ns["MANIFEST_SUFFIX"]))
+check("stars 772 < 804" in md and "fs-0003" in md
+      and "| --- |" in md, "output.md lists each rejected frame and each set")
+check(ns["_manifest_md"]({}) == [] and ns["_manifest_log_lines"]({})[0],
+      "no manifest, no section; an empty report still logs one line")
+
+print("\n1.8.0 — Siril's log as it really arrives: NUL-padded, and German")
+ld, pf, pa = ns["_log_delta"], ns["_parse_spcc_fit"], ns["_parse_align_pairs"]
+# The LDN1228 breadcrumb: head intact, tail anchor gone, last line '\x00'.
+before = "x\n" * 500 + "\x00" * 300
+after = "x\n" * 500 + "Befehlsausführung: spcc\nK0: 1.000\n" + "\x00" * 120
+d = ld(before, after)
+check(d is not None and d.startswith("Befehlsausführung: spcc"),
+      "NUL padding no longer hides the step's own lines")
+check(ld(None, after, ("Running command: spcc", "Befehlsausführung: spcc"))
+      .startswith("\nK0"), "a localised marker is found among several")
+check(ld(None, "abc", "") is None and ld(None, None, "x") is None,
+      "no marker, no snapshot: still None, never a guess")
+DE = """19:16:32: 893 Sterne von der Berechnung ausgeschlossen
+19:16:32: Bild R/G = 0.017823 + 1.146376 * Katalog R/G (Sigma: 0.177796)
+19:16:32: Bild B/G = 0.047100 + 1.033429 * Katalog B/G (Sigma: 0.065609)
+19:16:32: Ich habe eine Lösung für die Farbkalibrierung mit 1117 Sternen gefunden. Faktoren:
+19:16:32: K0: 1.000
+19:16:32: Die photometrische Farbkorrektur scheint eine ungenaue Lösung gefunden zu haben"""
+fit = pf(DE)
+check(fit.get("sigma") == {"R/G": 0.177796, "B/G": 0.065609}
+      and fit.get("stars") == 1117 and fit.get("excluded") == 893
+      and fit.get("imprecise"),
+      "a German SPCC fit is read like an English one (LDN1228 lines)")
+ALIGN = """Versuch #1: Nach der Sequenzanalyse wählen wir das Bild 4 als neue Referenz für die Registrierung
+Bringe Sterne in Bild 1 zur Deckung: erledigt
+Korrespondierende Paare: 1334
+Bringe Sterne in Bild 3 zur Deckung: erledigt
+Korrespondierende Paare: 1796"""
+check(pa(ALIGN, {1: "BLUE", 3: "LUMINOS", 4: "RED"})
+      == ({"BLUE": 1334, "LUMINOS": 1796}, "RED"),
+      "and so are the German star-pair counts")
 
 print()
 if fails:

@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.7.20
+Script Version: 1.8.0
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -60,8 +60,11 @@ What it does:
 - Blank/black frame rejection, adaptive pixel rejection, weighted-FWHM
   frame weighting, optional drizzle, quality filtering and rejection maps.
 - One-click option presets (Quick look / Balanced / Final).
-- A tidy output folder plus a Markdown processing report (output.md) and
-  a step-by-step post-processing guide (todo.md).
+- An optional NINA-PM stack manifest: frames NINA-PM rejected stay out,
+  each light gets the flat set NINA-PM assigned to it, SPCC is told the
+  rig as NINA-PM names it, and a mosaic is stacked one panel per run.
+- A tidy results folder (Stacked/) plus a Markdown processing report
+  (output.md) and a step-by-step post-processing guide (todo.md).
 - Dark-themed PyQt6 GUI matching the Svenesis look & feel, with a live
   processing log and persistent settings.
 
@@ -73,7 +76,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.7.20
+# Script Version: 1.8.0
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -97,6 +100,87 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.8.0 - What NINA-PM knows, read instead of guessed
+      - A NINA-PM STACK MANIFEST IS READ WHEN ONE IS THERE.  NINA-PM plans
+        and runs the rig, and it knows things discovery can only infer
+        from headers and folder names: which frames its review or grading
+        rejected, which night and panel every light belongs to, which flat
+        set calibrates which lights -- catch-up flats from a later night
+        included -- and how Siril's SPCC tables name the rig.  It exports
+        that per project as <project>.svenesis-monotrain.json (format
+        ninapm-stack-manifest, version 1).  The analysis looks for one in
+        the selected folder and up to three folders above it, the reach of
+        the results-folder menu, so an Astro-PM manifest next to Originals
+        is found.  Several are told apart by the frames they list, not by
+        name; a tie is reported and none is used.  Without a manifest
+        nothing changes.
+      - The manifest only narrows and labels what discovery found.  The
+        FITS header still decides a frame's filter and exposure; where
+        NINA-PM disagrees, the header wins and the log says so.  The scan
+        is kept as read, and every switch re-derives the view from it, so
+        'Use the NINA-PM manifest' off is the folder exactly as discovered.
+      - REJECTED FRAMES STAY OUT, WITH THEIR REASON.  'leave out frames
+        NINA-PM rejected' (on by default) drops them before staging; the
+        log sums them per filter and reason, output.md lists every one.
+        On LDN1228 that was 26 frames, all "stars < threshold", 17 of them
+        L from one cloudy night.  Siril's quality filters still run.
+      - FLATS PER LIGHT, AS NINA-PM ASSIGNED THEM.  Each light's night
+        becomes the night of its flat set, and that set's files are the
+        filter's flats, so the existing per-night calibration pairs exactly
+        those -- including a catch-up set shot a night later, which no
+        date rule can find.  'Match flats to the same night' is greyed out
+        while the manifest decides it.  A light without a set is named by
+        filter and night.
+      - SPCC AS NINA-PM NAMES THE RIG.  spccSensor and spccFilter are
+        checked against Siril's mono tables and used for this run; the
+        SPCC fields keep what the user typed.  A name Siril does not hold
+        -- the OSC trap "IMX533" -- is named and the settings are used.
+        Narrowband filters contribute their bandwidth; the wavelength stays
+        the emission line's.  A filter marked narrowband but 295 nm wide,
+        as L was in the first LDN1228 export, is judged by its name.
+      - A MOSAIC IS STACKED ONE PANEL PER RUN.  Frames of two panels show
+        different sky, and registration cannot put them on one reference.
+        With more than one panel a 'Mosaic panel' menu appears; the run
+        writes into Stacked/<panel>/ with the panel in the master names.
+        A light the manifest does not list goes into no panel's run.
+      - A manifest that describes only part of the data (nights, a range,
+        a result image, rejected frames left out) leaves unlisted lights
+        out, so a stand can be stacked again exactly.  Otherwise they are
+        stacked as found and named.
+      - Guiding RMS, HFR and airmass are reported per filter, and frames
+        guided worse than 1.5x the median are counted.  Reported only: the
+        weighting stays with what Siril measures on the image.
+      - Help: the Getting Started tab still sent the user to the "output"
+        folder; it says Stacked now.
+      - "NO DARK" IS SAID ONCE, AND AS WHAT IT IS.  The first LDN1228 run
+        with a manifest found no dark at all, and the 5% tolerance sentence
+        ("no dark within 5% of 180s lights ...") came once per calibration
+        part -- nineteen times across seven nights -- explaining a band to
+        a run that had nothing to measure against it.  With no dark master
+        the closest-dark search no longer runs; the run says once per
+        filter that none was found and that darks come from the Library.
+        A dark that fits nothing is likewise said once per filter.
+      - THE STAR-PAIR COUNTS AND THE SPCC FIT ARE READ AGAIN.  On the
+        LDN1228 runs neither could be isolated in Siril's log, and the
+        note blamed a scrolled buffer.  A breadcrumb added for the purpose
+        (stderr, sizes and which anchors were present) showed two other
+        causes.  The log arrives through shared memory with NUL padding
+        at its end, exactly where the tail anchor is taken, and the
+        padding's length changes between reads -- so no snapshot ever
+        matched; _log_text now strips it.  And the user's Siril runs in
+        German: the step markers ("Befehlsausführung: spcc",
+        "Überprüfen von Sequenzen im Verzeichnis") and the lines the
+        parsers read ("Bild R/G = ... (Sigma: ...)", "Korrespondierende
+        Paare") have German forms, which the readers now accept as well
+        (LOG_RUNNING, LOG_CHECKING).  A failed read still waits
+        LOG_SETTLE_S once and reads again, and still leaves the
+        breadcrumb.  The note reads "Not reported — the colour fit: ..."
+        instead of "The colour fit are not reported".
+      - New helpers: _manifest_candidates, _load_manifest, _manifest_pick,
+        _manifest_is_subset, _manifest_panels, _manifest_role,
+        _manifest_role_overrides, _manifest_spcc, _manifest_metrics,
+        _apply_manifest, _manifest_log_lines, _manifest_md, _name_role.
+
 1.7.20 - Stacked, where you choose it; and what real Astro-PM runs showed
       - A RESULTS-FOLDER LEVEL IN THE OUTPUT GROUP.  The folder was always
         created inside the selected one, which fits the N.I.N.A. layout
@@ -602,9 +686,11 @@ from __future__ import annotations
 import os
 import re
 import sys
+import html
 import json
 import math
 import shutil
+import time
 import traceback
 import datetime
 
@@ -679,7 +765,7 @@ from PyQt6.QtGui import QColor, QDesktopServices, QPalette
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.7.20"
+VERSION = "1.8.0"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -1860,6 +1946,13 @@ SPCC_SIGMA_LIMIT = 1.0
 # to be unique against a few thousand lines of Siril output, short enough
 # that a bounded log buffer still holds it after the step that follows.
 LOG_ANCHOR_CHARS = 400
+# How long a diagnostic reader waits before it reads Siril's log a second
+# time.  Added on the first suspicion for the LDN1228 failures -- a
+# console that had not caught up -- which the breadcrumb then disproved
+# (NUL padding and a German console, see _log_delta).  Kept because the
+# console IS filled from Siril's main loop and a busy one can lag; it
+# costs one second, and only on a read that has already failed.
+LOG_SETTLE_S = 1.0
 
 
 def _spread_sample(items: list, limit: int) -> list:
@@ -2556,6 +2649,779 @@ def _format_duration(seconds: float) -> str:
 
 
 # ---------------------------------------------------------------------------
+# NINA-PM stack manifest
+# ---------------------------------------------------------------------------
+# NINA-PM plans and runs the rig through a N.I.N.A. plugin, and it can
+# export per project what it KNOWS about the frames: the night and panel
+# of every light, which ones its review or grading rejected and why, which
+# flat set calibrates which lights (catch-up flats from a later night
+# included), and the rig as Siril's SPCC tables name it.  Discovery has to
+# guess all of that from headers and folder names.
+#
+# The manifest only ever narrows and labels what discovery found.  The FITS
+# header stays the authority on what a file IS -- its filter, its exposure
+# -- and where the two disagree the header wins and the log says so.  A
+# folder without a manifest runs exactly as it did before.
+MANIFEST_SUFFIX = ".svenesis-monotrain.json"
+MANIFEST_FORMAT = "ninapm-stack-manifest"
+MANIFEST_VERSION = 1
+# The one NINA-PM status that may be stacked.  Everything else (rejected by
+# review or grading, aborted) is left out while the user lets it be.
+MANIFEST_OK_STATUS = "ok"
+# A narrowband filter is mapped to the emission line nearest its centre
+# wavelength, and only within this distance.  Wider than any real filter's
+# offset from its line, far narrower than the gap between two lines.
+MANIFEST_LINE_TOLERANCE_NM = 10.0
+# A "narrowband" filter wider than this is a typo in the project, not a
+# narrowband filter -- an L filter is ~300 nm.  Its name decides instead.
+MANIFEST_NB_MAX_BANDWIDTH_NM = 30.0
+# Guiding RMS this many times the filter's median is named in the report.
+# Named only: frame weighting stays with what Siril measures on the image.
+MANIFEST_GUIDING_OUTLIER = 1.5
+# How many file names a list in the log or the report spells out.
+MANIFEST_SHOW_NAMES = 5
+
+
+def _norm_filter(name) -> str:
+    """Comparison key for a filter name: upper case, no white space."""
+    return "".join(str(name or "").upper().split())
+
+
+def _manifest_candidates(root: str,
+                         max_level: int = OUTPUT_LEVEL_MAX) -> list:
+    """``[(level, path)]`` of manifest files in `root` and above it.
+
+    The same reach as the results-folder menu: an Astro-PM project keeps
+    its frames in <Target>/Originals, and the manifest belongs with the
+    target, one level up from the folder that is selected.
+    """
+    out: list = []
+    cur = os.path.normpath(root) if root else ""
+    for level in range(max_level + 1):
+        if not cur:
+            break
+        try:
+            names = sorted(os.listdir(cur))
+        except OSError:
+            names = []
+        for name in names:
+            if name.startswith(".") or not name.lower().endswith(
+                    MANIFEST_SUFFIX):
+                continue
+            path = os.path.join(cur, name)
+            if os.path.isfile(path):
+                out.append((level, path))
+        parent = os.path.dirname(cur)
+        if not parent or parent == cur:
+            break
+        cur = parent
+    return out
+
+
+def _load_manifest(path: str) -> tuple:
+    """``(manifest, problem)``: the parsed file, or None and why not.
+
+    A newer format version is accepted -- unknown fields are ignored, and
+    the summary says the file is newer than this script.  What cannot be
+    accepted is a file that is not a manifest at all.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        return None, f"could not be read ({exc})"
+    if not isinstance(data, dict) or data.get("format") != MANIFEST_FORMAT:
+        return None, f"is not a {MANIFEST_FORMAT} file"
+    try:
+        version = int(data.get("version"))
+    except (TypeError, ValueError):
+        return None, "carries no format version"
+    if version < 1:
+        return None, f"has an unknown format version ({version})"
+    if not isinstance(data.get("lights"), list):
+        return None, "lists no light frames"
+    return data, ""
+
+
+def _manifest_lights(man: dict) -> list:
+    """The light entries that name a file -- anything else is skipped."""
+    return [lt for lt in (man or {}).get("lights") or []
+            if isinstance(lt, dict) and lt.get("file")]
+
+
+def _manifest_pick(candidates: list, light_names: set) -> tuple:
+    """``(path, manifest, notes)`` for the manifest that describes these
+    lights, or ``("", None, notes)``.
+
+    ``candidates`` is ``[(level, path, manifest)]``.  Chosen on evidence,
+    not on names: how many of the light frames found here it lists.  A
+    target name can be typed three ways and a project renamed; the file
+    names are what NINA-PM wrote.  At equal evidence the nearer file wins,
+    and two equally near ones are a tie that is reported, not guessed.
+    """
+    scored, notes = [], []
+    for level, path, man in candidates:
+        names = {os.path.basename(str(lt["file"]))
+                 for lt in _manifest_lights(man)}
+        hits = len(names & light_names)
+        if hits:
+            scored.append((hits, -level, path, man))
+        else:
+            notes.append(f"{os.path.basename(path)} lists none of the light "
+                         "frames found here — ignored.")
+    if not scored:
+        return "", None, notes
+    best = max(scored, key=lambda c: (c[0], c[1]))
+    ties = [c for c in scored if (c[0], c[1]) == (best[0], best[1])]
+    if len(ties) > 1:
+        notes.append(
+            "Several manifests list these frames equally well ("
+            + ", ".join(os.path.basename(c[2]) for c in ties)
+            + ") — none is used.  Keep one per target.")
+        return "", None, notes
+    for cand in scored:
+        if cand is not best:
+            notes.append(
+                f"{os.path.basename(cand[2])} lists {cand[0]} of these "
+                f"frames; {os.path.basename(best[2])} lists {best[0]} and "
+                "is used.")
+    return best[2], best[3], notes
+
+
+def _manifest_is_subset(man: dict) -> bool:
+    """True when the manifest deliberately describes only part of the data.
+
+    A stand "up to night X", a date range, a result image -- or an export
+    that left the rejected frames out.  A light on disk that such a file
+    does not list was left out on purpose, so it stays out of the stack;
+    only then can a stand be stacked again exactly.
+    """
+    o = (man or {}).get("options") or {}
+    nights = o.get("nights", "all")
+    return (str(nights or "all").lower() != "all"
+            or any(o.get(k) for k in ("from", "to", "resultId", "untilUtc"))
+            or o.get("includeRejected") is False)
+
+
+def _manifest_panels(man: dict) -> list:
+    """Panel names that hold lights, in the project's panel order."""
+    order: list = []
+    for p in sorted(((man or {}).get("project") or {}).get("panels") or [],
+                    key=lambda p: (p.get("index", 0)
+                                   if isinstance(p, dict) else 0)):
+        if isinstance(p, dict) and p.get("name") and not p.get("deleted"):
+            if p["name"] not in order:
+                order.append(p["name"])
+    used = {str(lt.get("panel") or "") for lt in _manifest_lights(man)}
+    used.discard("")
+    return [p for p in order if p in used] + sorted(used - set(order))
+
+
+def _manifest_role(entry: dict) -> str | None:
+    """The colour role of one manifest filter, or None.
+
+    The name decides for broadband filters, as it does without a manifest.
+    For narrowband the manifest adds what a name cannot always carry: the
+    centre wavelength, mapped to the nearest emission line.  A filter
+    marked narrowband but wider than MANIFEST_NB_MAX_BANDWIDTH_NM is a
+    mistake in the project -- an L filter once arrived that way -- and is
+    judged by its name like any other.
+    """
+    by_name = (_name_role(entry.get("shortName") or "")
+               or _name_role(entry.get("name") or ""))
+    ftype = str(entry.get("filterType") or "").lower()
+    if ftype != "narrowband" or _manifest_nb_doubt(entry):
+        return by_name
+    if by_name in _LINE_NM:
+        return by_name
+    try:
+        wl = float(entry.get("centerWavelengthNm"))
+    except (TypeError, ValueError):
+        return by_name
+    line, dist = min(((r, abs(nm - wl)) for r, nm in _LINE_NM.items()),
+                     key=lambda t: t[1])
+    return line if dist <= MANIFEST_LINE_TOLERANCE_NM else by_name
+
+
+def _manifest_nb_doubt(entry: dict) -> str:
+    """Why a filter marked narrowband cannot be one, or ``""``."""
+    if str(entry.get("filterType") or "").lower() != "narrowband":
+        return ""
+    try:
+        bw = float(entry.get("bandwidthNm"))
+    except (TypeError, ValueError):
+        return ""
+    if bw > MANIFEST_NB_MAX_BANDWIDTH_NM:
+        return f"it is {bw:g} nm wide"
+    return ""
+
+
+def _manifest_role_overrides(man: dict) -> tuple:
+    """``({filter key: role}, notes)`` where the manifest knows better.
+
+    Only where the name alone finds no role, or a different one: a filter
+    called "H-Alpha 3nm Edge" carries no name `_filter_role` knows, and
+    its 656 nm centre does.  A role the name already gets right is not
+    repeated, so a manifest cannot quietly change a working LRGB run.
+    """
+    roles, notes = {}, []
+    for entry in (man or {}).get("filters") or []:
+        if not isinstance(entry, dict) or not entry.get("shortName"):
+            continue
+        short = entry["shortName"]
+        doubt = _manifest_nb_doubt(entry)
+        if doubt:
+            notes.append(f"{short} is marked narrowband in NINA-PM, but "
+                         f"{doubt} — treated by its name instead.")
+        role = _manifest_role(entry)
+        if role and role != _name_role(short):
+            roles[_norm_filter(short)] = role
+            notes.append(f"{short} is read as {_ROLE_LABEL.get(role, role)} "
+                         "— from the NINA-PM filter list, not its name.")
+    return roles, notes
+
+
+def _manifest_spcc(man: dict, sensors: set | frozenset = frozenset(),
+                   filters: set | frozenset = frozenset()) -> dict:
+    """What the manifest says SPCC should be told, checked against Siril.
+
+    Returns ``{"sensor", "red", "green", "blue", "bandwidths", "notes"}``.
+    A name goes in only when it is in Siril's MONO table -- or when that
+    table could not be read at all (empty set), because "cannot check" is
+    never "wrong".  A wrong name is left out and named, and the run uses
+    the SPCC settings instead: SPCC does not fail on a wrong name, it
+    quietly calibrates with something else.
+
+    Narrowband filters contribute their bandwidth only.  The wavelength
+    SPCC is given is the emission line's, as without a manifest: what a
+    narrowband channel contains is that line, wherever the filter is
+    centred.
+    """
+    out = {"sensor": "", "red": "", "green": "", "blue": "",
+           "bandwidths": {}, "notes": []}
+    eq = (man or {}).get("equipment") or {}
+    name = str(eq.get("spccSensor") or "").strip()
+    if name:
+        if sensors and name not in sensors:
+            out["notes"].append(
+                f"spccSensor '{name}' is not in Siril's mono sensor table — "
+                "the sensor from the SPCC settings is used.")
+        else:
+            out["sensor"] = name
+    for entry in (man or {}).get("filters") or []:
+        if not isinstance(entry, dict):
+            continue
+        role = _manifest_role(entry)
+        spf = str(entry.get("spccFilter") or "").strip()
+        if role in ("red", "green", "blue") and spf:
+            if filters and spf not in filters:
+                out["notes"].append(
+                    f"spccFilter '{spf}' ({entry.get('shortName')}) is not in "
+                    "Siril's mono filter table — the filter from the SPCC "
+                    "settings is used.")
+            else:
+                out[role] = spf
+        if (str(entry.get("filterType") or "").lower() == "narrowband"
+                and role in _LINE_NM and not _manifest_nb_doubt(entry)):
+            try:
+                bw = float(entry.get("bandwidthNm"))
+            except (TypeError, ValueError):
+                continue
+            if bw > 0:
+                out["bandwidths"][role] = bw
+    if (out["sensor"] or any(out[k] for k in ("red", "green", "blue"))) and (
+            not sensors or not filters):
+        out["notes"].append(
+            "Siril's SPCC tables could not be read here, so the names from "
+            "NINA-PM are used unchecked.")
+    return out
+
+
+def _manifest_metrics(entries: list) -> dict:
+    """Median HFR / guiding and the airmass range of some light entries."""
+    def vals(key):
+        out = []
+        for lt in entries:
+            v = (lt.get("metrics") or {}).get(key)
+            if isinstance(v, (int, float)) and math.isfinite(v):
+                out.append(float(v))
+        return out
+
+    hfr, rms, air = vals("hfr"), vals("guidingRmsArcsec"), vals("airmass")
+    med_rms = _median(rms) if rms else None
+    return {
+        "n": len(entries),
+        "hfr": _median(hfr) if hfr else None,
+        "guiding": med_rms,
+        "guiding_n": len(rms),
+        "guiding_high": (sum(1 for v in rms
+                             if v > med_rms * MANIFEST_GUIDING_OUTLIER)
+                         if med_rms else 0),
+        "airmass": (min(air), max(air)) if air else None,
+    }
+
+
+def _apply_manifest(groups: dict, calib: dict, nights: dict, man: dict,
+                    panel: str = "", drop_rejected: bool = True) -> dict:
+    """Narrow and label a discovery result with what NINA-PM knows.
+
+    Returns ``{"groups", "calib", "nights", "report", "flats_by_night"}``;
+    the inputs are left untouched, so switching the manifest off is the
+    original scan again.
+
+    * Lights are matched by file name.  A light the manifest does not list
+      is kept, unless the manifest is a deliberate subset (see
+      `_manifest_is_subset`) or a mosaic -- a frame of no known panel
+      would otherwise land in every panel's run.  Either way the report
+      names it.
+    * Lights of another panel are left out: a mosaic is stacked one panel
+      per run.  Rejected lights are left out while ``drop_rejected``.
+    * Each kept light's night becomes the night of the flat set NINA-PM
+      assigned to it, and that set's flat files are the filter's flats.
+      The per-night calibration then pairs exactly those -- catch-up flats
+      from a later night included, which no date rule can find.
+    * Filter and exposure stay the header's.  A disagreement is reported.
+    """
+    lights_m = [lt for lt in _manifest_lights(man)
+                if not panel or str(lt.get("panel") or "") in ("", panel)]
+    by_name = {os.path.basename(str(lt["file"])): lt for lt in lights_m}
+    other_panel: dict = {}
+    if panel:
+        for lt in _manifest_lights(man):
+            p = str(lt.get("panel") or "")
+            if p and p != panel:
+                other_panel[os.path.basename(str(lt["file"]))] = p
+    sets = {fs["id"]: fs for fs in (man or {}).get("flatSets") or []
+            if isinstance(fs, dict) and fs.get("id")}
+    subset = _manifest_is_subset(man)
+    panels = _manifest_panels(man)
+    mosaic = bool(panel) and len(panels) > 1
+    keep_unlisted = not subset and not mosaic
+
+    new_nights = dict(nights or {})
+    kept: dict = {}            # filter -> [path]
+    report = {
+        "generated": (man or {}).get("generatedAt") or "",
+        "project": (((man or {}).get("project") or {}).get("name")
+                    or ((man or {}).get("project") or {}).get("targetName")
+                    or ""),
+        "version": (man or {}).get("version"),
+        "subset": subset, "panel": panel, "panels": panels,
+        "listed": len(lights_m), "matched": 0,
+        "unlisted": [], "unlisted_kept": keep_unlisted,
+        "unlisted_why": ("" if keep_unlisted
+                         else "mosaic" if mosaic else "subset"),
+        "missing": [], "rejected": [], "rejected_dropped": drop_rejected,
+        "other_panels": {}, "mismatch": [],
+        "flat_sets": {}, "no_flat_set": {}, "flats_missing": 0,
+        "flats_unused": 0, "flats_shared": [],
+        "flips": [], "warnings": [], "metrics": {},
+    }
+    seen: set = set()
+    stacked_entries: dict = {}     # filter -> [manifest entry]
+    used_sets: dict = {}           # filter -> [set id], first-use order
+    set_key: dict = {}             # set id -> night key
+
+    # Night keys first: one per (filter, night) normally, the set id added
+    # where one filter has two sets for the same night (a rotator change).
+    per_fn: dict = {}
+    for fs in sets.values():
+        per_fn.setdefault((_norm_filter(fs.get("filter")),
+                           str(fs.get("night") or "")), []).append(fs["id"])
+    for (_f, night), ids in per_fn.items():
+        for sid in ids:
+            set_key[sid] = (night if len(ids) == 1 or not night
+                            else f"{night} {sid}")
+
+    for filt, g in (groups or {}).items():
+        exp_of = {p: e for e, ps in (g.get("by_exp") or {}).items()
+                  for p in ps}
+        for path in g.get("files") or []:
+            name = os.path.basename(path)
+            entry = by_name.get(name)
+            if entry is None:
+                if name in other_panel:
+                    p = other_panel[name]
+                    report["other_panels"][p] = (
+                        report["other_panels"].get(p, 0) + 1)
+                    continue
+                report["unlisted"].append(name)
+                if not keep_unlisted:
+                    continue
+                kept.setdefault(filt, []).append(path)
+                continue
+            seen.add(name)
+            report["matched"] += 1
+            mf = str(entry.get("filter") or "")
+            if mf and _norm_filter(mf) != _norm_filter(filt):
+                report["mismatch"].append(
+                    f"{name}: NINA-PM says filter {mf}, the header {filt}")
+            try:
+                mexp = float(entry.get("exposureS"))
+                hexp = float(exp_of.get(path, mexp))
+                if abs(mexp - hexp) > 0.05:
+                    report["mismatch"].append(
+                        f"{name}: NINA-PM says {mexp:g}s, the header "
+                        f"{hexp:g}s")
+            except (TypeError, ValueError):
+                pass
+            status = str(entry.get("status") or MANIFEST_OK_STATUS).lower()
+            if status != MANIFEST_OK_STATUS:
+                report["rejected"].append({
+                    "file": name, "filter": filt,
+                    "night": str(entry.get("night") or ""),
+                    "status": status,
+                    "reason": str(entry.get("reason") or ""),
+                    "detail": str(entry.get("detail") or ""),
+                    "by": str(entry.get("rejectedBy") or "")})
+                if drop_rejected:
+                    continue
+            kept.setdefault(filt, []).append(path)
+            stacked_entries.setdefault(filt, []).append(entry)
+            sid = entry.get("flatSet")
+            if sid and sid in sets:
+                new_nights[path] = set_key.get(sid) or str(
+                    entry.get("night") or "")
+                if sid not in used_sets.setdefault(filt, []):
+                    used_sets[filt].append(sid)
+            else:
+                night = str(entry.get("night") or "")
+                if night:
+                    new_nights[path] = night
+                nf = report["no_flat_set"].setdefault(filt, [])
+                if night and night not in nf:
+                    nf.append(night)
+
+    report["missing"] = sorted(n for n in by_name if n not in seen)
+
+    # Groups, rebuilt over the kept paths -- the same shape discovery emits.
+    new_groups: dict = {}
+    for filt, paths in kept.items():
+        g = groups[filt]
+        keep = set(paths)
+        by_exp = {e: [p for p in ps if p in keep]
+                  for e, ps in (g.get("by_exp") or {}).items()}
+        by_exp = {e: ps for e, ps in by_exp.items() if ps}
+        new_groups[filt] = dict(
+            g, files=[p for p in g.get("files") or [] if p in keep],
+            by_exp=by_exp,
+            exp_total=sum(float(e) * len(ps) for e, ps in by_exp.items()),
+            exps=sorted(by_exp),
+            dates=sorted({d for d in (_night_of(p, new_nights)
+                                      for p in paths) if d}))
+
+    # Flats: the files of the sets the kept lights use, found by name.
+    new_calib = dict(calib or {})
+    flat_groups = dict((calib or {}).get(KIND_FLAT) or {})
+    flat_index: dict = {}
+    for fkey, grp in flat_groups.items():
+        for p in grp.get("files") or []:
+            flat_index.setdefault(os.path.basename(p), (p, fkey, grp))
+    owner: dict = {}               # flat path -> set id that claimed it
+    flats_by_night = False
+    for filt, sids in used_sets.items():
+        files, info, replaced = [], None, set()
+        rows = []
+        for sid in sids:
+            fs = sets[sid]
+            listed = [os.path.basename(str(f)) for f in fs.get("flats") or []]
+            found = []
+            for name in listed:
+                hit = flat_index.get(name)
+                if not hit:
+                    continue
+                path, fkey, grp = hit
+                replaced.add(fkey)
+                info = info or grp.get("info")
+                if path in owner and owner[path] != sid:
+                    report["flats_shared"].append(
+                        f"{name} ({owner[path]}, {sid})")
+                    continue
+                owner[path] = sid
+                new_nights[path] = set_key.get(sid, "")
+                found.append(path)
+            files.extend(found)
+            report["flats_missing"] += len(listed) - len(found)
+            rows.append({"id": sid, "night": set_key.get(sid, ""),
+                         "flats_night": str(fs.get("flatsNight") or ""),
+                         "catch_up": bool(fs.get("catchUp")),
+                         "listed": len(listed), "found": len(found)})
+        report["flat_sets"][filt] = rows
+        if not files:
+            continue            # discovery's flats stay for this filter
+        for fkey in replaced:
+            if fkey in flat_groups:
+                report["flats_unused"] += sum(
+                    1 for p in flat_groups[fkey].get("files") or []
+                    if p not in owner)
+                if fkey != filt:
+                    flat_groups.pop(fkey, None)
+        flat_groups[filt] = {"files": files, "info": info or {},
+                             "date": _night_of(files[0], new_nights)}
+        flats_by_night = True
+    new_calib[KIND_FLAT] = flat_groups
+
+    for w in (man or {}).get("warnings") or []:
+        if not isinstance(w, dict):
+            continue
+        if panel and w.get("panel") and w.get("panel") != panel:
+            continue
+        when = str(w.get("atUtc") or "").replace("T", " ").rstrip("Z")
+        if w.get("code") == "meridian_flip":
+            report["flips"].append(when or str(w.get("night") or ""))
+        else:
+            report["warnings"].append(
+                f"{w.get('code') or 'warning'} "
+                f"{w.get('night') or when}".strip())
+    report["metrics"] = {f: _manifest_metrics(es)
+                         for f, es in sorted(stacked_entries.items())}
+    return {"groups": new_groups, "calib": new_calib, "nights": new_nights,
+            "report": report, "flats_by_night": flats_by_night}
+
+
+def _names_short(names: list, limit: int = MANIFEST_SHOW_NAMES) -> str:
+    """``a, b, c and 7 more`` -- a list the log can carry."""
+    names = list(names)
+    head = ", ".join(names[:limit])
+    rest = len(names) - limit
+    return head + (f" and {rest} more" if rest > 0 else "")
+
+
+def _manifest_log_lines(report: dict, path: str = "") -> list:
+    """``[(text, kind)]`` summarising a manifest, kind = ok / info / warn.
+
+    One function for the analysis and the run, so the two logs cannot
+    describe the same file differently.
+    """
+    r = report or {}
+    out: list = []
+    head = (f"NINA-PM manifest: {os.path.basename(path)}" if path
+            else "NINA-PM manifest")
+    bits = [r.get("project") or "", (r.get("generated") or "").replace(
+        "T", " ").rstrip("Z")]
+    out.append((head + (f" ({', '.join(b for b in bits if b)})"
+                        if any(bits) else "")
+                + f" — {r.get('matched', 0)} of {r.get('listed', 0)} "
+                "listed light(s) found here.", "ok"))
+    try:
+        if int(r.get("version") or 1) > MANIFEST_VERSION:
+            out.append((f"  The manifest is format version {r['version']}, "
+                        f"newer than this script reads ({MANIFEST_VERSION}); "
+                        "fields it does not know are ignored.", "warn"))
+    except (TypeError, ValueError):
+        pass
+    if r.get("panel") and len(r.get("panels") or []) > 1:
+        others = sum((r.get("other_panels") or {}).values())
+        out.append((f"  Mosaic: stacking panel '{r['panel']}' of "
+                    f"{len(r['panels'])}; {others} light(s) of the other "
+                    "panels are left for their own runs.", "info"))
+    rej = r.get("rejected") or []
+    if rej:
+        why: dict = {}
+        for x in rej:
+            key = (x["filter"], x.get("reason") or x.get("status") or "?")
+            why[key] = why.get(key, 0) + 1
+        shown = "; ".join(f"{f} {n}× {reason}"
+                          for (f, reason), n in sorted(why.items()))
+        if r.get("rejected_dropped", True):
+            out.append((f"  {len(rej)} light(s) rejected in NINA-PM are left "
+                        f"out: {shown}.", "info"))
+        else:
+            out.append((f"  {len(rej)} light(s) rejected in NINA-PM are "
+                        f"stacked anyway, as switched: {shown}.", "warn"))
+    if r.get("unlisted"):
+        n = len(r["unlisted"])
+        if r.get("unlisted_kept", True):
+            out.append((f"  {n} light(s) here are not in the manifest and "
+                        f"are stacked as found: {_names_short(r['unlisted'])}"
+                        ".", "warn"))
+        elif r.get("unlisted_why") == "mosaic":
+            out.append((f"  {n} light(s) here are not in the manifest, so "
+                        "their panel is unknown — left out of every panel: "
+                        f"{_names_short(r['unlisted'])}.", "warn"))
+        else:
+            out.append((f"  {n} light(s) here are not in the manifest, which "
+                        "describes a chosen part of the data — left out: "
+                        f"{_names_short(r['unlisted'])}.", "info"))
+    if r.get("missing"):
+        out.append((f"  {len(r['missing'])} light(s) in the manifest were not "
+                    f"found here: {_names_short(r['missing'])}.  Still "
+                    "syncing, or moved?", "warn"))
+    for line in (r.get("mismatch") or [])[:MANIFEST_SHOW_NAMES]:
+        out.append((f"  {line} — the header is used.", "warn"))
+    if len(r.get("mismatch") or []) > MANIFEST_SHOW_NAMES:
+        out.append((f"  … and {len(r['mismatch']) - MANIFEST_SHOW_NAMES} "
+                    "more disagreement(s) between NINA-PM and the headers.",
+                    "warn"))
+    sets = r.get("flat_sets") or {}
+    if sets:
+        parts = []
+        for f, rows in sorted(sets.items()):
+            late = ", ".join(x["flats_night"] for x in rows
+                             if x.get("catch_up"))
+            parts.append(f"{f} {len(rows)}"
+                         + (f" (catch-up from {late})" if late else ""))
+        out.append(("  Flats as NINA-PM assigned them, one set per night: "
+                    + "; ".join(parts) + ".", "ok"))
+    for f, nights in sorted((r.get("no_flat_set") or {}).items()):
+        out.append((f"  {f} {', '.join(sorted(nights)) or '?'}: no flat set "
+                    "in NINA-PM, none taken later either — those lights fall "
+                    "back to the pooled flat, or none.", "warn"))
+    if r.get("flats_missing"):
+        out.append((f"  {r['flats_missing']} flat(s) of the assigned sets "
+                    "were not found here.", "warn"))
+    if r.get("flats_unused"):
+        out.append((f"  {r['flats_unused']} flat(s) found here belong to no "
+                    "set the stacked lights use — not stacked.", "info"))
+    if r.get("flats_shared"):
+        out.append(("  Flat(s) shared by two sets keep the first set's night: "
+                    + _names_short(r["flats_shared"]) + ".", "info"))
+    for note in r.get("role_notes") or []:
+        out.append((f"  {note}", "info"))
+    sp = r.get("spcc") or {}
+    named = [f"{label} {sp[k]}" for k, label in
+             (("sensor", "sensor"), ("red", "R"), ("green", "G"),
+              ("blue", "B")) if sp.get(k)]
+    if named:
+        out.append(("  SPCC as NINA-PM names the rig: " + ", ".join(named)
+                    + " (this run; the SPCC settings are unchanged).", "ok"))
+    if sp.get("bandwidths"):
+        out.append(("  Narrowband bandwidths from NINA-PM: "
+                    + ", ".join(f"{_ROLE_LABEL.get(k, k)} {v:g} nm"
+                                for k, v in sorted(sp["bandwidths"].items()))
+                    + ".", "ok"))
+    for note in sp.get("notes") or []:
+        out.append((f"  {note}", "warn"))
+    if r.get("flips"):
+        out.append((f"  Meridian flip(s): {', '.join(r['flips'])} UTC.",
+                    "info"))
+    for w in r.get("warnings") or []:
+        out.append((f"  NINA-PM warning: {w}.", "info"))
+    for f, m in sorted((r.get("metrics") or {}).items()):
+        if m.get("guiding_high"):
+            out.append((f"  {f}: {m['guiding_high']} frame(s) guided worse "
+                        f"than {MANIFEST_GUIDING_OUTLIER:g}× the median "
+                        f"{m['guiding']:.2f}\" RMS — stacked; the weighting "
+                        "measures the stars themselves.", "info"))
+    return out
+
+
+def _manifest_md(report: dict, path: str = "") -> list:
+    """The manifest's part of output.md, as lines.  Empty without one."""
+    r = report or {}
+    if not r:
+        return []
+    L: list = ["", "### What NINA-PM said about these frames", ""]
+    L.append(f"Read from `{os.path.basename(path) or 'the manifest'}`"
+             + (f", exported {r['generated'].replace('T', ' ').rstrip('Z')} "
+                "UTC" if r.get("generated") else "")
+             + f": {r.get('matched', 0)} of {r.get('listed', 0)} listed "
+             "light(s) were found here.  The FITS headers still decide each "
+             "frame's filter and exposure.")
+    if r.get("subset"):
+        L.append("")
+        L.append("The manifest describes a **chosen part** of the data, so "
+                 "lights it does not list were left out.")
+    if r.get("panel") and len(r.get("panels") or []) > 1:
+        L.append("")
+        L.append(f"**Mosaic:** this run stacked panel **{r['panel']}** of "
+                 f"{', '.join(r['panels'])}.  The other panels are separate "
+                 "runs, each in its own folder.")
+    rej = r.get("rejected") or []
+    if rej:
+        L.append("")
+        L.append(("**Rejected in NINA-PM and left out**"
+                  if r.get("rejected_dropped", True)
+                  else "**Rejected in NINA-PM, stacked anyway (as "
+                       "switched)**") + f" — {len(rej)} light(s):")
+        L.append("")
+        L.append("| Filter | Night | Reason | Detail | By | File |")
+        L.append("| --- | --- | --- | --- | --- | --- |")
+        for x in sorted(rej, key=lambda x: (x["filter"], x["night"],
+                                            x["file"])):
+            cells = [x["filter"], x["night"],
+                     x.get("reason") or x.get("status") or "",
+                     x.get("detail") or "", x.get("by") or "", x["file"]]
+            L.append("| " + " | ".join(str(c).replace("|", "\\|")
+                                       for c in cells) + " |")
+    sets = r.get("flat_sets") or {}
+    if sets:
+        L.append("")
+        L.append("**Flat sets assigned by NINA-PM** (each night's lights are "
+                 "divided by their own set):")
+        L.append("")
+        L.append("| Filter | Set | Lights' night | Flats taken | Found |")
+        L.append("| --- | --- | --- | --- | ---: |")
+        for f, rows in sorted(sets.items()):
+            for x in rows:
+                taken = x.get("flats_night") or "—"
+                if x.get("catch_up"):
+                    taken += " (catch-up)"
+                L.append(f"| {f} | {x['id']} | {x['night'] or '—'} | {taken} "
+                         f"| {x['found']} of {x['listed']} |")
+    gaps = r.get("no_flat_set") or {}
+    if gaps:
+        L.append("")
+        for f, nights in sorted(gaps.items()):
+            L.append(f"> ⚠️ **{f}**, {', '.join(sorted(nights)) or '?'}: no "
+                     "flat set in NINA-PM and none taken later.")
+    mets = r.get("metrics") or {}
+    if mets:
+        L.append("")
+        L.append("**Conditions as NINA-PM recorded them** (stacked lights; "
+                 "reported, not used for weighting):")
+        L.append("")
+        L.append("| Filter | Lights | Median HFR | Median guiding RMS | "
+                 "Guided worse than "
+                 f"{MANIFEST_GUIDING_OUTLIER:g}× median | Airmass |")
+        L.append("| --- | ---: | ---: | ---: | ---: | --- |")
+        for f, m in sorted(mets.items()):
+            hfr = f"{m['hfr']:.2f}" if m.get("hfr") is not None else "—"
+            rms = (f"{m['guiding']:.2f}\" ({m['guiding_n']} frames)"
+                   if m.get("guiding") is not None else "—")
+            air = (f"{m['airmass'][0]:.2f}–{m['airmass'][1]:.2f}"
+                   if m.get("airmass") else "—")
+            L.append(f"| {f} | {m['n']} | {hfr} | {rms} | "
+                     f"{m.get('guiding_high', 0)} | {air} |")
+    sp = r.get("spcc") or {}
+    named = [f"{label} `{sp[k]}`" for k, label in
+             (("sensor", "sensor"), ("red", "R"), ("green", "G"),
+              ("blue", "B")) if sp.get(k)]
+    if named or sp.get("bandwidths"):
+        L.append("")
+        L.append("**SPCC was told what NINA-PM names**, checked against "
+                 "Siril's tables: "
+                 + ", ".join(named + [f"{_ROLE_LABEL.get(k, k)} {v:g} nm"
+                                      for k, v in sorted(
+                                          (sp.get("bandwidths")
+                                           or {}).items())])
+                 + ".")
+    for note in sp.get("notes") or []:
+        L.append("")
+        L.append(f"> ⚠️ {note}")
+    if r.get("flips"):
+        L.append("")
+        L.append(f"Meridian flip(s): {', '.join(r['flips'])} UTC — the "
+                 "registration handles the 180° turn.")
+    if r.get("missing") or r.get("unlisted") or r.get("mismatch"):
+        L.append("")
+        if r.get("missing"):
+            L.append(f"- {len(r['missing'])} listed light(s) were not found "
+                     f"here: {_names_short(r['missing'])}.")
+        if r.get("unlisted"):
+            L.append(f"- {len(r['unlisted'])} light(s) here were not listed"
+                     + (" and were stacked as found"
+                        if r.get("unlisted_kept", True)
+                        else " and were left out — their panel is unknown"
+                        if r.get("unlisted_why") == "mosaic"
+                        else " and were left out")
+                     + f": {_names_short(r['unlisted'])}.")
+        for line in r.get("mismatch") or []:
+            L.append(f"- {line} — the header was used.")
+    return L
+
+
+# ---------------------------------------------------------------------------
 # Discovery worker (off the UI thread)
 # ---------------------------------------------------------------------------
 class AnalyzeWorker(QThread):
@@ -2736,13 +3602,33 @@ class AnalyzeWorker(QThread):
                 g["dates"] = sorted(d for d in g["dates"] if d)
                 g["exps"] = sorted(g["exps"])
 
+            # A NINA-PM manifest, if one sits with the frames.  Read here,
+            # once, so the window can re-apply it as its switches move
+            # without going back to the disk.
+            man_path, man, man_notes = "", None, []
+            loaded = []
+            for level, mpath in _manifest_candidates(self._root):
+                data, problem = _load_manifest(mpath)
+                if data is None:
+                    man_notes.append(
+                        f"{os.path.basename(mpath)} {problem} — ignored.")
+                else:
+                    loaded.append((level, mpath, data))
+            if loaded:
+                light_names = {os.path.basename(p) for g in groups.values()
+                               for p in g["files"]}
+                man_path, man, picked = _manifest_pick(loaded, light_names)
+                man_notes += picked
+
             self.progress.emit(100, "Analysis complete.")
             self.finished.emit(
                 {"groups": groups, "target": target, "total": total,
                  "in_target": len(in_target), "outside": len(outside),
                  "stray_lights": stray_lights,
                  "objects": sorted(objects), "calib": calib,
-                 "nights": nights, "unsupported": unsupported})
+                 "nights": nights, "unsupported": unsupported,
+                 "manifest": man, "manifest_path": man_path,
+                 "manifest_notes": man_notes})
         except Exception as exc:      # worker must never crash the app
             self.failed.emit(f"{exc}\n\n{traceback.format_exc()}")
 
@@ -2850,6 +3736,9 @@ class StackWorker(QThread):
         self._spcc_fit: dict = {}
         # Said once per run, not once per reader.
         self._log_read_warned: set = set()
+        # (filter, reason) for which "no dark" has been said -- a split
+        # calibrates per night and asks once per part.
+        self._no_dark_said: set = set()
         # Filters left unstacked because the palette does not read them.
         self._skipped_by_palette: list = []
         # filter -> registration options that could not be honoured.
@@ -4199,6 +5088,10 @@ class StackWorker(QThread):
             if best_key is None or key < best_key:
                 best, best_key, best_exp = path, key, have_f
         if best is None:
+            # Once per filter and exposure: a split calls this per night.
+            if (filt, want_f) in self._no_dark_said:
+                return None
+            self._no_dark_said.add((filt, want_f))
             # Report against the LOOSER bound: naming the tighter one
             # would read as the rule for every dark, and it is not.
             self._emit(
@@ -4615,7 +5508,7 @@ class StackWorker(QThread):
             if _signature_matches(info, light_info):
                 dark = path
                 break
-        if dark is None:
+        if dark is None and self._masters.get(KIND_DARK):
             dark = self._closest_dark(light_info, filt)
         if dark:
             args.append(f'"-dark={dark}"')
@@ -4649,10 +5542,25 @@ class StackWorker(QThread):
                         "and this few cannot.", LogColor.BLUE)
                 self._cc_used[filt] = cc_label
         elif self._masters.get(KIND_DARK):
+            if (filt, "match") not in self._no_dark_said:
+                self._no_dark_said.add((filt, "match"))
+                self._emit(
+                    f"  {filt}: no dark matches these lights (exposure, "
+                    "gain, temperature, binning or image size differ) — "
+                    "continuing without one.", LogColor.SALMON)
+        elif (self._opts.get("use_darks", True)
+              and (filt, "none") not in self._no_dark_said):
+            # No dark master exists at all.  The tolerance sentence used
+            # to fire here once per calibration part -- nineteen times on
+            # a seven-night LDN1228 run -- explaining a 5% band to a run
+            # that had no dark to measure against.
+            self._no_dark_said.add((filt, "none"))
             self._emit(
-                f"  {filt}: no dark matches these lights (exposure, gain, "
-                "temperature, binning or image size differ) — continuing "
-                "without one.", LogColor.SALMON)
+                f"  {filt}: no dark — this run found none at all, so dark "
+                "current and hot pixels stay in this channel"
+                + (" (the bias is subtracted instead)"
+                   if self._masters.get(KIND_BIAS) else "")
+                + ".  Darks come from the Library folder.", LogColor.SALMON)
 
         flat = self._flat_for(filt, night)
         if flat:
@@ -5759,6 +6667,8 @@ class StackWorker(QThread):
               f"**{', '.join(sorted(partial_reuse))}** were kept from an "
               "earlier run; only the remaining filters were stacked again. "
               "The channels were then re-aligned together.")
+        L.extend(_manifest_md(opts.get("manifest_report") or {},
+                              opts.get("manifest_file", "")))
         A("")
         A("---")
         A("")
@@ -6537,6 +7447,15 @@ class StackWorker(QThread):
         try:
             os.makedirs(self._out_dir, exist_ok=True)
             self._write_stub_report()
+            # The run's own log says what the manifest decided: the
+            # analysis log is usually cleared by the time this starts.
+            manifest = self._opts.get("manifest_report")
+            if manifest:
+                colour = {"ok": LogColor.GREEN, "info": LogColor.BLUE,
+                          "warn": LogColor.SALMON}
+                for text, kind in _manifest_log_lines(
+                        manifest, self._opts.get("manifest_file", "")):
+                    self._emit(text, colour[kind])
             filters = list(self._groups.keys())
             errors: dict[str, str] = {}
             last_result = None
@@ -7930,7 +8849,7 @@ class StackWorker(QThread):
         """
         for _attempt in (1, 2):
             try:
-                text = self.siril.get_siril_log()
+                text = _log_text(self.siril.get_siril_log())
             except Exception as exc:                 # noqa: BLE001
                 _log_swallowed(exc)
                 return None
@@ -7953,8 +8872,27 @@ class StackWorker(QThread):
         """
         after = self._log_snapshot()
         delta = _log_delta(log_before, after, scope)
+        if delta is None and after is not None and LOG_SETTLE_S > 0:
+            time.sleep(LOG_SETTLE_S)
+            after = self._log_snapshot()
+            delta = _log_delta(log_before, after, scope)
         if delta is not None:
             return delta
+        if after is not None and log_before is not None:
+            # What the failed read looked like, for the next diagnosis --
+            # stderr reaches Siril's console, not the report.  Whether the
+            # lines were trimmed off the front or never arrived is exactly
+            # what these numbers separate.
+            try:
+                sys.stderr.write(
+                    f"[ImageMonoTrain] log delta for {what}: before "
+                    f"{len(log_before)} chars, after {len(after)}; head "
+                    f"kept {log_before[:200] in after}, tail kept "
+                    f"{log_before[-LOG_ANCHOR_CHARS:] in after}, scope "
+                    f"{'found' if scope and scope in after else 'absent'}; "
+                    f"last line {after.rstrip().splitlines()[-1:]!r}\n")
+            except Exception:                   # noqa: BLE001
+                pass
         # Per diagnostic, not per run.  One shared flag meant the first
         # reader to fail silenced the second one's message as well --
         # and on one run that swallowed an SPCC fit with sigma 5.5/6.7
@@ -7973,7 +8911,7 @@ class StackWorker(QThread):
                        "no longer be isolated in it — it has scrolled past "
                        "what its buffer holds")
             self._emit(
-                f"  {what.capitalize()} are not reported: {why}."
+                f"  Not reported — {what}: {why}."
                 # One phrase, one line: a test asserts this sentence is
                 # here, and splitting it across string literals hides it
                 # from the only reader that checks the note still reassures.
@@ -8001,7 +8939,8 @@ class StackWorker(QThread):
         # is the failure mode being repaired here.
         delta = self._log_delta_or_warn(
             log_before, "the colour fit",
-            scope=f"Running command: {command}" if command else "")
+            scope=(tuple(m + command for m in LOG_RUNNING)
+                   if command else ""))
         if delta is None:
             return
         fit = _parse_spcc_fit(delta)
@@ -8210,8 +9149,8 @@ class StackWorker(QThread):
                     "checked before composition.", LogColor.SALMON)
             self._read_align_pairs(
                 log_before, index_to_filter,
-                scope="Checking sequences in the directory: "
-                      + os.path.join(work, "process"))
+                scope=tuple(m + os.path.join(work, "process")
+                            for m in LOG_CHECKING))
 
             aligned: dict[str, str] = {}
             for idx, filt in index_to_filter.items():
@@ -8431,6 +9370,15 @@ def _log_delta(before, after, scope: str = ""):
     """
     if after is None:
         return None
+    # The text arrives through a shared-memory buffer and carries NUL
+    # padding at its end.  The padding is not part of the log, but it
+    # sits exactly where the tail anchor is taken from, and its length
+    # changes from one read to the next -- on a 518-frame LDN1228 run
+    # the breadcrumb showed the earlier snapshot's head intact, its tail
+    # gone, and a last "line" of '\x00'.  Neither snapshot path could
+    # ever have matched.
+    after = _log_text(after)
+    before = _log_text(before)
     if before is not None:
         if not before:
             return after                # nothing preceded; it is all delta
@@ -8440,11 +9388,36 @@ def _log_delta(before, after, scope: str = ""):
         cut = after.rfind(anchor)
         if cut >= 0:
             return after[cut + len(anchor):]
-    if scope:
-        cut = after.rfind(scope)
-        if cut >= 0:
-            return after[cut + len(scope):]
+    # One marker or several: Siril's log is localised, so the line a step
+    # writes reads "Running command: spcc" in English and
+    # "Befehlsausführung: spcc" in German.  The latest of them wins.
+    scopes = (scope,) if isinstance(scope, str) else tuple(scope or ())
+    best = None
+    for mark in scopes:
+        if not mark:
+            continue
+        cut = after.rfind(mark)
+        if cut >= 0 and (best is None or cut + len(mark) > best):
+            best = cut + len(mark)
+    if best is not None:
+        return after[best:]
     return None
+
+
+def _log_text(text):
+    """Siril's log as text: NUL padding removed, None passed through."""
+    if text is None:
+        return None
+    return str(text).replace("\x00", "")
+
+
+# The lines a step writes that the log readers anchor on, per language
+# Siril's console may be set to.  English and German are the two this has
+# been run under; another language falls back to the snapshot anchors,
+# which no longer depend on the wording at all.
+LOG_RUNNING = ("Running command: ", "Befehlsausführung: ")
+LOG_CHECKING = ("Checking sequences in the directory: ",
+                "Überprüfen von Sequenzen im Verzeichnis: ")
 
 
 def _spcc_relative_sigma(fit: dict) -> dict:
@@ -8495,9 +9468,12 @@ def _parse_spcc_fit(delta: str) -> dict:
         # the ratio by k scales BOTH the slope and the sigma by k, so
         # sigma/slope is the scale-free number and a bare sigma against a
         # fixed threshold is not.
-        m = re.match(r"^Image ([RGB])/([RGB]) = \s*([\d.eE+-]+)\s*\+\s*"
-                     r"([\d.eE+-]+)\s*\* Catalog [RGB]/[RGB]\s*"
-                     r"\(sigma:\s*([\d.eE+-]+)\)", line)
+        # English and German console: "Image R/G = ... * Catalog R/G
+        # (sigma: ...)" and "Bild R/G = ... * Katalog R/G (Sigma: ...)".
+        m = re.match(r"^(?:Image|Bild) ([RGB])/([RGB]) = \s*([\d.eE+-]+)"
+                     r"\s*\+\s*([\d.eE+-]+)\s*\* (?:Catalog|Katalog) "
+                     r"[RGB]/[RGB]\s*\((?:sigma|Sigma):\s*([\d.eE+-]+)\)",
+                     line)
         if m:
             key = f"{m.group(1)}/{m.group(2)}"
             try:
@@ -8507,12 +9483,15 @@ def _parse_spcc_fit(delta: str) -> dict:
             except ValueError:
                 pass
             continue
-        m = re.match(r"^Found a solution for color calibration using "
-                     r"(\d+) stars", line)
+        m = (re.match(r"^Found a solution for color calibration using "
+                      r"(\d+) stars", line)
+             or re.search(r"Lösung für die Farbkalibrierung mit (\d+) "
+                          r"Sternen", line))
         if m:
             out["stars"] = int(m.group(1))
             continue
-        m = re.match(r"^(\d+) stars excluded from the calculation", line)
+        m = re.match(r"^(\d+) (?:stars excluded from the calculation|"
+                     r"Sterne von der Berechnung ausgeschlossen)", line)
         if m:
             out["excluded"] = int(m.group(1))
             continue
@@ -8523,7 +9502,7 @@ def _parse_spcc_fit(delta: str) -> dict:
             except ValueError:
                 pass
             continue
-        if "imprecise solution" in line:
+        if "imprecise solution" in line or "ungenaue Lösung" in line:
             out["imprecise"] = True
     # The white-balance block is printed TWICE, before and after
     # renormalisation, and the second one is what was applied.  Keeping
@@ -8548,15 +9527,18 @@ def _parse_align_pairs(delta: str, index_to_filter: dict) -> tuple:
     pairs, ref, pending = {}, None, None
     for raw in delta.splitlines():
         line = re.sub(r"^\d{2}:\d{2}:\d{2}:\s*", "", raw).strip()
-        m = re.match(r"^.*choosing image (\d+) as new reference", line)
+        m = re.match(r"^.*(?:choosing image|wählen wir das Bild) (\d+) "
+                     r"(?:as new reference|als neue Referenz)", line)
         if m:
             ref = index_to_filter.get(int(m.group(1)))
             continue
-        m = re.match(r"^Matching stars in image (\d+):", line)
+        m = re.match(r"^(?:Matching stars in image|Bringe Sterne in Bild) "
+                     r"(\d+)", line)
         if m:
             pending = index_to_filter.get(int(m.group(1)))
             continue
-        m = re.match(r"^Initial pair matches:\s*(\d+)", line)
+        m = re.match(r"^(?:Initial pair matches|Korrespondierende Paare):"
+                     r"\s*(\d+)", line)
         if m and pending:
             pairs[pending] = int(m.group(1))
             pending = None
@@ -8756,8 +9738,25 @@ _NB_ROLES = {
 }
 
 
+# {filter key: role} that a NINA-PM manifest supplied for filter names the
+# table above does not know (see `_manifest_role_overrides`).  Module state,
+# because the role is asked for everywhere -- the palette guess, the
+# composition, the background step -- and threading it through every call
+# would touch them all for a lookup that is empty on every run without a
+# manifest.  The window sets it on each analysis and clears it without one.
+_ROLE_OVERRIDES = {}
+
+
 def _filter_role(name: str) -> str | None:
     """Best-guess R/G/B/L or Ha/OIII/SII role for a filter name."""
+    key = "".join(str(name).upper().split())
+    if key in _ROLE_OVERRIDES:
+        return _ROLE_OVERRIDES[key]
+    return _name_role(name)
+
+
+def _name_role(name: str) -> str | None:
+    """The role a filter NAME alone implies -- no manifest consulted."""
     key = "".join(str(name).upper().split())
     if key in _NB_ROLES:
         return _NB_ROLES[key]
@@ -9150,6 +10149,18 @@ class ImageMonoTrainWindow(QMainWindow):
         # `_night_of`, so they cannot disagree about which night a frame
         # belongs to.
         self._nights: dict = {}
+        # The analysis as it came off the disk, and the NINA-PM manifest
+        # found with it.  `_groups` / `_calib` / `_nights` above are derived
+        # from the scan by `_apply_manifest_view`, so moving a manifest
+        # switch re-derives them without reading a header again.
+        self._scan: dict = {}
+        self._manifest: dict | None = None
+        self._manifest_path = ""
+        self._manifest_report: dict = {}
+        # True while the manifest assigns the flats per light: the per-night
+        # pairing is then the manifest's, not the checkbox's.
+        self._manifest_flats = False
+        self._filling_manifest = False
 
         self.init_ui()
         self._load_settings()
@@ -9252,6 +10263,61 @@ class ImageMonoTrainWindow(QMainWindow):
         self.btn_analyze.clicked.connect(self._on_analyze)
         self.btn_analyze.setEnabled(False)
         layout.addWidget(self.btn_analyze)
+
+        # The NINA-PM manifest.  Hidden until an analysis finds one, so a
+        # folder without one shows exactly the box it always did.
+        self.lbl_manifest = QLabel("")
+        self.lbl_manifest.setWordWrap(True)
+        self.lbl_manifest.setStyleSheet(_hint_style())
+        self.lbl_manifest.setVisible(False)
+        layout.addWidget(self.lbl_manifest)
+
+        self.chk_manifest = QCheckBox("Use the NINA-PM manifest")
+        self.chk_manifest.setChecked(True)
+        self.chk_manifest.setToolTip(
+            f"A *{MANIFEST_SUFFIX} file from NINA-PM, found in the selected "
+            "folder or up to three folders above it.\n"
+            "It says which lights NINA-PM rejected, which night and panel "
+            "each light belongs to, which flat set calibrates it (catch-up "
+            "flats included), and how SPCC names the rig.\n"
+            "The FITS headers still decide each frame's filter and "
+            "exposure; disagreements are logged.\n"
+            "Off: the folder is stacked exactly as discovered.")
+        _nofocus(self.chk_manifest)
+        self.chk_manifest.toggled.connect(self._on_manifest_changed)
+        self.chk_manifest.setVisible(False)
+        layout.addWidget(self.chk_manifest)
+
+        self.chk_manifest_reject = QCheckBox(
+            "     leave out frames NINA-PM rejected")
+        self.chk_manifest_reject.setChecked(True)
+        self.chk_manifest_reject.setToolTip(
+            "Frames NINA-PM's review or automatic grading rejected are not "
+            "stacked; the log and output.md list each one with its reason.\n"
+            "Siril's own quality filters still run on what is left.\n"
+            "Off: they are stacked like any other frame — useful to compare.")
+        _nofocus(self.chk_manifest_reject)
+        self.chk_manifest_reject.toggled.connect(self._on_manifest_changed)
+        self.chk_manifest.toggled.connect(self.chk_manifest_reject.setEnabled)
+        self.chk_manifest_reject.setVisible(False)
+        layout.addWidget(self.chk_manifest_reject)
+
+        # A mosaic is stacked one panel per run: frames of two panels show
+        # different sky, and registration cannot put them on one reference.
+        self.wid_panel = QWidget()
+        prow = QHBoxLayout(self.wid_panel)
+        prow.setContentsMargins(0, 0, 0, 0)
+        prow.addWidget(QLabel("     Mosaic panel:"))
+        self.cmb_panel = QComboBox()
+        self.cmb_panel.setToolTip(
+            "The manifest describes a mosaic.  Each panel is stacked on its "
+            "own run, into its own folder inside the results folder, with "
+            "the panel in the master names.  Run once per panel, then "
+            "assemble the mosaic from the panels' masters.")
+        self.cmb_panel.currentIndexChanged.connect(self._on_manifest_changed)
+        prow.addWidget(self.cmb_panel, 1)
+        self.wid_panel.setVisible(False)
+        layout.addWidget(self.wid_panel)
 
         parent_layout.addWidget(group)
 
@@ -10827,6 +11893,10 @@ class ImageMonoTrainWindow(QMainWindow):
             self.chk_cosmetic.setChecked(st.value("cosmetic", True, type=bool))
             self.chk_flats_by_date.setChecked(
                 st.value("flats_by_date", False, type=bool))
+            self.chk_manifest.setChecked(
+                st.value("manifest_use", True, type=bool))
+            self.chk_manifest_reject.setChecked(
+                st.value("manifest_reject", True, type=bool))
             self._set_library(str(st.value("calib_library", "")))
             self._on_calib_kind_toggled()
             self.chk_reuse.setChecked(
@@ -10910,6 +11980,8 @@ class ImageMonoTrainWindow(QMainWindow):
         st.setValue("use_darks", self.chk_use_darks.isChecked())
         st.setValue("cosmetic", self.chk_cosmetic.isChecked())
         st.setValue("flats_by_date", self.chk_flats_by_date.isChecked())
+        st.setValue("manifest_use", self.chk_manifest.isChecked())
+        st.setValue("manifest_reject", self.chk_manifest_reject.isChecked())
         st.setValue("calib_library", self._library)
         st.setValue("reuse_masters", self.chk_reuse.isChecked())
         st.setValue("load_result", self.chk_load_result.isChecked())
@@ -11088,8 +12160,20 @@ class ImageMonoTrainWindow(QMainWindow):
             return 0
 
     def _output_path(self) -> str:
-        """The results folder the next run would write into."""
-        return _output_dir(self._root, self._selected_out_level())
+        """The results folder the next run would write into.
+
+        A mosaic panel gets a folder of its own inside it: output.md,
+        todo.md and the alignment are per run, and a second panel's run
+        would otherwise replace the first one's report.
+        """
+        out = _output_dir(self._root, self._selected_out_level())
+        panel = self._selected_panel()
+        return os.path.join(out, _safe(panel)) if panel else out
+
+    def _run_target(self) -> str:
+        """The target as the run names its files -- with the panel."""
+        panel = self._selected_panel()
+        return f"{self._target} {panel}" if panel else self._target
 
     def _refresh_out_label(self) -> None:
         self.lbl_out.setText(
@@ -11151,6 +12235,13 @@ class ImageMonoTrainWindow(QMainWindow):
         self._groups = {}
         self._calib = {}
         self._nights = {}
+        self._scan = {}
+        self._manifest = None
+        self._manifest_path = ""
+        self._manifest_report = {}
+        self._manifest_flats = False
+        _ROLE_OVERRIDES.clear()
+        self._fill_manifest_controls()
         self._multi_target = []
         self.tbl_filters.setRowCount(0)
         self._refresh_flats_table()
@@ -11383,14 +12474,13 @@ class ImageMonoTrainWindow(QMainWindow):
         "Match flats to the same night" went dead because the darks were
         unusable.
         """
-        darks, flats = (self.chk_use_darks.isChecked(),
-                        self.chk_use_flats.isChecked())
+        darks = self.chk_use_darks.isChecked()
         # The library holds darks and bias; cosmetic correction reads a
         # master dark's statistics.  Neither means anything without them.
         for w in (self.btn_library, self.btn_library_clear,
                   self.chk_cosmetic):
             w.setEnabled(darks)
-        self.chk_flats_by_date.setEnabled(flats)
+        self._sync_flats_by_date_lock()
         self._refresh_flats_table()
         self._refresh_darks_table()
         if self._groups:
@@ -11462,10 +12552,10 @@ class ImageMonoTrainWindow(QMainWindow):
         # a preview that promised a per-night split the run then refuses
         # would be worse than no preview.
         per_night = (StackWorker._flats_per_night(grp, lit, self._nights)
-                     if self.chk_flats_by_date.isChecked() else {})
+                     if self._flats_by_night() else {})
         if per_night:
             files = [p for n in per_night for p in per_night[n]]
-        elif self.chk_flats_by_date.isChecked() and lit:
+        elif self._flats_by_night() and lit:
             kept = [p for p in files if _night_of(p, self._nights) in lit]
             if kept:
                 files = kept
@@ -11678,11 +12768,11 @@ class ImageMonoTrainWindow(QMainWindow):
             if missing:
                 tip.append("No flats for " + ", ".join(missing)
                            + " — those nights fall back to a pooled master.")
-        elif len(nights) > 1 and not self.chk_flats_by_date.isChecked():
+        elif len(nights) > 1 and not self._flats_by_night():
             tip.append("Pooled across nights — right for a rig that was not "
                        "touched in between. 'Match flats to the same night' "
                        "gives each night its own master.")
-        elif self.chk_flats_by_date.isChecked() and len(lit) > 1:
+        elif self._flats_by_night() and len(lit) > 1:
             # The lights span nights; the flats do not.  Keyed on the LIT
             # nights, because that is what the user is being told cannot
             # be separated -- the flats have already been narrowed to one.
@@ -11808,7 +12898,7 @@ class ImageMonoTrainWindow(QMainWindow):
         # which lights each one touches, so it belongs in the summary
         # rather than only in the run log -- by then it is too late to
         # reconsider it.
-        if self.chk_flats_by_date.isChecked():
+        if self._flats_by_night():
             split = {}
             for filt, grp in (c.get(KIND_FLAT) or {}).items():
                 if filt not in (self._groups or {}):
@@ -11872,16 +12962,21 @@ class ImageMonoTrainWindow(QMainWindow):
         self.lbl_calib_found.setText(head)
 
     def _on_analyze_done(self, payload: dict) -> None:
-        self._groups = payload["groups"]
+        self._scan = payload
         self._target = payload["target"]
-        total = payload["total"]
         objects = payload.get("objects", [])
-        self._calib = payload.get("calib", {}) or {}
-        # The night each frame really belongs to (noon-to-noon, from its
-        # own DATE-OBS).  The previews below must judge nights by the same
-        # rule the run does, or the table promises a per-night split the
-        # run then refuses -- or hides one it is about to make.
-        self._nights = payload.get("nights", {}) or {}
+        self._manifest = payload.get("manifest")
+        self._manifest_path = payload.get("manifest_path") or ""
+        for note in payload.get("manifest_notes") or []:
+            self._log(f"NINA-PM manifest: {note}", LogColor.SALMON)
+        self._fill_manifest_controls()
+        # Groups, calibration frames and nights -- the scan, narrowed by
+        # the manifest when there is one.  The nights are each frame's own
+        # (noon-to-noon DATE-OBS, or the night of the flat set NINA-PM
+        # assigned): the previews below must judge them by the same rule
+        # the run does, or the table promises a per-night split the run
+        # then refuses -- or hides one it is about to make.
+        self._apply_manifest_view()
         self._show_calib_summary(payload.get("unsupported", 0))
         if payload.get("stray_lights"):
             self._log(
@@ -11912,7 +13007,16 @@ class ImageMonoTrainWindow(QMainWindow):
                 "the sky into one image.\n\n"
                 "Pick the folder of a single target instead (usually one "
                 "level deeper).")
+        self._show_discovery()
 
+    def _show_discovery(self) -> None:
+        """The tables, the header and the overview, from the current view.
+
+        Called after an analysis and again whenever a manifest switch
+        re-derives what the run will see -- the counts must follow.
+        """
+        payload = self._scan or {}
+        total = payload.get("total", 0)
         # Populate the table.
         filters = sorted(self._groups.keys())
         total_lights, total_exp = self._refresh_filter_table()
@@ -11947,7 +13051,8 @@ class ImageMonoTrainWindow(QMainWindow):
             f"<p><b>{len(filters)}</b> optical filter(s) with light frames — "
             f"<b>{total_txt}</b> total integration:</p>"
             f"<table cellspacing='0'>{rows}</table>"
-            "<hr>"
+            + self._manifest_html()
+            + "<hr>"
             "<p style='color:#aaaaaa;'>Review the list, adjust the stacking "
             "options if needed, then press <b>Stack All Filters</b>.  "
             "One integrated master light is written per filter into the "
@@ -11962,9 +13067,151 @@ class ImageMonoTrainWindow(QMainWindow):
             self._log(f"  {filt}: {len(g['files'])} lights "
                       f"({_format_duration(g.get('exp_total', 0.0))})",
                       LogColor.BLUE)
+        self._log_manifest()
         # Last, so that a "this palette cannot be built from these filters"
         # warning appears BELOW the list of filters it is talking about.
         self._populate_compose_combos()
+
+    # -- NINA-PM manifest ------------------------------------------------
+    def _manifest_on(self) -> bool:
+        return bool(self._manifest) and self.chk_manifest.isChecked()
+
+    def _multi_panel(self) -> bool:
+        """True when the manifest is a mosaic and is in use."""
+        return self._manifest_on() and self.cmb_panel.count() > 1
+
+    def _selected_panel(self) -> str:
+        """The mosaic panel this run stacks, or "" for a single field."""
+        return self.cmb_panel.currentText() if self._multi_panel() else ""
+
+    def _fill_manifest_controls(self) -> None:
+        """Show the manifest switches for a manifest, and only then."""
+        have = bool(self._manifest)
+        self._filling_manifest = True
+        try:
+            for w in (self.lbl_manifest, self.chk_manifest,
+                      self.chk_manifest_reject):
+                w.setVisible(have)
+            panels = _manifest_panels(self._manifest) if have else []
+            before = self.cmb_panel.currentText()
+            self.cmb_panel.clear()
+            self.cmb_panel.addItems(panels)
+            if before in panels:
+                self.cmb_panel.setCurrentText(before)
+            self.wid_panel.setVisible(len(panels) > 1)
+            self.chk_manifest_reject.setEnabled(self.chk_manifest.isChecked())
+        finally:
+            self._filling_manifest = False
+
+    def _apply_manifest_view(self) -> None:
+        """Derive what the run will see: the scan, narrowed by the manifest.
+
+        The scan itself is never modified, so the manifest switch is a
+        clean A/B: off is the folder exactly as discovered.
+        """
+        scan = self._scan or {}
+        groups = scan.get("groups") or {}
+        calib = scan.get("calib") or {}
+        nights = scan.get("nights") or {}
+        self._manifest_report = {}
+        self._manifest_flats = False
+        _ROLE_OVERRIDES.clear()
+        if self._manifest_on():
+            view = _apply_manifest(
+                groups, calib, nights, self._manifest,
+                panel=self._selected_panel(),
+                drop_rejected=self.chk_manifest_reject.isChecked())
+            groups, calib, nights = (view["groups"], view["calib"],
+                                     view["nights"])
+            self._manifest_flats = view["flats_by_night"]
+            roles, role_notes = _manifest_role_overrides(self._manifest)
+            _ROLE_OVERRIDES.update(roles)
+            hint = self._spcc_root()
+            spcc = _manifest_spcc(self._manifest,
+                                  _spcc_catalog("mono_sensors", hint),
+                                  _spcc_catalog("mono_filters", hint))
+            self._manifest_report = dict(view["report"], spcc=spcc,
+                                         role_notes=role_notes)
+        self._groups, self._calib, self._nights = groups, calib, nights
+        self._sync_flats_by_date_lock()
+        self._refresh_manifest_label()
+        self._refresh_out_label()
+
+    def _refresh_manifest_label(self) -> None:
+        if not self._manifest:
+            self.lbl_manifest.setText("")
+            return
+        name = os.path.basename(self._manifest_path)
+        if not self._manifest_on():
+            self.lbl_manifest.setText(
+                f"NINA-PM manifest {name} — switched off.")
+            return
+        r = self._manifest_report
+        rej = len(r.get("rejected") or [])
+        self.lbl_manifest.setText(
+            f"NINA-PM manifest {name}: {r.get('matched', 0)} of "
+            f"{r.get('listed', 0)} listed lights found"
+            + (f", {rej} rejected "
+               + ("left out" if r.get("rejected_dropped", True)
+                  else "stacked anyway") if rej else "")
+            + (", flats per light as NINA-PM assigned them"
+               if self._manifest_flats else "") + ".")
+
+    def _manifest_html(self) -> str:
+        """The overview's manifest paragraph, or "" without one."""
+        if not self._manifest_on():
+            return ""
+        colour = {"ok": "#88ff88", "info": "#aaaaaa", "warn": "#ffb0a0"}
+        lines = _manifest_log_lines(self._manifest_report,
+                                    self._manifest_path)
+        return ("<p>" + "<br>".join(
+            f"<span style='color:{colour[kind]};'>"
+            f"{html.escape(text.strip())}</span>" for text, kind in lines)
+            + "</p>")
+
+    def _log_manifest(self) -> None:
+        if not self._manifest:
+            return
+        if not self._manifest_on():
+            self._log(
+                f"NINA-PM manifest {os.path.basename(self._manifest_path)} "
+                "is switched off — the folder is stacked as discovered.",
+                LogColor.BLUE)
+            return
+        colour = {"ok": LogColor.GREEN, "info": LogColor.BLUE,
+                  "warn": LogColor.SALMON}
+        for text, kind in _manifest_log_lines(self._manifest_report,
+                                              self._manifest_path):
+            self._log(text, colour[kind])
+
+    def _on_manifest_changed(self, *_args) -> None:
+        if self._filling_manifest or not self._scan:
+            return
+        self._apply_manifest_view()
+        self._show_calib_summary(quiet=True)
+        self._show_discovery()
+
+    def _flats_by_night(self) -> bool:
+        """Is each night calibrated with its own flats on this run?
+
+        The checkbox decides -- unless the manifest assigns the flats, in
+        which case pairing each light with its own set IS the assignment.
+        """
+        return (self.chk_flats_by_date.isChecked()
+                or (self._manifest_on() and self._manifest_flats))
+
+    def _sync_flats_by_date_lock(self) -> None:
+        """Grey out the per-night switch while the manifest decides it."""
+        forced = self._manifest_on() and self._manifest_flats
+        self.chk_flats_by_date.setEnabled(
+            self.chk_use_flats.isChecked() and not forced)
+        if not hasattr(self, "_fbd_tip"):
+            self._fbd_tip = self.chk_flats_by_date.toolTip()
+        self.chk_flats_by_date.setToolTip(
+            ("Decided by the NINA-PM manifest: every light is calibrated "
+             "with the flat set NINA-PM assigned to it, one master per "
+             "night.  Switch the manifest off to choose here.\n\n"
+             if forced else "") + self._fbd_tip)
 
     # ------------------------------------------------------------------
     # STACKING
@@ -11981,12 +13228,12 @@ class ImageMonoTrainWindow(QMainWindow):
         if palette == "Auto":
             palette = _detect_palette(sorted(self._groups.keys()))
 
-        return {
+        opts = {
             "calibrate": self._calibration_on(),
             "use_flats": self.chk_use_flats.isChecked(),
             "use_darks": self.chk_use_darks.isChecked(),
             "cosmetic": self.chk_cosmetic.isChecked(),
-            "flats_by_date": self.chk_flats_by_date.isChecked(),
+            "flats_by_date": self._flats_by_night(),
             "calib_library": self._library,
             "skip_blank": self.chk_skip_blank.isChecked(),
             "rejection": self.chk_rejection.isChecked(),
@@ -12041,7 +13288,30 @@ class ImageMonoTrainWindow(QMainWindow):
             "finish": self.chk_finish.isChecked(),
             "finish_stretch": self.chk_finish_stretch.isChecked(),
             "load_result": self.chk_load_result.isChecked(),
+            # Filled below when a NINA-PM manifest is in use; empty, the
+            # run and the report behave as they always did.
+            "manifest_report": {},
+            "manifest_file": "",
         }
+        if self._manifest_on():
+            # What NINA-PM names, already checked against Siril's tables
+            # in `_manifest_spcc`.  For this run only: the SPCC fields keep
+            # what the user typed, and a folder without a manifest still
+            # gets exactly that.
+            r = self._manifest_report
+            spcc = r.get("spcc") or {}
+            for key, opt in (("sensor", "spcc_sensor"),
+                             ("red", "spcc_rfilter"),
+                             ("green", "spcc_gfilter"),
+                             ("blue", "spcc_bfilter")):
+                if spcc.get(key):
+                    opts[opt] = spcc[key]
+            if spcc.get("bandwidths"):
+                opts["nb_bandwidths"] = dict(opts["nb_bandwidths"],
+                                             **spcc["bandwidths"])
+            opts["manifest_report"] = r
+            opts["manifest_file"] = os.path.basename(self._manifest_path)
+        return opts
 
     def _on_stack(self) -> None:
         if not self._groups:
@@ -12089,7 +13359,7 @@ class ImageMonoTrainWindow(QMainWindow):
                   f"output to {out_dir}", LogColor.GREEN)
 
         self._stack_worker = StackWorker(
-            self.siril, self._groups, self._target, out_dir,
+            self.siril, self._groups, self._run_target(), out_dir,
             self._ext, self._current_opts(), self._calib, self._nights)
         self._stack_worker.progress.connect(self._on_progress)
         # Text-only slot: the worker already logged to the Siril console on
@@ -12227,8 +13497,11 @@ class ImageMonoTrainWindow(QMainWindow):
     def _set_left_enabled(self, enabled: bool) -> None:
         self._busy = not enabled
         for w in (self.btn_pick, self.btn_analyze, self.btn_stack,
-                  self.cmb_preset, self.cmb_out_level):
+                  self.cmb_preset, self.cmb_out_level, self.chk_manifest,
+                  self.cmb_panel):
             w.setEnabled(enabled)
+        self.chk_manifest_reject.setEnabled(
+            enabled and self.chk_manifest.isChecked())
         # The window can still be closed while busy (closeEvent then offers to
         # abort), but greying the button out makes the state obvious.
         self.btn_close.setEnabled(enabled)
@@ -12398,7 +13671,7 @@ class ImageMonoTrainWindow(QMainWindow):
             "<li>Press <b>Stack All Filters</b>.  Watch progress in the "
             "<b>Log</b> tab.</li>"
             "<li>Collect one FITS master light per filter from the "
-            "<b>output</b> folder.</li>"
+            "<b>Stacked</b> results folder.</li>"
             "</ol>"
             "<hr>"
             "<h3 style='color:#88aaff;'>How folders are read</h3>"
@@ -12429,7 +13702,43 @@ class ImageMonoTrainWindow(QMainWindow):
             "<p>Its own results folder (<b>Stacked/</b>, and an older "
             "<b>output/</b> that holds results) is skipped while "
             "scanning, so a second run never re-reads the masters it wrote "
-            "as if they were new light frames.</p>")
+            "as if they were new light frames.</p>"
+            "<hr>"
+            "<h3 style='color:#88aaff;'>A NINA-PM manifest</h3>"
+            "<p>NINA-PM can export, per project, a stack manifest "
+            f"(<tt>*{MANIFEST_SUFFIX}</tt>).  Put it into the target "
+            "folder — the selected folder or up to three above it, so with "
+            "Astro-PM next to <i>Originals</i>.  The analysis finds it by "
+            "itself and names it in the Log; when several are found, the "
+            "one that lists the most of these frames is used.  What it "
+            "changes:</p>"
+            "<ul>"
+            "<li><b>Use the NINA-PM manifest</b> — switches all of it on "
+            "or off.  Off, the folder is stacked exactly as discovered.</li>"
+            "<li><b>leave out frames NINA-PM rejected</b> — frames its "
+            "review or automatic grading rejected are not stacked; the Log "
+            "and <tt>output.md</tt> list each one with its reason.  "
+            "Siril's own quality filters still run on what is left.</li>"
+            "<li><b>Flats</b> — every light is calibrated with the flat "
+            "set NINA-PM assigned to it, one master per night, catch-up "
+            "flats from a later night included.  <i>Match flats to the "
+            "same night</i> is then decided by the manifest and greyed "
+            "out.</li>"
+            "<li><b>SPCC</b> — the sensor and filter names NINA-PM gives "
+            "(<tt>spccSensor</tt>, <tt>spccFilter</tt>) are used for this "
+            "run if Siril's tables hold them; a wrong one is named and the "
+            "SPCC settings are used instead.  Narrowband filters "
+            "contribute their bandwidth.</li>"
+            "<li><b>Mosaic panel</b> — a mosaic is stacked one panel per "
+            "run, into its own folder inside the results folder.</li>"
+            "</ul>"
+            "<p>The FITS headers still decide each frame's filter and "
+            "exposure.  A light the manifest does not list is stacked as "
+            "found and named — unless the manifest describes only part of "
+            "the data (a night range, a stand), in which case it is left "
+            "out, so the stand repeats exactly.  Guiding, HFR and airmass "
+            "from NINA-PM are reported, never used for weighting: that "
+            "stays with what Siril measures on the image.</p>")
         tabs.addTab(tab1, "Getting Started")
 
         tab2 = QTextBrowser()

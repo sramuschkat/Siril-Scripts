@@ -649,7 +649,7 @@ Reads the current image from Siril, divides it into a configurable grid of tiles
 
 ## Svenesis ImageMono Train
 
-**File:** `Svenesis-ImageMono-Train.py` (v1.7.20) — **[Detailed Instructions](Instructions/Svenesis-ImageMono-Train-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-ImageMono-Train-Instructions_de.md)**
+**File:** `Svenesis-ImageMono-Train.py` (v1.8.0) — **[Detailed Instructions](Instructions/Svenesis-ImageMono-Train-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-ImageMono-Train-Instructions_de.md)**
 
 > ⚠️ Public preview — not yet submitted to the official Siril Script Repository.
 
@@ -666,6 +666,17 @@ Turns a single N.I.N.A. capture folder into a finished colour image without ever
 - Reports every filter with its **frame count, total integration time, exposure, gain and sensor temperature** before anything is processed.
 - Warns when the folder holds **more than one target** (picked the date folder by mistake) and skips its own results folder while scanning. Target names are compared normalised, so `M 101` and `M101` are not mistaken for two objects.
 - Only calibration is taken from **outside** the target folder — a light frame sitting in the library or a neighbouring calibration folder is counted and reported, never stacked into your target.
+
+#### NINA-PM manifest — what the planner knows, read instead of guessed
+
+If you plan and run the rig with **NINA-PM**, export the project's stack manifest (`<project>.svenesis-monotrain.json`) and put it into the target folder — the selected folder or up to three above it, so with Astro-PM next to `Originals`. The analysis finds it by itself; without one, nothing changes.
+
+- **Rejected frames stay out**, each listed in the log and in `output.md` with its reason (*leave out frames NINA-PM rejected*, on by default). Siril's quality filters still run on what is left.
+- **Flats per light, as NINA-PM assigned them** — one master per night, including catch-up flats shot on a later night, which no date rule can find. A light without a flat set is named by filter and night.
+- **SPCC as NINA-PM names the rig** (`spccSensor`, `spccFilter`), checked against Siril's own tables first; a name Siril does not hold — `IMX533`, say — is reported and the SPCC fields are used instead. Narrowband filters contribute their bandwidth.
+- **Mosaics are stacked one panel per run**, each into `Stacked/<panel>/`.
+- **The FITS headers stay the authority** on filter and exposure; a disagreement is logged. A light the manifest does not list is stacked and named — unless the manifest describes only part of the data, so a stand can be stacked again exactly.
+- Guiding RMS, HFR and airmass are reported per filter, never used for weighting.
 
 #### Calibration — optional and additive
 
@@ -762,7 +773,7 @@ Both documents describe **what actually happened**, not the usual case:
 1. Run **Svenesis ImageMono Train** from Siril: **Processing → Scripts** (or your Scripts menu). No image needs to be loaded.
 2. Click **Select Target Folder…** and pick the root folder of **one** target. Under **Output**, *Results folder* places `Stacked/` inside it or up to three folders above — with Astro-PM, pick `Originals` and choose *1 level up*.
 3. *(Optional)* Set a **Library** folder holding your reusable darks and bias — it is remembered between runs. Session flats are found automatically next to your lights.
-4. Review the discovered filters, frame counts, integration times and what calibration was found.
+4. Review the discovered filters, frame counts, integration times and what calibration was found. If a NINA-PM manifest was found, the *Target Folder* box names it, and the Log says which frames it leaves out and which flats it assigns.
 5. Pick a **Preset** (or adjust the options), choose a **Palette** — or leave it on *Auto*. Check the **SPCC** fields under *Auto-finish*: they are pre-filled for one particular rig, so put your own sensor and filter names there (the Log tells you if a name does not match Siril's database).
 6. Press **Stack All Filters** and watch the Log tab.
 7. Open `Stacked/` — the colour image is loaded in Siril automatically; read **`todo.md`** for the remaining, creative steps.

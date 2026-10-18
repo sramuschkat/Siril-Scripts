@@ -163,6 +163,7 @@ class Worker:
         self._split_refused: dict = {}
         self._cc_said: dict = {}
         self._no_flat_said: set = set()
+        self._no_dark_said: set = set()
         self._commands: list = []
         self.progress = types.SimpleNamespace(emit=lambda *a: None)
 
@@ -660,11 +661,18 @@ print("\n9e) an unreadable log is not mistaken for an empty one")
 check('get_siril_log() or ""' not in src,
       "no snapshot launders a failed read into an empty string")
 
+# No real pause in the tests: the settle wait is counted, not slept.
+_SLEPT = []
 log_ns = {"LOG_ANCHOR_CHARS": 400, "_log_swallowed": lambda e: None,
-          "LogColor": types.SimpleNamespace(SALMON=2)}
+          "LogColor": types.SimpleNamespace(SALMON=2), "sys": sys,
+          "LOG_SETTLE_S": 1.0,
+          "time": types.SimpleNamespace(sleep=_SLEPT.append)}
 exec(ast.get_source_segment(src, next(
     n for n in tree.body if isinstance(n, ast.FunctionDef)
     and n.name == "_log_delta")), log_ns)
+exec(ast.get_source_segment(src, next(
+    n for n in tree.body if isinstance(n, ast.FunctionDef)
+    and n.name == "_log_text")), log_ns)
 exec("from __future__ import annotations\n" + "\n".join(
     textwrap.dedent(body(n)) for n in ("_log_snapshot",
                                        "_log_delta_or_warn")), log_ns)
@@ -758,7 +766,8 @@ check("palette uses" not in am and "_align_ref_advice(self._opts" in am,
       "the remedy is derived from the run's own palette, not hard-coded",
       am[am.find("if weak"):][:400])
 sf = body("_read_spcc_fit")
-check("Running command: {command}" in sf,
+check("m + command for m in LOG_RUNNING" in sf
+      and "Running command: " in src and "Befehlsausführung: " in src,
       "and the colour reader anchors on the COMMAND it issued")
 check("cmd[0]" in body("_colour_calibrate"),
       "taken from the command list, not split out of a display label")
@@ -1922,6 +1931,104 @@ check(bm.count("self._write_frame_record(dest, kind,") == 2,
       "both ways a master comes into being write its record")
 check("used.append(src)" in bm and "_write_frame_record(dest, kind, used)" in bm,
       "the record lists the frames actually staged, not the ones offered")
+
+print("\n51) the NINA-PM manifest reaches the run, and only through one view")
+# 1.8.0.  The window keeps the scan as discovered and derives what the run
+# sees from it; every switch re-derives, nothing edits the scan in place.
+ui = "ImageMonoTrainWindow"
+an = _cls_method("AnalyzeWorker", "run")
+check("_manifest_candidates(self._root)" in an and "_manifest_pick(" in an,
+      "the analysis finds the manifest and picks it by the frames it lists")
+check('"manifest": man' in an and '"manifest_notes": man_notes' in an,
+      "and hands it to the window with whatever it refused")
+done = _cls_method(ui, "_on_analyze_done")
+check("self._scan = payload" in done and "self._apply_manifest_view()" in done,
+      "the window keeps the scan and derives the view from it")
+check("self._groups = payload" not in done,
+      "the groups are never taken from the payload directly any more")
+view = _cls_method(ui, "_apply_manifest_view")
+check("_apply_manifest(" in view and "drop_rejected=self.chk_manifest_reject"
+      in view and "panel=self._selected_panel()" in view,
+      "the view applies the rejections and the chosen panel")
+check("_ROLE_OVERRIDES.clear()" in view
+      and view.index("_ROLE_OVERRIDES.clear()")
+      < view.index("_ROLE_OVERRIDES.update("),
+      "role overrides are cleared before every view, never accumulated")
+check("_ROLE_OVERRIDES.clear()" in _cls_method(ui, "_on_analyze"),
+      "and a new analysis starts without the last manifest's roles")
+chg = _cls_method(ui, "_on_manifest_changed")
+check("self._apply_manifest_view()" in chg and "self._show_discovery()" in chg,
+      "moving a switch re-derives the view and redraws the counts")
+src_grp = _cls_method(ui, "_build_source_group")
+for w in ("chk_manifest", "chk_manifest_reject", "cmb_panel"):
+    check(f"self.{w}" in src_grp and "_on_manifest_changed" in src_grp,
+          f"{w} is built and re-derives the view")
+check("self.chk_manifest" in _cls_method(ui, "_set_left_enabled")
+      and "self.cmb_panel" in _cls_method(ui, "_set_left_enabled"),
+      "the manifest switches are locked while a run goes")
+for key in ("manifest_use", "manifest_reject"):
+    check(f'"{key}"' in _cls_method(ui, "_save_settings")
+          and f'"{key}"' in _cls_method(ui, "_load_settings"),
+          f"{key} is saved and restored")
+opts = _cls_method(ui, "_current_opts")
+check('"flats_by_date": self._flats_by_night()' in opts,
+      "the run's per-night flats follow the manifest when it assigns them")
+check('opts["manifest_report"] = r' in opts and 'spcc.get(key)' in opts,
+      "the report and the checked SPCC names reach the run")
+check(src.count("self.chk_flats_by_date.isChecked()") == 2,
+      "only the settings and the helper read the checkbox itself")
+check("os.path.join(out, _safe(panel))" in _cls_method(ui, "_output_path"),
+      "a mosaic panel gets a results folder of its own")
+check("self._run_target()" in _cls_method(ui, "_on_stack"),
+      "and the panel is part of the master names")
+run = body("run")
+check("_manifest_log_lines(" in run
+      and run.index("_manifest_log_lines(") < run.index("_stack_all_filters("),
+      "the run log says what the manifest decided before anything stacks")
+check("_manifest_md(" in body("_write_docs"),
+      "output.md carries the manifest's section")
+sa = body("_spcc_args")
+check('self._opts.get("spcc_sensor")' in sa,
+      "SPCC still reads its names from the options the window built")
+fr = _fn_src("_filter_role")
+check(fr.index("_ROLE_OVERRIDES") < fr.index("_name_role(name)"),
+      "a manifest role is consulted before the name")
+
+print("\n52) what the first LDN1228 run with a manifest said wrong")
+# 1.8.0.  Seven nights of L and no dark anywhere: the 5% tolerance
+# sentence came once per calibration part, nineteen times, to a run that
+# had no dark to measure anything against.
+ca = body("_calibrate_args")
+check("if dark is None and self._masters.get(KIND_DARK):" in ca,
+      "the closest-dark search only runs when there is a dark to search")
+check('(filt, "none") not in self._no_dark_said' in ca
+      and "found none at all" in ca,
+      "no dark at all is said once per filter, as what it is")
+check('(filt, "match") not in self._no_dark_said' in ca,
+      "and a dark that fits nothing is said once per filter too")
+check("(filt, want_f) in self._no_dark_said" in body("_closest_dark"),
+      "the tolerance sentence is said once per filter and exposure")
+# Both diagnostics were lost on that run: neither the snapshot anchor nor
+# the step's own marker was in the log that came back.  One settle pause
+# and a second read; the breadcrumb records what the failed read held.
+# Own snapshots: `_before` is reused as a name further up the file.
+_b52 = "y\n" * 300 + f"Setting CWD to '{PROC}'\n"
+_a52 = _b52 + STEP
+_SLEPT.clear()
+d, msg = _drive([_b52, "y\n" * 10, _a52])
+check(d is not None and "1376" in d and _SLEPT == [1.0],
+      "a log that has not caught up yet is read again after a pause")
+_SLEPT.clear()
+d, msg = _drive([_b52, _a52])
+check(d is not None and _SLEPT == [],
+      "a healthy read does not wait at all")
+d, msg = _drive([_b52, None, None])
+check(_SLEPT == [], "a refused transfer is not waited on — it is refused")
+check("Not reported — the star-pair counts:" in _drive(
+          [_b52, "unrelated tail\n" * 50])[1],
+      "the message reads as a sentence for one count or many")
+check("log delta for {what}" in body("_log_delta_or_warn"),
+      "a failed read leaves a breadcrumb with what the log held")
 
 print()
 if fails:

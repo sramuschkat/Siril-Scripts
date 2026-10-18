@@ -17,6 +17,28 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(os.path.dirname(HERE), "Svenesis-ImageMono-Train.py")
 src = open(SRC).read()
 tree = ast.parse(src)
+# ast.get_source_segment re-splits the whole file on every call.  At 15k
+# lines and a few thousand calls that was most of this suite's runtime
+# (one section alone took 51 s), so the lines are split once here.
+# Offsets in the AST are UTF-8 byte columns, hence the encoded lines.
+_BLINES = [ln.encode("utf-8") for ln in src.splitlines(keepends=True)]
+
+
+def _seg(node):
+    """_seg(node), without re-reading the file."""
+    try:
+        l1, l2 = node.lineno - 1, node.end_lineno - 1
+        c1, c2 = node.col_offset, node.end_col_offset
+    except AttributeError:
+        return None
+    if None in (l1, l2, c1, c2):
+        return None
+    if l1 == l2:
+        return _BLINES[l1][c1:c2].decode("utf-8")
+    return b"".join([_BLINES[l1][c1:]] + _BLINES[l1 + 1:l2]
+                    + [_BLINES[l2][:c2]]).decode("utf-8")
+
+
 lines = src.splitlines()
 
 fails = []
@@ -112,14 +134,14 @@ mutated = []
 for loop in ast.walk(tree):
     if not isinstance(loop, ast.For):
         continue
-    it = (ast.get_source_segment(src, loop.iter) or "").strip()
+    it = (_seg(loop.iter) or "").strip()
     if not it or "(" in it:
         continue
     for n in ast.walk(loop):
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
                 and n.func.attr in ("append", "pop", "remove", "add",
                                     "clear", "update", "setdefault"):
-            if (ast.get_source_segment(src, n.func.value) or "").strip() == it:
+            if (_seg(n.func.value) or "").strip() == it:
                 mutated.append((n.lineno, it))
 check(not mutated, "no container is mutated while iterated", str(mutated[:3]))
 
@@ -141,7 +163,7 @@ for n in ast.walk(tree):
             and n.func.attr == "_cmd"):
         continue
     for a in n.args[1:]:
-        seg = ast.get_source_segment(src, a) or ""
+        seg = _seg(a) or ""
         if any(t in seg for t in ("dir", "path", "_out", "os.path.join",
                                   "library")) and '"' not in seg:
             suspect.append((n.lineno, seg[:50]))
@@ -159,7 +181,7 @@ unquoted = []
 for n in ast.walk(tree):
     if not isinstance(n, ast.JoinedStr):
         continue
-    seg = (ast.get_source_segment(src, n) or "").strip()
+    seg = (_seg(n) or "").strip()
     # Only whole arguments, not prose that happens to mention a flag.
     m = re.match(r"""^f(['"])"?-(%s)=""" % "|".join(PATH_FLAGS), seg)
     if not m:
@@ -179,7 +201,7 @@ print("\n10) the settings round-trip is symmetric")
 def _keys(fn, pat):
     node = next(n for n in ast.walk(tree)
                 if isinstance(n, ast.FunctionDef) and n.name == fn)
-    return set(re.findall(pat, ast.get_source_segment(src, node)))
+    return set(re.findall(pat, _seg(node)))
 
 
 save = _keys("_save_settings", r'st\.setValue\("(\w+)"')
