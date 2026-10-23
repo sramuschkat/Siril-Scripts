@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.8.0** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.8.1** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.8.0](#17-neu-in-180)
+17. [Neu in 1.8.1](#17-neu-in-181)
 
 ---
 
@@ -165,7 +165,7 @@ Leg die Datei in den Zielordner. Die Analyse sucht im gewählten Ordner und bis 
 Was es ändert, und was nicht:
 
 - **Verworfene Frames bleiben draußen**, solange *leave out frames NINA-PM rejected* an ist (Standard). Das Log fasst sie je Filter und Grund zusammen, `output.md` listet jeden einzeln. Sirils eigene Qualitätsfilter laufen danach zusätzlich.
-- **Jedes Light bekommt den Flat-Satz, den NINA-PM ihm zugeordnet hat**, ein Master pro Nacht — auch einen nachgeholten Satz aus einer späteren Nacht, den keine Datumsregel findet. *Match flats to the same night* entscheidet dann das Manifest, der Schalter ist ausgegraut. Ein Light ohne Satz wird mit Filter und Nacht genannt.
+- **Jedes Light bekommt den Flat-Satz, den NINA-PM ihm zugeordnet hat**, ein Master pro aufgenommenem Flat-Satz — auch einen nachgeholten Satz aus einer späteren Nacht, den keine Datumsregel findet, und Flats, die für mehrere Nächte wiederverwendet werden, ergeben einen Master statt einen pro Nacht. *Match flats to the same night* entscheidet dann das Manifest, der Schalter ist ausgegraut. Ein Light ohne Satz wird mit Filter und Nacht genannt.
 - **SPCC bekommt das Rig so, wie NINA-PM es nennt**, nachdem die Namen gegen Sirils Tabellen geprüft sind (siehe §10).
 - **Ein Mosaik wird Panel für Panel gestackt, ein Lauf pro Panel.** Bei mehr als einem Panel erscheint unter den Schaltern das Menü *Mosaic panel*; der Lauf schreibt nach `Stacked/<Panel>/` und setzt das Panel in die Masternamen.
 - **Der FITS-Header bleibt maßgeblich** für Filter und Belichtung eines Frames. Wo NINA-PM widerspricht, gilt der Header, und das Log nennt den Frame.
@@ -178,7 +178,7 @@ Was es ändert, und was nicht:
 | `lights[].night`, `flatSet` | Die Nacht, als die das Light kalibriert wird, und der Flat-Satz, durch den es geteilt wird |
 | `lights[].panel` | Welcher Panel-Lauf das Light übernimmt |
 | `lights[].filter`, `exposureS` | Nur zum Abgleich mit dem Header |
-| `flatSets[]` | Die Flat-Dateien jedes Satzes, die Nacht, der er dient, wann er aufgenommen wurde, nachgeholt oder nicht |
+| `flatSets[]` | Die Flat-Dateien jedes Satzes — zuerst die Kopie im Projektordner (`flatsInProjectFolder`), dann der Originalname (`flats`) —, die Nacht, der er dient, wann er aufgenommen wurde, nachgeholt oder nicht |
 | `equipment.spccSensor`, `filters[].spccFilter` | SPCC-Sensor- und Filternamen, genutzt nach einer Prüfung gegen Sirils Tabellen |
 | `filters[].filterType`, `centerWavelengthNm`, `bandwidthNm` | Schmalband-Bandbreite für SPCC; eine Rolle für einen Filternamen, den das Skript nicht kennt |
 | `options` | Ob das Manifest bewusst nur einen Teil der Daten beschreibt |
@@ -950,7 +950,15 @@ Nein. Alles wird unter `Stacked/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.8.0
+## 17. Neu in 1.8.1
+
+**Ein Flat-Lauf, ein Master — egal für wie viele Nächte.** NINA-PM führt einen Flat-Satz einmal pro Nacht, deren Lights er dient; Flats, die für spätere Nächte wiederverwendet werden, kommen daher als mehrere Sätze mit denselben Dateien. Bei IC434 diente ein OIII-Flat-Lauf vom 19.10. drei Nächten: der zweite und dritte Satz fanden jede Datei schon vergeben, ihre Lights fielen auf den gepoolten Master zurück, und der Bericht zählte 50 Flats als fehlend. Die Kalibrierung gruppiert die Lights jetzt nach dem Flat-Lauf, den sie nutzen — der Nacht, in der die Flats aufgenommen wurden —, so teilen sich diese 26 OIII-Lights einen Master, und zwei einzelne RED-Frames mit denselben Flats werden zusammen statt allein kalibriert. Die Lights-Tabelle zeigt weiterhin die Nächte, in denen die Lights entstanden.
+
+**Geliehene Flats werden als Kopie von NINA-PM gefunden.** Flats, die für ein anderes Projekt aufgenommen wurden, kopiert NINA-PM unter dem Namen dieses Projekts hierher, und der Export nennt die Kopie in `flatsInProjectFolder`, Eintrag für Eintrag passend zu `flats`. Gesucht wird zuerst die Kopie, dann der Originalname; Mosaik-Exporte haben diese Liste nicht und werden wie bisher über `flats` zugeordnet.
+
+Der IC434-Export ergänzt außerdem je Frame `medianAdu`, `madAdu`, `backgroundRel` und `noiseRel` und lässt `project.targetName` leer; beides braucht keine Änderung — unbekannte Messwerte werden ignoriert, und der Projektname springt ein.
+
+## Was neu war in 1.8.0
 
 **Was NINA-PM weiß, wird gelesen statt geraten.** Wenn du dein Rig mit NINA-PM planst und steuerst, leg dessen Stack-Manifest (`<Projekt>.svenesis-monotrain.json`) in den Zielordner; §4 beschreibt die Datei und jedes Feld, das das Skript liest. Ohne Manifest ändert sich nichts.
 

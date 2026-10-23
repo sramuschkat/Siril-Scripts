@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.8.0** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.8.1** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.8.0](#17-whats-new-in-180)
+17. [What's New in 1.8.1](#17-whats-new-in-181)
 
 ---
 
@@ -165,7 +165,7 @@ Put the file into the target folder. The analysis looks in the selected folder a
 What it changes, and what it does not:
 
 - **Rejected frames stay out** while *leave out frames NINA-PM rejected* is on (the default). The Log sums them per filter and reason; `output.md` lists every one. Siril's own quality filters still run on what is left.
-- **Each light gets the flat set NINA-PM assigned to it**, one master per night — including a catch-up set shot on a later night, which no date rule can find. *Match flats to the same night* is then decided by the manifest and greyed out. A light without a set is named by filter and night.
+- **Each light gets the flat set NINA-PM assigned to it**, one master per set of flats taken — including a catch-up set shot on a later night, which no date rule can find, and flats reused for several nights, which make one master rather than one per night. *Match flats to the same night* is then decided by the manifest and greyed out. A light without a set is named by filter and night.
 - **SPCC is told the rig as NINA-PM names it**, after the names are checked against Siril's tables (see §10).
 - **A mosaic is stacked one panel per run.** With more than one panel a *Mosaic panel* menu appears under the switches; the run writes into `Stacked/<panel>/` and puts the panel into the master names.
 - **The FITS header stays the authority** on a frame's filter and exposure. Where NINA-PM disagrees, the header wins and the Log names the frame.
@@ -178,7 +178,7 @@ What it changes, and what it does not:
 | `lights[].night`, `flatSet` | The night the light is calibrated as, and the flat set it is divided by |
 | `lights[].panel` | Which mosaic panel's run takes the light |
 | `lights[].filter`, `exposureS` | Cross-checked against the header only |
-| `flatSets[]` | The flat files of each set, the night it serves, when it was shot, catch-up or not |
+| `flatSets[]` | The flat files of each set — the copy in this project's folder first (`flatsInProjectFolder`), then the original name (`flats`) — the night it serves, when it was shot, catch-up or not |
 | `equipment.spccSensor`, `filters[].spccFilter` | SPCC sensor and filter names, used after a check against Siril's tables |
 | `filters[].filterType`, `centerWavelengthNm`, `bandwidthNm` | Narrowband bandwidth for SPCC; a role for a filter name the script does not know |
 | `options` | Whether the manifest is a deliberate part of the data |
@@ -950,7 +950,15 @@ No. Everything is written under `Stacked/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.8.0
+## 17. What's New in 1.8.1
+
+**One flat run, one master — however many nights it serves.** NINA-PM lists a flat set once for every night of lights it serves, so flats reused for later nights arrive as several sets with the same files. On IC434 one OIII flat run from 10-19 served three nights: the second and third set found every file already taken, their lights fell back to the pooled master, and the report counted 50 flats as missing. The calibration now groups lights by the flat run they use — the night the flats were taken — so those 26 OIII lights share one master, and two single RED frames that use the same flats are calibrated together instead of alone. The lights table still shows the nights the lights were taken.
+
+**Borrowed flats are found as NINA-PM's copy.** Flats shot for another project are copied into this one under this project's name, and the export lists the copy in `flatsInProjectFolder`, index for index with `flats`. The copy is looked for first, the original name second; mosaic exports carry no such list and match on `flats` as before.
+
+The IC434 export also adds per-frame `medianAdu`, `madAdu`, `backgroundRel` and `noiseRel` and leaves `project.targetName` empty; neither needs a change — unknown metrics are ignored, and the project name stands in.
+
+## What was new in 1.8.0
 
 **What NINA-PM knows is read instead of guessed.** If you plan and run the rig with NINA-PM, put its stack manifest (`<project>.svenesis-monotrain.json`) into the target folder; §4 describes the file and every field the script reads. Without one, nothing changes.
 

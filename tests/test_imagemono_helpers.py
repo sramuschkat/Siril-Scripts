@@ -895,9 +895,12 @@ fs["flatsNight"], fs["catchUp"] = "2026-10-18", True
 g2, c2 = _scan(cu)
 v3 = apply_m(g2, c2, {}, cu)
 late = [p for p in v3["calib"]["flat"]["RED"]["files"] if "/2026-10-18/" in p]
-check(len(late) == 25 and all(night(p, v3["nights"]) == "2026-10-17"
-                              for p in late),
+red17 = [p for p in v3["groups"]["RED"]["files"] if "/2026-10-17/" in p]
+check(len(late) == 25 and red17
+      and {night(p, v3["nights"]) for p in late + red17} == {"2026-10-18"},
       "catch-up flats taken a night later pair with the lights they serve")
+check(v3["groups"]["RED"]["light_nights"][-1] == "2026-10-17",
+      "while the table still shows the night the lights were taken")
 check(any(x["catch_up"] for x in v3["report"]["flat_sets"]["RED"]),
       "and the report marks the set as a catch-up")
 
@@ -1075,6 +1078,60 @@ Korrespondierende Paare: 1796"""
 check(pa(ALIGN, {1: "BLUE", 3: "LUMINOS", 4: "RED"})
       == ({"BLUE": 1334, "LUMINOS": 1796}, "RED"),
       "and so are the German star-pair counts")
+
+print("\n1.8.0 — flat sets that list the same files make one master (IC434)")
+ic, problem = load(os.path.join(HERE, "fixtures", "IC434.svenesis-monotrain.json"))
+check(ic is not None and not problem, "the IC434 manifest loads")
+gi, ci = _scan(ic)
+for fk, grp in ci["flat"].items():          # one copy per file, as on disk
+    grp["files"] = list(dict.fromkeys(grp["files"]))
+vi = apply_m(gi, ci, {}, ic)
+ri = vi["report"]
+check(ri["flats_missing"] == 0 and not ri["flats_shared"],
+      "no flat counted missing or shared because three sets list it")
+oiii = vi["groups"]["OIII"]
+check(oiii["dates"] == ["2026-10-19"] and len(vi["calib"]["flat"]["OIII"]
+                                              ["files"]) == 25,
+      "OIII's three sets of one flat run are one calibration part")
+check(oiii["light_nights"] == ["2026-10-19", "2026-10-20", "2026-10-21"],
+      "and the lights still say which nights they came from")
+red = vi["groups"]["RED"]
+red16 = [p for p in red["files"] if night(p, vi["nights"]) == "2026-10-16"]
+check(len(red16) == 2,
+      "the two single RED frames sharing one flat set calibrate together")
+text = "\n".join(t for t, _k in ns["_manifest_log_lines"](ri))
+check("OIII 1, reused for 2 more night(s)" in text,
+      "the log says one master serves three nights")
+check(len(ri["rejected"]) == 6, "the six HA frames NINA-PM rejected are found")
+
+# flatsInProjectFolder: borrowed DrZi1 flats copied under IC434's name,
+# as the 14:33 IC434 export lists them.
+cp = ic
+check(all(len(fs.get("flatsInProjectFolder") or []) == len(fs["flats"])
+          for fs in cp["flatSets"]),
+      "the IC434 export lists a project-folder name for every flat")
+ic = copy.deepcopy(cp)
+for fs in ic["flatSets"]:
+    fs.pop("flatsInProjectFolder", None)
+    fs.pop("darkFlatsInProjectFolder", None)
+gc, cc = _scan(ic)
+for grp in cc["flat"].values():
+    grp["files"] = [p.replace("/DrZi1_", "/IC434_") for p in
+                    dict.fromkeys(grp["files"])]
+vc = apply_m(gc, cc, {}, cp)
+check(vc["report"]["flats_missing"] == 0
+      and vc["report"]["flats_copied"] == 4 * 25,   # 0010/0012 = 0009
+      "flats on disk only as the project-folder copy are found by that name")
+vo = apply_m(gc, cc, {}, ic)
+check(vo["report"]["flats_missing"] == 6 * 25,
+      "without the list the same folder misses the six borrowed sets' files")
+part = copy.deepcopy(cp)
+part["flatSets"][0]["flatsInProjectFolder"][0] = None
+del part["flatSets"][1]["flatsInProjectFolder"]
+gp, cpp = _scan(ic)
+vp = apply_m(gp, cpp, {}, part)
+check(vp["report"]["flats_missing"] == 0,
+      "an empty entry or a missing list (mosaic) falls back to `flats`")
 
 print()
 if fails:

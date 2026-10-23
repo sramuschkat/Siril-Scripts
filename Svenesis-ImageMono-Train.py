@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.8.0
+Script Version: 1.8.1
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -76,7 +76,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.8.0
+# Script Version: 1.8.1
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -100,6 +100,34 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.8.1 - One flat run, one master -- however many nights it serves
+      - FLAT SETS THAT SHARE THEIR FILES MAKE ONE MASTER.  NINA-PM lists a
+        set once per night of lights it serves, so flats reused for later
+        nights arrive as several sets with the identical files: on IC434
+        one OIII set from 10-19 served 10-19, 10-20 and 10-21.  Keyed by
+        the lights' night, the second and third set found every file
+        already claimed, their lights fell back to the pooled master and
+        the report counted 50 flats as missing.  The calibration key is now
+        the night the flats were TAKEN, shared by every set with the same
+        files; the lights table still shows the nights the lights were
+        taken (light_nights).  It also merges single frames that would
+        otherwise be calibrated alone -- IC434's two RED frames of 10-16
+        and 10-21 share one flat set and now one calibration part.
+      - FLATS COPIED INTO THE PROJECT FOLDER ARE FOUND.  When a set borrows
+        flats shot for another project (IC434's "DrZi1_FLAT_..."), NINA-PM
+        copies them into this project under this project's name and lists
+        the copy in flatSets[].flatsInProjectFolder, index for index with
+        `flats` (darkFlatsInProjectFolder likewise).  The copy's name is
+        looked for first, the original's second; a mosaic export carries
+        no such list and is matched on `flats` as before.  The log counts
+        the flats found as copies.  The dark-flats need no list: they are
+        found by their header, whatever they are called.
+      - Seen first on the IC434 export, which also adds per-frame
+        medianAdu, madAdu, backgroundRel and noiseRel metrics and
+        leaves project.targetName empty.  Neither needs anything:
+        unknown metrics are ignored, and the project name stands in
+        for the target name.
+
 1.8.0 - What NINA-PM knows, read instead of guessed
       - A NINA-PM STACK MANIFEST IS READ WHEN ONE IS THERE.  NINA-PM plans
         and runs the rig, and it knows things discovery can only infer
@@ -765,7 +793,7 @@ from PyQt6.QtGui import QColor, QDesktopServices, QPalette
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.8.0"
+VERSION = "1.8.1"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -3014,24 +3042,43 @@ def _apply_manifest(groups: dict, calib: dict, nights: dict, man: dict,
         "missing": [], "rejected": [], "rejected_dropped": drop_rejected,
         "other_panels": {}, "mismatch": [],
         "flat_sets": {}, "no_flat_set": {}, "flats_missing": 0,
+        "flats_copied": 0,
         "flats_unused": 0, "flats_shared": [],
         "flips": [], "warnings": [], "metrics": {},
     }
     seen: set = set()
     stacked_entries: dict = {}     # filter -> [manifest entry]
     used_sets: dict = {}           # filter -> [set id], first-use order
-    set_key: dict = {}             # set id -> night key
+    set_key: dict = {}             # set id -> calibration key
+    light_nights: dict = {}        # filter -> nights the lights were taken
 
-    # Night keys first: one per (filter, night) normally, the set id added
-    # where one filter has two sets for the same night (a rotator change).
-    per_fn: dict = {}
+    # One calibration key per set of flat FILES, not per set id.  NINA-PM
+    # lists a set once for every night of lights it serves, so flats that
+    # serve several nights arrive as several sets with the identical
+    # files -- on IC434 one OIII set from 10-19 served three nights.  Keyed
+    # by the lights' night, two of those three found every file already
+    # claimed: their 22 lights fell back to the pooled master and the
+    # report counted 50 flats as missing.  The key is now the night the
+    # flats were TAKEN, shared by every set with the same files; the set
+    # id is added only where one filter has two different flat sets from
+    # the same night (a rotator change).
+    by_files: dict = {}
     for fs in sets.values():
-        per_fn.setdefault((_norm_filter(fs.get("filter")),
-                           str(fs.get("night") or "")), []).append(fs["id"])
-    for (_f, night), ids in per_fn.items():
-        for sid in ids:
-            set_key[sid] = (night if len(ids) == 1 or not night
-                            else f"{night} {sid}")
+        files_id = frozenset(os.path.basename(str(f))
+                             for f in fs.get("flats") or [])
+        by_files.setdefault((_norm_filter(fs.get("filter")), files_id),
+                            []).append(fs["id"])
+    per_fn: dict = {}
+    for (filt_key, _files), ids in by_files.items():
+        first = sets[ids[0]]
+        night = str(first.get("flatsNight") or first.get("night") or "")
+        per_fn.setdefault((filt_key, night), []).append(ids)
+    for (_f, night), same_night in per_fn.items():
+        for ids in same_night:
+            key = (night if len(same_night) == 1 or not night
+                   else f"{night} {ids[0]}")
+            for sid in ids:
+                set_key[sid] = key
 
     for filt, g in (groups or {}).items():
         exp_of = {p: e for e, ps in (g.get("by_exp") or {}).items()
@@ -3078,6 +3125,8 @@ def _apply_manifest(groups: dict, calib: dict, nights: dict, man: dict,
                     continue
             kept.setdefault(filt, []).append(path)
             stacked_entries.setdefault(filt, []).append(entry)
+            if entry.get("night"):
+                light_nights.setdefault(filt, set()).add(str(entry["night"]))
             sid = entry.get("flatSet")
             if sid and sid in sets:
                 new_nights[path] = set_key.get(sid) or str(
@@ -3107,8 +3156,11 @@ def _apply_manifest(groups: dict, calib: dict, nights: dict, man: dict,
             by_exp=by_exp,
             exp_total=sum(float(e) * len(ps) for e, ps in by_exp.items()),
             exps=sorted(by_exp),
+            # The calibration keys -- the nights the flats were taken.
+            # What the table shows are the nights the LIGHTS were taken.
             dates=sorted({d for d in (_night_of(p, new_nights)
-                                      for p in paths) if d}))
+                                      for p in paths) if d}),
+            light_nights=sorted(light_nights.get(filt) or ()))
 
     # Flats: the files of the sets the kept lights use, found by name.
     new_calib = dict(calib or {})
@@ -3117,35 +3169,61 @@ def _apply_manifest(groups: dict, calib: dict, nights: dict, man: dict,
     for fkey, grp in flat_groups.items():
         for p in grp.get("files") or []:
             flat_index.setdefault(os.path.basename(p), (p, fkey, grp))
-    owner: dict = {}               # flat path -> set id that claimed it
+    owner: dict = {}               # flat path -> key that claimed it
+    copied: set = set()            # flats found under their copy's name
     flats_by_night = False
     for filt, sids in used_sets.items():
         files, info, replaced = [], None, set()
         rows = []
         for sid in sids:
             fs = sets[sid]
+            key = set_key.get(sid, "")
             listed = [os.path.basename(str(f)) for f in fs.get("flats") or []]
-            found = []
-            for name in listed:
-                hit = flat_index.get(name)
+            # NINA-PM copies flats it borrows from another project into
+            # this one under this project's name, and lists the copy's
+            # name in flatsInProjectFolder, index for index with `flats`.
+            # The copy is looked for first, the original second.  Mosaic
+            # exports carry no such list, and an entry may be empty.
+            #
+            # TODO(mosaic): a mosaic export carries no flatsInProjectFolder,
+            # so a borrowed flat copied into a mosaic project would not be
+            # found under its copy's name.  Does not happen today (NINA-PM
+            # does not copy flats for mosaics).  If it ever does, derive the
+            # copy's name by the rule in NINA-PM's monotrain-export.md §3.3:
+            # it starts with the project name as NINA writes it, "/" and
+            # "\" become "-", umlauts become ae/oe/ue/ss.
+            copies = fs.get("flatsInProjectFolder") or []
+            found = 0
+            for idx, name in enumerate(listed):
+                copy = (os.path.basename(str(copies[idx]))
+                        if idx < len(copies) and copies[idx] else "")
+                hit = (flat_index.get(copy) if copy else None) \
+                    or flat_index.get(name)
                 if not hit:
                     continue
+                if copy and copy != name and flat_index.get(copy) is hit:
+                    copied.add(hit[0])
                 path, fkey, grp = hit
                 replaced.add(fkey)
                 info = info or grp.get("info")
-                if path in owner and owner[path] != sid:
-                    report["flats_shared"].append(
-                        f"{name} ({owner[path]}, {sid})")
+                found += 1
+                if path in owner:
+                    # The same files under another set id: one master.
+                    # Under another KEY they are genuinely shared by two
+                    # different sets, and keep the first one's night.
+                    if owner[path] != key:
+                        report["flats_shared"].append(
+                            f"{name} ({owner[path]}, {key})")
                     continue
-                owner[path] = sid
-                new_nights[path] = set_key.get(sid, "")
-                found.append(path)
-            files.extend(found)
-            report["flats_missing"] += len(listed) - len(found)
-            rows.append({"id": sid, "night": set_key.get(sid, ""),
+                owner[path] = key
+                new_nights[path] = key
+                files.append(path)
+            report["flats_missing"] += len(listed) - found
+            rows.append({"id": sid, "night": str(fs.get("night") or ""),
+                         "key": key,
                          "flats_night": str(fs.get("flatsNight") or ""),
                          "catch_up": bool(fs.get("catchUp")),
-                         "listed": len(listed), "found": len(found)})
+                         "listed": len(listed), "found": found})
         report["flat_sets"][filt] = rows
         if not files:
             continue            # discovery's flats stay for this filter
@@ -3160,6 +3238,7 @@ def _apply_manifest(groups: dict, calib: dict, nights: dict, man: dict,
                              "date": _night_of(files[0], new_nights)}
         flats_by_night = True
     new_calib[KIND_FLAT] = flat_groups
+    report["flats_copied"] = len(copied)
 
     for w in (man or {}).get("warnings") or []:
         if not isinstance(w, dict):
@@ -3259,10 +3338,14 @@ def _manifest_log_lines(report: dict, path: str = "") -> list:
         for f, rows in sorted(sets.items()):
             late = ", ".join(x["flats_night"] for x in rows
                              if x.get("catch_up"))
-            parts.append(f"{f} {len(rows)}"
+            keys = {x.get("key", x["night"]) for x in rows}
+            reused = len(rows) - len(keys)
+            parts.append(f"{f} {len(keys)}"
+                         + (f", reused for {reused} more night(s)"
+                            if reused > 0 else "")
                          + (f" (catch-up from {late})" if late else ""))
-        out.append(("  Flats as NINA-PM assigned them, one set per night: "
-                    + "; ".join(parts) + ".", "ok"))
+        out.append(("  Flats as NINA-PM assigned them, one master per flat "
+                    "set taken: " + "; ".join(parts) + ".", "ok"))
     for f, nights in sorted((r.get("no_flat_set") or {}).items()):
         out.append((f"  {f} {', '.join(sorted(nights)) or '?'}: no flat set "
                     "in NINA-PM, none taken later either — those lights fall "
@@ -3270,6 +3353,10 @@ def _manifest_log_lines(report: dict, path: str = "") -> list:
     if r.get("flats_missing"):
         out.append((f"  {r['flats_missing']} flat(s) of the assigned sets "
                     "were not found here.", "warn"))
+    if r.get("flats_copied"):
+        out.append((f"  {r['flats_copied']} flat(s) found as NINA-PM's copy "
+                    "in this project's folder (flatsInProjectFolder).",
+                    "info"))
     if r.get("flats_unused"):
         out.append((f"  {r['flats_unused']} flat(s) found here belong to no "
                     "set the stacked lights use — not stacked.", "info"))
@@ -3347,8 +3434,9 @@ def _manifest_md(report: dict, path: str = "") -> list:
     sets = r.get("flat_sets") or {}
     if sets:
         L.append("")
-        L.append("**Flat sets assigned by NINA-PM** (each night's lights are "
-                 "divided by their own set):")
+        L.append("**Flat sets assigned by NINA-PM** (each light is divided "
+                 "by its own set; sets that list the same flat files make "
+                 "one master):")
         L.append("")
         L.append("| Filter | Set | Lights' night | Flats taken | Found |")
         L.append("| --- | --- | --- | --- | ---: |")
@@ -12351,7 +12439,9 @@ class ImageMonoTrainWindow(QMainWindow):
             # so a session running past midnight counts once.  Named while
             # there are few enough to read; beyond that the count is the
             # fact worth having, and the tooltip keeps the dates.
-            nights = sorted((g.get("dates") or set()))
+            # The lights' own nights where a manifest re-keyed the
+            # calibration nights to when the flats were taken.
+            nights = sorted(g.get("light_nights") or g.get("dates") or set())
             n_text = (", ".join(_short_nights(nights))
                       if 0 < len(nights) <= NIGHTS_NAMED
                       else (f"{len(nights)} nights" if nights else "—"))
