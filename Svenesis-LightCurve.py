@@ -1,6 +1,6 @@
 """
 Svenesis LightCurve
-Script Version: 1.0.16
+Script Version: 1.0.17
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -92,6 +92,75 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.0.17 - The aperture's last test, entries that outlive their target, the gain
+      The aperture
+      - A STABILITY TEST on the transit itself.  Point-to-point noise
+        and the seeing correlation judge a light curve; neither says
+        whether the DEPTH still depends on the radius.  The difference
+        of two apertures' light curves does: the noise they share
+        cancels in it, and what is left is fitted with the transit's
+        own profile and the fit's bases.  A radius a larger one
+        contradicts at 2.5 sigma gives way to the first radius every
+        larger one agrees with.  On HAT-P-25 b 1.6 x FWHM (the noise
+        optimum) differed from 2.0 x by 2.1 ± 0.7 mmag of a 21 mmag
+        transit, 2.9 sigma, and nothing beyond 2.0 x differed by more
+        than 1.1: (Rp/R*)² 1.58 -> 1.77 %.  On Qatar-4 b 1.35 x FWHM
+        gave way to 1.6 x (3.2 sigma against 2.0 x): 2.77 -> 2.70 %.
+        Simulated with the target's PSF 15 % wider than the comps' and
+        the seeing at its best mid-transit, a 15.0 mmag transit read
+        13.3 ± 2.3 mmag at the noise optimum and 15.3 ± 1.3 after the
+        test.  Without a real dependence the test moved the aperture
+        in 13 of 300 runs (7 of 291 under correlated noise), and the
+        depth did not change when it did.
+      - One radius beyond the grid, 3.0 x FWHM, is measured as the
+        WITNESS of the largest candidate and is never chosen itself.
+      - When no radius holds, the aperture stays and the range of
+        depths across the radii is reported in red: the formal bar
+        does not cover the choice of aperture.  When a larger radius
+        would hold but another star would be inside it, the aperture
+        is not enlarged (its light dilutes the transit) and the same
+        range is reported.
+      - The table -- depth, (Rp/R*)², airmass term and the largest
+        disagreement with a larger radius, per aperture -- is in the
+        log and in the report.
+      Entries that outlive their target
+      - Claret coefficients are bound to the target they were entered
+        or computed for.  Frames of another target clear the field
+        when the folder is chosen, by name; coefficients from an
+        earlier version, with no target on record, are flagged in the
+        run's log.  Two targets had been fitted with a third star's
+        limb darkening.
+      - The telescope aperture is bound to the focal length of the
+        frames it was used with, and cleared under frames of another
+        (or, with nothing on record, when it makes a focal ratio no
+        telescope has): 81 mm sat under frames of 2032 mm focal
+        length, f/25, and set their scintillation term.
+      - Flats must be from the lights' optical train.  Camera, size,
+        binning and filter do not tell two telescopes apart; a flat
+        whose FOCALLEN differs from the lights' by more than 5 % is
+        rejected by name, and flats of two focal lengths are never
+        one master.  A library folder left in the form from another
+        instrument can no longer serve its flats.
+      The gain
+      - Measured from two of the run's own raw flats and their offset
+        frames when the header carries no EGAIN: the photon noise of
+        the flats' difference, in the frames' own ADU, on 64 px tiles
+        of the central half.  Right to 0.6 % on synthetic flats at
+        0.06-4 e-/ADU with vignetting, dust, a drifting panel and a
+        colour mosaic; 0.258 e-/ADU on a camera whose frames had been
+        measured with an assumed 1 (four pairs: 0.2573-0.2583).  It
+        sets the error bars and the fit's weights, not the depth.  A
+        header EGAIN that disagrees by more than 25 % is reported and
+        stays in use.
+      HOPS mode
+      - Without a/R* and inclination from the archive the mode runs on
+        a central transit, and now says in red what that costs: Rp/R*
+        low by 1 % at b = 0.3, 4 % at 0.5, 9 % at 0.7, 19 % at 0.85
+        (measured on its own model), outside its bar.
+      Wording
+      - The linearity warning no longer says the depth "comes out
+        shallow": the direction depends on which stars are in the
+        non-linear range.
 1.0.16 - The audit's second round, and what three real nights asked for
       Photometry
       - The ensemble's medians are taken over the frames all comps
@@ -671,7 +740,7 @@ from matplotlib.ticker import FuncFormatter
 
 from sirilpy import LogColor
 
-VERSION = "1.0.16"
+VERSION = "1.0.17"
 
 # The full manual on GitHub, linked from the help dialog.  The in-app
 # tabs are the quick reference; the manual carries the measurements
@@ -1003,6 +1072,39 @@ APERTURE_NOISE_TIE = 0.03
 APERTURE_SEEING_LOUD = 0.2
 APERTURE_SEEING_QUIET = 0.1
 APERTURE_SEEING_TIE = 0.05
+# The aperture's last test is made on the transit itself.  Point-to-point
+# noise and the seeing correlation both judge a light curve; neither
+# says whether the DEPTH still depends on the radius.  The difference of
+# two apertures' light curves does: the noise the apertures share
+# cancels in it, and what remains is fitted with the transit's own
+# profile.  A profile found in the difference at this many sigma means
+# the two apertures disagree about the depth, and the smaller one gives
+# way.  Measured on two real nights: HAT-P-25 b, 1.6 x FWHM against 2.0 x
+# at 2.9 sigma (2.1 mmag of a 21 mmag transit) and nothing above 1.1
+# from 2.0 x outward; Qatar-4 b, 1.35 x against 2.0 x at 3.2 sigma and
+# nothing above 1.8 from 1.6 x outward.
+APERTURE_STABLE_Z = 2.5
+# One radius beyond the grid, measured only to confirm the largest
+# candidate: it is never chosen.
+APERTURE_WITNESS_FWHM = 3.0
+APERTURE_STABLE_MIN_DOF = 10
+# The curve rebuilt from the per-star fluxes must be the curve that was
+# measured, to this many magnitudes, or the test is not run.
+APERTURE_REBUILD_TOL = 5e-4
+# A flat is the vignetting and the dust of ONE optical train.  Camera,
+# size, binning and filter do not tell two telescopes apart; the focal
+# length the capture program wrote does.
+FLAT_FOCAL_TOL = 0.05
+# Focal ratios outside this range are no telescope: a group 5 aperture
+# that makes one with the frames' focal length belongs to another
+# instrument.
+PLAUSIBLE_F_RATIO = (1.5, 20.0)
+# Gain from two flats: tiles of this many pixels on the central half of
+# the frame, the median over at least this many tiles.
+GAIN_BLOCK = 64
+GAIN_MIN_BLOCKS = 16
+GAIN_PLAUSIBLE = (0.005, 50.0)
+GAIN_HEADER_DISAGREE = 0.25
 APERTURE_INNER_RATIO = 2.0
 APERTURE_OUTER_RATIO = 3.0
 CLIP_WINDOW = 9
@@ -1117,7 +1219,8 @@ SCINTILLATION_SCALE_HEIGHT_M = 8000.0
 FIT_WEIGHT_CLIP = (0.2, 5.0)
 # A target whose brightest frame reaches this fraction of the clip level
 # is warned about: CMOS sensors turn non-linear well below the clip, and
-# a depth measured in the non-linear range comes out shallow.
+# a depth measured in the non-linear range is off (shallow when only the
+# target is up there, deep when the comparison stars are).
 TARGET_LINEAR_HEADROOM = 0.8
 # The aperture grid is scaled to the run's MEDIAN seeing rather than the
 # reference frame's: `register -2pass` picks the best-seeing frame as
@@ -6796,7 +6899,8 @@ def inspect_frame(path: str, header=None) -> dict:
     out = {"path": path, "kind": None, "exp_s": None, "gain_v": None,
            "temp_v": None, "binning": 1, "dims": None, "instrument": None,
            "filter": "", "date_obs": "", "date_loc": "", "object": "",
-           "objctra": "", "objctdec": "", "datamax": None, "aptdia": None}
+           "objctra": "", "objctdec": "", "datamax": None, "aptdia": None,
+           "focal_mm": None}
     h = header if header is not None else _read_header(path)
     if h is None:
         out["kind"] = classify_path(path)
@@ -6849,6 +6953,17 @@ def inspect_frame(path: str, header=None) -> dict:
                 v = float(h[key])
                 if 10.0 <= v <= 20000.0:
                     out["aptdia"] = v
+            except (TypeError, ValueError):
+                pass
+            break
+    # The focal length the capture program wrote: what tells two optical
+    # trains with the same camera apart (flats, the group 5 aperture).
+    for key in ("FOCALLEN", "FOCAL"):
+        if key in h:
+            try:
+                v = float(h[key])
+                if 5.0 <= v <= 200000.0:
+                    out["focal_mm"] = v
             except (TypeError, ValueError):
                 pass
             break
@@ -7081,7 +7196,8 @@ def group_calibration(infos, want_filter: str = "") -> dict:
             info["flat_session"] = session.get(id(info))
         key = (kind, calib_signature(
             info, with_temp=kind in (KIND_DARK, KIND_DARKFLAT)),
-            info.get("flat_session") if kind == KIND_FLAT else None)
+            info.get("flat_session") if kind == KIND_FLAT else None,
+            flat_focal_key(info) if kind == KIND_FLAT else None)
         grp = groups.get(key)
         if grp is None:
             grp = {"kind": kind, "key": key, "files": [], "info": info}
@@ -7247,6 +7363,161 @@ def scan_calibration(roots, want_filter: str = "", read=None) -> dict:
     return group_calibration(infos, want_filter)
 
 
+def flat_focal_key(info):
+    """The optical train a flat belongs to, as a grouping key: its focal
+    length to the millimetre, or None when the header names none."""
+    try:
+        f = float((info or {}).get("focal_mm") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    return int(round(f)) if f > 0 else None
+
+
+def optical_train_matches(master: dict, light: dict,
+                          tol: float = FLAT_FOCAL_TOL) -> tuple:
+    """``(ok, why)`` -- whether a flat was taken through the lights'
+    telescope, as far as the headers can say.  A focal length missing on
+    either side decides nothing and passes; two that differ by more than
+    ``tol`` are two optical trains."""
+    try:
+        fm = float((master or {}).get("focal_mm") or 0.0)
+        fl = float((light or {}).get("focal_mm") or 0.0)
+    except (TypeError, ValueError):
+        return True, "focal length unreadable"
+    if not (fm > 0 and fl > 0):
+        return True, "no focal length to compare"
+    if abs(fm - fl) <= tol * fl:
+        return True, f"same optical train ({fm:g} mm)"
+    return False, (f"taken at {fm:g} mm focal length, the lights at "
+                   f"{fl:g} mm — another telescope, and a flat is the "
+                   "vignetting and the dust of one optical train")
+
+
+def form_aperture_stale(aperture_mm, focal_mm, bound_focal_mm=None) -> str:
+    """Why the telescope aperture left in the form does not belong to
+    these frames, or ``""`` when nothing says so.
+
+    ``bound_focal_mm`` is the focal length of the frames the value was
+    last used with.  Known, it decides: another focal length is another
+    telescope.  Unknown, only a focal ratio no telescope has
+    (`PLAUSIBLE_F_RATIO`) gives the value away.
+    """
+    try:
+        ap = float(aperture_mm or 0.0)
+        fo = float(focal_mm or 0.0)
+    except (TypeError, ValueError):
+        return ""
+    if not (ap > 0 and fo > 0):
+        return ""
+    try:
+        bound = float(bound_focal_mm or 0.0)
+    except (TypeError, ValueError):
+        bound = 0.0
+    if bound > 0:
+        if abs(fo - bound) > FLAT_FOCAL_TOL * bound:
+            return (f"it was entered for frames of {bound:g} mm focal "
+                    f"length, and these are {fo:g} mm")
+        return ""
+    lo, hi = PLAUSIBLE_F_RATIO
+    ratio = fo / ap
+    if not lo <= ratio <= hi:
+        return (f"with these frames' {fo:g} mm focal length it makes "
+                f"f/{ratio:.0f}, which no telescope is")
+    return ""
+
+
+def gain_from_flat_pair(flat_a, flat_b, offset=0.0, block: int = GAIN_BLOCK,
+                        ceiling=None):
+    """The camera's conversion factor in e-/ADU from two flats.
+
+    Photon noise is the one noise whose size is known in electrons: a
+    signal of S electrons scatters by sqrt(S).  In the DIFFERENCE of two
+    flats everything fixed -- vignetting, dust, pixel response -- cancels
+    and the photon noise of both remains, so on a tile with mean signals
+    Sa and Sb (offset removed) and r = Sa / Sb,
+
+        var(a - r b) = Sa (1 + r) / gain.
+
+    The second flat is scaled to the first before differencing, so a
+    panel that drifted between the two exposures costs nothing.  Tiles
+    of ``block`` pixels on the central half of the frame, the variance
+    of each clipped at five robust sigma (a cosmic ray, a hot pixel),
+    the median over the tiles.  ``offset`` is the pedestal: a number or
+    an image.  A colour sensor needs nothing special, because the
+    relation is linear in the signal.  Read noise is left out: at flat
+    levels it is a thousandth of the photon variance.
+
+    Returns ``{"gain", "n", "signal", "scatter"}`` (scatter: the tiles'
+    robust relative spread) or ``None``.
+    """
+    a = np.asarray(flat_a, dtype=float)
+    b = np.asarray(flat_b, dtype=float)
+    if a.ndim == 3:
+        a = a[0]
+    if b.ndim == 3:
+        b = b[0]
+    if a.ndim != 2 or a.shape != b.shape:
+        return None
+    off = np.asarray(offset, dtype=float)
+    if off.ndim == 3:
+        off = off[0]
+    if off.ndim not in (0, 2) or (off.ndim == 2 and off.shape != a.shape):
+        return None
+    h, w = a.shape
+    y0, y1, x0, x1 = h // 4, h - h // 4, w // 4, w - w // 4
+    block = max(8, int(block))
+    gains, signals = [], []
+    for yy in range(y0, y1 - block + 1, block):
+        for xx in range(x0, x1 - block + 1, block):
+            ta = a[yy:yy + block, xx:xx + block]
+            tb = b[yy:yy + block, xx:xx + block]
+            if ceiling is not None and (float(ta.max()) >= float(ceiling)
+                                        or float(tb.max()) >= float(ceiling)):
+                continue
+            to = off if off.ndim == 0 else off[yy:yy + block, xx:xx + block]
+            ta, tb = ta - to, tb - to
+            sa, sb = float(ta.mean()), float(tb.mean())
+            if not (sa > 0 and sb > 0):
+                continue
+            r = sa / sb
+            d = (ta - r * tb).ravel()
+            med = float(np.median(d))
+            mad = 1.4826 * float(np.median(np.abs(d - med)))
+            if not mad > 0:
+                continue
+            keep = np.abs(d - med) < 5.0 * mad
+            if int(keep.sum()) < 0.5 * d.size:
+                continue
+            var = float(np.var(d[keep]))
+            if var > 0:
+                gains.append(sa * (1.0 + r) / var)
+                signals.append(0.5 * (sa + sb))
+    if len(gains) < GAIN_MIN_BLOCKS:
+        return None
+    g = np.asarray(gains)
+    gain = float(np.median(g))
+    lo, hi = GAIN_PLAUSIBLE
+    if not lo <= gain <= hi:
+        return None
+    spread = 1.4826 * float(np.median(np.abs(g - gain))) / gain
+    return {"gain": gain, "n": int(g.size),
+            "signal": float(np.median(signals)), "scatter": spread}
+
+
+def _first_image(path: str):
+    """The first image of a FITS file as an array (compressed or not),
+    or None."""
+    try:
+        from astropy.io import fits
+        with fits.open(path, memmap=False) as hdul:
+            for hdu in hdul:
+                if getattr(hdu, "data", None) is not None:
+                    return np.asarray(hdu.data)
+    except Exception as exc:                        # noqa: BLE001
+        _log_swallowed(exc)
+    return None
+
+
 def choose_masters(groups: dict, light_info: dict) -> tuple:
     """``(chosen, notes)`` -- which group to use for each kind, and why.
 
@@ -7302,6 +7573,15 @@ def choose_masters(groups: dict, light_info: dict) -> tuple:
         ok, why = signature_matches(grp["info"], light_info,
                                     check_exposure=False,
                                     check_temperature=False)
+        if ok:
+            # Same camera, size, binning and filter is not yet the same
+            # telescope: a library folder left in the form from another
+            # instrument serves exactly such flats.
+            t_ok, t_why = optical_train_matches(grp["info"], light_info)
+            if not t_ok:
+                notes.append(f"flat REJECTED ({len(grp['files'])} "
+                             f"frame(s)): {t_why}")
+                continue
         if ok:
             flat = grp
             others = sum(1 for g in flat_groups if g is not grp)
@@ -8099,6 +8379,187 @@ def aperture_seeing_pick(noises, radii, rsee, picked):
     return max(quiet, key=lambda i: float(radii[i])) if quiet else picked
 
 
+def transit_shape(fit):
+    """The transit of a fit as a unit-depth profile on the fit's own
+    rows: the model minus the baseline and the systematics, over the
+    central depth.  ``None`` when the fit has no depth to divide by."""
+    try:
+        model = np.asarray(fit["model_mag"], dtype=float)
+        trend = np.asarray(fit["trend"], dtype=float)
+        depth = float(fit["depth_mag"])
+        base = float(fit.get("baseline") or 0.0)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if model.shape != trend.shape or not (math.isfinite(depth)
+                                          and depth > 0):
+        return None
+    return (model - trend - base) / depth
+
+
+def aperture_curve(flux, ferr, comps, raw_sum: bool = False):
+    """``(mag, err)`` of the target (row 0) against the comparison stars
+    in rows ``comps`` at one aperture, centred on its median: the
+    normalised ensemble, or with ``raw_sum`` HOPS's target over the raw
+    comp sum.  The same two constructions the engine uses, so a curve
+    can be rebuilt at any radius it measured."""
+    f = np.asarray(flux, dtype=float)
+    e = np.asarray(ferr, dtype=float)
+    cf = [f[i] for i in comps]
+    ce = [e[i] for i in comps]
+    if raw_sum:
+        rel, rel_err = hops_relative_flux(f[0], cf, e[0], ce)
+        good = np.isfinite(rel) & (rel > 0) & np.isfinite(rel_err)
+        safe = np.where(good, rel, 1.0)
+        mag = np.where(good, -2.5 * np.log10(safe), np.nan)
+        err = np.where(good, (2.5 / math.log(10.0)) * rel_err / safe, np.nan)
+    else:
+        mag, err = ensemble_relative_mags(f[0], cf, e[0], ce)
+        mag = np.asarray(mag, dtype=float)
+        err = (np.asarray(err, dtype=float) if err is not None
+               else np.full(mag.shape, np.nan))
+    if np.any(np.isfinite(mag)):
+        mag = mag - float(np.nanmedian(mag))
+    return mag, err
+
+
+def aperture_shift(d_mag, shape, cols=(), t=None, duration_d=None):
+    """How much of the transit sits in the DIFFERENCE of two apertures'
+    light curves.
+
+    ``d_mag`` is curve A minus curve B on the same rows, ``shape`` the
+    unit-depth transit profile (`transit_shape`), ``cols`` the fit's
+    systematics columns.  The difference is fitted with a constant, the
+    columns and the profile; the profile's coefficient is the depth of A
+    minus the depth of B at the fit's timing and shape, exactly, because
+    that fit is linear.  Its bar comes from the scatter of the difference
+    itself -- the noise the two apertures share has cancelled -- scaled
+    by the red-noise beta of the residual when ``t`` and ``duration_d``
+    are given.
+
+    Returns ``(shift, sigma, per_unit)`` in magnitudes, ``per_unit`` the
+    columns' own coefficient differences per unit of each column (None
+    for a constant column), or ``None`` when there is too little to fit.
+    """
+    d = np.asarray(d_mag, dtype=float)
+    sh = np.asarray(shape, dtype=float)
+    if d.shape != sh.shape or d.ndim != 1:
+        return None
+    ok = np.isfinite(d) & np.isfinite(sh)
+    use = []
+    for c in cols:
+        c = np.asarray(c, dtype=float)
+        if c.shape != d.shape:
+            return None
+        use.append(c)
+        ok &= np.isfinite(c)
+    n = int(ok.sum())
+    design, scales = [np.ones(n)], []
+    for c in use:
+        c = c[ok]
+        sd = float(np.std(c)) if n else 0.0
+        scales.append(sd)
+        if sd > 0:
+            design.append((c - float(np.mean(c))) / sd)
+    if n < len(design) + 1 + APERTURE_STABLE_MIN_DOF \
+            or not float(np.std(sh[ok])) > 0:
+        return None
+    a = np.column_stack(design + [sh[ok]])
+    try:
+        co, *_rest = np.linalg.lstsq(a, d[ok], rcond=None)
+        cov = np.linalg.inv(a.T @ a)
+    except np.linalg.LinAlgError:
+        return None
+    res = d[ok] - a @ co
+    var = float(res @ res) / float(n - a.shape[1])
+    sigma = math.sqrt(max(var * float(cov[-1, -1]), 0.0))
+    if t is not None and duration_d:
+        try:
+            beta = float(red_noise_beta(np.asarray(t, dtype=float)[ok], res,
+                                        float(duration_d))[0])
+        except Exception:                           # noqa: BLE001
+            beta = 1.0
+        if math.isfinite(beta) and beta > 1.0:
+            sigma *= beta
+    per_unit, k = [], 1
+    for sd in scales:
+        if sd > 0:
+            per_unit.append(float(co[k]) / sd)
+            k += 1
+        else:
+            per_unit.append(None)
+    return float(co[-1]), float(sigma), per_unit
+
+
+def aperture_stability(radii, shifts, picked, eligible=None,
+                       z_max: float = APERTURE_STABLE_Z):
+    """Which aperture the transit depth has stopped depending on.
+
+    ``shifts[(i, j)]`` is ``(shift, sigma)`` from `aperture_shift` for
+    curve ``i`` minus curve ``j``, given for ``radii[i] < radii[j]``.
+    An aperture HOLDS when no larger one disagrees with it about the
+    depth by ``z_max`` sigma or more.  Starting at ``picked`` and going
+    outward through ``eligible`` (all, when None), the first aperture
+    that holds is returned.
+
+    Returns ``(index, verdict, worst)``: ``"stable"`` (the pick holds),
+    ``"moved"`` (a larger one is the first to hold), ``"unstable"`` (none
+    at or above the pick holds, the pick is returned) or
+    ``"unconfirmed"`` (nothing larger than the pick was measured).
+    ``worst[i]`` is ``(j, z, shift, sigma)`` for the larger aperture
+    that disagrees most with ``i``, or None.  An aperture with nothing
+    larger beside it cannot hold: agreement needs a witness.
+    """
+    n = len(radii)
+
+    def _worst(i):
+        out = None
+        for j in range(n):
+            if not float(radii[j]) > float(radii[i]):
+                continue
+            got = shifts.get((i, j))
+            if got is None:
+                continue
+            sh, sg = float(got[0]), float(got[1])
+            if not (math.isfinite(sh) and math.isfinite(sg)):
+                continue
+            z = (sh / sg if sg > 0
+                 else (0.0 if sh == 0 else math.copysign(math.inf, sh)))
+            if out is None or abs(z) > abs(out[1]):
+                out = (j, z, sh, sg)
+        return out
+
+    worst = {i: _worst(i) for i in range(n)}
+    w0 = worst.get(picked)
+    if w0 is None:
+        return picked, "unconfirmed", worst
+    if abs(w0[1]) < z_max:
+        return picked, "stable", worst
+    outward = sorted((i for i in range(n)
+                      if float(radii[i]) > float(radii[picked])
+                      and (eligible is None or i in eligible)),
+                     key=lambda i: float(radii[i]))
+    for i in outward:
+        w = worst[i]
+        if w is not None and abs(w[1]) < z_max:
+            return i, "moved", worst
+    return picked, "unstable", worst
+
+
+def nearest_neighbour_px(stars, x: float, y: float):
+    """Distance in pixels from ``(x, y)`` to the nearest OTHER detected
+    star, or None when the list holds no other star."""
+    best = None
+    for st in (stars or []):
+        sx = float(getattr(st, "xpos", 0.0) or 0.0)
+        sy = float(getattr(st, "ypos", 0.0) or 0.0)
+        if abs(sx - x) < 1e-6 and abs(sy - y) < 1e-6:
+            continue
+        d = math.hypot(sx - float(x), sy - float(y))
+        if best is None or d < best:
+            best = d
+    return best
+
+
 def point_to_point_sigma(mag):
     """Scatter from successive differences, blind to slow structure.
 
@@ -8767,6 +9228,10 @@ class LightCurveWorker(QThread):
         self._ref_shift = (0.0, 0.0)
         self._ref_fwhm = 0.0
         self._frame_wh = None
+        self._measured_gain = None
+        self._target_neighbour_px = None
+        self._aper_stability = None
+        self._stab_prefit = None
 
     # -- plumbing ---------------------------------------------------------
     def _apply_hops_photometry(self, jd, mag, err):
@@ -8864,8 +9329,21 @@ class LightCurveWorker(QThread):
         note = ""
         if claret and len(claret) == 4:
             claret = [float(c) for c in claret]
+            bound = str(self.opts.get("hops_ldc_for") or "").strip()
             note = (self.opts.get("hops_ldc_note")
-                    or "Claret a1..a4 as entered")
+                    or ("Claret a1..a4 as entered"
+                        + (f" for {bound}" if bound else "")))
+            if not bound and not self.opts.get("hops_ldc_note") \
+                    and not self.opts.get("hops_ldc_fresh"):
+                # Coefficients that outlived their session carry no
+                # name: nothing recorded which star they were for.
+                self._emit(
+                    "  Limb darkening: the Claret coefficients in group 5 "
+                    "come from an earlier session, and nothing records "
+                    "which star and filter they were entered for. Clear "
+                    "the field to have them computed for this star, or "
+                    "retype them to confirm they are this star's.",
+                    LogColor.SALMON)
         else:
             claret = None
             teff, logg = eph.get("teff_k"), eph.get("logg")
@@ -9019,6 +9497,262 @@ class LightCurveWorker(QThread):
                    if err_old.size == err_new.size else err_new)
         return mag_out, err_out, X
 
+    def _aperture_stability(self, jd, jd_utc, mag, err, bases, anchor,
+                            u1, u2, sc_term):
+        """The aperture's last test: does the transit depth still depend
+        on the radius?
+
+        The engine chose the aperture by point-to-point noise and by the
+        seeing; both judge a light curve, neither the depth.  Here the
+        transit is fitted once at the chosen aperture, and the
+        DIFFERENCE between each pair of apertures' light curves is then
+        fitted with that transit's profile and the same bases
+        (`aperture_shift`).  An aperture a larger one disagrees with by
+        APERTURE_STABLE_Z sigma gives way to the first larger one that
+        every aperture beyond it agrees with (`aperture_stability`).
+
+        Returns ``{"mag", "err", "aperture"}`` when the aperture moved --
+        the raw record then carries the new radius and its fluxes -- or
+        None.  ``self._aper_stability`` holds the table for the report.
+        """
+        self._stab_prefit = None
+        self._aper_stability = None
+        raw = getattr(self, "_native_raw", None)
+        if not raw or not raw.get("flux_by_r"):
+            return None
+        try:
+            by_r = {float(k): np.asarray(v, dtype=float)
+                    for k, v in raw["flux_by_r"].items()}
+            by_e = {float(k): np.asarray(v, dtype=float)
+                    for k, v in raw["ferr_by_r"].items()}
+            jd_frames = np.asarray(raw["jd"], dtype=float)
+            keep = [bool(k) for k in raw.get("keep", [])]
+            r_pick = float(raw["aperture"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        radii = sorted(by_r)
+        jd = np.asarray(jd, dtype=float)
+        mag = np.asarray(mag, dtype=float)
+        err = np.asarray(err, dtype=float)
+        if r_pick not in by_r or len(radii) < 2 or mag.size != jd.size:
+            return None
+        idx = match_frames_to_curve(np.asarray(jd_utc, dtype=float),
+                                    jd_frames, tol_s=2.0)
+        if idx.size != mag.size or not np.all(idx >= 0):
+            self._emit("  Aperture stability not tested: "
+                       f"{int((idx < 0).sum())} curve row(s) could not be "
+                       "paired with a frame.", LogColor.SALMON)
+            return None
+        comps = [i + 1 for i, k in enumerate(keep)
+                 if k and i + 1 < by_r[r_pick].shape[0]]
+        if not comps:
+            return None
+        hops = self.opts.get("fit_mode") == "hops"
+        curves = {r: aperture_curve(by_r[r][:, idx], by_e[r][:, idx], comps,
+                                    raw_sum=hops) for r in radii}
+        d0 = curves[r_pick][0] - mag
+        if np.any(np.isfinite(d0)):
+            d0 = d0 - float(np.nanmedian(d0))
+        if not np.all(np.isfinite(d0)) \
+                or float(np.max(np.abs(d0))) > APERTURE_REBUILD_TOL:
+            off = (1000.0 * float(np.nanmax(np.abs(d0)))
+                   if np.any(np.isfinite(d0)) else float("nan"))
+            self._emit("  Aperture stability not tested: the light curve "
+                       "rebuilt from the per-star fluxes is not the one "
+                       f"that was measured (up to {off:.2f} mmag apart).",
+                       LogColor.SALMON)
+            return None
+
+        err_fit = err if err.size == jd.size else None
+        always = {k: v for k, v in bases.items() if k in ("airmass", "flip")}
+        cands = {k: v for k, v in bases.items() if k not in always}
+        if cands:
+            chosen, rows = select_bases_bic(jd, mag, always, cands, u1=u1,
+                                            u2=u2, err=err_fit, anchor=anchor)
+            self._stab_prefit = (chosen, rows)
+        else:
+            chosen = dict(bases)
+        pre = fit_transit(jd, mag, bases=chosen, u1=u1, u2=u2, err=err_fit,
+                          anchor=anchor)
+        if pre is None or not pre.get("detected"):
+            self._emit("  Aperture stability not tested: no transit is "
+                       "detected at the chosen aperture, so there is no "
+                       "depth for the apertures to disagree about.",
+                       LogColor.BLUE)
+            return None
+        prof = transit_shape(pre)
+        good = np.asarray(pre.get("good_mask"), dtype=bool)
+        if prof is None or good.size != jd.size \
+                or int(good.sum()) != prof.size:
+            return None
+        shape = np.full(jd.size, np.nan)
+        shape[good] = prof
+        names = [k for k in (pre.get("bases") or []) if k in chosen]
+        cols = [np.asarray(chosen[k], dtype=float) for k in names]
+        n = len(radii)
+        shifts, units = {}, {}
+        for i in range(n):
+            for j in range(i + 1, n):
+                got = aperture_shift(
+                    curves[radii[i]][0] - curves[radii[j]][0], shape, cols,
+                    t=jd, duration_d=pre.get("duration_d"))
+                if got is not None:
+                    shifts[(i, j)] = (got[0], got[1])
+                    units[(i, j)] = got[2]
+        p = radii.index(r_pick)
+        witness = raw.get("witness_r")
+        fw = float(raw.get("grid_fwhm") or 0.0)
+        near = getattr(self, "_target_neighbour_px", None)
+        usable = [i for i, r in enumerate(radii)
+                  if (witness is None or r != float(witness))
+                  and np.all(np.isfinite(curves[r][0]))]
+        crowded = [i for i in usable
+                   if near is not None and float(near) < radii[i] + fw
+                   and radii[i] > r_pick]
+        i_new, verdict, worst = aperture_stability(
+            radii, shifts, p, eligible=[i for i in usable
+                                        if i not in crowded])
+        if verdict == "unstable" and crowded:
+            i_alt, v_alt, _w = aperture_stability(radii, shifts, p,
+                                                  eligible=usable)
+            if v_alt == "moved":
+                verdict, i_new = "crowded", i_alt
+
+        # The table: every aperture's depth at the fit's timing, shape
+        # and bases, as the chosen one's plus the measured difference.
+        d_pick = float(pre["depth_mmag"])
+        pct_pick = pre.get("depth_rprs2_pct")
+        k_air = names.index("airmass") if "airmass" in names else None
+        slope_pick = pre.get("airmass_slope")
+        rows = []
+        for i, r in enumerate(radii):
+            if i == p:
+                dd, ds, da = 0.0, 0.0, 0.0
+            else:
+                key = (min(i, p), max(i, p))
+                got = shifts.get(key)
+                if got is None:
+                    rows.append((float(r), None, None, None, None, None))
+                    continue
+                sign = 1.0 if i < p else -1.0
+                dd, ds = sign * 1000.0 * got[0], 1000.0 * got[1]
+                un = units.get(key) or []
+                da = (sign * 1000.0 * un[k_air]
+                      if k_air is not None and k_air < len(un)
+                      and un[k_air] is not None else None)
+            depth = d_pick + dd
+            pct = (float(pct_pick) * depth / d_pick
+                   if pct_pick and d_pick > 0 else None)
+            air = (1000.0 * float(slope_pick) + da
+                   if slope_pick is not None and da is not None else None)
+            w = worst.get(i)
+            rows.append((float(r), depth, ds, pct,
+                         (float(w[1]), float(radii[w[0]])) if w else None,
+                         air))
+        self._emit(
+            "  Aperture stability — the depth each radius gives with the "
+            "fit's timing, shape and bases held. The differences are "
+            "measured on the difference of the two light curves, where "
+            "the noise the apertures share cancels:", LogColor.BLUE)
+        for (r, depth, ds, pct, w, air) in rows:
+            if depth is None:
+                self._emit(f"    aperture {r:5.2f} px  not comparable",
+                           LogColor.BLUE)
+                continue
+            tag = ("  <-- chosen by noise" if r == r_pick else
+                   "  (witness)" if witness is not None
+                   and r == float(witness) else "")
+            self._emit(
+                f"    aperture {r:5.2f} px"
+                + (f" ({r / fw:.2f} x FWHM)" if fw > 0 else "")
+                + f"  depth {depth:6.2f} mmag"
+                + (f" ±{ds:.2f} against the chosen one" if r != r_pick
+                   else "                             ")
+                + (f"  (Rp/R*)² ≈ {pct:.2f} %" if pct is not None else "")
+                + (f"  airmass term {air:+.1f} mmag/airmass"
+                   if air is not None else "")
+                + (f"  largest disagreement with a larger radius "
+                   f"{abs(w[0]):.1f} sigma ({w[1]:.2f} px)" if w else "")
+                + tag,
+                LogColor.BLUE)
+        fin = [row for row in rows if row[1] is not None and row[0] >= r_pick]
+        lo = min((row[3] if row[3] is not None else row[1]) for row in fin)
+        hi = max((row[3] if row[3] is not None else row[1]) for row in fin)
+        unit = "%" if fin[0][3] is not None else "mmag"
+        w0 = worst.get(p)
+        record = {"verdict": verdict, "picked": r_pick, "used": r_pick,
+                  "z_max": float(APERTURE_STABLE_Z), "rows": rows,
+                  "lo": float(lo), "hi": float(hi), "unit": unit,
+                  "text": ""}
+        self._aper_stability = record
+        if verdict == "unconfirmed":
+            record["text"] = (f"{r_pick:.2f} px is the largest radius "
+                              "measured, so nothing larger confirms it")
+            self._emit("  Aperture stability: " + record["text"] + ".",
+                       LogColor.BLUE)
+            return None
+        w_txt = (f"{1000.0 * abs(w0[2]):.2f} ± {1000.0 * w0[3]:.2f} mmag "
+                 f"({abs(w0[1]):.1f} sigma) against {radii[w0[0]]:.2f} px")
+        if verdict == "stable":
+            record["text"] = (f"the depth at {r_pick:.2f} px agrees with "
+                              "every larger radius (largest difference "
+                              + w_txt + ")")
+            self._emit("  Aperture stability: " + record["text"]
+                       + " — the aperture stands.", LogColor.GREEN)
+            return None
+        if verdict in ("unstable", "crowded"):
+            why = ("a larger radius would hold, but another star sits "
+                   f"{float(near):.0f} px from the target and would be "
+                   "inside it — its light dilutes the transit, so the "
+                   "aperture is not enlarged"
+                   if verdict == "crowded" else
+                   "no radius at or above it is confirmed by every larger "
+                   "one")
+            record["text"] = (
+                f"the depth depends on the aperture: at {r_pick:.2f} px it "
+                f"differs by {w_txt}, and {why}. Across the radii from the "
+                f"chosen one outward it runs {lo:.2f}–{hi:.2f} {unit}")
+            self._emit(
+                "  APERTURE DEPENDENCE: " + record["text"] + ". That range "
+                "is what this run supports; the formal bar does not cover "
+                "the choice of aperture. The aperture stays at "
+                f"{r_pick:.2f} px.", LogColor.RED)
+            return None
+        # Moved.
+        r_new = radii[i_new]
+        m_new, e_new = curves[r_new]
+        e_new = np.asarray(e_new, dtype=float)
+        if np.any(np.isfinite(e_new)):
+            e_new = np.where(np.isfinite(e_new), e_new,
+                             float(np.nanmedian(e_new)))
+        else:
+            e_new = err.copy()
+        if sc_term is not None and np.asarray(sc_term).shape == e_new.shape:
+            e_new = np.hypot(e_new, np.asarray(sc_term, dtype=float))
+        w_new = worst.get(i_new)
+        p2p_old = 1000.0 * point_to_point_sigma(mag)
+        p2p_new = 1000.0 * point_to_point_sigma(m_new)
+        record["used"] = float(r_new)
+        record["text"] = (
+            f"the depth at {r_pick:.2f} px differs by {w_txt}: the "
+            "difference of the two light curves contains the transit, so "
+            f"the depth still depends on the radius there. {r_new:.2f} px "
+            "is the first radius every larger one agrees with"
+            + (f" (largest difference {abs(w_new[1]):.1f} sigma)"
+               if w_new else "")
+            + f" and is used instead (point-to-point noise "
+            f"{p2p_old:.2f} → {p2p_new:.2f} mmag)")
+        self._emit("  APERTURE MOVED: " + record["text"]
+                   + ". Noise is what the first choice minimised; a depth "
+                   "that changes with the radius is a bias no bar shows.",
+                   LogColor.SALMON)
+        raw["flux"] = by_r[r_new].copy()
+        raw["ferr"] = by_e[r_new].copy()
+        raw["aperture"] = float(r_new)
+        self._stab_prefit = None
+        return {"mag": np.asarray(m_new, dtype=float), "err": e_new,
+                "aperture": float(r_new)}
+
     def _comp_share_check(self, fit, bases, jd_utc, X) -> None:
         """Every kept basis beyond airmass and the flip step, measured on
         the comparison stars.  Fills ``fit["comp_share"]`` and logs a
@@ -9105,6 +9839,7 @@ class LightCurveWorker(QThread):
             else 90.0
         geom_note = ("orbit (a/R*, inclination, eccentricity, periastron) "
                      "from the archive")
+        geom_assumed = False
         if a_rs is None or inc is None:
             dur_h = eph.get("duration_h")
             sin_arg = (math.sin(math.pi * float(dur_h) / 24.0 / period)
@@ -9120,6 +9855,21 @@ class LightCurveWorker(QThread):
                          "duration assuming a central transit (b = 0), "
                          "because the archive lists no a/R* or "
                          "inclination for this planet")
+            geom_assumed = True
+            # HOPS itself will not run without the orbit.  Running on an
+            # assumed one is a convenience, and a radius from it is not
+            # a measurement: said in red, not in a subordinate clause.
+            self._emit(
+                "  HOPS MODE WITHOUT THE ORBIT: the archive lists no a/R* "
+                "and inclination for this planet, so the transit is "
+                "modelled as central (b = 0) with a/R* derived from the "
+                "duration. Rp/R* then comes out LOW by what the true "
+                "impact parameter is: 1 % at b = 0.3, 4 % at 0.5, 9 % at "
+                "0.7, 19 % at 0.85 (measured on this model), and its bar "
+                "does not contain that. The mid-time is the usable result "
+                "of this mode here; for the radius use the Svenesis fit, "
+                "which states the same uncertainty in its Rp/R* bar.",
+                LogColor.RED)
         geom = {"period_d": period, "a_rs": float(a_rs), "ecc": ecc,
                 "inc_deg": float(inc), "peri_deg": peri}
         u1_q, u2_q, ldc, _ld_src, ld_note = self._limb_darkening(eph)
@@ -9322,6 +10072,7 @@ class LightCurveWorker(QThread):
                 "photometry": getattr(self, "_hops_phot_note", "") or
                 "ensemble series (HOPS photometry unavailable)",
                 "geom": geom, "geom_note": geom_note, "impact_b": float(b),
+                "geom_assumed": bool(geom_assumed),
                 "ldc": ldc, "ldc_note": ldc_note,
                 "detrend": choice, "detrend_note": detrend_note,
                 "rp_source": rp_src,
@@ -9593,6 +10344,102 @@ class LightCurveWorker(QThread):
                 return cand
         return None
 
+    def _measure_gain(self, chosen: dict, light_info: dict,
+                      light_header=None) -> None:
+        """The camera's e-/ADU from two of the run's own raw flats and
+        their offset frames (`gain_from_flat_pair`), kept in
+        ``self._measured_gain`` for the engine to use when the header
+        carries no conversion factor.  Every way out says why; nothing
+        here may abort the run."""
+        self._measured_gain = None
+        flat = chosen.get("flat")
+        if not flat or len(flat.get("files") or []) < 2:
+            return
+        try:
+            g_l = light_info.get("gain_v")
+            g_f = (flat.get("info") or {}).get("gain_v")
+            if g_l is not None and g_f is not None \
+                    and abs(float(g_l) - float(g_f)) > 1e-6:
+                self._emit(
+                    f"  Gain not measured from the flats: they were taken "
+                    f"at gain setting {float(g_f):g}, the lights at "
+                    f"{float(g_l):g}, and the conversion factor belongs "
+                    "to the setting.", LogColor.BLUE)
+                return
+            off_grp = (chosen.get("offset") or chosen.get("light_bias")
+                       or chosen.get("dark"))
+            if not off_grp or not off_grp.get("files"):
+                self._emit(
+                    "  Gain not measured from the flats: no bias, "
+                    "dark-flat or dark frames give their pedestal, and a "
+                    "signal that still contains it would overstate the "
+                    "gain.", LogColor.BLUE)
+                return
+            paths = sorted(flat["files"])[:2]
+            imgs = []
+            for path in paths:
+                state, _ev = frames_are_calibrated(_read_header(path))
+                arr = _first_image(path)
+                if arr is None or state is True \
+                        or not np.issubdtype(arr.dtype, np.integer):
+                    self._emit(
+                        "  Gain not measured from the flats: "
+                        f"{os.path.basename(path)} is not a raw camera "
+                        "frame (a master or a calibrated flat has had its "
+                        "noise averaged away).", LogColor.BLUE)
+                    return
+                imgs.append(arr)
+            ceiling = 0.98 * float(np.iinfo(imgs[0].dtype).max)
+            offs = []
+            for path in sorted(off_grp["files"])[:4]:
+                arr = _first_image(path)
+                if arr is not None and arr.shape == imgs[0].shape:
+                    offs.append(np.asarray(arr, dtype=float))
+            if not offs:
+                self._emit("  Gain not measured from the flats: their "
+                           "offset frames could not be read at the flats' "
+                           "size.", LogColor.BLUE)
+                return
+            got = gain_from_flat_pair(imgs[0], imgs[1],
+                                      np.mean(offs, axis=0), ceiling=ceiling)
+        except Exception as exc:                    # noqa: BLE001
+            _log_swallowed(exc)
+            return
+        if got is None:
+            self._emit("  Gain not measured from the flats: two flats and "
+                       "their offset gave no usable photon-noise estimate "
+                       "(too few unsaturated tiles, or a value no camera "
+                       "has).", LogColor.SALMON)
+            return
+        self._measured_gain = got
+        hdr_gain = None
+        try:
+            v = float((light_header or {}).get("EGAIN"))
+            if 0.0 < v < 100.0:
+                hdr_gain = v
+        except (TypeError, ValueError, AttributeError):
+            hdr_gain = None
+        msg = (f"  Gain measured from two flats: {got['gain']:.3f} e-/ADU "
+               f"({got['n']} tiles at {got['signal']:.0f} ADU above the "
+               f"offset, tile scatter {100 * got['scatter']:.0f} %) — the "
+               "photon noise of their difference, in the frames' own ADU.")
+        if hdr_gain is None:
+            self._emit(msg + " The headers carry no EGAIN, so the error "
+                       "bars use this value instead of an assumed 1.",
+                       LogColor.GREEN)
+        elif abs(hdr_gain - got["gain"]) > GAIN_HEADER_DISAGREE * got["gain"]:
+            self._emit(
+                msg + f" The header says EGAIN = {hdr_gain:g}: the two "
+                f"differ by a factor {max(hdr_gain, got['gain']) / min(hdr_gain, got['gain']):.1f}. "
+                "The header's value stays in use for the error bars; a "
+                "factor of 4 or 16 between them is a 12- or 14-bit camera "
+                "whose frames are scaled to 16 bit while EGAIN is quoted "
+                "for the unscaled ADU, and then the measured value is the "
+                "right one.", LogColor.SALMON)
+        else:
+            self._emit(msg + f" It agrees with the header's EGAIN "
+                       f"({hdr_gain:g}), which is used.", LogColor.BLUE)
+
     def _build_master(self, kind: str, grp: dict, cache: str, work: str,
                       offset_master: str = ""):
         """Build (or reuse) one master; return its path or ``None``.
@@ -9794,6 +10641,7 @@ class LightCurveWorker(QThread):
                                         chosen["light_bias"], cache, work))
         masters = {k: v for k, v in masters.items() if v}
         self._calib_masters = dict(masters)
+        self._measure_gain(chosen, light_info, light_header)
 
         # Back to the light sequence before calibrating it: the master
         # builds moved the working directory.
@@ -10389,6 +11237,13 @@ class LightCurveWorker(QThread):
                    f"({fwhm_note}).", LogColor.BLUE)
         radii = sorted({round(max(1.5, float(fwhm) * g), 2)
                         for g in APERTURE_FWHM_GRID})
+        # One radius beyond the grid, never a candidate: the witness the
+        # largest candidate is compared with in the stability test.
+        witness = round(max(1.5, float(fwhm) * APERTURE_WITNESS_FWHM), 2)
+        if witness > radii[-1]:
+            radii.append(witness)
+        else:
+            witness = None
         r_in = AUTORING_INNER_FWHM * max(float(fwhm), 1.0)
         r_out = AUTORING_OUTER_FWHM * max(float(fwhm), 1.0)
         gain = 1.0
@@ -10415,6 +11270,11 @@ class LightCurveWorker(QThread):
                             break
                     except (TypeError, ValueError):
                         pass
+                mg = getattr(self, "_measured_gain", None)
+                if mg and gain_src.startswith("assumed"):
+                    gain = gain_hdr = float(mg["gain"])
+                    gain_src = ("measured from two flats ("
+                                f"{mg['n']} tiles at {mg['signal']:.0f} ADU)")
                 d0 = None
                 for u in hd:
                     if getattr(u, "data", None) is not None:
@@ -10784,7 +11644,8 @@ class LightCurveWorker(QThread):
         # Linearity margin.  The clip test catches a SATURATED core; a
         # CMOS sensor is non-linear well below that, and a target that
         # peaks at 90 % of the clip on its brightest frame passes every
-        # test above while its depth comes out shallow.
+        # test above while its depth is off (in which direction depends
+        # on which of the stars sit in the non-linear range).
         self._target_headroom = float("nan")
         if sat_adu:
             pk = peakn[0]
@@ -10802,7 +11663,9 @@ class LightCurveWorker(QThread):
                         f"({n_hi} frame(s) above "
                         f"{100 * TARGET_LINEAR_HEADROOM:.0f} %). CMOS "
                         "sensors turn non-linear well below the clip, and "
-                        "a depth measured there comes out shallow — a "
+                        "a depth measured there is off by an amount, and "
+                        "in a direction, that depend on which of the stars "
+                        "sit in that range — a "
                         "shorter exposure or a lower gain keeps the target "
                         f"under {100 * TARGET_LINEAR_HEADROOM:.0f} %.",
                         LogColor.SALMON)
@@ -10888,15 +11751,19 @@ class LightCurveWorker(QThread):
             if int(pair.sum()) >= 10 and np.std(fw_k[pair]) > 0 \
                     and np.std(mag[pair]) > 0:
                 r_see = float(np.corrcoef(mag[pair], fw_k[pair])[0, 1])
-            aper_rows.append((float(r), npts,
-                              1000.0 * p2p if math.isfinite(p2p)
-                              else float("nan")))
+            is_witness = witness is not None and r == witness
+            if not is_witness:
+                aper_rows.append((float(r), npts,
+                                  1000.0 * p2p if math.isfinite(p2p)
+                                  else float("nan")))
             self._emit(f"    aperture {r:5.2f} px  {npts:4d} point(s)  "
                        + ("     —" if not math.isfinite(p2p)
                           else f"{1000.0 * p2p:6.2f} mmag")
                        + (f"  seeing r = {r_see:+.2f}"
-                          if math.isfinite(r_see) else ""), LogColor.BLUE)
-            if math.isfinite(p2p):
+                          if math.isfinite(r_see) else "")
+                       + ("  (witness for the stability test, not a "
+                          "candidate)" if is_witness else ""), LogColor.BLUE)
+            if math.isfinite(p2p) and not is_witness:
                 cands.append((p2p, r, mag, err, npts, r_see))
         if not cands:
             self._emit("  No aperture produced a finite light curve — "
@@ -11048,6 +11915,11 @@ class LightCurveWorker(QThread):
             "keep": [bool(k) for k in keep],
             "aperture": float(r_best), "r_in": float(r_in),
             "r_out": float(r_out), "gain": float(gain_hdr),
+            # Every radius measured, for the stability test on the fit.
+            "flux_by_r": {float(r): flux[r] for r in radii},
+            "ferr_by_r": {float(r): ferr[r] for r in radii},
+            "witness_r": (float(witness) if witness is not None else None),
+            "grid_fwhm": float(fwhm),
             # Siril's calibrated floats are ADU / 65535: the per-star
             # files quote counts, so they multiply by this.
             "adu_scale": 65535.0 if float_normalised else 1.0,
@@ -11923,6 +12795,7 @@ class LightCurveWorker(QThread):
         crowd = crowding_note(stars, tx, ty, fwhm)
         if crowd:
             self._emit("  " + crowd[1], crowd[0])
+        self._target_neighbour_px = nearest_neighbour_px(stars, tx, ty)
 
         comps, comp_reserves, rejected, how_ranked = choose_comparison_stars(
             stars, (tx, ty), int(self.opts.get("n_comps", DEFAULT_N_COMPS)),
@@ -12224,6 +13097,7 @@ class LightCurveWorker(QThread):
         # weights of both fits -- not the blind fit's noise level, which
         # the residual scatter sets.
         self._scint_note = ""
+        sc_term = None
         ap_mm = self.opts.get("aperture_mm")
         ap_src = "group 5"
         if not ap_mm:
@@ -12278,7 +13152,8 @@ class LightCurveWorker(QThread):
             sc = scintillation_mag(X, exp_for_scint, ap_mm,
                                    self.opts.get("site_height_m", 0.0))
             if sc.shape == err.shape and np.any(np.isfinite(sc)):
-                err = np.hypot(err, np.where(np.isfinite(sc), sc, 0.0))
+                sc_term = np.where(np.isfinite(sc), sc, 0.0)
+                err = np.hypot(err, sc_term)
                 self._scint_note = (
                     f"scintillation (Young) for a {float(ap_mm):g} mm "
                     f"aperture, {exp_for_scint:g} s, "
@@ -12445,6 +13320,18 @@ class LightCurveWorker(QThread):
                        "(discovery mode).", LogColor.SALMON)
         else:
             partial = None
+        # The aperture's last test, on the transit itself: does the
+        # depth still depend on the radius?  Before the bases are chosen,
+        # because a different aperture is a different light curve.
+        swap = self._aperture_stability(jd, jd_utc, mag, err, bases, anchor,
+                                        u1_fit, u2_fit, sc_term)
+        if swap:
+            if raw_mag.size == swap["mag"].size:
+                raw_mag = swap["mag"] + float(np.nanmedian(raw_mag))
+            mag, err = swap["mag"], swap["err"]
+            aperture = swap["aperture"]
+            raw_rms = _mad_std(mag) * 1000.0
+            err_fit = err if err.size == jd.size else None
         # Every basis beyond airmass (and the flip step, a physical
         # event) must earn its place by the BIC, the transit in the
         # model throughout.  Offering all of them unasked handed a 6
@@ -12453,7 +13340,9 @@ class LightCurveWorker(QThread):
         cands = {k: v for k, v in bases.items() if k not in always}
         bic_rows = []
         if cands:
-            bases, bic_rows = select_bases_bic(
+            # The stability test already chose them on this very curve.
+            _pre = getattr(self, "_stab_prefit", None)
+            bases, bic_rows = _pre if _pre else select_bases_bic(
                 jd, mag, always, cands, u1=u1_fit, u2=u2_fit, err=err_fit,
                 anchor=anchor)
             bic_kept = [(n, d) for n, d, k in bic_rows if k]
@@ -12477,6 +13366,8 @@ class LightCurveWorker(QThread):
             fit["bic_rows"] = [(str(n), float(d), bool(k))
                                for n, d, k in bic_rows]
             fit["partial"] = partial
+            fit["aperture_stability"] = getattr(self, "_aper_stability",
+                                                None)
             if partial:
                 # The duration was held on purpose; that it sits where it
                 # was put is no finding.
@@ -12712,6 +13603,7 @@ class LightCurveWorker(QThread):
             "clip_note": clip_note,
             "comp_rows": comp_rows,
             "aper_rows": aper_rows,
+            "aper_stability": getattr(self, "_aper_stability", None),
             "aperture_px": aperture,
             "folder": folder,
             "out_dir": out_dir,
@@ -15508,6 +16400,11 @@ class SvenesisLightCurveWindow(QMainWindow):
             "defaults written exactly as Claret coefficients (a2 = u1 + "
             "2 u2, a4 = -u2), take over.")
         hgrid.addWidget(self.ed_hops_ldc, 1, 1, 1, 3)
+        # The star the coefficients were entered for.  The field is
+        # restored from the last session like every other, and four
+        # numbers do not say whose they are.
+        self._ldc_bound = ""
+        self.ed_hops_ldc.textEdited.connect(self._on_ldc_edited)
         self.btn_hops_ldc = QPushButton("Compute Claret (Phoenix)")
         self.btn_hops_ldc.setToolTip(
             "The coefficients HOPS would use, computed here: ExoTETHyS's "
@@ -15565,6 +16462,10 @@ class SvenesisLightCurveWindow(QMainWindow):
             "wrote one; otherwise the bars carry no scintillation and "
             "the log says so.")
         grid.addWidget(self.ed_aperture_mm, 1, 1)
+        # The focal length of the frames the aperture was entered for.
+        self._aperture_focal_bound = 0.0
+        self._probe_focal_mm = 0.0
+        self.ed_aperture_mm.textEdited.connect(self._on_aperture_edited)
         lay.addLayout(grid)
         self.chk_site_force = QCheckBox(
             "Use the form's site even when the headers carry one")
@@ -15862,6 +16763,45 @@ class SvenesisLightCurveWindow(QMainWindow):
                 "cleared the RA/Dec fields — they were the previous "
                 "target's, and these headers carry no position to replace "
                 "them with (the archive supplies one from the name)")
+        # Two more entries that outlive their target.  Claret
+        # coefficients are a star's and a filter's; the telescope
+        # aperture is an instrument's.  Both sat in the form through
+        # three targets and two telescopes before anything noticed.
+        ldc_text = self.ed_hops_ldc.text().strip()
+        ldc_for = getattr(self, "_ldc_bound", "") or existing
+        if ldc_text and name and ldc_for \
+                and target_key(ldc_for) != target_key(name):
+            self.ed_hops_ldc.setText("")
+            self._ldc_bound = ""
+            found.append(
+                f"cleared the Claret coefficients in group 5 — they were "
+                f"entered for {ldc_for!r}"
+                + (", and the run computes this star's from the Phoenix "
+                   "models" if self.chk_auto_ldc.isChecked() else
+                   "; with the Phoenix computation switched off the "
+                   "script's defaults apply until you enter this star's"))
+        focal = 0.0
+        for info in lights:
+            if info.get("focal_mm"):
+                focal = float(info["focal_mm"])
+                break
+        self._probe_focal_mm = focal
+        ap_text = self.ed_aperture_mm.text().strip()
+        why = form_aperture_stale(
+            _parse_aperture_mm(ap_text), focal,
+            getattr(self, "_aperture_focal_bound", 0.0))
+        if why:
+            self.ed_aperture_mm.setText("")
+            self._aperture_focal_bound = 0.0
+            found.append(
+                f"cleared the telescope aperture in group 5 ({ap_text} "
+                f"mm) — {why}. The header's APTDIA is used when there is "
+                "one; otherwise enter this telescope's, or the error "
+                "bars carry no scintillation term")
+        elif ap_text and focal and not getattr(
+                self, "_aperture_focal_bound", 0.0):
+            # First sight of a plausible pair: bound from here on.
+            self._aperture_focal_bound = focal
         if found:
             self._log("Read from the first "
                       f"{min(len(files), PROBE_HEADERS)} header(s): "
@@ -15964,6 +16904,21 @@ class SvenesisLightCurveWindow(QMainWindow):
         self._ldc_thread.done.connect(self._on_hops_ldc_done)
         self._ldc_thread.start()
 
+    def _on_ldc_edited(self, *_args) -> None:
+        """Typed coefficients belong to the target the form names now."""
+        self._ldc_bound = (self.ed_target_name.text().strip()
+                           if self.ed_hops_ldc.text().strip() else "")
+        # Typed in this session: the run need not ask whose they are,
+        # even when no target name was there to bind them to.
+        self._ldc_fresh = bool(self.ed_hops_ldc.text().strip())
+
+    def _on_aperture_edited(self, *_args) -> None:
+        """A typed aperture belongs to the telescope of the frames at
+        hand."""
+        self._aperture_focal_bound = (
+            float(getattr(self, "_probe_focal_mm", 0.0) or 0.0)
+            if self.ed_aperture_mm.text().strip() else 0.0)
+
     def _on_hops_ldc_done(self, vals, note: str) -> None:
         self.btn_hops_ldc.setEnabled(True)
         if not vals:
@@ -15973,6 +16928,7 @@ class SvenesisLightCurveWindow(QMainWindow):
         text = ", ".join(f"{v:.5f}" for v in vals)
         self.ed_hops_ldc.setText(text)
         self._hops_ldc_text = text
+        self._ldc_bound = self.ed_target_name.text().strip()
         alias = getattr(self, "_hops_filter_note", "") or ""
         if alias:
             note = f"{note} ({alias})"
@@ -16022,6 +16978,8 @@ class SvenesisLightCurveWindow(QMainWindow):
                 self.cmb_hops_detrend.currentIndex()],
             "hops_iterations": self.spin_hops_iter.value(),
             "hops_ldc": parse_claret_ldc(self.ed_hops_ldc.text()),
+            "hops_ldc_for": getattr(self, "_ldc_bound", ""),
+            "hops_ldc_fresh": bool(getattr(self, "_ldc_fresh", False)),
             "hops_ldc_note": (self._hops_ldc_note
                               if self.ed_hops_ldc.text().strip()
                               == self._hops_ldc_text else ""),
@@ -16137,6 +17095,13 @@ class SvenesisLightCurveWindow(QMainWindow):
             p.append(f"&nbsp;aperture {r['aperture_px']:.2f} px chosen by "
                      f"scan ({r['aperture_px'] / max(r['fwhm_px'], 1e-9):.2f}"
                      " × FWHM)<br>")
+        stab = r.get("aper_stability")
+        if stab and stab.get("text"):
+            colour = {"stable": "#88cc88", "moved": "#ddaa88",
+                      "unconfirmed": "#aaaaaa"}.get(stab["verdict"],
+                                                    "#e08080")
+            p.append(f"&nbsp;<span style='color:{colour}'>Aperture "
+                     f"stability: {stab['text']}.</span><br>")
         dropped = [row for row in r.get("comp_rows", []) if "DROP" in row[3]]
         if dropped:
             p.append(f"&nbsp;<span style='color:#ddaa88'>{len(dropped)} "
@@ -16331,6 +17296,21 @@ class SvenesisLightCurveWindow(QMainWindow):
                   + ("     —" if not np.isfinite(rms) else f"{rms:6.2f} mmag")
                   + ("   <-- chosen" if abs(a - r["aperture_px"]) < 1e-9
                      else ""))
+            stab = r.get("aper_stability")
+            if stab and stab.get("text"):
+                A(f"   stability      {stab['text']}")
+                for (ar, depth, ds, pct, w, air) in stab.get("rows", []):
+                    if depth is None:
+                        continue
+                    A(f"      {ar:5.2f} px  depth {depth:6.2f} mmag"
+                      + (f"  (Rp/Rs)^2 ~{pct:.2f} %" if pct is not None
+                         else "")
+                      + (f"  airmass term {air:+.1f} mmag/airmass"
+                         if air is not None else "")
+                      + (f"  vs larger radii up to {abs(w[0]):.1f} sigma"
+                         if w else "")
+                      + ("   <-- used" if abs(ar - stab["used"]) < 1e-9
+                         else ""))
         if r.get("n_clipped"):
             A(f"Outliers          {r['clip_note']}")
         for i, (x, y, snr) in enumerate(r["comps"], start=1):
@@ -16531,6 +17511,10 @@ class SvenesisLightCurveWindow(QMainWindow):
                 A("HOPS-compatible mode (ephemeris-locked fit)")
                 A(f"   photometry     {hops['photometry']}")
                 A(f"   geometry       {hops['geom_note']}")
+                if hops.get("geom_assumed"):
+                    A("                  ORBIT ASSUMED: Rp/R* is low by the "
+                      "unknown impact parameter (1 % at b = 0.3, 9 % at "
+                      "0.7, 19 % at 0.85); its bar does not contain that")
                 A(f"   limb darkening {hops['ldc_note']}")
                 A("   exposure       "
                   + (f"model averaged over {hops['sub_steps']} sub-steps of "
@@ -16692,6 +17676,12 @@ class SvenesisLightCurveWindow(QMainWindow):
         except (TypeError, ValueError):
             pass
         self.ed_hops_ldc.setText(str(st.value("hops_ldc", "") or ""))
+        self._ldc_bound = str(st.value("hops_ldc_for", "") or "")
+        try:
+            self._aperture_focal_bound = float(
+                st.value("aperture_focal_mm", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            self._aperture_focal_bound = 0.0
         self._on_fit_mode()
 
     def _save_settings(self) -> None:
@@ -16729,6 +17719,12 @@ class SvenesisLightCurveWindow(QMainWindow):
         st.setValue("hops_detrend", self.cmb_hops_detrend.currentIndex())
         st.setValue("hops_iterations", self.spin_hops_iter.value())
         st.setValue("hops_ldc", self.ed_hops_ldc.text().strip())
+        st.setValue("hops_ldc_for",
+                    getattr(self, "_ldc_bound", "")
+                    if self.ed_hops_ldc.text().strip() else "")
+        st.setValue("aperture_focal_mm",
+                    float(getattr(self, "_aperture_focal_bound", 0.0) or 0.0)
+                    if self.ed_aperture_mm.text().strip() else 0.0)
 
     # -- coffee -----------------------------------------------------------
     def _show_coffee_dialog(self) -> None:

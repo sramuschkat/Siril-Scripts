@@ -3557,7 +3557,7 @@ check(_hm is not None and _ld is not None,
 
 
 class _LC:
-    SALMON, GREEN, BLUE = "s", "g", "b"
+    SALMON, GREEN, BLUE, RED = "s", "g", "b", "r"
 
 
 class _Prog:
@@ -3600,6 +3600,9 @@ check(_fit is not None and "derived from the archive's duration"
       "no a/R★ and no airmass series: the orbit is derived from the "
       "duration (b = 0) and the detrending falls back to Linear, both "
       "announced")
+check(_fit["hops"].get("geom_assumed") is True
+      and any("HOPS MODE WITHOUT THE ORBIT" in m and "19 % at 0.85" in m for m in _w.log),
+      "HOPS mode on an assumed orbit says in its own line that Rp/R* is low by the unknown impact parameter")
 check(_fit["mode"] == "hops" and _fit["baseline"] == 0.0
       and _fit["detected"] is True and _fit["significance"] == 9.0
       and "template" in _fit and _fit["hops"]["rows"][-1][5]
@@ -4703,7 +4706,7 @@ check("red_noise_beta(np.asarray(res[\"t\"], float)" in _hm_src and "rp_sig *= b
       and "chain_autocorr_time(res.get(\"chain\"))" in _hm_src and '"converged": bool(' in _hm_src and "HOPS_MIN_CHAIN_TAUS" in _hm_src,
       "HOPS mode scales its headline bars by the Pont beta and reports the chain length in autocorrelation times")
 _fs_src = src[src.index("        X, airmass_note = self._airmass_series(jd_utc)"):src.index("        fit = fit_transit(jd, mag, bases=bases, u1=u1_fit")]
-check("scintillation_mag(X, exp_for_scint, ap_mm" in _fs_src and "err = np.hypot(err, np.where(np.isfinite(sc), sc, 0.0))" in _fs_src
+check("scintillation_mag(X, exp_for_scint, ap_mm" in _fs_src and "sc_term = np.where(np.isfinite(sc), sc, 0.0)" in _fs_src and "err = np.hypot(err, sc_term)" in _fs_src
       and "err_fit = err if err.size == jd.size else None" in src and "err=err_fit, anchor=anchor" in src and 'fit["ld_note"] = ld_source' in src,
       "scintillation joins the error bars before both fits see them; the blind fit is weighted and names its limb-darkening source")
 _wl = _FakeWorker({"hops_ldc": ns["quad_to_claret"](0.35, 0.23)})
@@ -5320,8 +5323,237 @@ check(_asp([4.38, 4.56, 4.74], [13.10, 16.37, 20.47], [-0.26, -0.02, 0.10], 0) =
       and _asp([4.38, 4.80, 4.74], [13.10, 16.37, 20.47], [-0.26, -0.02, 0.10], 0) == 0,
       "HAT-P-25 b's grid: 16.37 px (r -0.02, 4 % more noise) is taken over 13.10 px (r -0.26); not when it costs 10 %, not when the pick is quiet")
 check("make f/{f_ratio:.0f}" in src, "an aperture in the form that makes an impossible focal ratio is called out")
-check('VERSION = "1.0.16"' in src and "1.0.16 - The audit's second round, and what three real nights asked for" in src,
-      "version 1.0.16 with its changelog entry")
+check("1.0.16 - The audit's second round, and what three real nights asked for" in src,
+      "the 1.0.16 changelog entry stays")
+
+print("\n9u) 1.0.17: the aperture's last test, entries that outlive their target, the gain")
+# -- the transit in the difference of two apertures
+_rng = np.random.default_rng(2017)
+_n = 160
+_t = 2460100.0 + np.linspace(0.0, 5.0 / 24.0, _n)
+_t0u, _duru = _t[0] + 2.5 / 24.0, 2.4 / 24.0
+_tm = ns["ld_template"](0.11, 0.3, 0.40, 0.25)
+_shape_true = ns["ld_shape"](_t, _t0u, _duru, _tm)
+_Xu = 1.1 + 0.5 * np.linspace(0.0, 1.0, _n) ** 2
+_anc = {"t0": _t0u, "window_min": 8.0, "sigma_min": 1.0, "epoch": 0, "duration_d": _duru,
+        "duration_tol": 0.05, "impact_b": 0.3, "rprs": 0.11}
+_mag0 = 0.015 * _shape_true + 0.02 * (_Xu - _Xu.mean()) + _rng.normal(0, 0.0015, _n)
+_f0 = ns["fit_transit"](_t, _mag0 - np.median(_mag0), bases={"airmass": _Xu}, u1=0.40, u2=0.25, anchor=_anc)
+_ts = ns["transit_shape"](_f0)
+check(_ts is not None and abs(float(np.max(_ts)) - float(np.max(_shape_true))) < 0.05 and abs(float(_ts[0])) < 1e-9
+      and abs(float(_ts[-1])) < 1e-9 and ns["transit_shape"]({"model_mag": [0.0], "trend": [0.0], "depth_mag": 0.0}) is None,
+      "the transit's unit profile: the model without baseline and systematics, over the depth; none without a depth")
+_ash = ns["aperture_shift"]
+_dm = 0.002 * _shape_true + 0.010 * (_Xu - _Xu.mean()) + _rng.normal(0, 0.0008, _n)
+_g = _ash(_dm, _ts, [_Xu], t=_t, duration_d=_duru)
+check(_g is not None and abs(_g[0] - 0.002) < 3 * _g[1] and _g[0] / _g[1] > 5 and abs(_g[2][0] - 0.010) < 0.002,
+      "2 mmag of transit and 10 mmag/airmass hidden in the difference of two curves are both recovered",
+      str(_g))
+_zs = []
+for _k in range(200):
+    _g0 = _ash(_rng.normal(0, 0.0008, _n), _ts, [_Xu])
+    _zs.append(_g0[0] / _g0[1])
+check(abs(float(np.std(_zs)) - 1.0) < 0.2 and abs(float(np.mean(_zs))) < 0.25,
+      "on a difference that is pure noise the shift over its bar is a unit normal", f"{np.mean(_zs):+.2f} {np.std(_zs):.2f}")
+check(_ash(_dm[:8], _ts[:8], [_Xu[:8]]) is None and _ash(_dm, np.zeros(_n), [_Xu]) is None and _ash(_dm, _ts[:-1]) is None,
+      "too few rows, a profile without a transit in it, or unequal lengths: no verdict")
+# -- which aperture holds: the two measured nights, as (shift mmag, z) of row minus column
+_ast = ns["aperture_stability"]
+def _sh(pairs):
+    return {k: (1e-3 * d, 1e-3 * abs(d / z)) for k, (d, z) in pairs.items()}
+_hp_r = [11.01, 13.04, 16.30, 20.38, 24.00]
+_hp = _sh({(0, 1): (-0.50, -0.9), (0, 2): (-2.58, -2.6), (0, 3): (-3.48, -2.5), (0, 4): (-3.26, -1.9),
+           (1, 2): (-2.08, -2.9), (1, 3): (-2.98, -2.6), (1, 4): (-2.76, -1.8),
+           (2, 3): (-0.90, -1.1), (2, 4): (-0.68, -0.6), (3, 4): (0.22, 0.3)})
+_i, _v, _w9 = _ast(_hp_r, _hp, 1, eligible=[0, 1, 2, 3])
+check((_i, _v) == (2, "moved") and _w9[1][0] == 2 and abs(abs(_w9[1][1]) - 2.9) < 1e-6,
+      "HAT-P-25 b: 13.04 px disagrees with 16.30 px by 2.9 sigma and gives way to it, the first radius every larger one agrees with")
+check(_ast(_hp_r, _hp, 2, eligible=[0, 1, 2, 3])[:2] == (2, "stable") and _ast(_hp_r, _hp, 4)[:2] == (4, "unconfirmed")
+      and _ast(_hp_r, _hp, 1, eligible=[0, 1])[:2] == (1, "unstable"),
+      "an aperture that holds stands; the largest has no witness; with no larger radius allowed the pick stays and says so")
+_q4_r = [2.61, 3.09, 3.86, 4.83, 6.00]
+_q4 = _sh({(0, 1): (2.07, 2.5), (0, 2): (2.74, 3.2), (0, 3): (2.76, 2.3), (0, 4): (4.29, 2.6),
+           (1, 2): (0.67, 1.1), (1, 3): (0.69, 0.7), (1, 4): (2.22, 1.5),
+           (2, 3): (0.02, 0.03), (2, 4): (1.55, 1.2), (3, 4): (1.53, 1.8)})
+check(_ast(_q4_r, _q4, 0, eligible=[0, 1, 2, 3])[:2] == (1, "moved") and _ast(_q4_r, _q4, 2, eligible=[0, 1, 2, 3])[:2] == (2, "stable"),
+      "Qatar-4 b: 2.61 px (3.2 sigma against 3.86 px) gives way to 3.09 px; 3.86 px would have stood")
+_drift = _sh({(0, 1): (1.0, 3.0), (0, 2): (2.0, 3.5), (0, 3): (3.0, 4.0), (1, 2): (1.0, 3.0), (1, 3): (2.0, 3.5), (2, 3): (1.0, 3.0)})
+check(_ast([1.0, 2.0, 3.0, 4.0], _drift, 0, eligible=[0, 1, 2])[:2] == (0, "unstable"),
+      "a depth that keeps moving to the largest radius has no stable aperture, and the choice is not changed")
+check(abs(ns["APERTURE_STABLE_Z"] - 2.5) < 1e-12 and abs(ns["APERTURE_WITNESS_FWHM"] - 3.0) < 1e-12
+      and ns["APERTURE_WITNESS_FWHM"] > max(ns["APERTURE_FWHM_GRID"]) and ns["APERTURE_WITNESS_FWHM"] < ns["AUTORING_INNER_FWHM"],
+      "the witness radius lies beyond the grid and inside the sky annulus")
+# -- curves at any radius
+_apc = ns["aperture_curve"]
+_fl = np.vstack([10000.0 * 10 ** (-0.4 * _mag0)] + [c * (1 + _rng.normal(0, 0.001, _n)) for c in (8000.0, 20000.0, 15000.0)])
+_fe = np.sqrt(_fl)
+_me, _ee = _apc(_fl, _fe, [1, 2, 3])
+_mh, _eh = _apc(_fl, _fe, [1, 2, 3], raw_sum=True)
+check(float(np.max(np.abs(_me - _mh))) < 2e-4 and abs(float(np.median(_me))) < 1e-12 and np.all(np.isfinite(_ee)) and np.all(np.isfinite(_eh)),
+      "the normalised ensemble and HOPS's raw sum are the same curve while no comp is missing", f"{np.max(np.abs(_me - _mh)):.2e}")
+_fl2 = _fl.copy(); _fl2[2, 40] = np.nan
+check(np.isfinite(_apc(_fl2, _fe, [1, 2, 3])[0][40]) and not np.isfinite(_apc(_fl2, _fe, [1, 2, 3], raw_sum=True)[0][40]),
+      "a missing comp costs the raw sum its frame and the ensemble nothing")
+class _St:
+    def __init__(self, x, y):
+        self.xpos, self.ypos = x, y
+_nn = ns["nearest_neighbour_px"]
+check(abs(_nn([_St(100, 100), _St(103, 104), _St(300, 300)], 100, 100) - 5.0) < 1e-9 and _nn([_St(100, 100)], 100, 100) is None,
+      "the nearest other star's distance, None when the target is alone")
+# -- the worker method on synthetic per-star fluxes
+_asm = None
+for _node in tree.body:
+    if isinstance(_node, ast.ClassDef) and _node.name == "LightCurveWorker":
+        for _m in _node.body:
+            if isinstance(_m, ast.FunctionDef) and _m.name == "_aperture_stability":
+                _asm = ast.get_source_segment(src, _m)
+_ans = dict(ns)
+_ans["LogColor"] = _LC
+exec(textwrap.dedent(_asm), _ans)
+class _SW:
+    def __init__(self, raw, near=None, mode="blind"):
+        self.opts, self.log, self._native_raw, self._target_neighbour_px = {"fit_mode": mode}, [], raw, near
+    def _emit(self, msg, color=None):
+        self.log.append((color, msg))
+_SW._aperture_stability = _ans["_aperture_stability"]
+def _raw_for(loss_mmag):
+    """Target and three comps at five radii.  The target's flux at the
+    two smallest radii carries an extra loss shaped like the transit
+    (a seeing change at mid-run): what a too-small aperture does."""
+    rr = [5.4, 6.4, 8.0, 10.0, 12.0]
+    by_r, by_e = {}, {}
+    rs = np.random.default_rng(5)
+    shared = [1 + rs.normal(0, 0.0012, _n) for _k in range(4)]
+    for k, r in enumerate(rr):
+        ee = 1.0 - math.exp(-r * r / (2 * 1.7 ** 2))
+        tgt = 60000.0 * ee * 10 ** (-0.4 * (0.015 * _shape_true + 0.02 * (_Xu - _Xu.mean()))) * shared[0]
+        extra = loss_mmag * (2 - k) / 2.0 if k < 2 else 0.0
+        tgt = tgt * 10 ** (-0.4 * 1e-3 * extra * _shape_true) * (1 + rs.normal(0, 0.0003 * (k + 1), _n))
+        comps = [c * ee * shared[1 + j] * (1 + rs.normal(0, 0.0003 * (k + 1), _n)) for j, c in enumerate((50000.0, 90000.0, 70000.0))]
+        by_r[r] = np.vstack([tgt] + comps)
+        by_e[r] = np.sqrt(by_r[r])
+    return {"flux_by_r": by_r, "ferr_by_r": by_e, "jd": _t.copy(), "keep": [True, True, True], "aperture": 5.4,
+            "witness_r": 12.0, "grid_fwhm": 4.0, "flux": by_r[5.4], "ferr": by_e[5.4]}
+def _run_stab(loss, near=None):
+    raw = _raw_for(loss)
+    m, e = _apc(raw["flux"], raw["ferr"], [1, 2, 3])
+    w = _SW(raw, near)
+    out = w._aperture_stability(_t, _t, m, e, {"airmass": _Xu}, _anc, 0.40, 0.25, np.full(_n, 0.001))
+    return w, raw, out, e
+_w1, _r1, _o1, _e1 = _run_stab(0.0)
+check(_o1 is None and _w1._aper_stability["verdict"] == "stable" and _r1["aperture"] == 5.4
+      and any("the aperture stands" in m for _c, m in _w1.log),
+      "clean fluxes: the chosen aperture agrees with every larger one and stands", str(_w1.log[-1]))
+_w2, _r2, _o2, _e2 = _run_stab(3.0)
+check(_o2 is not None and _w2._aper_stability["verdict"] == "moved" and _o2["aperture"] == 8.0 and _r2["aperture"] == 8.0
+      and _r2["flux"] is not _r2["flux_by_r"][5.4] and np.allclose(_r2["flux"], _r2["flux_by_r"][8.0])
+      and _o2["mag"].size == _n and _w2._stab_prefit is None and any("APERTURE MOVED" in m for _c, m in _w2.log),
+      "3 mmag of transit-shaped loss in the two smallest radii: the aperture moves to the first radius the larger ones agree with, and the raw record follows",
+      str(_w2._aper_stability["verdict"]))
+check(float(np.min(_o2["err"])) >= 0.001 and float(np.median(_o2["err"])) > float(np.median(np.sqrt(1.0 / _r2["flux"][0]))) ,
+      "the new curve's bars carry the scintillation term the old ones had")
+_w3, _r3, _o3, _e3 = _run_stab(3.0, near=9.0)
+check(_o3 is None and _w3._aper_stability["verdict"] == "crowded" and _r3["aperture"] == 5.4
+      and any(c == "r" and "APERTURE DEPENDENCE" in m and "9 px" in m for c, m in _w3.log),
+      "with another star 9 px from the target the aperture is not enlarged; the dependence is reported in red with its range")
+_raw4 = _raw_for(0.0); _raw4["aperture"] = 10.0
+_m4, _e4 = _apc(_raw4["flux_by_r"][10.0], _raw4["ferr_by_r"][10.0], [1, 2, 3])
+_w4 = _SW(_raw4)
+check(_w4._aperture_stability(_t, _t, _m4 + 0.004 * _shape_true, _e4, {"airmass": _Xu}, _anc, 0.40, 0.25, None) is None
+      and _w4._aper_stability is None and any("rebuilt from the per-star fluxes" in m for _c, m in _w4.log),
+      "a curve that cannot be rebuilt from the per-star fluxes is not tested, and the log says so")
+_nat17 = src[src.index("    def _native_photometry(self"):src.index("    def _run_light_curve(self")]
+check("witness = round(max(1.5, float(fwhm) * APERTURE_WITNESS_FWHM), 2)" in _nat17
+      and "if math.isfinite(p2p) and not is_witness:" in _nat17 and '"flux_by_r": {float(r): flux[r] for r in radii}' in _nat17
+      and "swap = self._aperture_stability(jd, jd_utc, mag, err, bases, anchor," in src
+      and src.index("swap = self._aperture_stability(") < src.index("            bases, bic_rows = _pre if _pre else select_bases_bic("),
+      "the engine measures a witness radius it never chooses, keeps every radius, and the test runs before the bases are chosen")
+check('"aper_stability": getattr(self, "_aper_stability", None)' in src and "stability      {stab['text']}" in src
+      and "stability: {stab['text']}.</span><br>" in src and 'fit["aperture_stability"] = getattr(self, "_aper_stability",' in src,
+      "the verdict and the table reach the results dict, the report and the summary")
+# -- flats belong to one optical train
+_otm = ns["optical_train_matches"]
+check(_otm({"focal_mm": 382.0}, {"focal_mm": 2032.0})[0] is False and "another telescope" in _otm({"focal_mm": 382.0}, {"focal_mm": 2032.0})[1]
+      and _otm({"focal_mm": 380.3}, {"focal_mm": 382.0})[0] is True and _otm({}, {"focal_mm": 382.0})[0] is True
+      and _otm({"focal_mm": 382.0}, {})[0] is True,
+      "a flat at 382 mm is not a flat for lights at 2032 mm; 380.3 against 382 is one telescope; a missing focal length decides nothing")
+def _inf17(kind, exp, date, n, tag, focal, filt="L"):
+    return [dict(i, focal_mm=focal) for i in _inf(kind, exp, date, n, tag, filt)]
+_l17 = dict(_lights, focal_mm=2032.0)
+_g17 = _gc(_inf17("flat", 3.0, "2026-08-31", 20, "gt81", 382.0) + _inf17("flat", 3.0, "2026-08-30", 12, "c8", 2032.0), "L")
+_c17, _n17 = _cm(_g17, _l17)
+check(len(_c17["flat"]["files"]) == 12 and "/x/c8_0.fit" in _c17["flat"]["files"]
+      and any("flat REJECTED (20 frame(s))" in t and "382 mm" in t and "2032 mm" in t for t in _n17),
+      "the nearer, larger flat set of another telescope is rejected by name; the lights' own telescope's flats are used", str(_n17))
+_g18 = _gc(_inf17("flat", 3.0, "2026-08-31", 10, "a", 382.0) + _inf17("flat", 3.0, "2026-08-31", 10, "b", 2032.0), "L")
+check(len(_g18["flat"]) == 2 and ns["flat_focal_key"]({"focal_mm": 381.6}) == 382 and ns["flat_focal_key"]({}) is None,
+      "flats of two focal lengths taken the same night are two groups, never one master")
+_c19, _n19 = _cm(_gc(_inf17("flat", 3.0, "2026-08-31", 20, "gt81", 382.0), "L"), _l17)
+check("flat" not in _c19 and any("flat REJECTED" in t for t in _n19),
+      "with only another telescope's flats in the library the lights go without a flat rather than with a wrong one")
+_hd17 = {"FOCALLEN": 2032.0, "IMAGETYP": "LIGHT", "NAXIS1": 100, "NAXIS2": 100}
+check(ns["inspect_frame"]("/x/a.fit", _hd17)["focal_mm"] == 2032.0 and ns["inspect_frame"]("/x/a.fit", {"IMAGETYP": "LIGHT"})["focal_mm"] is None,
+      "the frame's focal length is read with its other header facts")
+# -- entries that outlive their target
+_fas = ns["form_aperture_stale"]
+check("f/25" in _fas(81.0, 2032.0) and _fas(81.0, 382.0) == "" and "382 mm" in _fas(81.0, 2032.0, 382.0)
+      and _fas(203.0, 2032.0, 2032.0) == "" and _fas(81.0, 400.0, 382.0) == "" and _fas(None, 2032.0) == "" and _fas(81.0, None) == "",
+      "81 mm under 2032 mm frames is another telescope's aperture (f/25, or bound to 382 mm); under its own frames it stays")
+_gui17 = src[src.index("    def _probe_target(self, files)"):src.index("    def _on_pick_folder(self)")]
+check("cleared the Claret coefficients in group 5" in _gui17 and "target_key(ldc_for) != target_key(name)" in _gui17
+      and "cleared the telescope aperture in group 5" in _gui17 and "form_aperture_stale(" in _gui17
+      and 'st.setValue("hops_ldc_for",' in src and 'st.setValue("aperture_focal_mm",' in src
+      and "self.ed_hops_ldc.textEdited.connect(self._on_ldc_edited)" in src
+      and "self.ed_aperture_mm.textEdited.connect(self._on_aperture_edited)" in src,
+      "Claret coefficients are bound to their target and the aperture to its focal length; both are cleared, by name, when the frames say otherwise")
+_wl17 = _FakeWorker({"hops_ldc": ns["quad_to_claret"](0.35, 0.23)})
+_wl17._limb_darkening({"teff_k": 6000, "logg": 4.3})
+_wl18 = _FakeWorker({"hops_ldc": ns["quad_to_claret"](0.35, 0.23), "hops_ldc_for": "HAT-P-25 b"})
+_ch18 = _wl18._limb_darkening({"teff_k": 6000, "logg": 4.3})
+check(any("nothing records" in m for m in _wl17.log) and not any("nothing records" in m for m in _wl18.log)
+      and "as entered for HAT-P-25 b" in _ch18[3],
+      "coefficients without a recorded target are flagged once per run; bound ones name their star in the limb-darkening line")
+# -- the gain, from two flats
+_gfp = ns["gain_from_flat_pair"]
+def _flat17(rs, level_e, gain, ped, shape=(700, 900), cfa=False):
+    yy, xx = np.mgrid[0:shape[0], 0:shape[1]]
+    ill = 1.0 - 0.6 * ((yy - shape[0] / 2) ** 2 + (xx - shape[1] / 2) ** 2) / shape[0] ** 2
+    ill = ill * (1 - 0.1 * np.exp(-((yy - 300) ** 2 + (xx - 400) ** 2) / 800.0))
+    ill = ill * (1 + 0.01 * np.random.default_rng(7).standard_normal(shape))
+    if cfa:
+        col = np.ones(shape); col[0::2, 0::2] = 0.6; col[1::2, 1::2] = 0.45
+        ill = ill * col
+    e = rs.poisson(level_e * ill) + rs.normal(0, 2.0, shape)
+    return np.clip(np.round(e / gain + ped), 0, 65535).astype(np.uint16)
+_rs = np.random.default_rng(31)
+_ok17 = True
+_got17 = []
+for _gain, _ped, _cfa, _dr in ((0.25, 200, False, 1.0), (0.25, 200, False, 0.8), (1.3, 1000, False, 1.1), (0.06, 800, True, 0.9)):
+    _a, _b = _flat17(_rs, 30000 * _gain, _gain, _ped, cfa=_cfa), _flat17(_rs, 30000 * _gain * _dr, _gain, _ped, cfa=_cfa)
+    _gg = _gfp(_a, _b, np.full(_a.shape, float(_ped)), ceiling=0.98 * 65535)
+    _got17.append(round(_gg["gain"] / _gain, 4))
+    _ok17 = _ok17 and abs(_gg["gain"] / _gain - 1.0) < 0.03 and _gg["n"] >= 16
+check(_ok17, "the gain from two flats is right to 3 % at 0.06-1.3 e-/ADU: vignetting, dust and pixel response cancel, a drifting panel and a colour mosaic cost nothing",
+      str(_got17))
+_a, _b = _flat17(_rs, 39000, 1.3, 1000), _flat17(_rs, 39000, 1.3, 1000)
+check(_gfp(_a, _b, 0.0)["gain"] / 1.3 > 1.02 and abs(_gfp(_a, _b, 1000.0)["gain"] / 1.3 - 1.0) < 0.03,
+      "a pedestal left in the signal overstates the gain; a scalar offset removes it as well as an image")
+_m1 = np.mean([_flat17(_rs, 7500, 0.25, 200) for _k in range(6)], axis=0)
+_m2 = np.mean([_flat17(_rs, 7500, 0.25, 200) for _k in range(6)], axis=0)
+check(_gfp(_m1, _m2, 200.0)["gain"] / 0.25 > 4.0,
+      "two stacked masters read several times too high, which is why the worker refuses anything but raw integer frames")
+check(_gfp(np.ones((100, 100)), np.ones((100, 100))) is None and _gfp(np.ones((300, 300)), np.ones((300, 301))) is None
+      and _gfp(_a, _a.astype(float) * 0 + 5.0) is None,
+      "too small a frame, unequal shapes, or a flat without photon noise: no gain")
+_cal17 = src[src.index("    def _measure_gain(self"):src.index("    def _build_master(self")]
+check("np.issubdtype(arr.dtype, np.integer)" in _cal17 and "frames_are_calibrated(_read_header(path))" in _cal17
+      and "abs(float(g_l) - float(g_f)) > 1e-6" in _cal17 and "self._measure_gain(chosen, light_info, light_header)" in src
+      and 'if mg and gain_src.startswith("assumed"):' in _nat17 and "The header's value stays in use" in _cal17,
+      "the gain is measured from raw flats at the lights' gain setting, used when the header has no EGAIN, and compared with it when it has")
+check("comes out shallow" not in src and "in a direction, that depend on which of the stars" in src,
+      "the linearity warning no longer claims the depth comes out shallow: the direction depends on which stars are up there")
+check('VERSION = "1.0.17"' in src and "1.0.17 - The aperture's last test, entries that outlive their target, the gain" in src,
+      "version 1.0.17 with its changelog entry")
 
 if fails:
     print(f"{len(fails)} FAILURE(S)")

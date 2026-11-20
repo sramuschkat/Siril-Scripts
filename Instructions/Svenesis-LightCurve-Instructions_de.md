@@ -1,6 +1,6 @@
 # Svenesis LightCurve — Anleitung
 
-**Version 1.0.16** | Siril Python-Skript für Exoplaneten-Transitphotometrie
+**Version 1.0.17** | Siril Python-Skript für Exoplaneten-Transitphotometrie
 
 > *Ein Ordner Subs hinein, eine Lichtkurve heraus — und eine ehrliche Antwort auf die einzige Frage, die zählt: steckt da ein Transit drin?*
 
@@ -155,6 +155,8 @@ Ein Flat muss die Belichtungszeit der Lights **nicht** treffen. Ein Flat ist ein
 
 **Flats gehören zu einer Sitzung.** Flats mit mehr als sechs Stunden Abstand sind verschiedene Sitzungen — Staub wandert, die Kamera wird gedreht — und werden getrennt gruppiert; benutzt wird die Sitzung, die den Lights zeitlich am nächsten liegt, und das Log sagt, wie weit sie entfernt war und wie viele andere beiseitegelegt wurden. Der gecachte Master trägt Filter und Sitzung im Namen.
 
+**Ein optischer Zug, und der Gain, seit v1.0.17.** Kamera, Größe, Binning und Filter unterscheiden zwei Teleskope nicht, und ein Library-Ordner, der von einem anderen Instrument im Formular steht, liefert genau solche Flats. Ein Flat, dessen `FOCALLEN` um mehr als 5 % von dem der Lights abweicht, wird jetzt mit Begründung verworfen (*taken at 382 mm focal length, the lights at 2032 mm — another telescope*), und Flats zweier Brennweiten werden nie zu einem Master gestapelt. Fehlt die Brennweite auf einer Seite, entscheidet sie nichts. — Steht kein `EGAIN` im Header, wird der Umrechnungsfaktor **aus zwei rohen Flats des Laufs** und ihren Offset-Frames gemessen: In der Differenz zweier Flats hebt sich alles Feste auf (Vignettierung, Staub, Pixelempfindlichkeit), übrig bleibt das Photonenrauschen beider, dessen Größe in Elektronen bekannt ist. Kacheln von 64 px auf der mittleren Hälfte des Bildes, das zweite Flat auf das erste skaliert, der Median über die Kacheln. Auf 0,6 % richtig an synthetischen Flats von 0,06 bis 4 e⁻/ADU, auch mit driftender Flatfolie und Farbmosaik; 0,258 e⁻/ADU an einer Kamera, deren Frames bisher mit angenommenem 1 gemessen wurden (vier Paare: 0,2573–0,2583). Der Wert bestimmt die Fehlerbalken und die Gewichte im Fit, nicht die Tiefe. Master und kalibrierte Flats werden abgelehnt (ihr Rauschen ist weggemittelt, zwei Master aus je 8 Frames lesen achtfach zu hoch), ebenso Flats mit anderer Gain-Einstellung. Ein `EGAIN` im Header, das um mehr als 25 % abweicht, wird gemeldet und bleibt in Gebrauch.
+
 ### Was es nicht tut
 
 Die Pixelarbeit macht Sirils `calibrate`. In diesem Skript steckt keine Bias-/Dark-/Flat-Arithmetik, aus demselben Grund, aus dem keine Photometrie darin steckt. Und es **resampelt nicht** — Bias, Dark und Flat sind reine Pixelrechnung, das Versprechen der Registrierung bleibt unberührt. Es wird allerdings eine zweite Kopie jedes Frames geschrieben, der Arbeitsordner verdoppelt sich also.
@@ -222,6 +224,8 @@ Die RA/Dec-Felder werden benutzt, wenn sie mit dem *übereinstimmen*, was die Fr
 > *Using the RA/Dec in the form; your lights agree to 0.0".*
 
 Eine Koordinate, die weiter als etwa zwei Bogenminuten davon entfernt ist, ist das vorige Ziel, keine Absicht — die Felder überdauern Sitzungen, und **eine Koordinate, die vom vorigen Ziel stehengeblieben ist, sieht exakt aus wie eine absichtliche**. Sie wird ersetzt, in Rot, mit beiden Werten im Log. Einen Stern anzupeilen, der *nicht* das Header-Objekt ist, geht weiterhin: nach der Ordnerwahl eintippen — zur Laufzeit wird die Abweichung gemeldet statt übersteuert.
+
+**Zwei weitere Einträge, die ihr Ziel überleben, seit v1.0.17.** Die **Claret-Koeffizienten** in Gruppe 5 gehören zu einem Stern und einem Filter, und vier Zahlen sagen nicht, zu welchem. Sie sind jetzt an das Ziel gebunden, für das sie eingegeben oder berechnet wurden; Frames eines anderen Ziels leeren das Feld bei der Ordnerwahl, mit Namensnennung, und der Lauf berechnet dann die dieses Sterns aus den Phoenix-Modellen. Koeffizienten aus einer früheren Version, zu denen kein Ziel vermerkt ist, meldet das Log jedes Laufs, bis du sie löschst oder neu eingibst. Die **Teleskopöffnung** gehört zu einem Instrument: Sie ist an die Brennweite der Frames gebunden, mit denen sie benutzt wurde, und wird unter Frames einer anderen geleert — oder, wenn nichts vermerkt ist, sobald sie ein Öffnungsverhältnis ergibt, das kein Teleskop hat (81 mm unter 2032-mm-Frames ist f/25). Dann gilt `APTDIA` aus dem Header; ohne den tragen die Fehlerbalken keinen Szintillationsterm, und das Log sagt es. Wie bei den Koordinaten: Einen Wert, dem die Frames widersprechen, tippst du *nach* der Ordnerwahl ein.
 
 ### Die Namensabfrage bringt, was der Header nicht tragen kann
 
@@ -531,6 +535,8 @@ Bahn und Bedeckungsmodell sind gegen pylightcurves eigene `planet_orbit` und `tr
 
 **Was sich nicht ändert.** Der blinde Signifikanztest läuft weiterhin zuerst und entscheidet allein, ob ein Transit *beansprucht* wird. Der HOPS-Modus misst den Planeten aus dem Katalog; er prüft nicht, ob er da ist, und das Log sagt das bei jedem Lauf. Hat der blinde Test die Schwelle nicht erreicht, sind die HOPS-Zahlen die Vermessung eines Transits, den in deinen Daten niemand nachgewiesen hat. Die Logzeile *no transit claimed* nennt die Zahlen des Blindtests, nicht die des HOPS-Fits. Und liegt ein gefitteter Kontakt **außerhalb des Laufs**, sagen Log, `results.txt` (`#WARNING:`) und Report, dass Transit und Basislinienversatz dort dieselbe Kurve sind — die Zahlen des HOPS-Modus messen diesen Planeten nicht. Gesehen an einem TOI-4033-Lauf, dessen Meridian-Flip im vorhergesagten Fenster lag: der ephemeridengebundene Fit wanderte 127 min auf die Stufe.
 
+**Ohne Bahn, seit v1.0.17.** HOPS selbst verlangt die Bahn. Nennt das Archiv kein a/R★ und keine Inklination — bei den meisten TOIs — rechnet dieser Modus mit einem zentralen Transit (b = 0) und einem a/R★ aus der Dauer und sagt in Rot, was das kostet: Rp/R★ kommt um 1 % zu klein heraus bei b = 0,3, um 4 % bei 0,5, um 9 % bei 0,7 und um 19 % bei 0,85 (am Modell des Modus gemessen), und sein Fehlerbalken enthält das nicht. Brauchbar ist dort die Transitmitte; für den Radius nennt der Svenesis-Fit dieselbe Unsicherheit in seinem Balken.
+
 ---
 
 ## 10. Ist es echt?
@@ -609,6 +615,17 @@ Kein Katalog, kein Netz. Ein Veränderlichkeits-Flag aus dem AAVSO-VSX wäre bes
 - **Der Zentroid ist Gauß-gefenstert.** Bisher zählte jedes Pixel der 21-px-Box gleich, ein Nachbar mit halbem Fluss in 12 px Abstand zog das Zentrum bei FWHM 3 um 1,2 px und bei FWHM 4 um 2,3 px — und der Aperturfluss änderte sich mit dem Seeing um 110 mmag. Das Fenster gibt diesem Nachbarn kein Gewicht; der gemessene Zug ist 0,00 px.
 
 **Und das Seeing redet bei der Apertur mit.** Ein Radius, dessen Kurve dem Seeing noch folgt (|r| > 0,2), weicht einem größeren, der das nicht tut (|r| ≤ 0,1), wenn das höchstens 5 % Punkt-zu-Punkt-Rauschen kostet. Ein nicht gemessener Seeing-Term ist mehr wert als ein modellierter: Bei HAT-P-25 b verschob ein Nachfokussieren am Meridianflip die Kurve bei 1,6 × FWHM um 18 mmag, so viel wie der Transit.
+
+**Der letzte Test der Apertur ist der Transit, seit v1.0.17.** Punkt-zu-Punkt-Rauschen und Seeing-Korrelation beurteilen beide eine Lichtkurve; keines sagt, ob die *Tiefe* noch vom Radius abhängt. Die Differenz der Lichtkurven zweier Aperturen sagt es. Das Rauschen, das die Aperturen teilen — Szintillation, der größte Teil des Photonenrauschens — hebt sich darin auf, und der Rest wird mit dem Profil des Transits und den Basen des Fits angepasst; weil dieser Fit linear ist, ist der Koeffizient des Profils genau die Tiefe der einen Apertur minus die der anderen. Ein Radius, dem ein größerer mit **2,5 Sigma** widerspricht, weicht dem ersten Radius, dem alle größeren zustimmen, und ein Radius jenseits des Rasters (3,0 × FWHM) wird nur als Zeuge des größten Kandidaten gemessen.
+
+| Nacht | Rauschoptimum | Widerspruch | Benutzt | (Rp/R★)² |
+|---|---|---|---|---|
+| HAT-P-25 b | 1,6 × FWHM | 2,1 ± 0,7 mmag gegen 2,0 × (2,9 σ) | 2,0 × FWHM, bestätigt auf 1,1 σ | 1,58 → 1,77 % |
+| Qatar-4 b | 1,35 × FWHM | 2,7 ± 0,9 mmag gegen 2,0 × (3,2 σ) | 1,6 × FWHM, bestätigt auf 1,5 σ | 2,77 → 2,70 % |
+
+Simuliert mit einer Ziel-PSF, die 15 % breiter ist als die der Vergleichssterne, und dem besten Seeing zur Transitmitte — dem Fall, in dem eine kleine Apertur das Seeing in die Tiefe schreibt — las ein Transit von 15,0 mmag am Rauschoptimum 13,3 ± 2,3 mmag und nach dem Test 15,3 ± 1,3. Ohne echte Abhängigkeit verschob der Test die Apertur in 13 von 300 Läufen (7 von 291 bei korreliertem Rauschen), und die Tiefe änderte sich dabei nicht: Ein falscher Wechsel kostet ein paar Prozent Rauschen, ein verpasster einen Fehler, den kein Balken zeigt.
+
+Drei Ausgänge neben *bleibt* und *verschoben*. **Kein Radius hält**: Die Apertur bleibt, und die Spanne der Tiefen über die Radien steht in Rot im Log — diese Spanne, nicht der formale Balken, ist das, was der Lauf hergibt. **Ein größerer Radius würde halten, aber ein anderer erkannter Stern läge darin**: Die Apertur wird nicht vergrößert, weil dessen Licht den Transit verdünnt, und die Spanne wird genannt. **Nicht getestet**: Bei der gewählten Apertur ist kein Transit nachgewiesen, oder die eigene Photometrie des Skripts lief nicht. Die Tabelle — Tiefe, (Rp/R★)², Luftmassenterm und der größte Widerspruch zu einem größeren Radius, je Apertur — steht im Log und im Bericht.
 
 ### Klipping ist keine Variabilität — und kein Frame verschwindet unbenannt
 

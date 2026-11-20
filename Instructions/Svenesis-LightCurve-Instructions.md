@@ -1,6 +1,6 @@
 # Svenesis LightCurve — User Instructions
 
-**Version 1.0.16** | Siril Python Script for Exoplanet Transit Photometry
+**Version 1.0.17** | Siril Python Script for Exoplanet Transit Photometry
 
 > *A folder of sub-exposures in, a light curve out — and an honest answer to the only question that matters: is there a transit in it?*
 
@@ -155,6 +155,8 @@ A flat does **not** have to match the lights' exposure. A flat is a ratio; its o
 
 **Flats belong to a session.** Flats more than six hours apart are different sessions — dust moves, the camera is turned — and are grouped apart; the session nearest the lights in time is used, and the log says how far away it was and how many others were set aside. The cached master carries filter and session in its name.
 
+**One optical train, and the gain, since v1.0.17.** Camera, size, binning and filter do not tell two telescopes apart, and a library folder left in the form from another instrument serves exactly such flats. A flat whose `FOCALLEN` differs from the lights' by more than 5 % is now rejected by name (*taken at 382 mm focal length, the lights at 2032 mm — another telescope*), and flats of two focal lengths are never stacked into one master. A focal length missing on either side decides nothing. — When the header carries no `EGAIN`, the conversion factor is **measured from two of the run's own raw flats** and their offset frames: in the difference of two flats everything fixed cancels (vignetting, dust, pixel response) and the photon noise of both remains, whose size is known in electrons. Tiles of 64 px on the central half of the frame, the second flat scaled to the first, the median over the tiles. Right to 0.6 % on synthetic flats from 0.06 to 4 e⁻/ADU, including a drifting panel and a colour mosaic; 0.258 e⁻/ADU on a camera whose frames had been measured with an assumed 1 (four pairs: 0.2573–0.2583). The value sets the error bars and the weights of the fit, not the depth. Masters and calibrated flats are refused (their noise has been averaged away, and two 8-frame masters read eight times high), and so are flats taken at another gain setting. A header `EGAIN` that disagrees by more than 25 % is reported and stays in use.
+
 ### What it does not do
 
 The pixel work is Siril's `calibrate`. There is no bias/dark/flat arithmetic in this script, for the same reason there is no photometry in it. And it does **not** resample — bias, dark and flat are per-pixel arithmetic, so the promise the registration keeps is untouched. It does write a second copy of every frame, so the working folder doubles.
@@ -222,6 +224,8 @@ The RA/Dec fields are used when they *agree* with what the frames (or, failing h
 > *Using the RA/Dec in the form; your lights agree to 0.0".*
 
 A coordinate further than about two arcminutes from that is the previous target, not a choice — the fields persist across sessions, and **a coordinate left over from the previous target looks exactly like a deliberate one**. It is replaced, in red, with both values printed. Aiming at a star that is *not* the headers' object still works: type it after choosing the folder, and at run time the disagreement is reported rather than overridden.
+
+**Two more entries that outlive their target, since v1.0.17.** The **Claret coefficients** in group 5 are a star's and a filter's, and four numbers do not say whose they are. They are now bound to the target they were typed or computed for; frames of another target clear the field when the folder is chosen, by name, and the run then computes this star's from the Phoenix models. Coefficients left from an earlier version, with no target on record, are flagged in the run's log until you clear or retype them. The **telescope aperture** is an instrument's: it is bound to the focal length of the frames it was used with and cleared under frames of another — or, with nothing on record, when it makes a focal ratio no telescope has (81 mm under 2032 mm frames is f/25). The header's `APTDIA` then takes over; without one the error bars carry no scintillation term and the log says so. As with the coordinates: to use a value the frames contradict, type it *after* choosing the folder.
 
 ### The name lookup adds what the header cannot carry
 
@@ -538,6 +542,8 @@ The orbit and the occultation model are verified against pylightcurve's own `pla
 
 **What does not change.** The blind significance test still runs first and still decides whether a transit is *claimed*. HOPS mode measures the catalogue's planet; it does not test for one, and the log says so on every run. If the blind test did not reach the floor, the HOPS numbers are a measurement of a transit nobody has demonstrated in your data. The log's *no transit claimed* line quotes the blind test's numbers, not the HOPS fit's. And when a fitted contact lies **outside the run**, the log, `results.txt` (`#WARNING:`) and the report say that a transit and a baseline offset are the same curve there — the HOPS-mode numbers do not measure this planet. Seen on a TOI-4033 run whose meridian flip sat inside the predicted window: the ephemeris-locked fit walked 127 min onto the step.
 
+**Without the orbit, since v1.0.17.** HOPS itself asks for the orbit. When the archive lists no a/R★ and inclination — most TOIs — this mode runs on a central transit (b = 0) with a/R★ derived from the duration, and says in red what that costs: Rp/R★ comes out low by 1 % at b = 0.3, 4 % at 0.5, 9 % at 0.7 and 19 % at 0.85 (measured on the mode's own model), and its bar does not contain that. The mid-time is the usable result there; for the radius the Svenesis fit states the same uncertainty in its bar.
+
 ---
 
 ## 10. Deciding Whether It Is Real
@@ -616,6 +622,17 @@ No catalogue and no network. A variability flag from AAVSO's VSX would be better
 - **The centroid is Gaussian-windowed.** Every pixel of the 21 px box used to count alike, so a neighbour of half the flux 12 px away pulled the centre by 1.2 px at FWHM 3 and 2.3 px at FWHM 4 — and the aperture flux changed by 110 mmag with the seeing. The window gives that neighbour no weight; the measured pull is 0.00 px.
 
 **And the seeing has a say in the aperture.** A radius whose curve still follows the seeing (|r| > 0.2) gives way to a larger one that does not (|r| ≤ 0.1) when that costs at most 5 % in point-to-point noise. A seeing term not measured is worth more than one modelled: on HAT-P-25 b a refocus at the meridian flip moved the curve by 18 mmag at 1.6 × FWHM, the size of the transit.
+
+**The aperture's last test is the transit, since v1.0.17.** Point-to-point noise and the seeing correlation both judge a light curve; neither says whether the *depth* still depends on the radius. The difference of two apertures' light curves does. The noise the apertures share — scintillation, most of the photon noise — cancels in it, and what is left is fitted with the transit's own profile and the fit's bases; because that fit is linear, the profile's coefficient is exactly the depth of one aperture minus the depth of the other. A radius that a larger one contradicts at **2.5 sigma** gives way to the first radius every larger one agrees with, and one radius beyond the grid (3.0 × FWHM) is measured only as the witness of the largest candidate.
+
+| Night | Noise optimum | Disagreement | Used | (Rp/R★)² |
+|---|---|---|---|---|
+| HAT-P-25 b | 1.6 × FWHM | 2.1 ± 0.7 mmag against 2.0 × (2.9 σ) | 2.0 × FWHM, confirmed to 1.1 σ | 1.58 → 1.77 % |
+| Qatar-4 b | 1.35 × FWHM | 2.7 ± 0.9 mmag against 2.0 × (3.2 σ) | 1.6 × FWHM, confirmed to 1.5 σ | 2.77 → 2.70 % |
+
+Simulated with the target's PSF 15 % wider than the comparison stars' and the seeing at its best mid-transit — the case where a small aperture writes the seeing into the depth — a 15.0 mmag transit read 13.3 ± 2.3 mmag at the noise optimum and 15.3 ± 1.3 after the test. Without any real dependence the test moved the aperture in 13 of 300 runs (7 of 291 under correlated noise), and the depth did not change when it did: a false move costs a few per cent of noise, a missed one a bias no bar shows.
+
+Three outcomes besides *stands* and *moved*. **No radius holds**: the aperture stays and the range of depths across the radii is printed in red — that range, not the formal bar, is what the run supports. **A larger radius would hold but another detected star would be inside it**: the aperture is not enlarged, because that star's light dilutes the transit, and the range is printed. **Not tested**: no transit is detected at the chosen aperture, or this script's own engine did not run. The table — depth, (Rp/R★)², airmass term and the largest disagreement with a larger radius, per aperture — is in the log and in the report.
 
 ### Clipping is not variability — and no frame vanishes unnamed
 
