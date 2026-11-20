@@ -3710,7 +3710,7 @@ check('self.opts.get("fit_mode") == "hops":\n                jd, mag, err = self
       "photometry swap, engine capture, compute button, compute thread "
       "and exposure hand-over are all wired, the HOPS-python bridge gone")
 
-check("TARGET_CACHE_SCHEMA = 2" in src
+check("TARGET_CACHE_SCHEMA = 3" in src
       and 'hit.get("schema") != TARGET_CACHE_SCHEMA' in src
       and 'found["schema"] = TARGET_CACHE_SCHEMA' in src
       and "the older cached ephemeris (no orbit columns)" in src,
@@ -4012,7 +4012,7 @@ _areas = [float(_cw((21, 21), 10.0 + dx, 10.0 + dy, 1.5).sum())
 check(np.std(_areas) / np.mean(_areas) < 0.002,
       f"the r = 1.5 px aperture area wobbles {100 * np.std(_areas) / np.mean(_areas):.2f} % "
       "with sub-pixel centre (was 0.6 % at 8 x 8)")
-check("self._flip_jd_utc = 0.5 * (j_at + j_before)" in src and 'out["datamax"] = float(h[key])' in src
+check("self._flip_jd_utc = 0.5 * (j_at + j_before)" in src and 'out["datamax"] = v' in src and "plausible_adc_ceiling(v)" in src
       and "frame_max in (4095.0, 16383.0)" in src
       and "peak_scale = min(4.0, max(1.0, (fw0 / fw_min) ** 2))" in src
       and "elif n_dropped and n_promoted:" in src
@@ -4669,7 +4669,7 @@ _lines2 = [p for p, _h in _ocl(_r_oc2, _f_oc)]
 check(any("1.3 sigma from the prediction" in l for l in _lines) and any("the ephemeris itself predicts" in l for l in _lines)
       and any("3.0 sigma from the prediction" in l for l in _lines2) and any("lists no error" in l for l in _lines2),
       "O-C sigma counts the ephemeris's own bar: a 3-minute drift is 1.3 sigma against T0 +/- 2 min, not 3.0 — and says so either way")
-check("pl_tranmiderr1,pl_orbpererr1" in src and src.count('"t0_err_d": _abs_or_none(_num("pl_tranmiderr1"))') == 2
+check("pl_tranmiderr1,pl_orbpererr1" in src and '"t0_err_d": _abs_or_none(_num("pl_tranmiderr1"))' in src and '"t0_err_d": t0_err,' in src
       and ns["_abs_or_none"](-0.002) == 0.002 and ns["_abs_or_none"](None) is None and ns["_abs_or_none"]("x") is None,
       "both archive queries fetch the T0 and period errors, magnitudes whatever the sign")
 _sv = ns["saturation_verdict"]
@@ -4692,7 +4692,7 @@ check('for name in ("fwhm", "sky", "n_stars", "xpos", "ypos"):' in src and 'qual
       "the target's centroid per frame is offered to the fit as x/y drift bases through the same frame pairing")
 check("d = d[min(max(ch, 0), d.shape[0] - 1)]" in _nat and 'self.opts.get("channel", 0)' in _nat,
       "the native engine measures the chosen channel of a debayered OSC frame, not plane 0")
-check("run_med = float(np.median(qf))" in _nat and "fwhm = max(fwhm_ref, run_med)" in _nat and "RUN_FWHM_RATIO_RANGE" in _nat,
+check("run_med = float(np.median(qf))" in _nat and "fwhm = grid_fwhm(fwhm_ref, q_fwhm)" in _nat and "RUN_FWHM_RATIO_RANGE" in _nat,
       "the aperture grid is scaled to the run's median seeing, never smaller than the reference frame's, inside a trust range")
 check("APERTURE_MAX_SEEING_R" in _nat and "np.corrcoef(mag[pair], fw_k[pair])" in _nat and "stable = [c for c in cands" in _nat,
       "an aperture whose curve tracks the seeing is passed over for a less correlated one")
@@ -4948,8 +4948,380 @@ check("point-to-point noise{tie_note}; sky annulus" in src, "the tie note rides 
 _scan_ap = src[src.index("        least = min(eligible, key=lambda t: (t[2], -t[1]))"):src.index("        return (aper, APERTURE_INNER_RATIO * aper,")]
 check("aperture_tie_break(" in _scan_ap and "[t[2] for t in eligible], [t[0] for t in eligible]" in _scan_ap and "if aper != least[0]:" in _scan_ap,
       "Siril's own scan (the light_curve fallback) breaks its ties the same way and logs it")
-check('VERSION = "1.0.14"' in src and "1.0.14 - The aperture: within a noise tie, the larger radius" in src,
-      "version 1.0.14 with its changelog entry")
+check("1.0.14 - The aperture: within a noise tie, the larger radius" in src,
+      "the 1.0.14 changelog entry stays")
+
+print("\n9s) 1.0.15: the audit's five findings")
+# -- Rp/R* at the orbit's impact parameter
+_anc = ns["ephemeris_anchor"]
+_ft = ns["fit_transit"]
+_htf = ns["hops_transit_flux"]
+def _exact_case(k, ars, b, with_orbit=True, ecc=0.0, peri=90.0):
+    P = 3.0
+    t0 = 2460000.5 + 400 * P
+    inc = math.degrees(math.acos(b / ars * (1 + ecc * math.sin(math.radians(peri))) / (1 - ecc ** 2)))
+    geom = {"period_d": P, "a_rs": ars, "ecc": ecc, "inc_deg": inc, "peri_deg": peri}
+    dur = ns["transit_duration_days"](k, P, ars, ecc, inc, peri)
+    half = max(2.75 / 24, 1.3 * dur)
+    t = t0 + np.arange(-half, half, 90 / 86400)
+    mag = -2.5 * np.log10(np.asarray(_htf(t, k, t0, geom, "quad", (0.4, 0.25)), float))
+    eph = {"period_d": P, "t0_bjd": 2460000.5, "duration_h": 24 * dur, "t0_err_d": 1e-4, "period_err_d": 1e-7}
+    if with_orbit:
+        eph.update({"a_rs": ars, "inc_deg": inc, "ecc": ecc, "peri_deg": peri, "rprs_archive": k})
+    anc = _anc(eph, t, "BJD_TDB")[0]
+    return anc, _ft(t, mag, bases=None, u1=0.4, u2=0.25, anchor=anc)
+for _b in (0.0, 0.5, 0.7, 0.85):
+    _a, _f = _exact_case(0.12, 8.0, _b)
+    check(_a["impact_b"] is not None and abs(_a["impact_b"] - _b) < 1e-9 and abs(_a["rprs"] - 0.12) < 1e-12,
+          f"the anchor carries the orbit's impact parameter ({_b}) and the archive's Rp/R*")
+    check(_f is not None and _f["impact_b_source"] == "archive" and abs(_f["impact_b"] - _b) < 1e-9
+          and abs(_f["rprs"] / 0.12 - 1.0) < 0.003,
+          f"exact transit at b = {_b}: Rp/R* comes back within 0.3 % at the orbit's own b (it was up to 12 % off)",
+          f"{100 * (_f['rprs'] / 0.12 - 1):+.2f} %")
+_a, _f = _exact_case(0.12, 8.0, 0.7, with_orbit=False)
+check(_a["impact_b"] is None and _f["impact_b_source"] == "grid" and _f["impact_b"] in (0.0, 0.5)
+      and -0.06 < _f["rprs"] / 0.12 - 1.0 < -0.03,
+      "without an orbit in the archive the two-value grid stays, with the bias the log now states (about -4 % at b = 0.7)",
+      f"{100 * (_f['rprs'] / 0.12 - 1):+.2f} %")
+_a90 = _exact_case(0.12, 10.0, 0.4, ecc=0.3, peri=90.0)
+_a270 = _exact_case(0.12, 10.0, 0.4, ecc=0.3, peri=270.0)
+check(abs(_a90[0]["impact_b"] - 0.4) < 1e-9 and abs(_a270[0]["impact_b"] - 0.4) < 1e-9
+      and abs(_a90[1]["rprs"] / 0.12 - 1) < 0.003 and abs(_a270[1]["rprs"] / 0.12 - 1) < 0.003,
+      "eccentric orbit, omega 90 and 270: b = a/R* cos i (1 - e^2)/(1 + e sin omega) and the radius is right for both")
+_tt = 2460000.5 + 400 * 3.0 + np.linspace(-0.1, 0.1, 50)
+check(_anc({"period_d": 3.0, "t0_bjd": 2460000.5, "a_rs": 8.0, "inc_deg": 80.0, "rprs_archive": 0.1}, _tt, "BJD_TDB")[0]["impact_b"] is None,
+      "an archive orbit that does not transit (b = 1.39) is not a geometry to fit with")
+check('"impact_b_source": "archive" if geo_b is not None else "grid"' in src
+      and "([] if geo_b is not None else" in src
+      and "impact parameter {anchor['impact_b']:.2f} from the" in src
+      and 'if fit.get("impact_b_source") == "archive":' in src and 'elif fit.get("impact_b_source") == "archive":' in src,
+      "the log, the summary and the report name where the impact parameter came from")
+# -- the clip level on calibrated frames
+_ccm, _cfa, _sv = ns["calibrated_clip_map"], ns["clip_factor_at"], ns["saturation_verdict"]
+_rng = np.random.default_rng(1)
+_H, _W = 480, 640
+_yy, _xx = np.mgrid[0:_H, 0:_W]
+_fl = 1.0 - 0.35 * (((_xx - _W / 2) ** 2 + (_yy - _H / 2) ** 2) / ((_W / 2) ** 2 + (_H / 2) ** 2))
+_fl = _fl / _fl.mean()
+for _ped, _dk in ((500.0, False), (1920.0, True)):
+    _rawf = _rng.poisson(1500.0, (_H, _W)).astype(float) + _ped
+    for _cx, _cy in ((_W // 2, _H // 2), (40, 40)):
+        _rawf[_cy - 2:_cy + 3, _cx - 2:_cx + 3] = 65535
+    _raw = np.clip(np.round(_rawf), 0, 65535).astype(np.uint16)
+    _dark = (np.full((_H, _W), _ped) if _dk else None)
+    _cal = np.clip((_raw.astype(float) - (_dark if _dk else 0.0)) / 65535.0 / _fl, 0, 1).astype(np.float32)
+    _map = _ccm(_raw, _cal, (_dark / 65535.0) if _dk else None)
+    _fc = _cfa(_map, _W // 2, _H // 2)
+    _true = (65535 - (_ped if _dk else 0)) / 65535 / _fl[_H // 2, _W // 2]
+    check(_map is not None and abs(_fc - _true) < 0.01 and _true < 0.95,
+          f"clip map ({'with' if _dk else 'no'} dark): a saturated pixel at the frame centre reads {_true:.3f} of full scale, measured to 1 %", f"{_fc:.4f}")
+    check(_sv(_cal, _W // 2, _H // 2)[0] is False and _sv(_cal, _W // 2, _H // 2, clip_factor=_fc)[0] is True,
+          "a saturated core at the centre of a calibrated frame passed the fixed 98 % and is caught at its own clip level")
+    check(_cfa(_map, 40, 40) == 1.0 and _sv(_cal, 40, 40, clip_factor=_cfa(_map, 40, 40))[0] is True,
+          "in the corner the calibrated ceiling itself is the level, as before")
+    _c2 = _cal.copy(); _c2[_H // 2 - 2:_H // 2 + 3, _W // 2 - 2:_W // 2 + 3] = 0.70
+    check(_sv(_c2, _W // 2, _H // 2, clip_factor=_fc)[0] is False, "an unsaturated star at the centre is not flagged")
+check(_ccm(np.zeros((10, 10), np.uint16), np.zeros((12, 10), np.float32)) is None and _cfa(None, 5, 5) == 1.0
+      and _ccm(np.zeros((64, 64), np.uint16), np.zeros((64, 64), np.float32)) is None,
+      "no comparable pair, no map: the fixed level stays")
+check("None if sat_adu is None else sat_adu * cf" in src and "pk = peakn[0]" in src
+      and "/ clip_factor_at(clip_map, xi, yi) if box.size" in src
+      and "clip_factor=clip_factor_at(\n                        self._clip_map_for(ref_path), x, row))" in src
+      and "self._calib_masters = dict(masters)" in src,
+      "the engine tests every star against the clip level at its own position: per frame, in the headroom guard, in the linearity margin and in the target's verdict")
+# -- the aperture and the comparison stars that were used
+check('raw_ap = (getattr(self, "_native_raw", None) or {}).get("aperture")' in src
+      and "aperture = float(raw_ap)" in src,
+      "the reported aperture is the one the engine measured with, not the least-noise row of the table")
+_ciu = ns["comps_in_use"]
+_used, _rows = _ciu({"stars_ref": [(100.0, 100.0), (10.0, 20.0), (30.0, 40.0), (50.0, 60.0), (70.0, 80.0)], "keep": [True, False, True, False]},
+                    [(10.0, 20.0, 55.0), (30.0, 40.0, 44.0)], [(50.0, 60.0, 33.0), (70.0, 80.0, 22.0)],
+                    [(10.0, 20.0, 4.0, "kept"), (30.0, 40.0, 30.0, "DROPPED — varies against its peers"), (50.0, 60.0, 3.0, "kept"), (70.0, 80.0, 5.0, "kept")])
+check(_used == [(10.0, 20.0, 55.0), (50.0, 60.0, 33.0)],
+      "the comparison stars reported are the kept ones, a promoted reserve included with its SNR", str(_used))
+check(_rows[1][3].startswith("DROPPED — varies") and _rows[3][3] == "DROPPED — the fit's residual falls without it" and _rows[0][3] == "kept",
+      "a star the residual selection dropped carries that verdict in the table; earlier verdicts stand")
+check(_ciu({}, [(1.0, 2.0, 3.0)])[0] == [] and '"comps": comps_report,' in src and "comps_report, comp_rows = comps_in_use(" in src,
+      "the results carry the used ensemble")
+check("if len(keep) != len(used) - 1 or keep[i]]" in src, "the field image draws only the stars still in the ensemble")
+# -- the Siril fallback probes
+_mc = src[src.index("    def _measure_curve("):src.index("    def _note_photometry_failure(")]
+check("self._run_light_curve(seq, target_xy, comps, autoring, quiet=True)" in _mc
+      and "jd, mag, err, _unmeasured = _parse_light_curve_dat(dat)" in _mc
+      and "_unlink_quiet(dat)" in _mc and "if not os.path.exists(dat):" in _mc
+      and "autoring, proc)" not in _mc,
+      "a fallback probe reads Siril's file instead of a return value that is always None, and never a stale file")
+# -- the EXOTIC folder
+_wef = src[src.index("def write_exotic_folder("):src.index("class LightCurvePlot")]
+check('if f.get("detected") else "") +' in _wef and 'params[key] = "not claimed"' in _wef
+      and '("Transit claimed", claim)' in _wef,
+      "the EXOTIC folder withholds results and parameters of a fit that was not claimed")
+check("1.0.15 - Five findings of an audit against the HOPS and EXOTIC sources" in src,
+      "the 1.0.15 changelog entry stays")
+
+print("\n9t) 1.0.16: the audit's second round")
+# -- the ensemble on shared frames
+_erm = ns["ensemble_relative_mags"]
+_n = 200
+_Xa = np.linspace(1.05, 1.9, _n)
+_tr = 10 ** (-0.4 * 0.20 * (_Xa - 1.0))
+_tf = 2e5 * _tr
+_cs = [s_ * _tr for s_ in (4e5, 1e5, 1e5, 1e5, 1e5)]
+_c0 = _cs[0].copy(); _c0[120:] = np.nan
+_mg = _erm(_tf, [_c0] + _cs[1:], np.sqrt(_tf), [np.sqrt(c) for c in _cs])[0]
+check(abs(np.nanmedian(_mg[125:145]) - np.nanmedian(_mg[95:115])) < 2e-4 and np.all(np.isfinite(_mg)),
+      "a comp carrying half the flux and missing the last 40 % of an extinction ramp no longer steps the curve (it was 17 mmag)",
+      f"{1000 * (np.nanmedian(_mg[125:145]) - np.nanmedian(_mg[95:115])):.3f} mmag")
+check(abs(ns["COMP_MIN_COVERAGE"] - 0.8) < 1e-12 and "thin = [n_tgt > 0 and cv < COMP_MIN_COVERAGE * n_tgt for cv in cover]" in src
+      and "measured in only {cover[i]} of the" in src,
+      "a comp measured in under 80 % of the target's frames leaves the ensemble, with that verdict")
+# -- slow structure in a comp
+_sx = ns["slow_excess"]
+_rg = np.random.default_rng(11)
+_ex_w = [_sx(_rg.normal(0, 0.003, 150)) for _ in range(40)]
+_tt = np.linspace(0, 0.2, 150)
+_ex_s = _sx(_rg.normal(0, 0.003, 150) + 0.0075 * np.sin(2 * np.pi * _tt / 0.2))
+check(0.5 < np.median(_ex_w) < 1.4 and max(_ex_w) < 2.2 and _ex_s > 3.0,
+      "slow excess: about 1 on white noise, well over 3 for 15 mmag of slow wobble under 3 mmag of noise",
+      f"white median {np.median(_ex_w):.2f} max {max(_ex_w):.2f}, wobble {_ex_s:.2f}")
+check(math.isnan(_sx(_rg.normal(0, 0.003, 20))) and abs(_sx(_rg.normal(0, 0.003, 150) + 0.02 * _Xa[:150], [_Xa[:150]]) - 1.0) < 0.9,
+      "too short a curve gives no verdict, and a line in airmass is not slow structure")
+_rk = ns["rank_comps_by_scatter"]
+def _ens(bad=None, seed=3):
+    rg = np.random.default_rng(seed)
+    X_ = 1.1 + 0.6 * np.linspace(0, 1, 150) ** 2
+    tr_ = 10 ** (-0.4 * 0.15 * (X_ - 1.0))
+    out = []
+    for i, lv in enumerate((3e5, 2e5, 1.5e5, 1e5, 0.8e5, 0.6e5)):
+        c = lv * tr_
+        if i == bad:
+            c = c * 10 ** (-0.4 * 0.010 * np.sin(2 * np.pi * np.linspace(0, 0.2, 150) / 0.17))
+        out.append(rg.poisson(c).astype(float))
+    return out, X_
+_cl, _Xc2 = _ens()
+_b2, _ = _ens(bad=2)
+_b0, _ = _ens(bad=0)
+check(all(_rk(_cl, detrend=[_Xc2])[0]) and all(_rk(_ens(seed=8)[0], detrend=[_Xc2])[0]),
+      "six clean comps: the slow-structure screen drops none")
+check(_rk(_b2, detrend=[_Xc2])[0] == [True, True, False, True, True, True]
+      and _rk(_b0, detrend=[_Xc2])[0] == [False, True, True, True, True, True],
+      "a comp with 20 mmag of slow wobble is dropped, faint or brightest, and nobody else")
+check(abs(ns["COMP_RESIDUAL_GAIN"] - 0.03) < 1e-12 and "res @ res" in src[src.index("def select_comps_by_residual("):src.index("def stacked_significance(")],
+      "the selection by the fit's residual scores the standard deviation and needs a 3 % gain")
+# -- the windowed centroid
+_rc = ns["refine_centroid"]
+def _star(img, x, y, flux, fw):
+    sg = fw / 2.3548
+    yy_, xx_ = np.mgrid[0:img.shape[0], 0:img.shape[1]]
+    img += flux / (2 * np.pi * sg * sg) * np.exp(-((xx_ - x) ** 2 + (yy_ - y) ** 2) / (2 * sg * sg))
+_pulls = []
+for _fw in (3.0, 4.0):
+    _im = np.full((121, 121), 100.0)
+    _star(_im, 60.3, 60.4, 2e5, _fw); _star(_im, 72.3, 60.4, 1e5, _fw)
+    _cx, _cy = _rc(_im, 61, 60, fwhm=_fw)
+    _pulls.append(math.hypot(_cx - 60.3, _cy - 60.4))
+check(max(_pulls) < 0.05, "a neighbour of half the flux 12 px away no longer pulls the centroid (it was 1.2 and 2.3 px)", str([round(v, 3) for v in _pulls]))
+_im = np.full((81, 81), 100.0); _star(_im, 40.3, 40.6, 5e4, 3.0)
+_cx, _cy = _rc(_im, 45.0, 41.0, fwhm=3.0)
+check(math.hypot(_cx - 40.3, _cy - 40.6) < 0.02 and _rc(_im, 3, 3) is None,
+      "a seed 5 px off still lands on the star, and a box off the frame is None")
+# -- staying on the sensor through a flip
+_sif = ns["stays_in_frame"]
+_Wf, _Hf = 1200, 800
+_flipinv = np.array([[1, 0, 0, 0, 1, 0, 0, 0, 1], [-1, 0, _Wf - 1 + 37, 0, -1, _Hf - 1 - 21, 0, 0, 1]], dtype=float)
+_envx = {"box": (0.0, 36.0, -22.0, 0.0), "inv": _flipinv, "star_rows": False}
+check(_sif(30.0, 400.0, _Wf, _Hf, _envx, 18.9) is False and _sif(1150.0, 400.0, _Wf, _Hf, _envx, 18.9) is True
+      and _sif(30.0, 400.0, _Wf, _Hf, _envx["box"], 18.9) is True and _sif(1150.0, 400.0, _Wf, _Hf, _envx["box"], 18.9) is False,
+      "through a meridian flip the star near the LEFT edge leaves the sensor and the one near the right stays — the drift box had it the other way round")
+_fis = ns["frame_inverse_stack"]
+check(_fis([np.eye(3), None, np.zeros((3, 3))]).shape == (1, 9) and _fis([]) is None,
+      "the inverse stack holds the registered frames only")
+# -- flip detection
+class _Hm:
+    def __init__(self, deg):
+        self.h00 = math.cos(math.radians(deg)); self.h10 = math.sin(math.radians(deg))
+_fbi = ns["flip_boundary_index"]
+check(_fbi([_Hm(0.1 * i) for i in range(10)] + [_Hm(180.2) for _ in range(10)]) == 10,
+      "a meridian flip is found at its first frame")
+check(_fbi([_Hm(i * 120.0 / 59) for i in range(60)]) is None,
+      "a field turning continuously through 120 degrees (alt-az) is no flip")
+check(_fbi([_Hm(0.0)] * 5 + [_Hm(179.0)] + [_Hm(0.0)] * 5) is None,
+      "one mis-registered frame is no flip")
+check("without a meridian flip — an alt-azimuth mount or a" in src, "and the log calls a rotation a rotation")
+# -- frame pairing, clip level, exposure tolerance
+_mf = ns["match_frames_to_curve"]
+_jf = 2460000.0 + np.arange(100) * 60 / 86400.0
+_jf2 = _jf.copy(); _jf2[37] = np.nan
+check(list(_mf(_jf[[3, 10, 50, 99]], _jf2)) == [3, 10, 50, 99] and _mf(_jf[[37]], _jf2)[0] == -1,
+      "one frame without a time no longer unpairs every row")
+_pac = ns["plausible_adc_ceiling"]
+check(_pac(65535) and _pac(4095) and _pac(16383) and _pac(65520) and _pac(65532) and not _pac(41000) and not _pac(52311.5),
+      "DATAMAX is a clip level only when it has the form of one")
+_smq = ns["signature_matches"]
+_li = {"exp_s": 231.0, "gain_v": 125.0, "binning": 1, "dims": (3008, 3008), "temp_v": -10.0, "instrument": "ASI"}
+check(_smq(dict(_li, exp_s=230.0), _li)[0] is True and _smq(dict(_li, exp_s=3.0), _li)[0] is False,
+      "a 230 s dark calibrates 231 s lights (2 %), a 3 s dark does not")
+# -- calibration choices
+_gc, _cm = ns["group_calibration"], ns["choose_masters"]
+def _inf(kind, exp, date, n, tag, filt=""):
+    return [{"kind": kind, "exp_s": exp, "gain_v": 125.0, "binning": 1, "dims": (3008, 3008), "temp_v": -10.0,
+             "instrument": "ASI", "filter": filt, "date_obs": f"{date}T0{i % 6}:00:0{i % 10}", "path": f"/x/{tag}_{i}.fit"} for i in range(n)]
+_lights = dict(_li, date_obs="2026-08-31T03:00:00", filter="L")
+_infos = (_inf("flat", 3.0, "2026-06-02", 25, "fA", "L") + _inf("flat", 3.0, "2026-08-31", 20, "fB", "L")
+          + _inf("dark", 3.0, "2026-08-31", 19, "d3"))
+_groups = _gc(_infos, "L")
+check(len(_groups["flat"]) == 2, "flats of two nights are two sessions, not one master of 45 frames")
+_ch, _nt = _cm(_groups, _lights)
+check(len(_ch["flat"]["files"]) == 20 and "/x/fB_0.fit" in _ch["flat"]["files"],
+      "the flat session nearest the lights is used, not the larger pile", str(_nt))
+check("dark" not in _ch and _ch.get("offset") is not None and _ch["offset"]["kind"] == "dark"
+      and any("taken as their dark-flat" in t for t in _nt),
+      "a 3 s 'DARK' is rejected for 231 s lights and becomes the 3 s flats' dark-flat")
+check(_ch.get("light_bias") is _ch["offset"] and any("subtracted as their offset" in t for t in _nt),
+      "and, being a bias in all but name, it is subtracted from the lights too")
+_ch2, _nt2 = _cm(_gc(_inf("flat", 3.0, "2026-08-31", 20, "fB", "L"), "L"), _lights)
+check("offset" not in _ch2 and "light_bias" not in _ch2 and any("keep their pedestal" in t for t in _nt2)
+      and "'-bias=\"=64*$OFFSET\"'" not in src,
+      "without any measured offset the flats keep their pedestal; the synthetic 64 x OFFSET is gone")
+check(not any("REJECTED" in t for t in _nt) and any("they are the flats' dark-flats" in t for t in _nt),
+      "and its line no longer reads as a rejected dark")
+import tempfile
+with tempfile.TemporaryDirectory() as _td:
+    for _sub in ("FLAT", "_lightcurve/calib/x/process", "lightcurve/calib", "LIGHT/_lightcurve/process"):
+        os.makedirs(os.path.join(_td, _sub))
+        for _i in range(3):
+            open(os.path.join(_td, _sub, f"f_{_i}.fit"), "w").close()
+    _seen = []
+    ns["scan_calibration"]([_td], "", read=lambda p: (_seen.append(p), {"kind": "other", "path": p})[1])
+    check(len(_seen) == 3 and all(os.sep + "FLAT" + os.sep in p for p in _seen),
+          "the calibration scan does not walk into this script's own working and output folders (20 flats had become 207)", str(len(_seen)))
+check('fit["duration_at_bound"] = False' in src and "d_bic >= FLIP_STEP_REQUIRED_DBIC" in src and abs(ns["FLIP_STEP_REQUIRED_DBIC"] - 6.0) < 1e-12,
+      "a duration held for a partial transit is not 'at the bound', and the depth range is given only when the BIC cannot choose the model")
+_gf = ns["grid_fwhm"]
+check(abs(_gf(4.63, [8.0, 8.3, 8.15, 8.1, 8.2, 5.2]) - 8.125) < 1e-9 and _gf(4.63, None) == 4.63
+      and _gf(4.63, [30.0] * 6) == 4.63 and _gf(8.0, [5.0] * 6) == 8.0 and _gf(4.63, [8.0, 8.1]) == 4.63,
+      "the engine's FWHM for apertures and annulus: the run's median, never below the reference frame's, only when trusted")
+check("edge_margin=AUTORING_OUTER_FWHM * max(1.0, grid_fwhm(" in src and "float(edge_margin) if edge_margin" in src
+      and "fwhm = grid_fwhm(fwhm_ref, q_fwhm)" in src,
+      "the edge filter's margin is the annulus the engine will use, not the reference frame's")
+check('seq, bias=masters.get("bias"), dark=masters.get("dark"),' in src and 'dpath = _m.get("dark") or _m.get("bias")' in src,
+      "the bias reaches Siril's calibrate and the clip map")
+# -- the archive
+_t0c = ns["t0_to_bjd_tdb"]
+check(abs((_t0c(2455000.5, "BJD-UTC")[0] - 2455000.5) * 86400 - 66.184) < 1e-3
+      and abs((_t0c(2458000.5, "BJD-UTC")[0] - 2458000.5) * 86400 - 69.184) < 1e-3
+      and _t0c(2458000.5, "BJD-TDB") == (2458000.5, "") and _t0c(2458000.5, "BJD")[0] == 2458000.5
+      and "heliocentric" in _t0c(2458000.5, "HJD")[1],
+      "an archive T0 in UTC is brought to TDB with the leap seconds of its epoch; BJD-TDB is left alone; HJD is said")
+_be = ns["best_ephemeris"]
+_q4 = [{"ref": "Alsubai 2017", "period_d": 1.8053564, "period_err_d": None, "t0_bjd": 2457637.77361, "t0_err_d": 0.00046},
+       {"ref": "Kokori 2023", "period_d": 1.80536403, "period_err_d": 5.4e-7, "t0_bjd": 2458919.58363, "t0_err_d": 0.00015},
+       {"ref": "Hewitt 2026", "period_d": 1.8053656, "period_err_d": 2.1e-7, "t0_bjd": 2458919.5838, "t0_err_d": 8.9e-5},
+       {"ref": "ExoFOP", "period_d": 1.80537598, "period_err_d": 5.4e-5, "t0_bjd": 2459854.762356, "t0_err_d": 0.00049}]
+_pk = _be(_q4, 2461300.84)
+check(_pk["ref"] == "Hewitt 2026" and _pk["sigma_min"] < 0.5 and _be(_q4[:1], 2461300.84) is None and _be([], 1.0) is None,
+      "Qatar-4 b: of the archive's references the one good to 0.4 min is picked; a row without a period error does not compete",
+      f"{_pk['ref']} {_pk['sigma_min']:.2f} min")
+_ep = round((2461300.84 - _pk["t0_bjd"]) / _pk["period_d"])
+check(abs((_pk["t0_bjd"] + _ep * _pk["period_d"] - 2461300.84175) * 1440 - 27.8) < 0.5,
+      "and its prediction sits 28 min from the discovery ephemeris, where the data put the transit")
+check("pl_tranmid_systemref" in src and "is a fraction in a " in src and "TARGET_CACHE_MAX_AGE_D" in src
+      and 'found["cached_jd"] = jd_today' in src,
+      "the lookup reads the T0's time system, recognises a depth given as a fraction and refreshes a month-old cache entry")
+# -- site
+_sxg = ns["_sexagesimal"]
+check(abs(_sxg("110 52 44 W") + 110.87889) < 1e-4 and abs(_sxg("S 30 10 00") + 30.16667) < 1e-4
+      and abs(_sxg("110:52:44W") + 110.87889) < 1e-4 and abs(_sxg("12h34m56s") - 12.58222) < 1e-4
+      and abs(_sxg("-00 12 30") + 0.20833) < 1e-4 and abs(_sxg("31.5 N") - 31.5) < 1e-9,
+      "hemisphere letters are read, and the s of seconds is still a seconds mark")
+check(ns["site_from_header"]({"SITELAT": 0.0, "SITELONG": 0.0}) is None and ns["site_from_header"]({"SITELAT": 31.5, "SITELONG": -99.4}) is not None,
+      "a header site of 0/0 is 'unknown', as a target at 0/0 always was")
+_lsc = ns["longitude_sign_check"]
+_alt = ns["_altitude_deg"]
+_jdx = ns["_jd_from_dateobs"]("2026-08-15T03:00:00")
+_hdr = {"RA": 310.0, "DEC": 30.0, "DATE-OBS": "2026-08-15T03:00:00",
+        "CENTALT": _alt(_jdx, 310.0, 30.0, 50.0, -0.4)}
+_lon, _why = _lsc(_hdr, 50.0, 0.4)
+check(_lon == 0.4 and "both signs" in _why, "a longitude both of whose signs reproduce the altitude keeps the header's sign", _why)
+_hdr2 = dict(_hdr, CENTALT=_alt(_jdx, 310.0, 30.0, 31.5, -99.4))
+_lon2, _why2 = _lsc(_hdr2, 31.5, 99.4)
+check(_lon2 == -99.4 and "FLIPPED" in _why2, "and a west-positive header is still turned round", _why2)
+# -- the fit's own limits
+_cc = ns["contact_coverage"]
+_tg = np.linspace(0.0, 0.25, 150)
+check(_cc(_tg, 0.125, 0.10)[0] == "both" and _cc(_tg, 0.22, 0.10)[0] == "ingress" and _cc(_tg, 0.03, 0.10)[0] == "egress",
+      "contact coverage: both, ingress only (egress past the end), egress only")
+_sd = (_tg > 0.168).astype(float)
+_cv, _cd = _cc(_tg, 0.125, 0.10, side=_sd, tau_frac=0.15)
+check(_cv == "ingress" and _cd["floor_out"] == 0 and _cd["post"] > 5,
+      "an egress right behind a meridian flip is not observed: its floor lies on the other side of the step", str(_cd))
+_scs = ns["sigma_clip_series"]
+_rg = np.random.default_rng(4)
+_xs = np.linspace(0, 0.2, 150)
+_n0 = _n1 = 0
+for _ in range(60):
+    _ys = _rg.normal(0, 0.004, 150); _ys[100:] += 0.059
+    _n0 += _scs(_xs, _ys)[1]; _n1 += _scs(_xs, _ys, breaks=[0.5 * (_xs[99] + _xs[100])])[1]
+check(_n0 / 60 > 1.5 and _n1 / 60 < 0.2, "the outlier clip no longer removes the two points beside a flip step",
+      f"{_n0 / 60:.2f} -> {_n1 / 60:.2f} per run")
+_ys = _rg.normal(0, 0.004, 150); _ys[100:] += 0.059; _ys[120] += 0.08
+check(not _scs(_xs, _ys, breaks=[0.5 * (_xs[99] + _xs[100])])[0][120], "a real spike after the flip is still removed")
+def _anch_case(offset_min):
+    k_, P_, a_ = 0.12, 3.0, 8.0
+    t0_ = 2460000.5 + 400 * P_
+    g_ = {"period_d": P_, "a_rs": a_, "ecc": 0.0, "inc_deg": 87.0, "peri_deg": 90.0}
+    d_ = ns["transit_duration_days"](k_, P_, a_, 0.0, 87.0, 90.0)
+    t_ = t0_ + np.arange(-0.12, 0.12, 120 / 86400)
+    m_ = -2.5 * np.log10(np.asarray(_htf(t_, k_, t0_, g_, "quad", (0.4, 0.25)), float))
+    return _ft(t_, m_, u1=0.4, u2=0.25, anchor={"t0": t0_ + offset_min / 1440.0, "t0_window_d": 30 / 1440.0,
+                                                 "duration_d": d_, "duration_tol": 0.15})
+check(_anch_case(0.0)["t0_at_bound"] is False and _anch_case(0.0)["duration_at_bound"] is False
+      and _anch_case(45.0)["t0_at_bound"] is True,
+      "a mid-time 45 min from a ±30 min anchor is flagged as at the bound; a centred one is not")
+check("(d_raw - lnn) / (b_c * b_c) + lnn" in src and "best += d_raw" in src,
+      "the BIC's likelihood term is deflated by the red-noise beta of the model with the candidate")
+check('"verdict": ("target-only" if not shared else' in src and "NOT DECIDABLE" in src,
+      "'shared by the ensemble' has a third answer when the comps scatter more widely than the effect")
+_fat = ns["false_alarm_text"]
+check("0 of 2000" in _fat({"anchored": True}) and "0.25 %" in _fat({"anchored": False}) and "0.25 %" in _fat(None),
+      "the false-alarm statement is the one measured for this fit's kind of search")
+check("col[m] -= float(np.median(col[m]))" in src and 'bases["flip"] = step' in src[src.index("    def _reselect_comps("):src.index("    def _comp_share_check(")]
+      and "not " in src and "applied in HOPS mode, which keeps HOPS's own" in src,
+      "x/y drift is referred to each flip side, the reselection carries the flip step and leaves HOPS mode alone")
+check("PARTIAL TRANSIT:" in src and "duration_tol=PARTIAL_DURATION_TOL" in src and 'fit["partial"] = partial' in src
+      and "AT THE ANCHOR'S BOUND:" in src and 'fit["depth_spread"] = {' in src and "No transit found: " in src,
+      "partial transits, pinned parameters, a flip inside the transit and a window without a dip are all said in the log")
+check("iterations: int = 5000" in src and "self.spin_hops_iter.setValue(5000)" in src
+      and '"significance_beta": blind.get("red_noise_beta")' in src and '"tmid_e": (fit.get("t0_sigma_d")' in src,
+      "HOPS mode: 5000 iterations, the significance prints its own beta, both AAVSO files carry the same bars")
+# -- exports and filters
+_dfc = ns["detrend_flux_column"]
+_trm = 0.08 * (_Xa - 1.0)
+_oot = np.ones(_n, bool); _oot[80:130] = False
+_flx = 10 ** (-0.4 * (_trm - np.median(_trm[_oot]) + np.where(_oot, 0.0, 0.012)))
+_col = _dfc(_trm, _flx, _oot)
+check(abs(np.median(_flx[_oot] / _col[_oot]) - 1.0) < 1e-9 and abs(np.median(_flx[~_oot] / _col[~_oot]) - 10 ** (-0.4 * 0.012)) < 1e-9,
+      "DIFF / DETREND_2 is 1 out of transit and the depth inside it")
+check(ns["orientation_in_file_rows"]((-70.0, True, 2.0), False) == (70.0, False, 2.0)
+      and ns["orientation_in_file_rows"]((70.0, False, 2.0), True) == (70.0, False, 2.0)
+      and ns["orientation_in_file_rows"](None, False) is None,
+      "north and east of the field image are un-mirrored when the stars' rows are display rows")
+check('if label == "EXOTIC" and r.get("time_system") != "BJD_TDB":' in src,
+      "the EXOTIC folder, which declares BJD_TDB everywhere, is not written on JD_UTC times")
+_hfn = ns["hops_filter_name"]
+check(_hfn("CV") == "clear" and _hfn("CR") == "clear" and _hfn("CBB") == "exoplanets_bb" and _hfn("TG") == "JOHNSON_V"
+      and _hfn("SR") == "sdss_r" and _hfn("Sloan r'") == "sdss_r" and _hfn("Bessel V") == "JOHNSON_V" and _hfn("V") == "JOHNSON_V",
+      "AAVSO's own filter codes are passbands")
+check('.get("filter") or ""))' in src[src.index("    def _limb_darkening("):src.index("    def _reselect_comps(")],
+      "an empty Filter box takes the header's filter for the limb darkening")
+_asp = ns["aperture_seeing_pick"]
+check(_asp([4.38, 4.56, 4.74], [13.10, 16.37, 20.47], [-0.26, -0.02, 0.10], 0) == 1
+      and _asp([4.38, 4.56, 4.74], [13.10, 16.37, 20.47], [-0.12, -0.02, 0.10], 0) == 0
+      and _asp([4.38, 4.80, 4.74], [13.10, 16.37, 20.47], [-0.26, -0.02, 0.10], 0) == 0,
+      "HAT-P-25 b's grid: 16.37 px (r -0.02, 4 % more noise) is taken over 13.10 px (r -0.26); not when it costs 10 %, not when the pick is quiet")
+check("make f/{f_ratio:.0f}" in src, "an aperture in the form that makes an impossible focal ratio is called out")
+check('VERSION = "1.0.16"' in src and "1.0.16 - The audit's second round, and what three real nights asked for" in src,
+      "version 1.0.16 with its changelog entry")
 
 if fails:
     print(f"{len(fails)} FAILURE(S)")
