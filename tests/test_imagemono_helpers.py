@@ -53,7 +53,8 @@ WANT = ("_format_duration", "_median", "_exp_tag", "_night_key", "_path_date",
         "_manifest_pick", "_manifest_is_subset", "_manifest_panels",
         "_manifest_role", "_manifest_nb_doubt", "_manifest_role_overrides",
         "_manifest_spcc", "_manifest_metrics", "_apply_manifest",
-        "_names_short", "_manifest_log_lines", "_manifest_md")
+        "_names_short", "_manifest_log_lines", "_manifest_md",
+        "_bias_fits")
 for node in tree.body:
     if isinstance(node, ast.FunctionDef) and node.name in WANT:
         exec("from __future__ import annotations\n"
@@ -1179,6 +1180,23 @@ ns["_ROLE_OVERRIDES"].update(nroles)
 check(ns["_detect_palette"](["H", "Oiii", "S"]) == "SHO",
       "with the roles in place, S / H / Oiii propose SHO")
 ns["_ROLE_OVERRIDES"].clear()
+
+print("\n1.8.3 — a bias from another camera is not used")
+bf = ns["_bias_fits"]
+old_cam = {"dims": (3008, 3008), "binning": 1, "gain_v": 125, "exp_s": 0.1,
+           "temp_v": -10.0}
+poseidon = {"dims": (6252, 4176), "binning": 1, "gain_v": 125, "exp_s": 600.0,
+            "temp_v": -10.0}
+check(not bf(old_cam, [poseidon]),
+      "the 3008x3008 library bias does not meet 6252x4176 lights")
+check(bf(dict(old_cam, dims=(6252, 4176)), [poseidon]),
+      "a bias of the lights' size fits, whatever its exposure")
+check(not bf(dict(old_cam, dims=(6252, 4176), gain_v=0), [poseidon]),
+      "nor at another gain")
+check(bf(old_cam, [poseidon, dict(poseidon, dims=(3008, 3008))]),
+      "one filter's lights it fits are enough")
+check(bf(old_cam, []) and bf(old_cam, [{}]),
+      "with nothing known about the lights it is not refused")
 
 print()
 if fails:

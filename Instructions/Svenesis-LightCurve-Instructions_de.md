@@ -1,6 +1,6 @@
 # Svenesis LightCurve — Anleitung
 
-**Version 1.0.18** | Siril Python-Skript für Exoplaneten-Transitphotometrie
+**Version 1.0.19** | Siril Python-Skript für Exoplaneten-Transitphotometrie
 
 > *Ein Ordner Subs hinein, eine Lichtkurve heraus — und eine ehrliche Antwort auf die einzige Frage, die zählt: steckt da ein Transit drin?*
 
@@ -693,6 +693,44 @@ Es wird nichts irgendwohin geschickt. Einreichen ist deine Entscheidung — die 
 ---
 
 ## 11. Die Ausgabe lesen
+
+### Zuerst das Urteil (v1.0.19)
+
+Jeder Lauf endet mit einer Aussage, wie gut er war: oben im Reiter **Result** und im Bericht, als letzte Zeilen des Logs, und mit der Note im Titel des Diagramms. Sie beantwortet zwei Fragen getrennt, denn eine Nacht kann einen Transit mit 20 Sigma nachweisen und ihn trotzdem schlecht messen.
+
+**Nachweis** — ist da ein Transit — ist die Signifikanz gegen ihre kalibrierte Schwelle (§10). **Messung** — sind Tiefe und Mittenzeit verwertbar — wird aus dem benotet, was der Lauf über sich selbst herausgefunden hat:
+
+| Note | Bedeutet |
+|---|---|
+| **good** | Tiefe und Mittenzeit sind mit ihren Fehlerbalken verwertbar |
+| **usable** | Sie sind verwertbar; die genannten Befunde sollte man kennen |
+| **limited** | Mindestens ein Ergebnis ist von seinem Fehlerbalken nicht gedeckt; jeder Befund sagt, welches |
+| **not usable** | Die Zahlen sollten nicht verwendet werden |
+
+| Befund | Führt zu |
+|---|---|
+| Nur ein Kontakt mit Basislinie und Transitboden auf seiner Seite des Flips beobachtet (§9) | limited |
+| Kein Kontakt beobachtet | not usable |
+| Weniger als 10 Basislinienpunkte jenseits eines Kontakts | usable |
+| Nachweis unter 7 Sigma | usable |
+| Rotrausch-Beta über 1,5 / über 2,0 | usable / limited |
+| Die Tiefe hängt von der Blende ab, oder eine größere Blende nähme einen anderen Stern auf (§10) | limited |
+| Die Tiefe ändert sich um mehr als ihren eigenen Balken, wenn ein vom BIC zugelassener Detrending-Term weggelassen wird | limited |
+| Ein Detrending-Term, den nur der Zielstern zeigt | usable |
+| Mittenzeit oder Dauer am Rand des Ephemeridenfensters | limited |
+| Flip im Transit, und die Daten können das Modell nicht / doch wählen | limited / usable |
+| Zielstern gesättigt / über 80 % des Clip-Niveaus | limited / usable |
+| Ein / zwei Vergleichssterne | limited / usable |
+| Viele Frames nicht messbar | limited |
+| Zeiten nicht in BJD_TDB | limited |
+| HOPS-Modus auf angenommener Bahn | limited |
+| Keine Bahn verfügbar (keine im Archiv, oder blinde Suche), Rp/R★ mit angenommenem Impaktparameter | usable |
+
+**Die Note ist der schwerste Befund, nie eine Summe.** Ein fehlender Austritt wird nicht durch fünf bestandene Prüfungen aufgewogen, und eine Prozentzahl würde eine Genauigkeit behaupten, die es hier nicht gibt. Jeder Befund sagt, was er betrifft — ein Teiltransit die Mittenzeit, ein Seeing-Term die Tiefe —, sodass auch eine Nacht mit *limited* meist eine verwertbare Zahl hat.
+
+**Der Literaturwert geht nicht in die Note ein.** Eine Note, die Übereinstimmung mit der Literatur belohnt, misst die Erwartung, nicht die Nacht; der Abstand zum Archivwert steht neben dem Ergebnis, mehr nicht.
+
+Beide Testnächte dieser Version kommen auf *limited*, aus den Gründen, die von Hand gefunden wurden: HAT-P-25 b wegen des nicht beobachteten Austritts und weil die Tiefe mit dem Seeing-Term 1,77 % liest und ohne ihn 1,56 % (das 1,3-Fache ihres Balkens); Qatar-4 b wegen des nicht beobachteten Eintritts. In der Simulation bekommen 60 von 60 sauberen Volltransits bei weißem Rauschen *good*; bei stark korreliertem Rauschen (AR(1), ρ = 0,8) 29 von 60 *limited*, 21 *usable* und 10 *good*.
 
 Alles landet in einem Ordner `lightcurve/` neben deinen Subs:
 

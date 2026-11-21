@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.8.2** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.8.3** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.8.2](#17-whats-new-in-182)
+17. [What's New in 1.8.3](#17-whats-new-in-183)
 
 ---
 
@@ -951,7 +951,11 @@ No. Everything is written under `Stacked/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.8.2
+## 17. What's New in 1.8.3
+
+**A bias from another camera is not used.** The first bias set in the Library was taken whichever camera shot it. On the first M 1 run the old camera's 3008×3008 bias met the 6252×4176 lights, and Siril refused every channel (*images must have the same size*), so the run ended without a single master. A bias now has to match the lights by the same rule as a dark — camera, gain, binning, size and temperature, only the exposure does not count — and sets that do not are named in the Log and left out.
+
+## What was new in 1.8.2
 
 **N.I.N.A.'s filter names, as the header carries them.** The header holds the filter's name in N.I.N.A.'s filter wheel, and that need not be NINA-PM's: on the SFRO2 rig the wheel says `S`, `H` and `Oiii` where NINA-PM says SII, HA and OIII. A bare `S` or `H` names no emission line, so the M 1 export would have been stacked as two filters without a role — RGB proposed instead of SHO, the 3 nm bandwidths reaching no channel, and every SII and HA light logged as a disagreement. The export now carries N.I.N.A.'s name (`ninaName` in the filter list, `ninaFilter` on lights and flat sets); that name gets the NINA-PM filter's role, and a header that matches it is no disagreement. The filter keeps its header name in the table and in the file names.
 

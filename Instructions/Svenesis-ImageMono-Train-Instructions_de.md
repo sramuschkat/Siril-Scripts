@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.8.2** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.8.3** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.8.2](#17-neu-in-182)
+17. [Neu in 1.8.3](#17-neu-in-183)
 
 ---
 
@@ -951,7 +951,11 @@ Nein. Alles wird unter `Stacked/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.8.2
+## 17. Neu in 1.8.3
+
+**Ein Bias einer anderen Kamera wird nicht verwendet.** Genommen wurde der erste Bias-Satz der Library, egal welche Kamera ihn aufgenommen hatte. Beim ersten M 1-Lauf traf der 3008×3008-Bias der alten Kamera auf die 6252×4176-Lights, Siril lehnte jeden Kanal ab (*Bilder müssen die gleiche Größe haben*), und der Lauf endete ohne einen einzigen Master. Ein Bias muss jetzt nach derselben Regel wie ein Dark zu den Lights passen — Kamera, Gain, Binning, Größe und Temperatur, nur die Belichtung zählt nicht —, und Sätze, die das nicht tun, werden im Log genannt und weggelassen.
+
+## Was neu war in 1.8.2
 
 **N.I.N.A.s Filternamen, wie der Header sie trägt.** Im Header steht der Name des Filters im Filterrad von N.I.N.A., und der muss nicht der von NINA-PM sein: An der SFRO2-Rig heißen die Filter dort `S`, `H` und `Oiii`, in NINA-PM SII, HA und OIII. Ein bloßes `S` oder `H` nennt keine Emissionslinie, also wäre der M 1-Export als zwei Filter ohne Rolle gestackt worden — RGB statt SHO vorgeschlagen, die 3-nm-Bandbreiten bei keinem Kanal angekommen und jedes SII- und HA-Light als Widerspruch im Log. Der Export nennt jetzt N.I.N.A.s Namen (`ninaName` in der Filterliste, `ninaFilter` bei Lights und Flat-Sätzen); dieser Name bekommt die Rolle des NINA-PM-Filters, und ein Header, der ihm entspricht, ist kein Widerspruch. In der Tabelle und in den Dateinamen behält der Filter seinen Header-Namen.
 

@@ -497,7 +497,7 @@ Reads the current plate-solved image from Siril, identifies the main astronomica
 
 ## Svenesis LightCurve
 
-**File:** `Svenesis-LightCurve.py` (v1.0.18) — **[Detailed Instructions](Instructions/Svenesis-LightCurve-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-LightCurve-Instructions_de.md)**
+**File:** `Svenesis-LightCurve.py` (v1.0.19) — **[Detailed Instructions](Instructions/Svenesis-LightCurve-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-LightCurve-Instructions_de.md)**
 
 Exoplanet transit photometry inside Siril, in the spirit of [EXOTIC](https://github.com/rzellem/EXOTIC) (NASA's Exoplanet Watch pipeline) and [HOPS](https://github.com/ExoWorldsSpies/hops) — and tested against EXOTIC on its own sample data, with matching results. Point it at the folder holding one night's sub-exposures of an exoplanet host star. It measures how that star's brightness changed relative to other stars in the same field, removes the systematic trends it can account for, fits a transit — and tells you whether the dip is real.
 
@@ -649,7 +649,7 @@ Reads the current image from Siril, divides it into a configurable grid of tiles
 
 ## Svenesis ImageMono Train
 
-**File:** `Svenesis-ImageMono-Train.py` (v1.8.2) — **[Detailed Instructions](Instructions/Svenesis-ImageMono-Train-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-ImageMono-Train-Instructions_de.md)**
+**File:** `Svenesis-ImageMono-Train.py` (v1.8.3) — **[Detailed Instructions](Instructions/Svenesis-ImageMono-Train-Instructions.md)** · **[Deutsche Anleitung](Instructions/Svenesis-ImageMono-Train-Instructions_de.md)**
 
 > ⚠️ Public preview — not yet submitted to the official Siril Script Repository.
 

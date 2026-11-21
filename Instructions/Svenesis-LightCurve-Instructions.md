@@ -1,6 +1,6 @@
 # Svenesis LightCurve — User Instructions
 
-**Version 1.0.18** | Siril Python Script for Exoplanet Transit Photometry
+**Version 1.0.19** | Siril Python Script for Exoplanet Transit Photometry
 
 > *A folder of sub-exposures in, a light curve out — and an honest answer to the only question that matters: is there a transit in it?*
 
@@ -700,6 +700,44 @@ Nothing is sent anywhere. Submitting is your decision — the file just stops th
 ---
 
 ## 11. Reading the Output
+
+### The verdict comes first (v1.0.19)
+
+Every run ends with one statement of how good it was, at the top of the **Result** tab and the report, as the last lines of the log, and with its grade in the plot's title. It answers two questions apart, because a night can detect a transit at 20 sigma and still measure it badly.
+
+**Detection** — is there a transit — is the significance against its calibrated floor (§10). **Measurement** — can the depth and the mid-time be used — is graded from what the run found out about itself:
+
+| Grade | Means |
+|---|---|
+| **good** | Depth and mid-time can be used with their error bars |
+| **usable** | They can be used; the findings listed are worth knowing |
+| **limited** | At least one result is not covered by its error bar; each finding says which |
+| **not usable** | The numbers should not be used |
+
+| Finding | Grade it leads to |
+|---|---|
+| Only one contact observed with a baseline and a floor on its own side of the flip (§9) | limited |
+| Neither contact observed | not usable |
+| Fewer than 10 baseline points beyond a contact | usable |
+| Detected below 7 sigma | usable |
+| Red-noise beta above 1.5 / above 2.0 | usable / limited |
+| The depth depends on the aperture, or a larger aperture would take in another star (§10) | limited |
+| The depth moves by more than its own bar when a detrending term the BIC admitted is left out | limited |
+| A detrending term seen in the target only | usable |
+| Mid-time or duration at the edge of the ephemeris window | limited |
+| Flip inside the transit, and the data cannot choose the model / can | limited / usable |
+| Target saturated / above 80 % of the clip level | limited / usable |
+| One / two comparison stars | limited / usable |
+| Many frames unmeasured | limited |
+| Times not BJD_TDB | limited |
+| HOPS mode on an assumed orbit | limited |
+| No orbit available (none in the archive, or a blind search), so Rp/R★ uses an assumed impact parameter | usable |
+
+**The grade is the weightiest finding, never a sum.** A missing egress is not bought back by five checks that passed, and a percentage would claim a precision this has not got. Each finding says what it affects — a partial transit limits the mid-time, a seeing term the depth — so a *limited* night usually still has one number worth using.
+
+**The published value is not part of the grade.** A grade that rewards agreement with the literature measures the expectation, not the night; the distance from the archive's value is printed beside the result, and that is all it does.
+
+Both test nights of this version come out *limited*, for the reasons found by hand: HAT-P-25 b for its unobserved egress and because its depth reads 1.77 % with the seeing term and 1.56 % without (1.3 of its bar); Qatar-4 b for its unobserved ingress. Simulated, 60 of 60 clean full transits on white noise grade *good*; under strongly correlated noise (AR(1), ρ = 0.8) 29 of 60 grade *limited*, 21 *usable* and 10 *good*.
 
 Everything lands in a `lightcurve/` folder next to your subs:
 

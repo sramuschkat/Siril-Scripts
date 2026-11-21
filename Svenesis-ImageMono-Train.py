@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.8.2
+Script Version: 1.8.3
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -76,7 +76,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.8.2
+# Script Version: 1.8.3
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -100,6 +100,17 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.8.3 - A bias has to fit the lights
+      - A BIAS FROM ANOTHER CAMERA IS NOT USED.  The first bias set found
+        was taken, whichever camera shot it.  On the first M 1 run the
+        library's 3008x3008 IMX533 bias met the 6252x4176 Poseidon lights
+        -- with no 600s dark, the bias is what reaches the lights -- and
+        Siril refused all three channels ("images must have the same
+        size"), so the run ended with no master at all.  A bias set now has
+        to match at least one filter's lights by the rule the darks follow
+        (camera, gain, binning, size, temperature; not exposure).  Sets
+        that do not are counted in the log and left out.
+
 1.8.2 - N.I.N.A.'s filter names, as the header carries them
       - THE HEADER'S FILTER NAME GETS ITS ROLE FROM NINA-PM.  On the SFRO2
         rig the filter wheel calls the filters "S", "H" and "Oiii", which
@@ -806,7 +817,7 @@ from PyQt6.QtGui import QColor, QDesktopServices, QPalette
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.8.2"
+VERSION = "1.8.3"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -2414,6 +2425,25 @@ def _signature_matches(master: dict, target: dict) -> bool:
         if abs(float(mt) - float(tt)) > CALIB_TEMP_TOLERANCE_C:
             return False
     return True
+
+
+def _bias_fits(bias: dict, lights: list) -> bool:
+    """True if a bias set may be subtracted from at least one of `lights`.
+
+    The rule `_signature_matches` applies to darks, without the exposure: a
+    bias is a zero-length frame whatever its EXPTIME says.  Without this
+    the first bias set found was used, whichever camera took it -- on the
+    first SFRO2 run a 3008x3008 IMX533 bias from the library met the
+    6252x4176 Poseidon lights, and Siril refused every channel with
+    "images must have the same size".  No light information at all means
+    nothing can be judged, and the bias is not refused for it.
+    """
+    infos = [li for li in lights if li]
+    if not infos:
+        return True
+    probe = dict(bias or {}, exp_s=None)
+    return any(_signature_matches(probe, dict(li, exp_s=None))
+               for li in infos)
 
 
 # Above this the channels are not describing the same sky pixel any
@@ -5030,12 +5060,21 @@ class StackWorker(QThread):
                        "darks and bias off it does not reach the lights.",
                        LogColor.BLUE)
         if groups:
-            key = sorted(groups, key=_sig_sort_key)[0]
-            if len(groups) > 1:
+            lights = [g.get("info") or {} for g in self._groups.values()]
+            fitting = [k for k in sorted(groups, key=_sig_sort_key)
+                       if _bias_fits(groups[k].get("info") or {}, lights)]
+            if len(fitting) < len(groups):
                 self._emit(
-                    f"  bias: {len(groups)} sets found, using the first.",
+                    f"  bias: {len(groups) - len(fitting)} of {len(groups)} "
+                    "set(s) do not match the lights (camera, gain, "
+                    "temperature or size) — not used.", LogColor.SALMON)
+            if len(fitting) > 1:
+                self._emit(
+                    f"  bias: {len(fitting)} sets match, using the first.",
                     LogColor.SALMON)
-            grp = groups[key]
+            groups = {k: groups[k] for k in fitting}
+        if groups:
+            grp = groups[next(iter(groups))]
             self._masters[KIND_BIAS] = self._stack_calib_group(
                 KIND_BIAS, grp, self._master_name(KIND_BIAS, grp["info"]))
 

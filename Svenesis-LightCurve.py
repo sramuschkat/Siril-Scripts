@@ -1,6 +1,6 @@
 """
 Svenesis LightCurve
-Script Version: 1.0.18
+Script Version: 1.0.19
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -92,6 +92,36 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.0.19 - A verdict: detection and measurement, graded apart
+      - Every run ends with one line that says how good it was, and
+        why.  DETECTION is the significance against its floor, as
+        before.  MEASUREMENT is new as a statement: good, usable,
+        limited or not usable, from what the run found out about
+        itself -- which contacts are observed with a baseline and a
+        floor, correlated noise, whether the depth moved with the
+        aperture or with a detrending term, a fit at the edge of its
+        window, a flip inside the transit, a target near the clip
+        level, too few comparison stars, frames lost, times that are
+        not BJD_TDB, an orbit that had to be assumed.
+      - The grade is the WEIGHTIEST finding, not a sum: a missing
+        egress is not bought back by five checks that passed.  Each
+        finding says what it affects.  The published value is not
+        part of the grade -- agreement with the literature would
+        measure the expectation, not the night.
+      - New for it: the depth with and without the bases the BIC
+        admitted.  A depth that moves by more than its own bar when
+        such a term is left out depends on the model; on HAT-P-25 b
+        it is 1.77 % with the seeing term and 1.56 % without, 1.3 of
+        its bar, where the two fit modes had differed by exactly that.
+      - Both test nights come out "limited", for what was found by
+        hand: HAT-P-25 b for its unobserved egress and the seeing
+        term, Qatar-4 b for its unobserved ingress.  Simulated, 60 of
+        60 clean full transits on white noise grade "good"; under
+        strongly correlated noise (AR(1), rho 0.8) 29 of 60 grade
+        "limited", 21 "usable" and 10 "good".
+      - The verdict heads the Result tab and the report, ends the log,
+        and its grade is in the plot's title and the AAVSO file's
+        comment.  Nothing in the fit changes.
 1.0.18 - The form becomes a checklist
       - The left panel asked for some thirty things, and the frames
         answer most of them.  It is now three steps: choose the
@@ -772,7 +802,7 @@ from matplotlib.ticker import FuncFormatter
 
 from sirilpy import LogColor
 
-VERSION = "1.0.18"
+VERSION = "1.0.19"
 
 # The full manual on GitHub, linked from the help dialog.  The in-app
 # tabs are the quick reference; the manual carries the measurements
@@ -13404,6 +13434,30 @@ class LightCurveWorker(QThread):
             fit["partial"] = partial
             fit["aperture_stability"] = getattr(self, "_aper_stability",
                                                 None)
+            # For the verdict at the end: which contacts the FITTED
+            # transit has inside the run, and what the depth would be
+            # without the bases the BIC admitted.
+            try:
+                _cov, _cdet = contact_coverage(
+                    jd, float(fit["t0"]), float(fit["duration_d"]),
+                    side=bases.get("flip"))
+                fit["coverage"] = dict(_cdet, state=_cov)
+            except Exception as exc:               # noqa: BLE001
+                _log_swallowed(exc)
+            _extra = sorted(k for k in fit.get("bases") or []
+                            if k not in always)
+            if _extra and fit.get("detected"):
+                _plain = fit_transit(jd, mag, bases=always, u1=u1_fit,
+                                     u2=u2_fit, err=err_fit, anchor=anchor)
+                if _plain is not None:
+                    fit["basis_depth"] = {
+                        "names": _extra,
+                        "with_mmag": float(fit["depth_mmag"]),
+                        "without_mmag": float(_plain["depth_mmag"]),
+                        "with_pct": fit.get("depth_rprs2_pct"),
+                        "without_pct": _plain.get("depth_rprs2_pct"),
+                        "sigma_mmag": float(fit["depth_sigma_mmag"]),
+                    }
             if partial:
                 # The duration was held on purpose; that it sits where it
                 # was put is no finding.
@@ -13683,6 +13737,31 @@ class LightCurveWorker(QThread):
         }
         result["site_lat_deg"] = self.opts.get("site_lat_deg")
         result["site_lon_deg"] = self.opts.get("site_lon_deg")
+        _cal = str(getattr(self, "_calib_note", "") or "")
+        quality = measurement_quality(fit, {
+            "time_system": time_system,
+            "n_comps": len(comps_report),
+            "target_headroom": getattr(self, "_target_headroom",
+                                       float("nan")),
+            "target_saturated": bool(target_saturated),
+            "yield_severity": severity, "yield_note": yield_note,
+            "anchored": bool(fit.get("anchored")) if fit else None,
+            # Only what this script knows: it applied masters or it did
+            # not.  Frames calibrated elsewhere are not its to judge.
+            "calibrated": (True if "=" in _cal else None),
+        })
+        result["quality"] = quality
+        self._emit("  VERDICT — " + quality["headline"],
+                   {"good": LogColor.GREEN, "usable": LogColor.GREEN,
+                    "limited": LogColor.SALMON,
+                    "not usable": LogColor.RED}.get(quality["grade"],
+                                                    LogColor.SALMON))
+        for _sev, _text in quality["reasons"]:
+            self._emit("    " + ("•" if _sev < 2 else "▲") + " " + _text,
+                       LogColor.RED if _sev >= 3 else
+                       LogColor.SALMON if _sev == 2 else LogColor.BLUE)
+        for _text in quality["notes"]:
+            self._emit("    – " + _text, LogColor.BLUE)
         self._write_csv(result)
         self._write_field_image(result)
         if self.opts.get("write_aavso", True):
@@ -14034,6 +14113,10 @@ class LightCurveWorker(QThread):
                          + (f"; PARTIAL transit ({fit['partial']} only), "
                             "duration held at the archive's"
                             if fit and fit.get("partial") else "")
+                         + (f"; measurement graded {r['quality']['grade']} "
+                            f"by the script ({len(r['quality']['reasons'])} "
+                            "finding(s), see the report)"
+                            if (r.get("quality") or {}).get("grade") else "")
                          + "\n")
                 fh.write("#DATE,DIFF,ERR,DETREND_1"
                          + (",DETREND_2" if trend is not None else "") + "\n")
@@ -15951,6 +16034,11 @@ class LightCurvePlot(FigureCanvas):
         head = (f"{os.path.basename(r['folder'])}  ·  "
                 f"RMS {r['rms_mmag']:.2f} mmag  ·  "
                 f"{len(r['comps'])} comparison stars")
+        q = r.get("quality") or {}
+        if q.get("grade"):
+            head += f"  ·  measurement: {q['grade']}"
+        elif q.get("detection") == "not detected":
+            head += "  ·  no transit claimed"
         if r.get("title_bits"):
             head = f"{r['title_bits']}\n{head}"
         ax.set_title(head, fontsize=10)
@@ -15997,6 +16085,250 @@ class LightCurvePlot(FigureCanvas):
             return True
         except Exception:
             return False
+
+
+# ---------------------------------------------------------------------------
+# How good is the measurement
+# ---------------------------------------------------------------------------
+# Two questions, answered apart.  DETECTION -- is there a transit -- is
+# the significance against its calibrated floor.  MEASUREMENT -- can the
+# depth and the mid-time be used -- is everything the run found out
+# about itself along the way: coverage, correlated noise, whether the
+# depth moved with the aperture or with a detrending term, a fit at its
+# bounds.  A night can detect at 20 sigma and still measure badly.
+#
+# The grade is the WEIGHTIEST finding, never a sum: a missing egress is
+# not bought back by five checks that passed.  The published value is
+# not part of it -- a grade that rewards agreement with the literature
+# measures the expectation, not the night.
+QUALITY_GRADES = ("good", "usable", "limited", "not usable")
+QUALITY_MEANING = {
+    "good": "depth and mid-time can be used with their error bars",
+    "usable": "depth and mid-time can be used; the points below are "
+              "worth knowing",
+    "limited": "at least one result is not covered by its error bar; "
+               "each finding says which",
+    "not usable": "the numbers should not be used",
+}
+# Detected, but close to the floor.
+QUALITY_COMFORT_SIGMA = 7.0
+# Red-noise beta: above the first the bars are being stretched; above
+# the second they are known to stay too small (measured on AR(1) noise:
+# rho 0.5 reads 1.6, rho 0.8 reads 2.6 and leaves the bars 1.7x short).
+QUALITY_BETA_NOTE = 1.5
+QUALITY_BETA_LIMIT = 2.0
+# A depth that moves by more than this many of its own bars when a
+# detrending term is left out depends on the model, not on the data.
+QUALITY_MODEL_SIGMA = 1.0
+# Baseline points beyond a contact (PARTIAL_MIN_POINTS is the floor for
+# calling the contact observed at all).
+QUALITY_MIN_BASELINE = 10
+QUALITY_MIN_COMPS = 3
+
+
+def measurement_quality(fit, ctx=None) -> dict:
+    """The run's verdict on itself: ``{"detection", "grade", "headline",
+    "meaning", "reasons", "notes"}``.
+
+    ``detection`` is ``"detected"``, ``"not detected"`` or ``"no fit"``;
+    only a detected transit has a ``grade`` (one of `QUALITY_GRADES`).
+    ``reasons`` lists ``(severity, text)`` with severity 1 (worth
+    knowing), 2 (a result is not covered by its bar) or 3 (do not use),
+    weightiest first; the grade is the largest severity.  ``notes`` are
+    statements without a deduction.  Every text names what it affects.
+
+    ``ctx`` carries what is not in the fit: ``time_system``, ``n_comps``,
+    ``target_headroom`` (peak over clip level), ``target_saturated``,
+    ``yield_severity``, ``yield_note``, ``anchored`` (bool),
+    ``calibrated`` (bool or None).
+    """
+    ctx = dict(ctx or {})
+    out = {"detection": "no fit", "grade": None, "headline": "",
+           "meaning": "", "reasons": [], "notes": []}
+    if not fit:
+        out["headline"] = ("No fit was possible: too few usable points "
+                           "for a transit and a baseline.")
+        return out
+    sig = float(fit.get("significance") or 0.0)
+    if not fit.get("detected"):
+        out["detection"] = "not detected"
+        out["headline"] = (f"No transit claimed: {sig:.1f} sigma against a "
+                           f"floor of {MIN_DETECTION_SIGMA:.1f}. There is "
+                           "no measurement to grade.")
+        return out
+    out["detection"] = "detected"
+    found = []
+
+    def add(severity, text):
+        found.append((int(severity), str(text)))
+
+    # -- coverage
+    partial = fit.get("partial")
+    cov = fit.get("coverage") or {}
+    if partial in ("ingress", "egress"):
+        add(2, f"Partial transit: only the {partial} is observed with a "
+               "baseline and a floor on its own side. The duration is the "
+               "archive's, not measured; the mid-time rests on one "
+               "contact and the depth on one baseline.")
+    elif partial == "none":
+        add(3, "Neither contact is observed with a baseline and a floor: "
+               "depth and mid-time rest on the model, not on the data.")
+    elif cov:
+        pre, post = int(cov.get("pre", 0)), int(cov.get("post", 0))
+        state = cov.get("state")
+        if state in ("ingress", "egress", "none"):
+            add(2, "The fitted transit has "
+                   + ("neither contact" if state == "none"
+                      else f"only its {state}")
+                   + f" inside the run with a baseline ({pre} point(s) "
+                   f"before ingress, {post} after egress): duration and "
+                   "mid-time are weakly held.")
+        elif min(pre, post) < QUALITY_MIN_BASELINE:
+            add(1, f"Short baseline: {pre} point(s) before ingress and "
+                   f"{post} after egress. The slope under the transit, "
+                   "and with it the depth, is held by few points.")
+
+    # -- a detection close to its floor
+    if sig < QUALITY_COMFORT_SIGMA:
+        add(1, f"Detected at {sig:.1f} sigma, not far above the floor of "
+               f"{MIN_DETECTION_SIGMA:.1f}: the depth is known to about "
+               f"one part in {max(sig, 1.0):.0f}.")
+
+    # -- correlated noise
+    beta = float(fit.get("red_noise_beta") or 1.0)
+    if beta > QUALITY_BETA_LIMIT:
+        add(2, f"Strongly correlated noise (red-noise beta {beta:.2f}): "
+               "the bars are scaled by it, and at this level they are "
+               "measured to stay too small by up to a factor 1.7.")
+    elif beta > QUALITY_BETA_NOTE:
+        add(1, f"Correlated noise (red-noise beta {beta:.2f}): the bars "
+               "are scaled by it and may still be somewhat small.")
+
+    # -- the aperture
+    stab = fit.get("aperture_stability") or {}
+    if stab.get("verdict") in ("unstable", "crowded"):
+        add(2, "The depth depends on the aperture: "
+               f"{float(stab.get('lo', 0)):.2f}–{float(stab.get('hi', 0)):.2f} "
+               f"{stab.get('unit', '%')} across the radii"
+               + (", and a larger radius would take in another star"
+                  if stab.get("verdict") == "crowded" else "")
+               + ". That range, not the bar, is what the depth is known "
+                 "to.")
+    elif stab.get("verdict") == "moved":
+        out["notes"].append(
+            f"The aperture was enlarged from {float(stab['picked']):.2f} to "
+            f"{float(stab['used']):.2f} px because the depth still depended "
+            "on the radius; at the radius used it no longer does.")
+
+    # -- the detrending model
+    bd = fit.get("basis_depth") or {}
+    target_only = [str(c.get("name")) for c in (fit.get("comp_share") or [])
+                   if c.get("verdict") == "target-only"]
+    try:
+        shift = abs(float(bd["with_mmag"]) - float(bd["without_mmag"]))
+        bar = float(bd["sigma_mmag"])
+    except (KeyError, TypeError, ValueError):
+        shift, bar = 0.0, 0.0
+    if bar > 0 and shift > QUALITY_MODEL_SIGMA * bar:
+        names = "+".join(bd.get("names") or []) or "extra"
+        unit = "%" if bd.get("with_pct") is not None \
+            and bd.get("without_pct") is not None else "mmag"
+        a, b = ((bd["with_pct"], bd["without_pct"]) if unit == "%"
+                else (bd["with_mmag"], bd["without_mmag"]))
+        add(2, f"The depth depends on the detrending model: {float(a):.2f} "
+               f"{unit} with the {names} term, {float(b):.2f} {unit} "
+               f"without it — {shift / bar:.1f} of its error bar. The "
+               "depth is known to that range.")
+    elif target_only:
+        add(1, "The " + "+".join(target_only) + " term is seen in the "
+               "target only, not in the comparison stars: it may be "
+               "fitting part of the transit.")
+
+    # -- the fit at its bounds
+    if fit.get("t0_at_bound") or fit.get("duration_at_bound"):
+        what = " and ".join(w for w, on in (
+            ("mid-time", fit.get("t0_at_bound")),
+            ("duration", fit.get("duration_at_bound"))) if on)
+        add(2, f"The {what} came out at the edge of what the ephemeris "
+               "allows: the data ask for a value outside the window, and "
+               "the bar of a pinned parameter means nothing.")
+
+    # -- the flip
+    if fit.get("depth_spread"):
+        ds = fit["depth_spread"]
+        add(2, "The meridian flip sits inside the transit and the data "
+               f"cannot choose the model: (Rp/R*)² is {float(ds['lo']):.2f}–"
+               f"{float(ds['hi']):.2f} % depending on the flip step.")
+    elif fit.get("flip_step_dbic") is not None:
+        add(1, "The meridian flip sits inside the transit: the depth is "
+               "measured on one side of it only.")
+
+    # -- the target on the sensor
+    if ctx.get("target_saturated"):
+        add(2, "The target is saturated on the reference frame: its core "
+               "no longer scales with the flux, and the depth is not "
+               "trustworthy.")
+    else:
+        try:
+            head = float(ctx.get("target_headroom"))
+        except (TypeError, ValueError):
+            head = float("nan")
+        if math.isfinite(head) and head >= TARGET_LINEAR_HEADROOM:
+            add(1, f"The target peaks at {100 * head:.0f} % of the clip "
+                   "level, in the range where a CMOS sensor is no longer "
+                   "linear: the depth carries an error of unknown sign.")
+
+    # -- the ensemble
+    try:
+        n_comps = int(ctx.get("n_comps"))
+    except (TypeError, ValueError):
+        n_comps = None
+    if n_comps is not None and n_comps < 2:
+        add(2, "One comparison star: its own variability goes straight "
+               "into the light curve, and nothing can check it.")
+    elif n_comps is not None and n_comps < QUALITY_MIN_COMPS:
+        add(1, f"Only {n_comps} comparison stars: a slow change in either "
+               "cannot be told from the target's.")
+
+    # -- frames lost
+    if ctx.get("yield_severity") == "bad":
+        add(2, "Many frames could not be measured: "
+               + str(ctx.get("yield_note") or "").strip())
+
+    # -- times
+    ts = str(ctx.get("time_system") or "")
+    if ts and ts != "BJD_TDB":
+        add(2, f"The times are {ts}, not BJD_TDB: the mid-time cannot be "
+               "compared with an ephemeris (up to 8 minutes apart) and "
+               "should not be submitted as a timing.")
+
+    # -- the geometry behind Rp/R*
+    hops = fit.get("hops") or {}
+    if hops.get("geom_assumed"):
+        add(2, "HOPS mode ran on an assumed central transit: Rp/R* is low "
+               "by the unknown impact parameter (up to 19 % at b = 0.85), "
+               "outside its bar. The mid-time is not affected.")
+    elif fit.get("impact_b_source") == "grid" and fit.get("mode") != "hops":
+        add(1, "No orbit (a/R* and inclination) was available for this "
+               "fit: Rp/R* is converted from the depth with an assumed "
+               "impact parameter (its bar includes that); the depth "
+               "itself is not affected.")
+
+    if ctx.get("anchored") is False:
+        out["notes"].append("No ephemeris was used: the transit was "
+                            "searched blind, and no O−C can be given.")
+    if ctx.get("calibrated") is False:
+        out["notes"].append("The frames were measured without flat or "
+                            "dark calibration by this script.")
+
+    order = sorted(range(len(found)), key=lambda i: (-found[i][0], i))
+    out["reasons"] = [found[i] for i in order]
+    worst = max((sv for sv, _t in found), default=0)
+    out["grade"] = QUALITY_GRADES[min(worst, len(QUALITY_GRADES) - 1)]
+    out["meaning"] = QUALITY_MEANING[out["grade"]]
+    out["headline"] = (f"Transit detected at {sig:.1f} sigma. Measurement: "
+                       f"{out['grade']} — {out['meaning']}.")
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -17756,6 +18088,26 @@ class SvenesisLightCurveWindow(QMainWindow):
         p = [f'<div style="font-family:\'{fixed_font_family()}\';'
              'font-size:9pt;color:#dddddd">']
         p.append(f"<h3 style='color:#88aaff'>{os.path.basename(r['folder'])}</h3>")
+        q = r.get("quality") or {}
+        if q.get("headline"):
+            tint = {"good": "#88cc88", "usable": "#b0cc88",
+                    "limited": "#e0b060", "not usable": "#e08080"}.get(
+                        q.get("grade"), "#ddaa88")
+            p.append("<b>Verdict</b><br>")
+            p.append(f"&nbsp;<span style='color:{tint}'>"
+                     + _html_text(q["headline"]).replace("sigma", "σ")
+                     + "</span><br>")
+            for sev, text in q.get("reasons") or []:
+                p.append("&nbsp;<span style='color:"
+                         + ("#e08080" if sev >= 3 else
+                            "#e0b060" if sev == 2 else "#bbbbbb")
+                         + "'>" + ("▲ " if sev >= 2 else "• ")
+                         + _html_text(text).replace("sigma", "σ")
+                         + "</span><br>")
+            for text in q.get("notes") or []:
+                p.append("&nbsp;<span style='color:#888888'>– "
+                         + _html_text(text) + "</span><br>")
+            p.append("<br>")
         p.append("<b>Photometry</b><br>")
         p.append(f"&nbsp;{r['n_points']} of {r['n_files']} frames measured<br>")
         p.append(f"&nbsp;target at ({r['target_xy'][0]:.1f}, "
@@ -17949,6 +18301,14 @@ class SvenesisLightCurveWindow(QMainWindow):
         A(f"Svenesis LightCurve {VERSION} — light curve report")
         A(f"Generated {datetime.datetime.now().isoformat(timespec='seconds')}")
         A("")
+        q = r.get("quality") or {}
+        if q.get("headline"):
+            A(f"Verdict           {q['headline']}")
+            for sev, text in q.get("reasons") or []:
+                A(f"   {'(!)' if sev >= 2 else '( )'} {text}")
+            for text in q.get("notes") or []:
+                A(f"    -  {text}")
+            A("")
         A(f"Folder            {r['folder']}")
         A(f"Calibration       {r.get('calib_note') or 'not recorded'}")
         A(f"Frames            {r['n_points']} measured of {r['n_files']} found")

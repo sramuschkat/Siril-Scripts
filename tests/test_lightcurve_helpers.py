@@ -5735,8 +5735,85 @@ check('QGroupBox("2 · What the frames say")' in _ui18 and "self._build_expert_g
 _rp18 = src[src.index("    def _build_right_panel(self)"):src.index("    # -- behaviour")]
 check("self.chk_errbars = QCheckBox(" in _rp18 and "self.spin_bins = QSpinBox()" in _rp18,
       "error bars and binning sit above the plot they change")
-check('VERSION = "1.0.18"' in src and "1.0.18 - The form becomes a checklist" in src,
-      "version 1.0.18 with its changelog entry")
+check("1.0.18 - The form becomes a checklist" in src, "the 1.0.18 changelog entry stays")
+
+print("\n9w) 1.0.19: a verdict — detection and measurement, graded apart")
+_mq = ns["measurement_quality"]
+_good = {"detected": True, "significance": 14.2, "red_noise_beta": 1.0, "partial": None,
+         "coverage": {"state": "both", "pre": 40, "post": 35, "floor_in": 60, "floor_out": 60},
+         "aperture_stability": {"verdict": "stable"}, "impact_b_source": "archive"}
+_ctx = {"time_system": "BJD_TDB", "n_comps": 5, "target_headroom": 0.55, "target_saturated": False, "anchored": True}
+def _g(fit_changes=None, ctx_changes=None):
+    return _mq(dict(_good, **(fit_changes or {})), dict(_ctx, **(ctx_changes or {})))
+_q = _g()
+check(_q["detection"] == "detected" and _q["grade"] == "good" and _q["reasons"] == [] and _q["notes"] == []
+      and _q["headline"] == "Transit detected at 14.2 sigma. Measurement: good — depth and mid-time can be used with their error bars.",
+      "a full transit with nothing found against it: detected, and the measurement is good")
+check(_mq(None)["detection"] == "no fit" and _mq(None)["grade"] is None
+      and _mq({"detected": False, "significance": 2.9})["detection"] == "not detected"
+      and _mq({"detected": False, "significance": 2.9})["grade"] is None
+      and "no measurement to grade" in _mq({"detected": False, "significance": 2.9})["headline"],
+      "no fit and no detection are said as such, and neither gets a grade")
+check(_g({"partial": "ingress"})["grade"] == "limited" and "only the ingress" in _g({"partial": "ingress"})["reasons"][0][1]
+      and _g({"partial": "none"})["grade"] == "not usable"
+      and _g({"coverage": {"state": "both", "pre": 6, "post": 35}})["grade"] == "usable"
+      and _g({"coverage": {"state": "egress", "pre": 2, "post": 35}})["grade"] == "limited",
+      "coverage: one contact limits, none makes the numbers unusable, a short baseline is worth knowing")
+check(_g({"significance": 5.2})["grade"] == "usable" and _g({"red_noise_beta": 1.7})["grade"] == "usable"
+      and _g({"red_noise_beta": 2.4})["grade"] == "limited" and _g({"red_noise_beta": 1.4})["grade"] == "good",
+      "a detection near its floor and moderate red noise are worth knowing; strong red noise limits")
+_un = _g({"aperture_stability": {"verdict": "unstable", "lo": 1.58, "hi": 1.81, "unit": "%"}})
+_mv = _g({"aperture_stability": {"verdict": "moved", "picked": 13.04, "used": 16.30}})
+check(_un["grade"] == "limited" and "1.58–1.81 %" in _un["reasons"][0][1]
+      and _g({"aperture_stability": {"verdict": "crowded", "lo": 1.0, "hi": 1.2, "unit": "%"}})["grade"] == "limited"
+      and _mv["grade"] == "good" and len(_mv["notes"]) == 1 and "13.04 to 16.30 px" in _mv["notes"][0],
+      "a depth that depends on the aperture limits; an aperture the stability test moved is a note, not a deduction")
+_bd = {"names": ["fwhm"], "with_mmag": 23.41, "without_mmag": 20.52, "with_pct": 1.770, "without_pct": 1.5556, "sigma_mmag": 2.22}
+_md = _g({"basis_depth": _bd})
+check(_md["grade"] == "limited" and "1.77 % with the fwhm term, 1.56 % without it — 1.3 of its error bar" in _md["reasons"][0][1]
+      and _g({"basis_depth": dict(_bd, without_mmag=22.5)})["grade"] == "good"
+      and _g({"basis_depth": dict(_bd, without_mmag=22.5), "comp_share": [{"name": "fwhm", "verdict": "target-only"}]})["grade"] == "usable",
+      "HAT-P-25 b's seeing term: 1.77 % with it, 1.56 % without, more than the bar — the depth depends on the model")
+check(_g({"t0_at_bound": True})["grade"] == "limited" and "mid-time" in _g({"t0_at_bound": True})["reasons"][0][1]
+      and _g({"depth_spread": {"lo": 0.9, "hi": 1.4}})["grade"] == "limited" and _g({"flip_step_dbic": 30.0})["grade"] == "usable",
+      "a pinned parameter limits; a flip inside the transit limits when the data cannot choose the model")
+check(_g(None, {"target_saturated": True})["grade"] == "limited" and _g(None, {"target_headroom": 0.86})["grade"] == "usable"
+      and _g(None, {"n_comps": 1})["grade"] == "limited" and _g(None, {"n_comps": 2})["grade"] == "usable"
+      and _g(None, {"yield_severity": "bad", "yield_note": "only 31 % of the frames"})["grade"] == "limited"
+      and _g(None, {"time_system": "JD_UTC"})["grade"] == "limited" and "JD_UTC" in _g(None, {"time_system": "JD_UTC"})["reasons"][0][1],
+      "the sensor, the ensemble, lost frames and the time system each have their say")
+check(_g({"hops": {"geom_assumed": True}, "mode": "hops"})["grade"] == "limited"
+      and _g({"impact_b_source": "grid"})["grade"] == "usable" and _g({"impact_b_source": "grid", "mode": "hops"})["grade"] == "good"
+      and "searched blind" in _g(None, {"anchored": False})["notes"][0] and _g(None, {"anchored": False})["grade"] == "good",
+      "an assumed orbit limits the HOPS radius, an unknown impact parameter is worth knowing, a blind search is only noted")
+_many = _g({"partial": "egress", "significance": 5.5, "red_noise_beta": 1.7, "flip_step_dbic": 30.0}, {"n_comps": 2})
+check(_many["grade"] == "limited" and [sv for sv, _t in _many["reasons"]] == [2, 1, 1, 1, 1]
+      and _g({"partial": "none", "red_noise_beta": 2.5})["grade"] == "not usable"
+      and [sv for sv, _t in _g({"partial": "none", "red_noise_beta": 2.5})["reasons"]] == [3, 2],
+      "the grade is the weightiest finding, listed first — four lesser ones do not add up to a worse grade, and passed checks buy nothing back")
+_mqsrc = src[src.index("def measurement_quality(fit, ctx=None)"):src.index("# The form as a checklist")]
+check("rprs_archive" not in _mqsrc and "ephemeris" not in _mqsrc.replace("the ephemeris\n", "").replace("ephemeris was used", "").replace("an ephemeris", "").replace("the ephemeris \"", "")
+      and "depth_pct" not in _mqsrc and ns["QUALITY_GRADES"] == ("good", "usable", "limited", "not usable")
+      and set(ns["QUALITY_MEANING"]) == set(ns["QUALITY_GRADES"]),
+      "the published value is no input to the grade")
+check('result["quality"] = quality' in src and 'self._emit("  VERDICT — " + quality["headline"],' in src
+      and 'head += f"  ·  measurement: {q[\'grade\']}"' in src and 'p.append("<b>Verdict</b><br>")' in src
+      and "A(f\"Verdict           {q['headline']}\")" in src and "measurement graded {r['quality']['grade']}" in src
+      and 'fit["basis_depth"] = {' in src and 'fit["coverage"] = dict(_cdet, state=_cov)' in src,
+      "the verdict ends the log, heads the Result tab and the report, and its grade is in the plot title and the AAVSO comment")
+_hns["VERSION"], _hns["datetime"] = ns["VERSION"], __import__("datetime")
+_rq = dict(_base_r, quality=_many)
+_txtq = _hns["_report_text"](None, _rq)
+check(_txtq.index("Verdict           Transit detected at 5.5 sigma. Measurement: limited") < _txtq.index("Folder  ")
+      and "   (!) Partial transit: only the egress" in _txtq and "   ( ) Detected at 5.5 sigma" in _txtq
+      and "Verdict" not in _hns["_report_text"](None, _base_r),
+      "the report opens with the verdict and its findings, the weighty ones marked; a result without one prints none")
+_htmlq = _w0._result_html(dict(_rq, quality=dict(_many, notes=["a <note>"])))
+check(_htmlq.index("<b>Verdict</b>") < _htmlq.index("<b>Photometry</b>") and "▲ Partial transit" in _htmlq
+      and "5.5 σ" in _htmlq and "a &lt;note&gt;" in _htmlq and "#e0b060" in _htmlq,
+      "the Result tab opens with the verdict, coloured by its grade, findings escaped")
+check('VERSION = "1.0.19"' in src and "1.0.19 - A verdict: detection and measurement, graded apart" in src,
+      "version 1.0.19 with its changelog entry")
 
 if fails:
     print(f"{len(fails)} FAILURE(S)")
