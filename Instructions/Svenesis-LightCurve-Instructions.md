@@ -1,6 +1,6 @@
 # Svenesis LightCurve — User Instructions
 
-**Version 1.0.17** | Siril Python Script for Exoplanet Transit Photometry
+**Version 1.0.18** | Siril Python Script for Exoplanet Transit Photometry
 
 > *A folder of sub-exposures in, a light curve out — and an honest answer to the only question that matters: is there a transit in it?*
 
@@ -130,7 +130,7 @@ Or point straight at `LIGHT/2026-08-14/LUMINOS/` — then the flats are still fo
 | **Time stamp convention checked** | DATE-OBS is the exposure *start* by convention, and half the exposure is added. A `DATE-AVG` (N.I.N.A.) or `DATE-END` header settles it instead of assuming it: a program that stamps mid-exposure is recognised, its half-exposure is not added, and the log names the stamps the times came from. A `DATE-AVG` more than an exposure plus a minute from `DATE-OBS` is not a mid-exposure stamp and is ignored. The Siril fallback's times (DATE-OBS + EXPTIME/2 by Siril's convention) get the same correction, so both engines land on the same times. A wrong convention is half an exposure on every time, 145 s on 290 s subs |
 | **Frames sequenced by time** | The sequence is built in `DATE-OBS` order, not file-name order. A TOI-4033 run had five frames numbered 43–47 whose timestamps lay 1–3 h before frame 42's; in file order they read as a second meridian flip and a 60 mmag step. A log line says how many frames moved |
 | **Star coordinates measured, not assumed** | Whether Siril's star y is a file row or a flipped one depends on whether the plate solve flipped the reference frame. Since v1.0.12 the script decides this on the reference frame's own pixels after detection (which reading puts the detected stars on stars) and uses the verdict for every aperture seed, the saturation box and the field image. On a TheSkyX set whose solve failed, the old fixed assumption had put every aperture on empty sky |
-| **Site and name from the header, whatever the spelling** | SITELAT/SITELONG written as `+38 55 48.51` are read as degrees, so the altitude-based longitude sign check can flip a west-positive value instead of the form's site silently taking over. A label in front of the designation (`ESPC WASP-12`) is dropped one word at a time until the archive answers, and a retry that fails says so. Since v1.0.13 the **header's site wins** when the frames carry one; the form is the fallback for frames without, or the override when *Use the form's site even when the headers carry one* is ticked in group 5. A form site more than 50 km from the header's is reported either way: airmass and BJD both follow the site in use. A site read from the frames is written into the two fields, overwriting what was there |
+| **Site and name from the header, whatever the spelling** | SITELAT/SITELONG written as `+38 55 48.51` are read as degrees, so the altitude-based longitude sign check can flip a west-positive value instead of the form's site silently taking over. A label in front of the designation (`ESPC WASP-12`) is dropped one word at a time until the archive answers, and a retry that fails says so. Since v1.0.13 the **header's site wins** when the frames carry one; the form is the fallback for frames without, or the override when *Use the form's site even when the headers carry one* is ticked in the Site row. A form site more than 50 km from the header's is reported either way: airmass and BJD both follow the site in use. A site read from the frames is written into the two fields, overwriting what was there |
 | **Duplicate exposures dropped** | A repeated `DATE-OBS` is a copy, not an exposure. Found the hard way: a leftover working folder turned 178 subs into 534, and every duplicate would have entered the curve as an independent point, shrinking every error bar by √3 for nothing. Reported with a count, never silent |
 | **One filter, one exposure** | A filter or exposure change mid-run is *two* series, not a longer one. The largest set is kept and what was set aside is named |
 
@@ -167,10 +167,9 @@ Tick **One-shot-colour sensor (CFA)** for a Bayer camera. Without it the frame i
 
 ## 4. Getting Started
 
-1. **Choose folder** — the folder with your calibrated subs. Ten frames is the bare minimum; a real transit run is hundreds.
-2. **Target star** — leave it on *Brightest* for a first look.
-3. **Site coordinates** — only needed when the frames carry no site (SITELAT/SITELONG); a header site wins unless the checkbox in group 5 forces the form. Without either, the airmass detrend is skipped and the report says so.
-4. **Measure light curve.**
+1. **Choose folder** — the folder with your subs. Ten frames is the bare minimum; a real transit run is hundreds.
+2. **Look at "What the frames say".** Five rows report what the headers of that folder already state. A green tick needs nothing; an amber row asks for the one thing the headers do not say and tells you what the run loses without it.
+3. **Measure light curve.**
 
 The first run takes a few minutes: registering a few hundred subs is the slow part.
 
@@ -190,7 +189,7 @@ The first run takes a few minutes: registering a few hundred subs is the slow pa
 
 Every replacement is logged; nothing is swapped silently. To aim at a star that is *not* the headers' object, type it **after** choosing the folder — nothing re-reads after that. Calibration frames are sorted out before reading, so a folder of flats cannot prefill the target with a parked mount's position. And headers that offer nothing get a log line of their own — silence there would read as "nothing to do" when it means "type the name".
 
-Everything that decides *which star* now lives in one place — **group 3 · Target star** — and its first mode, **From the frames**, is where it starts:
+Everything that decides *which star* now lives in one place — **the Target row** — and its first mode, **From the frames**, is where it starts:
 
 | Mode | What it uses |
 |---|---|
@@ -225,13 +224,13 @@ The RA/Dec fields are used when they *agree* with what the frames (or, failing h
 
 A coordinate further than about two arcminutes from that is the previous target, not a choice — the fields persist across sessions, and **a coordinate left over from the previous target looks exactly like a deliberate one**. It is replaced, in red, with both values printed. Aiming at a star that is *not* the headers' object still works: type it after choosing the folder, and at run time the disagreement is reported rather than overridden.
 
-**Two more entries that outlive their target, since v1.0.17.** The **Claret coefficients** in group 5 are a star's and a filter's, and four numbers do not say whose they are. They are now bound to the target they were typed or computed for; frames of another target clear the field when the folder is chosen, by name, and the run then computes this star's from the Phoenix models. Coefficients left from an earlier version, with no target on record, are flagged in the run's log until you clear or retype them. The **telescope aperture** is an instrument's: it is bound to the focal length of the frames it was used with and cleared under frames of another — or, with nothing on record, when it makes a focal ratio no telescope has (81 mm under 2032 mm frames is f/25). The header's `APTDIA` then takes over; without one the error bars carry no scintillation term and the log says so. As with the coordinates: to use a value the frames contradict, type it *after* choosing the folder.
+**Two more entries that outlive their target, since v1.0.17.** The **Claret coefficients** in the expert settings are a star's and a filter's, and four numbers do not say whose they are. They are now bound to the target they were typed or computed for; frames of another target clear the field when the folder is chosen, by name, and the run then computes this star's from the Phoenix models. Coefficients left from an earlier version, with no target on record, are flagged in the run's log until you clear or retype them. The **telescope aperture** is an instrument's: it is bound to the focal length of the frames it was used with and cleared under frames of another — or, with nothing on record, when it makes a focal ratio no telescope has (81 mm under 2032 mm frames is f/25). The header's `APTDIA` then takes over; without one the error bars carry no scintillation term and the log says so. As with the coordinates: to use a value the frames contradict, type it *after* choosing the folder.
 
 ### The name lookup adds what the header cannot carry
 
 Spelling is not your problem: hyphens and spaces are stripped from **both** sides, so `HATP-32`, `HAT-P-32`, `hatp32b` and `HAT-P-32 b` all reach the same entry — and the **host name** is searched as well, because a name with no planet letter is what a header usually carries. A system with several known planets is a refusal that lists them, since their ephemerides differ.
 
-Give the planet a **name** — from `OBJECT` in the lights, or the *Target* box in group 3 — and the run fetches the published **ephemeris** from the NASA Exoplanet Archive. `WASP-75b` becomes `WASP-75 b` on the way out; one missing space is the whole difference between a hit and a silent miss.
+Give the planet a **name** — from `OBJECT` in the lights, or the name field of the Target row — and the run fetches the published **ephemeris** from the NASA Exoplanet Archive. `WASP-75b` becomes `WASP-75 b` on the way out; one missing space is the whole difference between a hit and a silent miss.
 
 It also **cross-checks** the position. Agreement is reported; a disagreement is *reported, not resolved*:
 
@@ -307,22 +306,38 @@ Nothing here can mis-point quietly.
 
 ## 5. The User Interface
 
-**Left panel**, six numbered groups in the order you use them:
+**Left panel — three steps, since v1.0.18.** The form used to ask for some thirty things; the frames answer most of them, so the dialog now shows what it found and asks only for the rest.
 
-| Group | Contents |
+| Step | What it is |
 |---|---|
-| **1 · Subs** | Folder picker, symlink/copy toggle |
-| **2 · Calibration** | Calibration on/off, library folder for darks/bias, CFA toggle (§3a) |
-| **3 · Target star** | Selection mode (starts on *From the frames*), planet name, archive lookup, pixel or RA/Dec fields |
-| **4 · Photometry** | Comparison count, SNR floor, channel (the plane the engine measures on a debayered OSC run), auto ring radii, aperture scan |
-| **5 · Analysis** | Fit mode (blind detection or HOPS-compatible), the Phoenix limb-darkening switch, HOPS detrending, iterations, Claret coefficients with *Compute Claret (Phoenix)* (both modes), airmass detrend, site, telescope aperture, plot binning |
-| **6 · Submission** | Observer code and filter for the AAVSO file |
+| **1 · Frames** | The folder picker |
+| **2 · What the frames say** | Five rows, filled from the headers of the chosen folder (below) |
+| **3 · Observer** | Your AAVSO observer code, remembered between sessions |
+| **Expert settings** | Folded. Everything with a default nobody has to touch |
+
+**The rows.** Each states a value and *where it came from* — a header keyword, a field, the last session — so an entry left over from another target or telescope is seen before the run, not after it.
+
+| Row | Filled from | Asks when | Behind *Change* |
+|---|---|---|---|
+| **Target** | `OBJECT`, `OBJCTRA`/`OBJCTDEC` | The headers name no planet | Target mode, name, archive lookup, pixel or RA/Dec fields |
+| **Site** | `SITELAT`/`SITELONG` | The headers carry no site | Latitude, longitude, the override checkbox |
+| **Telescope** | `APTDIA`, `FOCALLEN` | No aperture in the headers and none remembered for this focal length | The aperture in mm |
+| **Filter and camera** | `FILTER`, `BAYERPAT` | The headers name no filter | Filter name, colour-camera switch |
+| **Calibration** | The folders beside the lights, with file counts | — (amber when nothing is found) | Library folder for darks and bias |
+
+- **A green tick** is a known value. **An amber mark** is something missing or worth a look; the line under it says what its absence costs (no scintillation term, times left in JD_UTC, no ephemeris). Rows that ask are unfolded when the folder is chosen. Nothing blocks the run.
+- **The telescope aperture is remembered per focal length.** Type it once for a telescope; when frames of that focal length come back, so does the aperture, and the row says *remembered*.
+- **A Bayer pattern in the headers switches the colour-camera option on.** It is never switched off automatically, because not every capture program writes the keyword; a switch that disagrees with the headers turns the row amber.
+- **A filter typed in an earlier session** is shown together with what the headers say.
+- To use a value the frames contradict, type it *after* choosing the folder; nothing re-probes.
+
+**Expert settings.** Comparison count, SNR floor, channel, aperture search, comparison check, sky rings; the fit mode (blind detection or the HOPS-compatible fit, §9) with HOPS detrending and iterations; the Phoenix limb-darkening switch and the Claret field with *Compute Claret (Phoenix)*; the airmass term; calibration on/off; frame copies; the AAVSO file and its camera type. Their defaults are what the script is tested with. The folded header reads *all at their defaults* or, in amber, how many are changed and which — a switch forgotten in there cannot hide — and **Reset to defaults** puts them back.
 
 **Right panel**, four tabs:
 
 | Tab | Shows |
 |---|---|
-| **Light curve** | The curve, the fit, and a residual panel underneath |
+| **Light curve** | The curve, the fit, and a residual panel underneath. Above it the switches that only change the drawing: expected curve, error bars, binning |
 | **Result** | Everything the run measured, in words |
 | **Stars** | Target and each comparison star with its SNR |
 | **Log** | Every command sent to Siril and every rejection |
@@ -440,7 +455,7 @@ The shapes searched are now real geometries: four planet-to-star radius ratios c
 
 **Nothing else changed.** Each shape is a *template* on normalised phase, built once and interpolated at each node, so the model stays **linear in depth** — the closed-form solve, the determinism and the no-optimiser guarantee all survive. A physically free Rp/R★ would couple depth and shape and cost all three. (The occultation is integrated *radially* — the arc a planet covers at radius r has a closed form — so there are no elliptic integrals, no new dependency, and it is verified against an independent 2-D integration.)
 
-**Which limb darkening.** The template family is quadratic, and until v1.0.11 its coefficients were 0.35/0.23 for every star and every filter — right for a Sun-like host in a broad visual band, a 3–6 % systematic on Rp/R★ for anything else, and no error bar ever said so. Both fit modes now take the coefficients from the best source at hand: the Claret field in group 5 when it is filled, else the **Phoenix computation** for the archive's Teff and log g and the run's filter — the same machinery as *Compute Claret (Phoenix)*, run automatically (the first call per star downloads about four 21 MB model files into `~/.svenesis`; later calls take seconds) — else the defaults. The blind fit uses the quadratic pair closest to the Claret profile (area-weighted least squares over the disc, exact when the profile is quadratic to begin with), and the log and the report name the source. A switch in group 5 turns the automatic computation off.
+**Which limb darkening.** The template family is quadratic, and until v1.0.11 its coefficients were 0.35/0.23 for every star and every filter — right for a Sun-like host in a broad visual band, a 3–6 % systematic on Rp/R★ for anything else, and no error bar ever said so. Both fit modes now take the coefficients from the best source at hand: the Claret field in the expert settings when it is filled, else the **Phoenix computation** for the archive's Teff and log g and the run's filter — the same machinery as *Compute Claret (Phoenix)*, run automatically (the first call per star downloads about four 21 MB model files into `~/.svenesis`; later calls take seconds) — else the defaults. The blind fit uses the quadratic pair closest to the Claret profile (area-weighted least squares over the disc, exact when the profile is quadratic to begin with), and the log and the report name the source. A switch in group 5 turns the automatic computation off.
 
 > **The template's Rp/R★ is a shape index, not a planet radius.** With the duration free, a smaller template stretched fits nearly as well, so that value sits systematically below the truth. The **depth** is the measurement, and both reports say so.
 
@@ -530,7 +545,7 @@ Everything above answers *is there a transit?* HOPS — the ExoWorldsSpies pipel
 |---|---|---|
 | Duration and shape | Free — searched over a grid of templates | Fixed by the planet's **orbit** from the archive (a/R★, inclination, eccentricity, periastron); if the archive lacks a/R★ it is derived from the archive duration with a central transit, and the log says so |
 | Free parameters | T0, duration, shape variant, depth, baseline, systematics | Rp/R★, mid-time (within ±0.2 d of the predicted epoch), a normalisation, the detrending coefficients |
-| Limb darkening | Quadratic law (u1, u2) | **Claret four-coefficient law.** HOPS takes its coefficients from ExoTETHyS: Phoenix 2018 model intensities integrated over the passband, the spherical model's outer drop-off cut away, a weighted fit, interpolated between the star's grid neighbours. **Compute Claret (Phoenix)** does exactly that here — no HOPS needed — for the named planet's Teff and log g from the archive and the filter in group 6, with the transmission curve from the SVO Filter Profile Service. The filter name may be HOPS's spelling (R, V, r', …), a Johnson/Cousins/Sloan/SDSS/2MASS name, or what an RGB wheel writes (RED, GREEN, BLUE — taken as Cousins R, Johnson V, Johnson B, and labelled as an approximation beside the coefficients); narrowband filters have no table and are refused with the reason. An unfiltered run (filter blank, *clear*, *luminance* or Astrodon ExoPlanet-BB) uses HOPS's own measured passband from pylightcurve's photometry database (MIT licence), followed at run time through the links pylightcurve publishes and cached beside the SVO curves. Verified against ExoTETHyS's own output to 1e-7 on three stars and five passbands. The first call per star downloads about four 21 MB model files from the links ExoTETHyS publishes into `~/.svenesis`; nothing is bundled. Or enter your a₁..a₄, or leave the field blank and the quadratic law is rewritten *exactly* as Claret coefficients (a₂ = u1 + 2u2, a₄ = −u2) |
+| Limb darkening | Quadratic law (u1, u2) | **Claret four-coefficient law.** HOPS takes its coefficients from ExoTETHyS: Phoenix 2018 model intensities integrated over the passband, the spherical model's outer drop-off cut away, a weighted fit, interpolated between the star's grid neighbours. **Compute Claret (Phoenix)** does exactly that here — no HOPS needed — for the named planet's Teff and log g from the archive and the filter of the Filter row, with the transmission curve from the SVO Filter Profile Service. The filter name may be HOPS's spelling (R, V, r', …), a Johnson/Cousins/Sloan/SDSS/2MASS name, or what an RGB wheel writes (RED, GREEN, BLUE — taken as Cousins R, Johnson V, Johnson B, and labelled as an approximation beside the coefficients); narrowband filters have no table and are refused with the reason. An unfiltered run (filter blank, *clear*, *luminance* or Astrodon ExoPlanet-BB) uses HOPS's own measured passband from pylightcurve's photometry database (MIT licence), followed at run time through the links pylightcurve publishes and cached beside the SVO curves. Verified against ExoTETHyS's own output to 1e-7 on three stars and five passbands. The first call per star downloads about four 21 MB model files from the links ExoTETHyS publishes into `~/.svenesis`; nothing is bundled. Or enter your a₁..a₄, or leave the field blank and the quadratic law is rewritten *exactly* as Claret coefficients (a₂ = u1 + 2u2, a₄ = −u2) |
 | Photometry | The target against a median-normalised, Poisson-weighted comparison **ensemble** (NaN-robust) | The target divided by the **raw sum** of the comparison stars, errors propagated as HOPS does, from the same per-star fluxes at the same aperture — the per-star error formula √(F/g + area·σ²_sky) was HOPS's already. A frame missing a comparison star drops out, counted in the log |
 | Exposure | Model at mid-exposure | Model **averaged over each exposure** in 10 s sub-steps, exactly HOPS's rule, with the exposure time from the headers |
 | Detrending | Additive in magnitude, anchored on the out-of-transit points | HOPS's three choices — airmass, linear in time, quadratic in time — **multiplied** into the flux model, with HOPS's series names — plus the **meridian-flip step** when one was detected, so the offset between the two sensor patches is fitted with the transit rather than read as one |
@@ -672,7 +687,7 @@ It never removes more than **5 %** of a run. Past that the outliers *are* the da
 
 ### The AAVSO file
 
-`AAVSO_exoplanet.txt` lands beside the CSV, in Exoplanet Watch's own format and EXOTIC's layout: `#TYPE=EXOPLANET`, observer code, the four fields the upload form **requires** — `#STAR_NAME` (the archive's host name, else the planet name without its letter or TOI suffix), `#EXOPLANET_NAME` (the **resolved** name, never a stale form entry), `#EXPOSURE_TIME` and `#MEASUREMENT_TYPE=Rnflux` — binning, filter, `#DATE_TYPE=BJD_TDB`, `#PRIORS` and `#RESULTS` lines, then `DATE,DIFF,ERR,DETREND_1,DETREND_2`: DIFF is the raw differential series as **relative normalised flux** (out-of-transit median 1; AAVSO allows `Rflux`, `Dmag` and `Rnflux`, and EXOTIC writes `Rnflux`), DETREND_1 the airmass and DETREND_2 this script's fitted systematics model, so DIFF/DETREND_2 is the detrended curve. `#FILTER` is AAVSO's code, from the form's filter or else the frames' FILTER keyword: RED/GREEN/BLUE of an RGB wheel are `TR`/`TG`/`TB`, R or Rc is `R`, r' is `SR`, V is `V`, an unfiltered run is `CV`, Astrodon ExoPlanet-BB is `CBB` (AAVSO's clear-blue-blocking code, the one EXOTIC uses). Mid-transit time and its error, the central depth and its error, **`#RPRS`, `#RPRS_ERR` and `#DEPTH_RPRS2_PCT`** (the convention EXOTIC and AIJ quote — see §9), duration and the red-noise β travel in the header. `ERR` carries **scintillation** (Young's formula) in quadrature with the CCD equation whenever the telescope aperture is known — `APTDIA` in the header, or the field in group 5: 3–4 mmag per 60 s at airmass 1.5 on a 30 cm telescope, as much as the photon noise of a bright target — and the log says when the term is missing.
+`AAVSO_exoplanet.txt` lands beside the CSV, in Exoplanet Watch's own format and EXOTIC's layout: `#TYPE=EXOPLANET`, observer code, the four fields the upload form **requires** — `#STAR_NAME` (the archive's host name, else the planet name without its letter or TOI suffix), `#EXOPLANET_NAME` (the **resolved** name, never a stale form entry), `#EXPOSURE_TIME` and `#MEASUREMENT_TYPE=Rnflux` — binning, filter, `#DATE_TYPE=BJD_TDB`, `#PRIORS` and `#RESULTS` lines, then `DATE,DIFF,ERR,DETREND_1,DETREND_2`: DIFF is the raw differential series as **relative normalised flux** (out-of-transit median 1; AAVSO allows `Rflux`, `Dmag` and `Rnflux`, and EXOTIC writes `Rnflux`), DETREND_1 the airmass and DETREND_2 this script's fitted systematics model, so DIFF/DETREND_2 is the detrended curve. `#FILTER` is AAVSO's code, from the form's filter or else the frames' FILTER keyword: RED/GREEN/BLUE of an RGB wheel are `TR`/`TG`/`TB`, R or Rc is `R`, r' is `SR`, V is `V`, an unfiltered run is `CV`, Astrodon ExoPlanet-BB is `CBB` (AAVSO's clear-blue-blocking code, the one EXOTIC uses). Mid-transit time and its error, the central depth and its error, **`#RPRS`, `#RPRS_ERR` and `#DEPTH_RPRS2_PCT`** (the convention EXOTIC and AIJ quote — see §9), duration and the red-noise β travel in the header. `ERR` carries **scintillation** (Young's formula) in quadrature with the CCD equation whenever the telescope aperture is known — `APTDIA` in the header, or the Telescope row: 3–4 mmag per 60 s at airmass 1.5 on a 30 cm telescope, as much as the photon noise of a bright target — and the log says when the term is missing.
 
 **The picture the form asks for is written too.** AAVSO wants at least one image showing the plate-solved field with the target and the comparison stars, under 2 MB in all. `lightcurve/field.png` is exactly that: the reference frame, stretched, with the target circled in green, the comparison stars the photometry actually used numbered C1… in yellow, north/east arrows and a 5′ bar from the plate solution, and the target, date, filter and scale in the title. It shrinks itself until it is under the limit.
 

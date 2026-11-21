@@ -1389,17 +1389,17 @@ check(ns["header_target_radec"](MICRO)[0] is None
       "which is exactly the case the archive lookup exists for")
 
 print("\n8v2) the target controls sit where the target is chosen")
-grp3 = src[src.index('QGroupBox("3 · Target star")'):]
+grp3 = src[src.index("    def _build_target_group(self"):]
 grp3 = grp3[:grp3.index("def _build_photometry_group")]
-grp6 = src[src.index("def _build_export_group"):]
-grp6 = grp6[:grp6.index("\n    def _build_action_buttons")]
+grp6 = src[src.index("    def _build_observer_group(self"):]
+grp6 = grp6[:grp6.index("\n    # -- expert settings")]
 # The name box and the archive lookup DECIDE THE POSITION, so they belong
 # with the other ways of deciding it. Having them in the submission group
 # meant the one control that spares you typing coordinates sat in a group
 # about filing the result.
 for w in ("self.ed_target_name = QLineEdit()", "self.chk_resolve = QCheckBox("):
     check(w in grp3 and w not in grp6,
-          f"{w.split('=')[0].strip()} lives in group 3, not group 6 — it "
+          f"{w.split('=')[0].strip()} lives in the Target row, not with the submission — it "
           "decides the target, not the submission")
 check("From the frames" in grp3,
       "and the frames themselves are a target MODE, offered first: subs "
@@ -4812,7 +4812,7 @@ check("site_found = pyqtSignal(float, float, str)" in src and "sig.emit(float(la
       "a site read from the frames is sent to the form and overwrites the fields")
 check('"site_force_form": self.chk_site_force.isChecked()' in src and 'st.setValue("site_force"' in src
       and "Use the form's site even when the headers carry one" in src,
-      "the site override is a checkbox in group 5, wired to the options and saved with the settings")
+      "the site override is a checkbox in the Site row, wired to the options and saved with the settings")
 _retry_src = src[src.index("found, why = archive_lookup(pl)"):]
 _retry_src = _retry_src[:_retry_src.index("looks_like_toi(pl):", 200)]
 check('unreachable = "could not be reached" in why' in _retry_src
@@ -5500,8 +5500,8 @@ check("f/25" in _fas(81.0, 2032.0) and _fas(81.0, 382.0) == "" and "382 mm" in _
       and _fas(203.0, 2032.0, 2032.0) == "" and _fas(81.0, 400.0, 382.0) == "" and _fas(None, 2032.0) == "" and _fas(81.0, None) == "",
       "81 mm under 2032 mm frames is another telescope's aperture (f/25, or bound to 382 mm); under its own frames it stays")
 _gui17 = src[src.index("    def _probe_target(self, files)"):src.index("    def _on_pick_folder(self)")]
-check("cleared the Claret coefficients in group 5" in _gui17 and "target_key(ldc_for) != target_key(name)" in _gui17
-      and "cleared the telescope aperture in group 5" in _gui17 and "form_aperture_stale(" in _gui17
+check("cleared the Claret coefficients in the expert settings" in _gui17 and "target_key(ldc_for) != target_key(name)" in _gui17
+      and "cleared the telescope aperture (" in _gui17 and "form_aperture_stale(" in _gui17
       and 'st.setValue("hops_ldc_for",' in src and 'st.setValue("aperture_focal_mm",' in src
       and "self.ed_hops_ldc.textEdited.connect(self._on_ldc_edited)" in src
       and "self.ed_aperture_mm.textEdited.connect(self._on_aperture_edited)" in src,
@@ -5552,8 +5552,191 @@ check("np.issubdtype(arr.dtype, np.integer)" in _cal17 and "frames_are_calibrate
       "the gain is measured from raw flats at the lights' gain setting, used when the header has no EGAIN, and compared with it when it has")
 check("comes out shallow" not in src and "in a direction, that depend on which of the stars" in src,
       "the linearity warning no longer claims the depth comes out shallow: the direction depends on which stars are up there")
-check('VERSION = "1.0.17"' in src and "1.0.17 - The aperture's last test, entries that outlive their target, the gain" in src,
-      "version 1.0.17 with its changelog entry")
+check("1.0.17 - The aperture's last test, entries that outlive their target, the gain" in src,
+      "the 1.0.17 changelog entry stays")
+
+print("\n9v) 1.0.18: the form becomes a checklist")
+_rows = ns["checklist_rows"]
+def _row(probe, form, key):
+    return next(r for r in _rows(probe, form) if r["key"] == key)
+_idle = _rows({}, {})
+check([r["key"] for r in _idle] == list(ns["CHECKLIST_KEYS"]) and all(r["level"] == "idle" for r in _idle),
+      "before a folder is chosen every row waits, in a fixed order")
+_pr = {"has_folder": True, "object": "HAT-P-25b", "radec": True, "site": (31.5475, -99.3817), "aptdia": None,
+       "focal_mm": 2032.0, "filter": "L", "bayer": "", "calibrated": False, "calib_found": [("DARKFLAT", 25), ("FLAT", 25)]}
+_fm = {"target_mode": "auto", "target_name": "HAT-P-25b", "radec": True, "xy": False, "site": None, "site_force": False,
+       "aperture_mm": None, "filter": "", "cfa": False, "library": "", "calibrate": True}
+_all = {r["key"]: r for r in _rows(_pr, _fm)}
+check(_all["target"]["level"] == "ok" and _all["target"]["title"] == "Target: HAT-P-25b" and "OBJECT and OBJCTRA/OBJCTDEC" in _all["target"]["source"]
+      and _all["site"]["level"] == "ok" and _all["site"]["title"] == "Site: 31.55° N, 99.38° W" and "SITELAT" in _all["site"]["source"]
+      and _all["filter"]["level"] == "ok" and _all["filter"]["title"] == "Filter: L · mono camera"
+      and _all["calibration"]["level"] == "ok" and _all["calibration"]["title"] == "Calibration: DARKFLAT (25), FLAT (25)",
+      "what the headers say is stated with its source: target, site, filter and camera, calibration folders with their counts")
+check(_all["telescope"]["level"] == "ask" and "not in the headers" in _all["telescope"]["title"] and "scintillation" in _all["telescope"]["source"]
+      and sum(1 for r in _all.values() if r["level"] == "ask") == 1,
+      "the one thing these headers do not say is the one row that asks, and it names what is lost without it")
+_t = _row(_pr, dict(_fm, aperture_mm=203.0), "telescope")
+check(_t["level"] == "ok" and _t["title"] == "Telescope: 203 mm aperture, 2032 mm focal length (f/10.0)" and "typed in this row" in _t["source"]
+      and "remembered" in _row(_pr, dict(_fm, aperture_mm=203.0, aperture_note="Aperture remembered for frames of 2032 mm focal length"), "telescope")["source"]
+      and "APTDIA" in _row(dict(_pr, aptdia=203.0), _fm, "telescope")["source"],
+      "an aperture says whether it was typed, remembered for this telescope, or read from APTDIA")
+check(_row(dict(_pr, object="", radec=False), dict(_fm, target_name="", radec=False), "target")["level"] == "ask"
+      and _row(dict(_pr, object=""), dict(_fm, target_name=""), "target")["level"] == "ask"
+      and "no ephemeris" in _row(dict(_pr, object=""), dict(_fm, target_name=""), "target")["source"]
+      and "from the archive when you run" in _row(dict(_pr, radec=False), dict(_fm, radec=False), "target")["source"]
+      and "(the headers say HAT-P-25b)" in _row(_pr, dict(_fm, target_name="WASP-12 b"), "target")["source"],
+      "no name asks; a position without a name asks and says there is no ephemeris; a name that is not the headers' shows both")
+check(_row(_pr, dict(_fm, target_mode="brightest"), "target")["level"] == "ok"
+      and _row(_pr, dict(_fm, target_mode="pixel"), "target")["level"] == "ask"
+      and _row(_pr, dict(_fm, target_mode="pixel", xy=True), "target")["level"] == "ok"
+      and _row(_pr, dict(_fm, target_mode="radec", radec=False), "target")["level"] == "ask",
+      "the other target modes: brightest needs nothing, pixel and RA/Dec ask for their numbers")
+check(_row(dict(_pr, site=None), _fm, "site")["level"] == "ask" and "JD_UTC" in _row(dict(_pr, site=None), _fm, "site")["source"]
+      and "kept from the last session" in _row(dict(_pr, site=None), dict(_fm, site=(50.1, 8.7)), "site")["source"]
+      and _row(_pr, dict(_fm, site=(50.1, 8.7)), "site")["title"] == "Site: 31.55° N, 99.38° W"
+      and _row(_pr, dict(_fm, site=(50.1, 8.7), site_force=True), "site")["title"] == "Site: 50.10° N, 8.70° E"
+      and "overriding the headers" in _row(_pr, dict(_fm, site=(50.1, 8.7), site_force=True), "site")["source"]
+      and "SITELAT" in _row(_pr, dict(_fm, site=(31.5475, -99.3817), site_force=True), "site")["source"],
+      "the site: the header's wins over a stale form entry, the override is said, a form entry the run copied from the headers still counts as theirs")
+check(_row(dict(_pr, filter=""), _fm, "filter")["level"] == "ask"
+      and _row(_pr, dict(_fm, filter="CV"), "filter")["title"] == "Filter: CV · mono camera"
+      and "(the headers say L)" in _row(_pr, dict(_fm, filter="CV"), "filter")["source"]
+      and _row(dict(_pr, bayer="RGGB"), dict(_fm, cfa=True), "filter")["title"] == "Filter: L · colour camera (RGGB)"
+      and _row(dict(_pr, bayer="RGGB"), dict(_fm, cfa=True), "filter")["level"] == "ok"
+      and _row(_pr, dict(_fm, cfa=True), "filter")["level"] == "warn"
+      and _row(dict(_pr, bayer="RGGB"), _fm, "filter")["level"] == "warn",
+      "the filter row: a typed filter is shown beside the headers'; a colour-camera switch that disagrees with the headers is flagged")
+check(_row(dict(_pr, calib_found=[]), _fm, "calibration")["level"] == "warn"
+      and _row(dict(_pr, calib_found=[], calibrated=True), _fm, "calibration")["level"] == "ok"
+      and _row(_pr, dict(_fm, calibrate=False), "calibration")["level"] == "info"
+      and "and the library" in _row(_pr, dict(_fm, library="/x/lib"), "calibration")["source"],
+      "calibration: nothing found is a warning, already-calibrated frames are fine, switched off is said")
+_ec = ns["expert_changes"]
+check(_ec(dict(ns["EXPERT_DEFAULTS"])) == [] and _ec({}) == []
+      and _ec(dict(ns["EXPERT_DEFAULTS"], fit_mode="hops", n_comps=7, hops_ldc="0.7, -0.5, 0.9, -0.4")) == ["fit mode", "comparison stars", "Claret coefficients"]
+      and _ec(dict(ns["EXPERT_DEFAULTS"], min_snr=20.0, hops_ldc="  ")) == [] and set(ns["EXPERT_DEFAULTS"]) == set(ns["EXPERT_LABELS"]),
+      "the expert header names exactly the settings that are off their default")
+_ra17 = ns["remembered_aperture"]
+check(_ra17({"382": 81.0, "2032": 203.0}, 2032.0) == 203.0 and _ra17({"382": 81.0, "2032": 203.0}, 380.3) == 81.0
+      and _ra17({"382": 81.0}, 2032.0) is None and _ra17({}, 382.0) is None and _ra17({"382": 81.0}, None) is None
+      and _ra17({"x": "y", "382": 81.0}, 382.0) == 81.0,
+      "an aperture typed once for a focal length comes back for frames within 5 % of it, and for no other telescope")
+check(ns["site_text"](-33.9, 151.2) == "33.90° S, 151.20° E" and ns["_html_text"]("a<b & c>") == "a&lt;b &amp; c&gt;",
+      "southern and eastern sites read right; row texts are escaped")
+check(ns["inspect_frame"]("/x/a.fit", {"IMAGETYP": "LIGHT", "BAYERPAT": "RGGB"})["bayer"] == "RGGB"
+      and ns["inspect_frame"]("/x/a.fit", {"IMAGETYP": "LIGHT"})["bayer"] == "",
+      "the Bayer pattern is read with the frame's other header facts")
+# -- the dialog itself, on stand-in Qt classes: its logic runs, its drawing is not tested
+import fake_qt
+_wcls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "SvenesisLightCurveWindow")
+_gq = dict(ns)
+_gq.update(fake_qt.NAMES)
+_gq["LogColor"] = _LC
+class _FPlot(fake_qt.FW):
+    def render(self, *a, **k):
+        pass
+_gq["LightCurvePlot"] = _FPlot
+_gq["fixed_font_family"] = lambda: "Menlo"
+exec(ast.get_source_segment(src, _wcls), _gq)
+_Win = _gq["SvenesisLightCurveWindow"]
+def _open(store):
+    fake_qt.QSettings.store = dict(store)
+    return _Win(siril=object())
+def _plain(w, key):
+    return re.sub(r"<[^>]+>", "", w._rows[key]["text"].text().replace("<br>", " | "))
+_w0 = _open({})
+check(set(_w0._rows) == set(ns["CHECKLIST_KEYS"]) and all(_w0._rows[k]["icon"].text() == "–" for k in _w0._rows)
+      and _w0.lbl_expert.text() == "all at their defaults" and not _w0.btn_expert_reset.isEnabled()
+      and not _w0.expert_box.isVisible() and not _w0.btn_run.isEnabled(),
+      "a first start: five waiting rows, the expert settings folded and at their defaults, nothing to run yet")
+_keys0 = set(_w0._opts())
+check({"copy_frames", "calibrate", "calib_library", "cfa", "target_mode", "target_xy", "target_radec", "site_lat_deg", "site_lon_deg",
+       "aperture_mm", "site_force_form", "auto_ldc", "n_comps", "min_comp_snr", "channel", "autoring", "scan_aperture", "screen_comps",
+       "write_aavso", "obscode", "obstype", "resolve_target", "target_name", "filter_name", "detrend_airmass", "fit_mode",
+       "hops_detrend", "hops_iterations", "hops_ldc", "hops_ldc_for"} <= _keys0,
+      "every option the worker reads still leaves the dialog", str(sorted(_keys0)))
+_w1 = _open({"fit_mode": "hops", "n_comps": 7, "hops_ldc": "0.7, -0.5, 0.9, -0.4", "target_name": "Qatar-4 b"})
+check(_w1.lbl_expert.text() == "3 changed: fit mode, comparison stars, Claret coefficients" and _w1.btn_expert_reset.isEnabled(),
+      "settings left from an earlier session show on the folded header")
+_w1.btn_expert.setChecked(True)
+_vis = _w1.expert_box.isVisible()
+_w1._on_reset_expert()
+check(_vis and _w1.lbl_expert.text() == "all at their defaults" and _w1._opts()["fit_mode"] == "blind" and _w1._opts()["n_comps"] == ns["DEFAULT_N_COMPS"]
+      and _w1._opts()["hops_ldc"] is None and _w1._expert_values() == {k: (float(v) if isinstance(v, float) else v) for k, v in ns["EXPERT_DEFAULTS"].items()},
+      "the header unfolds the settings, and one button puts every one of them back")
+try:
+    from astropy.io import fits as _fits18
+except ImportError:
+    _fits18 = None
+if _fits18 is None:
+    print("   (astropy missing: the folder walk of the dialog is not run)")
+else:
+    def _night(root, name, focal, n=12, **extra):
+        d = os.path.join(root, name, "LIGHT")
+        os.makedirs(d)
+        for sub in ("FLAT", "DARKFLAT"):
+            os.makedirs(os.path.join(root, name, sub))
+            for i in range(3):
+                _fits18.PrimaryHDU(np.zeros((8, 8), np.uint16)).writeto(os.path.join(root, name, sub, f"c_{i}.fit"))
+        for i in range(n):
+            h = _fits18.Header()
+            h["IMAGETYP"], h["OBJECT"], h["EXPTIME"], h["FOCALLEN"] = "LIGHT", name, 60.0, focal
+            h["DATE-OBS"] = f"2026-01-02T03:{i:02d}:00"
+            for k, v in extra.items():
+                h[k] = v
+            _fits18.PrimaryHDU(np.zeros((8, 8), np.uint16), header=h).writeto(os.path.join(d, f"l_{i:03d}.fit"))
+        return d
+    with tempfile.TemporaryDirectory() as _td:
+        _n1 = _night(_td, "TEST-1 b", 382.0, OBJCTRA="03 13 44.5", OBJCTDEC="+25 11 51", SITELAT=31.5475, SITELONG=-99.3817, FILTER="L")
+        _n2 = _night(_td, "TEST-2 b", 2032.0, FILTER="R", BAYERPAT="RGGB")
+        _w2 = _open({"target_name": "OLD-9 b", "aperture_mm": "81", "hops_ldc": "0.7, -0.5, 0.9, -0.4"})
+        fake_qt.QFileDialog.answer = _n1
+        _w2._on_pick_folder()
+        check(_plain(_w2, "target").startswith("Target: TEST-1 b | OBJECT and OBJCTRA/OBJCTDEC") and _plain(_w2, "site").startswith("Site: 31.55° N, 99.38° W")
+              and _plain(_w2, "telescope").startswith("Telescope: 81 mm aperture, 382 mm focal length (f/4.7)")
+              and _plain(_w2, "filter").startswith("Filter: L · mono camera") and _plain(_w2, "calibration").startswith("Calibration: DARKFLAT (3), FLAT (3)")
+              and all(_w2._rows[k]["icon"].text() == "✓" for k in _w2._rows) and not any(_w2._rows[k]["button"].isChecked() for k in _w2._rows)
+              and _w2.lbl_status.text() == "Ready — every row is answered." and _w2.btn_run.isEnabled()
+              and _w2.ed_hops_ldc.text() == "" and _w2.ed_target_name.text() == "TEST-1 b",
+              "a folder whose headers say everything: five ticks, nothing unfolded, the stale name and coefficients replaced",
+              " / ".join(_plain(_w2, k) for k in _w2._rows))
+        _w2._save_settings()
+        fake_qt.QFileDialog.answer = _n2
+        _w2._on_pick_folder()
+        check(_w2._rows["telescope"]["icon"].text() == "!" and _w2._rows["telescope"]["button"].isChecked() and _w2.ed_aperture_mm.text() == ""
+              and _w2._rows["site"]["icon"].text() == "!" and _w2._rows["site"]["button"].isChecked()
+              and not _w2._rows["filter"]["button"].isChecked() and _w2.chk_cfa.isChecked()
+              and _plain(_w2, "filter").startswith("Filter: R · colour camera (RGGB)") and _plain(_w2, "target").startswith("Target: TEST-2 b")
+              and "position from the archive when you run" in _plain(_w2, "target")
+              and _w2.lbl_status.text().startswith("Ready. 2 row(s) above ask"),
+              "another telescope's frames: the 81 mm is cleared and its row asks, unfolded; the missing site asks; the Bayer pattern switches the colour camera on",
+              " / ".join(_plain(_w2, k) for k in _w2._rows))
+        _w2.ed_aperture_mm.type("203")
+        check(_plain(_w2, "telescope").startswith("Telescope: 203 mm aperture, 2032 mm focal length (f/10.0) | Aperture typed in this row")
+              and _w2.lbl_status.text().startswith("Ready. 1 row(s) above ask"),
+              "typing the aperture answers the row at once, and the status line follows")
+        _w2._save_settings()
+        fake_qt.QFileDialog.answer = _n1
+        _w2._on_pick_folder()
+        _back1 = _plain(_w2, "telescope")
+        fake_qt.QFileDialog.answer = _n2
+        _w2._on_pick_folder()
+        check(_back1.startswith("Telescope: 81 mm aperture, 382 mm focal length (f/4.7) | Aperture remembered for frames of 382 mm")
+              and _plain(_w2, "telescope").startswith("Telescope: 203 mm aperture, 2032 mm focal length (f/10.0) | Aperture remembered for frames of 2032 mm")
+              and __import__("json").loads(fake_qt.QSettings.store["apertures_by_focal"]) == {"382": 81.0, "2032": 203.0},
+              "each telescope's aperture is typed once: it comes back with its frames, in both directions", _back1)
+_ui18 = src[src.index("    def _build_left_panel(self)"):src.index("    def _build_source_group(self")]
+check('QGroupBox("2 · What the frames say")' in _ui18 and "self._build_expert_group(layout)" in _ui18
+      and _ui18.index("self._build_observer_group(layout)") < _ui18.index("self._build_expert_group(layout)")
+      and 'QGroupBox("1 · Frames")' in src and 'QGroupBox("3 · Observer")' in src
+      and "self.cmb_fit_mode" in src[src.index("    def _build_analysis_group(self"):src.index("    # -- the checklist")]
+      and src.index("    def _build_expert_group(self") < src.index("self._build_analysis_group(clay)"),
+      "three numbered steps and the folded expert settings, with the fit mode (and the HOPS-compatible fit) inside them")
+_rp18 = src[src.index("    def _build_right_panel(self)"):src.index("    # -- behaviour")]
+check("self.chk_errbars = QCheckBox(" in _rp18 and "self.spin_bins = QSpinBox()" in _rp18,
+      "error bars and binning sit above the plot they change")
+check('VERSION = "1.0.18"' in src and "1.0.18 - The form becomes a checklist" in src,
+      "version 1.0.18 with its changelog entry")
 
 if fails:
     print(f"{len(fails)} FAILURE(S)")

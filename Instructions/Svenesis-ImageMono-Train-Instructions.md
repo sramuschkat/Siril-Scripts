@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — User Instructions
 
-**Version 1.8.1** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
+**Version 1.8.2** | Siril Python Script for Monochrome Filter-Wheel Stacking and Colour Composition
 
 > *Point it at one N.I.N.A. target folder and walk away with per-channel masters and a calibrated colour image — calibration, stacking, cross-filter alignment, palette composition and colour calibration in one pass.*
 
@@ -24,7 +24,7 @@
 14. [Troubleshooting](#14-troubleshooting)
 15. [Tips & Best Practices](#15-tips--best-practices)
 16. [FAQ](#16-faq)
-17. [What's New in 1.8.1](#17-whats-new-in-181)
+17. [What's New in 1.8.2](#17-whats-new-in-182)
 
 ---
 
@@ -177,7 +177,8 @@ What it changes, and what it does not:
 | `lights[].status`, `reason`, `detail`, `rejectedBy` | Leaves a frame that is not `ok` out, and reports why |
 | `lights[].night`, `flatSet` | The night the light is calibrated as, and the flat set it is divided by |
 | `lights[].panel` | Which mosaic panel's run takes the light |
-| `lights[].filter`, `exposureS` | Cross-checked against the header only |
+| `lights[].filter`, `ninaFilter`, `exposureS` | Cross-checked against the header only |
+| `filters[].ninaName` | N.I.N.A.'s name for the filter — the one in the header — which gets the NINA-PM filter's role (`S` → SII) |
 | `flatSets[]` | The flat files of each set — the copy in this project's folder first (`flatsInProjectFolder`), then the original name (`flats`) — the night it serves, when it was shot, catch-up or not |
 | `equipment.spccSensor`, `filters[].spccFilter` | SPCC sensor and filter names, used after a check against Siril's tables |
 | `filters[].filterType`, `centerWavelengthNm`, `bandwidthNm` | Narrowband bandwidth for SPCC; a role for a filter name the script does not know |
@@ -950,7 +951,11 @@ No. Everything is written under `Stacked/`, and the raw frames are only read.
 
 ---
 
-## 17. What's New in 1.8.1
+## 17. What's New in 1.8.2
+
+**N.I.N.A.'s filter names, as the header carries them.** The header holds the filter's name in N.I.N.A.'s filter wheel, and that need not be NINA-PM's: on the SFRO2 rig the wheel says `S`, `H` and `Oiii` where NINA-PM says SII, HA and OIII. A bare `S` or `H` names no emission line, so the M 1 export would have been stacked as two filters without a role — RGB proposed instead of SHO, the 3 nm bandwidths reaching no channel, and every SII and HA light logged as a disagreement. The export now carries N.I.N.A.'s name (`ninaName` in the filter list, `ninaFilter` on lights and flat sets); that name gets the NINA-PM filter's role, and a header that matches it is no disagreement. The filter keeps its header name in the table and in the file names.
+
+## What was new in 1.8.1
 
 **One flat run, one master — however many nights it serves.** NINA-PM lists a flat set once for every night of lights it serves, so flats reused for later nights arrive as several sets with the same files. On IC434 one OIII flat run from 10-19 served three nights: the second and third set found every file already taken, their lights fell back to the pooled master, and the report counted 50 flats as missing. The calibration now groups lights by the flat run they use — the night the flats were taken — so those 26 OIII lights share one master, and two single RED frames that use the same flats are calibrated together instead of alone. The lights table still shows the nights the lights were taken.
 

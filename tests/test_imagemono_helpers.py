@@ -1133,6 +1133,53 @@ vp = apply_m(gp, cpp, {}, part)
 check(vp["report"]["flats_missing"] == 0,
       "an empty entry or a missing list (mosaic) falls back to `flats`")
 
+print("\n1.8.2 — N.I.N.A.'s filter names (the SFRO2 rig's S / H / Oiii)")
+NINA = {"SII": "S", "HA": "H", "OIII": "Oiii"}
+nm = {"format": "ninapm-stack-manifest", "version": 1, "filters": [
+    {"shortName": k, "ninaName": v, "filterType": "narrowband",
+     "centerWavelengthNm": wl, "bandwidthNm": 3, "spccFilter": None}
+    for (k, v), wl in zip(NINA.items(), (671.6, 656.3, 500.7))],
+    "lights": [], "flatSets": []}
+for k, v in NINA.items():
+    nm["flatSets"].append({"id": f"fs-{k}", "night": "2026-11-20",
+                           "flatsNight": "2026-11-20", "filter": k,
+                           "ninaFilter": v,
+                           "flats": [f"FLAT_{v}_{n:04d}.fits.fz"
+                                     for n in range(3)]})
+    for n in range(2):
+        nm["lights"].append({"file": f"LIGHT_{v}_{n:04d}.fits.fz",
+                             "night": "2026-11-20", "filter": k,
+                             "ninaFilter": v, "exposureS": 600,
+                             "status": "ok", "flatSet": f"fs-{k}"})
+nroles, nnotes = ns["_manifest_role_overrides"](nm)
+check(nroles == {"S": "sii", "H": "ha"},
+      "ninaName gives S and H the role their NINA-PM filter has; "
+      "Oiii already has it by name")
+check(len(nnotes) == 2 and "S is read as SII" in nnotes[0],
+      "and each such name is noted")
+check(ns["_manifest_role_overrides"](dict(nm, filters=[
+    dict(f, ninaName=f["shortName"]) for f in nm["filters"]]))[0] == {},
+      "a ninaName equal to the NINA-PM name adds nothing")
+hdr = {lt["filter"]: lt["ninaFilter"] for lt in nm["lights"]}
+nm_scan = {"lights": [dict(lt, filter=hdr[lt["filter"]]) for lt in nm["lights"]],
+           "flatSets": [dict(fs, filter=fs["ninaFilter"])
+                        for fs in nm["flatSets"]]}
+gn, cn = _scan(nm_scan)                     # headers carry N.I.N.A.'s names
+vn = apply_m(gn, cn, {}, nm)
+check(not vn["report"]["mismatch"],
+      "a header carrying ninaFilter is no disagreement with NINA-PM")
+check({f: len(g["files"]) for f, g in vn["calib"]["flat"].items()}
+      == {"S": 3, "H": 3, "Oiii": 3},
+      "flats are filed under the header's filter name")
+del nm["lights"][0]["ninaFilter"]
+check(len(apply_m(gn, cn, {}, nm)["report"]["mismatch"]) == 1,
+      "without ninaFilter the same header is still reported")
+ns["_ROLE_OVERRIDES"].clear()
+ns["_ROLE_OVERRIDES"].update(nroles)
+check(ns["_detect_palette"](["H", "Oiii", "S"]) == "SHO",
+      "with the roles in place, S / H / Oiii propose SHO")
+ns["_ROLE_OVERRIDES"].clear()
+
 print()
 if fails:
     print(f"{len(fails)} FAILURE(S)")

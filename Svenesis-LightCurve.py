@@ -1,6 +1,6 @@
 """
 Svenesis LightCurve
-Script Version: 1.0.17
+Script Version: 1.0.18
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -92,6 +92,38 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.0.18 - The form becomes a checklist
+      - The left panel asked for some thirty things, and the frames
+        answer most of them.  It is now three steps: choose the
+        folder, look at "What the frames say", start.  Five rows --
+        target, site, telescope, filter and camera, calibration --
+        each state what was found and WHERE it came from (a header
+        keyword, a field, the last session), and a row asks only for
+        what is missing, saying what its absence costs.  The rows that
+        ask unfold on their own; every row's "Change" unfolds the
+        fields the form always had.  Nothing was removed.
+      - Everything with a default nobody has to touch -- comparison
+        count, SNR floor, channel, the aperture search, the comparison
+        check, sky rings, fit mode with the HOPS-compatible fit and
+        its settings, limb darkening, the airmass term, calibration
+        on/off, frame copies, the AAVSO switches -- is folded into
+        "Expert settings".  The folded header says how many are off
+        their default and which, so a forgotten switch cannot hide,
+        and one button puts them back.
+      - The telescope aperture is remembered per focal length: typed
+        once for a telescope, it comes back with that telescope's
+        frames and the row says so.
+      - A Bayer pattern in the headers switches the colour-camera
+        option on (never off: not every program writes the keyword);
+        a switch that disagrees with the headers is flagged in its
+        row.
+      - A filter typed in an earlier session is shown beside what the
+        headers say instead of silently overriding it.
+      - The library folder is named as such in the Calibration row,
+        with its file count, so one left from another target is seen
+        before the run.
+      - Error bars and binning sit above the plot they change.
+      - The fit, the photometry and every output are unchanged.
 1.0.17 - The aperture's last test, entries that outlive their target, the gain
       The aperture
       - A STABILITY TEST on the transit itself.  Point-to-point noise
@@ -713,7 +745,7 @@ from PyQt6.QtWidgets import (
     QLabel, QPushButton, QGroupBox, QCheckBox, QSpinBox, QDoubleSpinBox,
     QComboBox, QLineEdit, QFileDialog, QMessageBox, QTabWidget, QTextEdit,
     QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, QDialog,
-    QScrollArea, QSizePolicy,
+    QScrollArea, QSizePolicy, QToolButton, QFrame,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSettings
 from PyQt6.QtGui import QColor, QDesktopServices, QFont, QFontDatabase
@@ -740,7 +772,7 @@ from matplotlib.ticker import FuncFormatter
 
 from sirilpy import LogColor
 
-VERSION = "1.0.17"
+VERSION = "1.0.18"
 
 # The full manual on GitHub, linked from the help dialog.  The in-app
 # tabs are the quick reference; the manual carries the measurements
@@ -6900,7 +6932,7 @@ def inspect_frame(path: str, header=None) -> dict:
            "temp_v": None, "binning": 1, "dims": None, "instrument": None,
            "filter": "", "date_obs": "", "date_loc": "", "object": "",
            "objctra": "", "objctdec": "", "datamax": None, "aptdia": None,
-           "focal_mm": None}
+           "focal_mm": None, "bayer": ""}
     h = header if header is not None else _read_header(path)
     if h is None:
         out["kind"] = classify_path(path)
@@ -6922,6 +6954,9 @@ def inspect_frame(path: str, header=None) -> dict:
         "DATE-MID", ""))) or "").strip()
     out["date_end"] = str(h.get("DATE-END", h.get("DATE_END", "")) or "").strip()
     out["instrument"] = str(h.get("INSTRUME", "") or "").strip() or None
+    # A colour sensor says so: capture programs write the mosaic's
+    # pattern, and a mono camera's header has neither keyword.
+    out["bayer"] = str(h.get("BAYERPAT", h.get("COLORTYP", "")) or "").strip()
     for key in ("EXPTIME", "EXPOSURE"):
         if key in h:
             try:
@@ -9338,7 +9373,7 @@ class LightCurveWorker(QThread):
                 # Coefficients that outlived their session carry no
                 # name: nothing recorded which star they were for.
                 self._emit(
-                    "  Limb darkening: the Claret coefficients in group 5 "
+                    "  Limb darkening: the Claret coefficients in the expert settings "
                     "come from an earlier session, and nothing records "
                     "which star and filter they were entered for. Clear "
                     "the field to have them computed for this star, or "
@@ -9378,7 +9413,8 @@ class LightCurveWorker(QThread):
                 else:
                     note = f"Phoenix coefficients unavailable: {why}"
             elif not self.opts.get("auto_ldc", True):
-                note = "Phoenix computation switched off in group 5"
+                note = ("Phoenix computation switched off in the expert "
+                        "settings")
             elif not (teff and logg):
                 note = ("the archive gives no Teff/log g for this star, so "
                         "no Phoenix computation")
@@ -10978,7 +11014,7 @@ class LightCurveWorker(QThread):
                         f"{f_lon:+.4f}) is {gap:.0f} km from the header's "
                         "and was set aside — the frames know where they "
                         "were taken. Tick 'Use the form's site even when "
-                        "the headers carry one' in group 5 if the header "
+                        "the headers carry one' in the Site row if the header "
                         "is the one that is wrong.", LogColor.SALMON)
             return
         if f_lat is not None:
@@ -12604,7 +12640,7 @@ class LightCurveWorker(QThread):
                 "BRIGHTEST star is used. That is a guess — it is right "
                 "surprisingly often, because a transit host is usually why "
                 "the field was framed that way, but check the position "
-                "below, or type the planet's name in group 3.",
+                "below, or type the planet's name in the Target row.",
                 LogColor.SALMON)
         stars, ref_path = self._detect_reference_stars(seq, proc)
         self._ref_stars = stars
@@ -13099,12 +13135,12 @@ class LightCurveWorker(QThread):
         self._scint_note = ""
         sc_term = None
         ap_mm = self.opts.get("aperture_mm")
-        ap_src = "group 5"
+        ap_src = "the Telescope row"
         if not ap_mm:
             infos0 = getattr(self, "_light_infos", None) or [{}]
             ap_mm = infos0[0].get("aptdia") if infos0 else None
             ap_src = "the header's APTDIA"
-        if ap_mm and ap_src == "group 5":
+        if ap_mm and ap_src == "the Telescope row":
             # A value left in the form from another telescope is the usual
             # way this goes wrong: 81 mm stayed in the field under frames
             # from a 4.8 m focal length.  The focal ratio shows it.
@@ -13121,7 +13157,7 @@ class LightCurveWorker(QThread):
                     f_ratio = focal / float(ap_mm)
                     if not 1.5 <= f_ratio <= 20.0:
                         self._emit(
-                            f"  The telescope aperture in group 5 "
+                            f"  The telescope aperture in the Telescope row "
                             f"({float(ap_mm):g} mm) and the frames' focal "
                             f"length ({focal:g} mm) make f/{f_ratio:.0f}, "
                             "which no telescope is: the field probably "
@@ -13132,7 +13168,7 @@ class LightCurveWorker(QThread):
                 if hdr_ap and abs(float(hdr_ap) - float(ap_mm)) \
                         > 0.2 * float(hdr_ap):
                     self._emit(
-                        f"  The telescope aperture in group 5 "
+                        f"  The telescope aperture in the Telescope row "
                         f"({float(ap_mm):g} mm) differs from the header's "
                         f"APTDIA ({float(hdr_ap):g} mm); the field's value "
                         "is used for the scintillation term.",
@@ -13164,7 +13200,7 @@ class LightCurveWorker(QThread):
         elif X is not None and not ap_mm:
             self._emit("  Error bars carry no scintillation term: the "
                        "telescope aperture is unknown (no APTDIA in the "
-                       "header, group 5 field blank).", LogColor.SALMON)
+                       "header, Telescope row blank).", LogColor.SALMON)
 
         # Every basis the fit may use, gathered in one place.  Airmass from
         # the sky position and the site; seeing, sky level and star count
@@ -15964,6 +16000,289 @@ class LightCurvePlot(FigureCanvas):
 
 
 # ---------------------------------------------------------------------------
+# The form as a checklist
+# ---------------------------------------------------------------------------
+# What the dialog used to ask for in thirty fields, the frames mostly
+# say themselves.  The rows below state what was found and where; a row
+# asks only for what is missing.
+CHECKLIST_KEYS = ("target", "site", "telescope", "filter", "calibration")
+# The settings nobody has to touch, their defaults, and what the
+# collapsed "Expert settings" header calls them when one is off its
+# default.
+EXPERT_DEFAULTS = {
+    "fit_mode": "blind", "n_comps": DEFAULT_N_COMPS,
+    "min_snr": float(MIN_COMP_SNR), "channel": 0, "scan_aperture": True,
+    "screen_comps": True, "autoring": True, "auto_ldc": True,
+    "hops_detrend": 0, "hops_iterations": 5000, "hops_ldc": "",
+    "detrend": True, "calibrate": True, "copy_frames": False,
+    "aavso": True, "obstype": "CCD",
+}
+EXPERT_LABELS = {
+    "fit_mode": "fit mode", "n_comps": "comparison stars",
+    "min_snr": "comparison SNR", "channel": "channel",
+    "scan_aperture": "aperture search", "screen_comps": "comparison check",
+    "autoring": "sky rings", "auto_ldc": "Phoenix limb darkening",
+    "hops_detrend": "HOPS detrending", "hops_iterations": "HOPS iterations",
+    "hops_ldc": "Claret coefficients", "detrend": "airmass term",
+    "calibrate": "calibration", "copy_frames": "frame copies",
+    "aavso": "AAVSO file", "obstype": "camera type",
+}
+
+
+def expert_changes(values: dict) -> list:
+    """Labels of the expert settings that are off their default, in the
+    order of `EXPERT_DEFAULTS`.  A key missing from ``values`` counts as
+    at its default."""
+    out = []
+    for key, default in EXPERT_DEFAULTS.items():
+        if key not in values:
+            continue
+        got = values[key]
+        if isinstance(default, float):
+            same = abs(float(got) - default) < 1e-9
+        elif isinstance(default, str):
+            same = str(got).strip() == default
+        else:
+            same = got == default
+        if not same:
+            out.append(EXPERT_LABELS[key])
+    return out
+
+
+def site_text(lat: float, lon: float) -> str:
+    """``31.55° N, 99.38° W`` for a latitude and an east-positive
+    longitude in degrees."""
+    return (f"{abs(float(lat)):.2f}° {'N' if float(lat) >= 0 else 'S'}, "
+            f"{abs(float(lon)):.2f}° {'E' if float(lon) >= 0 else 'W'}")
+
+
+def remembered_aperture(table, focal_mm, tol: float = FLAT_FOCAL_TOL):
+    """The aperture typed earlier for frames of this focal length, from
+    ``{focal_mm: aperture_mm}``, or None.  The nearest focal length
+    within ``tol`` counts: a telescope is typed once, not once a
+    session."""
+    try:
+        focal = float(focal_mm or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if not focal > 0 or not isinstance(table, dict):
+        return None
+    best = None
+    for key, val in table.items():
+        try:
+            f, ap = float(key), float(val)
+        except (TypeError, ValueError):
+            continue
+        if f > 0 and ap > 0 and abs(f - focal) <= tol * focal:
+            if best is None or abs(f - focal) < abs(best[0] - focal):
+                best = (f, ap)
+    return best[1] if best else None
+
+
+def _html_text(text) -> str:
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;"))
+
+
+def checklist_rows(probe: dict, form: dict) -> list:
+    """The dialog's checklist: one row per thing a run needs to know.
+
+    ``probe`` is what the first headers of the chosen folder said
+    (``has_folder``, ``object``, ``radec``, ``site``, ``aptdia``,
+    ``focal_mm``, ``filter``, ``bayer``, ``calibrated``,
+    ``calib_found``); ``form`` what the fields hold (``target_mode``,
+    ``target_name``, ``radec``, ``xy``, ``site``, ``site_force``,
+    ``aperture_mm``, ``aperture_note``, ``filter``, ``cfa``,
+    ``library``, ``calibrate``).
+
+    Returns dicts ``{"key", "level", "title", "source"}`` in
+    `CHECKLIST_KEYS` order.  Levels: ``ok`` (known, and from where),
+    ``ask`` (missing, and the row's field is the way to supply it),
+    ``warn`` (worth a look, nothing to type), ``info``, ``idle`` (no
+    folder yet).  ``source`` says where a value came from or what its
+    absence costs -- never just that it is missing.
+    """
+    probe, form = dict(probe or {}), dict(form or {})
+    if not probe.get("has_folder"):
+        names = {"target": "Target", "site": "Site",
+                 "telescope": "Telescope", "filter": "Filter and camera",
+                 "calibration": "Calibration"}
+        return [{"key": k, "level": "idle", "title": names[k],
+                 "source": "Choose a folder; the frames' headers are read "
+                           "for this."} for k in CHECKLIST_KEYS]
+    rows = []
+
+    # -- target
+    mode = form.get("target_mode") or "auto"
+    name = str(form.get("target_name") or "").strip()
+    hdr_name = str(probe.get("object") or "").strip()
+    named_by_header = bool(name and hdr_name
+                           and target_key(name) == target_key(hdr_name))
+    eph = (f"; ephemeris for {name} from the archive" if name
+           else "; no planet named, so no ephemeris and no O−C")
+    if mode == "brightest":
+        rows.append({"key": "target", "level": "ok",
+                     "title": "Target: the brightest star in the field",
+                     "source": "Chosen in this row" + eph + "."})
+    elif mode == "pixel":
+        ok = bool(form.get("xy"))
+        rows.append({"key": "target", "level": "ok" if ok else "ask",
+                     "title": ("Target: the star at the typed pixel position"
+                               if ok else "Target: pixel position missing"),
+                     "source": ("Snapped to the nearest detected star" + eph
+                                + "." if ok else
+                                "Pixel mode needs both an x and a y.")})
+    elif mode == "radec":
+        ok = bool(form.get("radec"))
+        rows.append({"key": "target", "level": "ok" if ok else "ask",
+                     "title": ("Target: the star at the typed RA/Dec"
+                               if ok else "Target: RA/Dec missing"),
+                     "source": ("Snapped to the nearest detected star" + eph
+                                + "." if ok else
+                                "RA/Dec mode needs both coordinates.")})
+    elif name:
+        where = ("OBJECT" if named_by_header else "Name typed")
+        if probe.get("radec"):
+            where += (" and OBJCTRA/OBJCTDEC in the headers"
+                      if named_by_header else
+                      "; position from OBJCTRA/OBJCTDEC in the headers")
+        elif named_by_header:
+            where += (" in the headers; position "
+                      + ("from the fields" if form.get("radec")
+                         else "from the archive when you run"))
+        else:
+            where += ("; position "
+                      + ("from the fields" if form.get("radec")
+                         else "from the archive when you run"))
+        if hdr_name and not named_by_header:
+            where += f" (the headers say {hdr_name})"
+        rows.append({"key": "target", "level": "ok",
+                     "title": f"Target: {name}", "source": where + "."})
+    elif probe.get("radec") or form.get("radec"):
+        rows.append({"key": "target", "level": "ask",
+                     "title": "Target: a position, but no planet name",
+                     "source": "Without a name there is no ephemeris: the "
+                               "transit is searched blind and no O−C can "
+                               "be given. Name the planet to anchor the "
+                               "fit."})
+    else:
+        rows.append({"key": "target", "level": "ask",
+                     "title": "Target: not named in the headers",
+                     "source": "Type the planet's name; the archive "
+                               "supplies the position and the ephemeris."})
+
+    # -- site
+    h_site, f_site = probe.get("site"), form.get("site")
+    same_site = bool(h_site and f_site
+                     and abs(h_site[0] - f_site[0]) < 0.01
+                     and abs(h_site[1] - f_site[1]) < 0.01)
+    if f_site and not same_site and (form.get("site_force") or not h_site):
+        rows.append({"key": "site", "level": "ok",
+                     "title": "Site: " + site_text(*f_site),
+                     "source": ("Typed, overriding the headers' "
+                                + site_text(*h_site) + "." if h_site else
+                                "From this row's fields, kept from the "
+                                "last session; the headers carry no "
+                                "site.")})
+    elif h_site:
+        rows.append({"key": "site", "level": "ok",
+                     "title": "Site: " + site_text(*h_site),
+                     "source": "SITELAT/SITELONG in the headers."})
+    else:
+        rows.append({"key": "site", "level": "ask",
+                     "title": "Site: not in the headers",
+                     "source": "Without latitude and longitude there is "
+                               "no airmass term, and the times stay JD_UTC "
+                               "instead of BJD_TDB."})
+
+    # -- telescope
+    ap_form, ap_hdr = form.get("aperture_mm"), probe.get("aptdia")
+    ap = ap_form or ap_hdr
+    focal = probe.get("focal_mm")
+    if ap:
+        rows.append({"key": "telescope", "level": "ok",
+                     "title": f"Telescope: {float(ap):g} mm aperture"
+                              + (f", {float(focal):g} mm focal length "
+                                 f"(f/{float(focal) / float(ap):.1f})"
+                                 if focal else ""),
+                     "source": ((str(form.get("aperture_note") or "")
+                                 or "Aperture typed in this row")
+                                if ap_form else "APTDIA in the headers")
+                               + ("; focal length from FOCALLEN."
+                                  if focal else ".")})
+    else:
+        rows.append({"key": "telescope", "level": "ask",
+                     "title": "Telescope aperture: not in the headers",
+                     "source": "Without it the error bars carry no "
+                               "scintillation term."})
+
+    # -- filter and camera
+    f_form = str(form.get("filter") or "").strip()
+    f_hdr = str(probe.get("filter") or "").strip()
+    bayer = str(probe.get("bayer") or "").strip()
+    cfa = bool(form.get("cfa"))
+    camera = ("colour camera" + (f" ({bayer})" if bayer else "")
+              if cfa else "mono camera")
+    cam_src = ("Bayer pattern in the headers" if cfa and bayer else
+               "no Bayer pattern in the headers" if not cfa and not bayer
+               else "colour camera set in this row; the headers carry no "
+                    "Bayer pattern" if cfa else
+               "the headers carry a Bayer pattern, but the colour-camera "
+               "switch in this row is off")
+    cam_odd = cfa != bool(bayer)
+    filt = f_form or f_hdr
+    if filt:
+        src = ("Filter typed in this row"
+               + (f" (the headers say {f_hdr})"
+                  if f_hdr and f_hdr.lower() != f_form.lower() else "")
+               if f_form else "FILTER in the headers")
+        rows.append({"key": "filter",
+                     "level": "warn" if cam_odd else "ok",
+                     "title": f"Filter: {filt} · {camera}",
+                     "source": src + "; " + cam_src + "."})
+    else:
+        rows.append({"key": "filter", "level": "ask",
+                     "title": f"Filter: not in the headers · {camera}",
+                     "source": "Name the passband (CV, V, R, Sloan r…): "
+                               "the limb darkening and the AAVSO file "
+                               "need it. " + cam_src[0].upper()
+                               + cam_src[1:] + "."})
+
+    # -- calibration
+    found = [(str(n), int(c)) for n, c in (probe.get("calib_found") or [])
+             if int(c) > 0]
+    if not form.get("calibrate", True):
+        rows.append({"key": "calibration", "level": "info",
+                     "title": "Calibration: switched off",
+                     "source": "In the expert settings; the frames are "
+                               "measured as they are."})
+    elif found:
+        rows.append({"key": "calibration", "level": "ok",
+                     "title": "Calibration: " + ", ".join(
+                         f"{n} ({c})" for n, c in found),
+                     "source": "Folders beside the lights"
+                               + (" and the library"
+                                  if form.get("library") else "")
+                               + ", with their file counts; matched "
+                                 "against the lights when you run."})
+    elif probe.get("calibrated"):
+        rows.append({"key": "calibration", "level": "ok",
+                     "title": "Calibration: the frames are already "
+                              "calibrated",
+                     "source": "Their headers say so, and no calibration "
+                               "folder lies beside them."})
+    else:
+        rows.append({"key": "calibration", "level": "warn",
+                     "title": "Calibration: no flats, darks or bias beside "
+                              "the lights",
+                     "source": "Frames inside the chosen folder are still "
+                               "found when you run; otherwise the frames "
+                               "are measured as they are. A library folder "
+                               "can be set in this row."})
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # Main window
 # ---------------------------------------------------------------------------
 class SvenesisLightCurveWindow(QMainWindow):
@@ -15981,9 +16300,17 @@ class SvenesisLightCurveWindow(QMainWindow):
         self._folder = ""
         self._worker = None
         self._result = None
+        # What the chosen folder's headers said, for the checklist.
+        self._probe = {}
+        self._calib_found = []
+        self._rows = {}
+        self._ui_ready = False
         self.init_ui()
         self._load_settings()
         self._update_target_fields()
+        self._ui_ready = True
+        self._refresh_checklist()
+        self._refresh_expert_note()
 
     # -- layout -----------------------------------------------------------
     def init_ui(self) -> None:
@@ -16015,12 +16342,24 @@ class SvenesisLightCurveWindow(QMainWindow):
         sub.setWordWrap(True)
         layout.addWidget(sub)
 
+        # Three things to do -- choose the folder, answer the rows that
+        # ask, start -- and everything else folded away.  Every field
+        # the form ever had still exists: behind a row's "Change", or
+        # in the expert settings.
         self._build_source_group(layout)
-        self._build_calibration_group(layout)
-        self._build_target_group(layout)
-        self._build_photometry_group(layout)
-        self._build_analysis_group(layout)
-        self._build_export_group(layout)
+        box = QGroupBox("2 · What the frames say")
+        rows_lay = QVBoxLayout(box)
+        rows_lay.setSpacing(0)
+        for key in CHECKLIST_KEYS:
+            self._add_check_row(rows_lay, key)
+        layout.addWidget(box)
+        self._build_target_group(self._rows["target"]["editor"])
+        self._build_site_editors(self._rows["site"]["editor"],
+                                 self._rows["telescope"]["editor"])
+        self._build_filter_editor(self._rows["filter"]["editor"])
+        self._build_calibration_group(self._rows["calibration"]["editor"])
+        self._build_observer_group(layout)
+        self._build_expert_group(layout)
         layout.addStretch()
 
         scroll.setWidget(inner)
@@ -16029,7 +16368,7 @@ class SvenesisLightCurveWindow(QMainWindow):
         return panel
 
     def _build_source_group(self, parent: QVBoxLayout) -> None:
-        box = QGroupBox("1 · Subs")
+        box = QGroupBox("1 · Frames")
         lay = QVBoxLayout(box)
         row = QHBoxLayout()
         self.btn_folder = QPushButton("Choose folder…")
@@ -16046,13 +16385,11 @@ class SvenesisLightCurveWindow(QMainWindow):
             "them. Symlinks cost nothing; copies double the disk use.\n\n"
             "Tick this only if your drive does not allow symlinks. Either "
             "way the original folder is never written to.")
-        lay.addWidget(self.chk_copy)
         parent.addWidget(box)
 
-    def _build_calibration_group(self, parent: QVBoxLayout) -> None:
-        box = QGroupBox("2 · Calibration")
-        lay = QVBoxLayout(box)
-
+    def _build_calibration_group(self, lay: QVBoxLayout) -> None:
+        """The Calibration row's editor: the library folder.  The
+        on/off switch is an expert setting and is placed there."""
         self.chk_calibrate = QCheckBox("Apply calibration when frames exist")
         self.chk_calibrate.setChecked(True)
         self.chk_calibrate.setToolTip(
@@ -16061,7 +16398,6 @@ class SvenesisLightCurveWindow(QMainWindow):
             "(the N.I.N.A. LIGHT / FLAT layout), masters are stacked and "
             "cached automatically, and whatever is missing is simply "
             "skipped and named in the log.")
-        lay.addWidget(self.chk_calibrate)
 
         row = QHBoxLayout()
         self.btn_library = QPushButton("📁  Library…")
@@ -16086,19 +16422,11 @@ class SvenesisLightCurveWindow(QMainWindow):
         self.lbl_library.setWordWrap(True)
         lay.addWidget(self.lbl_library)
 
-        self.chk_cfa = QCheckBox("One-shot-colour sensor (CFA)")
-        self.chk_cfa.setToolTip(
-            "Adds -cfa -debayer. Without it a Bayer frame is flat-fielded "
-            "across its own mosaic, which writes the CFA pattern into the "
-            "correction. Leave off for a mono camera.")
-        lay.addWidget(self.chk_cfa)
-
         self.lbl_calib_found = QLabel(
             "Choose a folder to see what calibration frames are found.")
         self.lbl_calib_found.setStyleSheet("color:#88aaff;font-size:9pt;")
         self.lbl_calib_found.setWordWrap(True)
         lay.addWidget(self.lbl_calib_found)
-        parent.addWidget(box)
 
     def _on_pick_library(self) -> None:
         path = QFileDialog.getExistingDirectory(
@@ -16119,14 +16447,27 @@ class SvenesisLightCurveWindow(QMainWindow):
         The preview reads headers, so it is capped: the point is to tell
         you whether the flats were found at all, not to be the run.
         """
+        self._calib_found = []
         if not self._folder:
             self.lbl_calib_found.setText(
                 "Choose a folder to see what calibration frames are found.")
+            self._refresh_checklist()
             return
         try:
             roots = calibration_roots(self._folder, self._library)
             names = sorted({os.path.basename(r.rstrip(os.sep)) or r
                             for r in roots})
+            # File counts for the checklist row: a directory listing,
+            # no header is read here.
+            counts = {}
+            lib = (os.path.normpath(self._library)
+                   if self._library else "")
+            for r in roots:
+                key = os.path.basename(r.rstrip(os.sep)) or r
+                if lib and os.path.normpath(r) == lib:
+                    key = "library " + key
+                counts[key] = counts.get(key, 0) + len(_fits_files(r))
+            self._calib_found = sorted(counts.items())
             # Anything filed inside your own selection is picked up by the
             # recursive scan, so a FLAT folder in there needs no mention
             # here -- but saying only "nothing found" would read as "there
@@ -16144,11 +16485,16 @@ class SvenesisLightCurveWindow(QMainWindow):
                     "still found; otherwise set a library folder.")
         except Exception as exc:            # noqa: BLE001 -- preview only
             self.lbl_calib_found.setText(f"Could not scan: {exc}")
+        self._refresh_checklist()
 
-    def _build_target_group(self, parent: QVBoxLayout) -> None:
-        box = QGroupBox("3 · Target star")
-        lay = QVBoxLayout(box)
+    def _build_target_group(self, lay: QVBoxLayout) -> None:
+        """The Target row's editor: how the star is found, its name, and
+        the coordinates for the modes that take them."""
         self.cmb_target = QComboBox()
+        # The longest entry must not set the panel's width.
+        self.cmb_target.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_target.setMinimumContentsLength(14)
         self.cmb_target.addItems([
             "From the frames — name or coordinates in the header",
             "Brightest star in the field",
@@ -16233,10 +16579,13 @@ class SvenesisLightCurveWindow(QMainWindow):
         note.setStyleSheet("color:#888888;font-size:8pt;")
         note.setWordWrap(True)
         lay.addWidget(note)
-        parent.addWidget(box)
+        for w in (self.ed_target_name, self.ed_ra, self.ed_dec, self.ed_x,
+                  self.ed_y):
+            w.textChanged.connect(self._refresh_checklist)
+        self.cmb_target.currentIndexChanged.connect(self._refresh_checklist)
 
     def _build_photometry_group(self, parent: QVBoxLayout) -> None:
-        box = QGroupBox("4 · Photometry")
+        box = QGroupBox("Photometry")
         lay = QVBoxLayout(box)
 
         row = QHBoxLayout()
@@ -16318,7 +16667,7 @@ class SvenesisLightCurveWindow(QMainWindow):
         parent.addWidget(box)
 
     def _build_analysis_group(self, parent: QVBoxLayout) -> None:
-        box = QGroupBox("5 · Analysis")
+        box = QGroupBox("Fit and limb darkening")
         lay = QVBoxLayout(box)
 
         row = QHBoxLayout()
@@ -16339,8 +16688,10 @@ class SvenesisLightCurveWindow(QMainWindow):
             "parameter table. The blind test still runs and still decides "
             "whether a transit is claimed.")
         self.cmb_fit_mode.currentIndexChanged.connect(self._on_fit_mode)
-        row.addWidget(self.cmb_fit_mode)
-        row.addStretch()
+        self.cmb_fit_mode.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_fit_mode.setMinimumContentsLength(14)
+        row.addWidget(self.cmb_fit_mode, 1)
         lay.addLayout(row)
 
         # Short label: the long one widened the panel past the window
@@ -16351,7 +16702,7 @@ class SvenesisLightCurveWindow(QMainWindow):
             "Both fit modes take their limb-darkening coefficients from "
             "the best source at hand: the Claret field below when it is "
             "filled, else — with this on — the Phoenix 2018 computation "
-            "for the star named in group 3 and the filter in group 6 "
+            "for the star named in the Target row and the filter in the Filter row "
             "(the first call per star downloads about four 21 MB model "
             "files into ~/.svenesis), else the script's quadratic "
             "defaults for a Sun-like star in a broad visual band. The "
@@ -16409,8 +16760,8 @@ class SvenesisLightCurveWindow(QMainWindow):
         self.btn_hops_ldc.setToolTip(
             "The coefficients HOPS would use, computed here: ExoTETHyS's "
             "method on the Phoenix 2018 model atmospheres for the planet "
-            "named in group 3 (Teff and log g from the archive) and the "
-            "filter in group 6 (transmission curve from the SVO Filter "
+            "named in the Target row (Teff and log g from the archive) and "
+            "the filter in the Filter row (transmission curve from the SVO Filter "
             "Profile Service).\n\n"
             "The first call per star downloads about four 21 MB model "
             "files into ~/.svenesis and takes a minute; later calls are "
@@ -16441,32 +16792,140 @@ class SvenesisLightCurveWindow(QMainWindow):
             "is carried into the depth instead of being fixed first.")
         lay.addWidget(self.chk_detrend)
 
+        parent.addWidget(box)
+
+    # -- the checklist ----------------------------------------------------
+    def _add_check_row(self, parent: QVBoxLayout, key: str) -> None:
+        """One row of the checklist: a mark, what is known and from
+        where, and a "Change" that unfolds the row's own fields."""
+        frame = QFrame()
+        frame.setObjectName("CheckRow")
+        frame.setStyleSheet("QFrame#CheckRow{border:none;"
+                            "border-bottom:1px solid #3a3a3a;}")
+        v = QVBoxLayout(frame)
+        # No side margins and no indent for the fields: the panel has a
+        # fixed width, and a row wider than it puts a horizontal
+        # scrollbar on the whole left pane.
+        v.setContentsMargins(0, 6, 0, 6)
+        v.setSpacing(4)
+        top = QHBoxLayout()
+        icon = QLabel("–")
+        icon.setFixedWidth(16)
+        icon.setAlignment(Qt.AlignmentFlag.AlignTop
+                          | Qt.AlignmentFlag.AlignHCenter)
+        text = QLabel("")
+        text.setWordWrap(True)
+        text.setTextFormat(Qt.TextFormat.RichText)
+        btn = QToolButton()
+        btn.setText("Change")
+        btn.setCheckable(True)
+        btn.setStyleSheet("QToolButton{border:none;background:transparent;"
+                          "color:#88aaff;padding:0 2px;font-size:9pt;}")
+        btn.setToolTip("Show or hide this row's own fields.")
+        top.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
+        top.addWidget(text, 1)
+        top.addWidget(btn, 0, Qt.AlignmentFlag.AlignTop)
+        v.addLayout(top)
+        editor = QWidget()
+        ed_lay = QVBoxLayout(editor)
+        ed_lay.setContentsMargins(0, 0, 0, 2)
+        editor.setVisible(False)
+        v.addWidget(editor)
+
+        def _toggle(on, _editor=editor, _btn=btn):
+            _editor.setVisible(bool(on))
+            _btn.setText("Hide" if on else "Change")
+        btn.toggled.connect(_toggle)
+        parent.addWidget(frame)
+        self._rows[key] = {"icon": icon, "text": text, "button": btn,
+                           "editor": ed_lay, "level": ""}
+
+    def _probe_facts(self) -> dict:
+        facts = dict(getattr(self, "_probe", None) or {})
+        facts["has_folder"] = bool(self._folder)
+        facts["calib_found"] = list(getattr(self, "_calib_found", []) or [])
+        return facts
+
+    def _form_facts(self) -> dict:
+        lat = _sexagesimal(self.ed_lat.text())
+        lon = _sexagesimal(self.ed_lon.text())
+        ra, dec = self._ra_deg(), _sexagesimal(self.ed_dec.text())
+        return {
+            "target_mode": self._target_mode(),
+            "target_name": self.ed_target_name.text().strip(),
+            "radec": bool(np.isfinite(ra) and np.isfinite(dec)),
+            "xy": bool(self.ed_x.text().strip()
+                       and self.ed_y.text().strip()),
+            "site": ((float(lat), float(lon))
+                     if np.isfinite(lat) and np.isfinite(lon) else None),
+            "site_force": self.chk_site_force.isChecked(),
+            "aperture_mm": _parse_aperture_mm(self.ed_aperture_mm.text()),
+            "aperture_note": getattr(self, "_aperture_note", ""),
+            "filter": self.ed_filter.text().strip(),
+            "cfa": self.chk_cfa.isChecked(),
+            "library": self._library,
+            "calibrate": self.chk_calibrate.isChecked(),
+        }
+
+    def _refresh_checklist(self, *_args, open_asks: bool = False) -> int:
+        """Redraw the rows from the headers' facts and the fields.
+        ``open_asks`` (after a folder was chosen) unfolds exactly the
+        rows that ask for input.  Returns how many rows ask."""
+        if not getattr(self, "_ui_ready", False):
+            return 0
+        marks = {"ok": ("✓", "#88cc88"), "ask": ("!", "#e0b060"),
+                 "warn": ("!", "#e0b060"), "info": ("–", "#999999"),
+                 "idle": ("–", "#777777")}
+        asks = 0
+        for row in checklist_rows(self._probe_facts(), self._form_facts()):
+            w = self._rows.get(row["key"])
+            if not w:
+                continue
+            level = row["level"]
+            mark, colour = marks.get(level, marks["info"])
+            w["level"] = level
+            w["icon"].setText(mark)
+            w["icon"].setStyleSheet(f"color:{colour};font-weight:bold;")
+            tint = ("#e0b060" if level in ("ask", "warn") else
+                    "#999999" if level == "idle" else "#e0e0e0")
+            w["text"].setText(
+                f"<span style='color:{tint}'>{_html_text(row['title'])}"
+                "</span><br><span style='color:#888888;font-size:8pt'>"
+                f"{_html_text(row['source'])}</span>")
+            if level == "ask":
+                asks += 1
+            if open_asks:
+                w["button"].setChecked(level == "ask")
+        # The "Ready" line counts the asking rows; it follows the rows
+        # while it is still that line (a run writes its own).
+        if self._folder and self.lbl_status.text().startswith("Ready"):
+            self.lbl_status.setText(self._ready_text(asks))
+        return asks
+
+    @staticmethod
+    def _ready_text(asks: int) -> str:
+        if asks:
+            # Nothing blocks the run; each asking row says what its
+            # answer is worth.
+            return (f"Ready. {asks} row(s) above ask for something the "
+                    "headers do not say — each says what is lost without "
+                    "it.")
+        return "Ready — every row is answered."
+
+    def _build_site_editors(self, site_lay: QVBoxLayout,
+                            scope_lay: QVBoxLayout) -> None:
+        """The Site row's fields (latitude, longitude, the override) and
+        the Telescope row's (the aperture)."""
         grid = QGridLayout()
-        grid.addWidget(QLabel("Site lat:"), 0, 0)
+        grid.addWidget(QLabel("Latitude:"), 0, 0)
         self.ed_lat = QLineEdit()
         self.ed_lat.setPlaceholderText("50.1  (north +)")
         grid.addWidget(self.ed_lat, 0, 1)
-        grid.addWidget(QLabel("lon:"), 0, 2)
+        grid.addWidget(QLabel("Longitude:"), 1, 0)
         self.ed_lon = QLineEdit()
         self.ed_lon.setPlaceholderText("8.7  (east +)")
-        grid.addWidget(self.ed_lon, 0, 3)
-        grid.addWidget(QLabel("Telescope aperture:"), 1, 0)
-        self.ed_aperture_mm = QLineEdit()
-        self.ed_aperture_mm.setPlaceholderText("mm, e.g. 300 (or APTDIA)")
-        self.ed_aperture_mm.setToolTip(
-            "The telescope's clear aperture in millimetres, for the "
-            "scintillation term of the error bars (Young's formula: "
-            "3-4 mmag per 60 s at airmass 1.5 on a 30 cm telescope, as "
-            "much as the photon noise of a bright target). Blank: the "
-            "header's APTDIA keyword is used when the capture program "
-            "wrote one; otherwise the bars carry no scintillation and "
-            "the log says so.")
-        grid.addWidget(self.ed_aperture_mm, 1, 1)
-        # The focal length of the frames the aperture was entered for.
-        self._aperture_focal_bound = 0.0
-        self._probe_focal_mm = 0.0
-        self.ed_aperture_mm.textEdited.connect(self._on_aperture_edited)
-        lay.addLayout(grid)
+        grid.addWidget(self.ed_lon, 1, 1)
+        site_lay.addLayout(grid)
         self.chk_site_force = QCheckBox(
             "Use the form's site even when the headers carry one")
         self.chk_site_force.setChecked(False)
@@ -16477,40 +16936,76 @@ class SvenesisLightCurveWindow(QMainWindow):
             "override the header — for a capture program that wrote the "
             "wrong site. A form site more than 50 km from the header's is "
             "reported either way.")
-        lay.addWidget(self.chk_site_force)
+        site_lay.addWidget(self.chk_site_force)
 
         row = QHBoxLayout()
-        row.addWidget(QLabel("Bin the plot into:"))
-        self.spin_bins = QSpinBox()
-        self.spin_bins.setRange(0, 200)
-        self.spin_bins.setValue(0)
-        self.spin_bins.setSpecialValueText("off")
-        self.spin_bins.setToolTip(
-            "Draw binned points on top of the raw ones.\n\n"
-            "Presentation only. The fit always sees every point — binning "
-            "first would throw away the very scatter the significance test "
-            "needs to be honest about itself.")
-        self.spin_bins.valueChanged.connect(self._redraw)
-        row.addWidget(self.spin_bins)
-        self.chk_errbars = QCheckBox("Error bars")
-        self.chk_errbars.setChecked(False)
-        self.chk_errbars.setToolTip(
-            "Draw each raw point's 1-sigma uncertainty as a whisker — the "
-            "same per-point error the fit weights with and the CSV carries "
-            "as err_mag (CCD equation: star + sky photon noise and read "
-            "noise).\n\n"
-            "Presentation only, like binning: on or off, the fit and the "
-            "significance see the identical numbers. Off by default "
-            "because a few hundred whiskers bury the transit shape.")
-        self.chk_errbars.toggled.connect(self._redraw)
-        row.addWidget(self.chk_errbars)
-        row.addStretch()
+        row.addWidget(QLabel("Aperture:"))
+        self.ed_aperture_mm = QLineEdit()
+        self.ed_aperture_mm.setPlaceholderText("mm, e.g. 203")
+        self.ed_aperture_mm.setToolTip(
+            "The telescope's clear aperture in millimetres, for the "
+            "scintillation term of the error bars (Young's formula: "
+            "3-4 mmag per 60 s at airmass 1.5 on a 30 cm telescope, as "
+            "much as the photon noise of a bright target). Blank: the "
+            "header's APTDIA keyword is used when the capture program "
+            "wrote one; otherwise the bars carry no scintillation and "
+            "the log says so.")
+        row.addWidget(self.ed_aperture_mm, 1)
+        row.addWidget(QLabel("mm"))
+        scope_lay.addLayout(row)
+        # The focal length of the frames the aperture was entered for.
+        self._aperture_focal_bound = 0.0
+        self._probe_focal_mm = 0.0
+        # {focal length: aperture}, one entry per telescope ever typed.
+        self._apertures = {}
+        self._aperture_note = ""
+        self.ed_aperture_mm.textEdited.connect(self._on_aperture_edited)
+        for w in (self.ed_lat, self.ed_lon, self.ed_aperture_mm):
+            w.textChanged.connect(self._refresh_checklist)
+        self.chk_site_force.toggled.connect(self._refresh_checklist)
+
+    def _build_filter_editor(self, lay: QVBoxLayout) -> None:
+        """The Filter row's fields: the passband and the camera kind."""
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Filter:"))
+        self.ed_filter = QLineEdit()
+        self.ed_filter.setPlaceholderText("blank = as the headers say")
+        self.ed_filter.setToolTip(
+            "The passband, for the limb darkening and the AAVSO file. "
+            "Blank: the frames' FILTER keyword is used. AAVSO's codes "
+            "(CV, CR, CBB, TG…), Johnson/Cousins and Sloan names, "
+            "Red/Green/Blue and L are understood.")
+        row.addWidget(self.ed_filter, 1)
+        lay.addLayout(row)
+        self.chk_cfa = QCheckBox("One-shot-colour sensor (CFA)")
+        self.chk_cfa.setToolTip(
+            "Adds -cfa -debayer. Without it a Bayer frame is flat-fielded "
+            "across its own mosaic, which writes the CFA pattern into the "
+            "correction. Leave off for a mono camera.\n\n"
+            "Switched on when the chosen folder's headers carry a Bayer "
+            "pattern.")
+        lay.addWidget(self.chk_cfa)
+        self.ed_filter.textChanged.connect(self._refresh_checklist)
+        self.chk_cfa.toggled.connect(self._refresh_checklist)
+
+    def _build_observer_group(self, parent: QVBoxLayout) -> None:
+        """The one thing no header knows: who observed."""
+        box = QGroupBox("3 · Observer")
+        lay = QVBoxLayout(box)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("AAVSO observer code"))
+        self.ed_obscode = QLineEdit()
+        self.ed_obscode.setText(DEFAULT_OBSCODE)
+        self.ed_obscode.setPlaceholderText("e.g. ABC — optional")
+        self.ed_obscode.setToolTip(
+            "Your AAVSO observer code, remembered between sessions. Left "
+            "empty the file is still written, with the field marked, and "
+            "you can fill it in later.")
+        row.addWidget(self.ed_obscode, 1)
         lay.addLayout(row)
         parent.addWidget(box)
-
-    def _build_export_group(self, parent: QVBoxLayout) -> None:
-        box = QGroupBox("6 · Submission")
-        lay = QVBoxLayout(box)
+        # The two submission switches are expert settings; they are
+        # created here and placed there.
         self.chk_aavso = QCheckBox("Write an AAVSO Exoplanet Watch file")
         self.chk_aavso.setChecked(True)
         self.chk_aavso.setToolTip(
@@ -16519,37 +17014,142 @@ class SvenesisLightCurveWindow(QMainWindow):
             "Refused when the times are not BJD_TDB: the format declares "
             "that, and JD_UTC under that header is an 8 minute error "
             "nobody could see.")
-        lay.addWidget(self.chk_aavso)
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Observer code"))
-        self.ed_obscode = QLineEdit()
-        self.ed_obscode.setText(DEFAULT_OBSCODE)
-        self.ed_obscode.setPlaceholderText("e.g. ABC — optional")
-        self.ed_obscode.setToolTip(
-            "Your AAVSO observer code. Left empty the file is still "
-            "written, with the field marked, and you can fill it in later.")
-        row.addWidget(self.ed_obscode, 1)
-        row.addWidget(QLabel("Camera"))
         self.cmb_obstype = QComboBox()
         self.cmb_obstype.addItems(["CCD", "DSLR"])
         self.cmb_obstype.setToolTip(
             "AAVSO's #OBSTYPE. CCD also for a CMOS camera (Exoplanet Watch "
             "asks for CCD there and the camera type in the notes), DSLR "
             "for a colour camera's channel.")
+
+    # -- expert settings --------------------------------------------------
+    def _build_expert_group(self, parent: QVBoxLayout) -> None:
+        """Everything with a default nobody has to touch, folded away.
+        The header says when something in there is off its default, so
+        a forgotten switch cannot hide."""
+        head = QHBoxLayout()
+        self.btn_expert = QToolButton()
+        self.btn_expert.setText("Expert settings")
+        self.btn_expert.setCheckable(True)
+        self.btn_expert.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.btn_expert.setArrowType(Qt.ArrowType.RightArrow)
+        self.btn_expert.setStyleSheet(
+            "QToolButton{border:none;background:transparent;color:#cccccc;"
+            "font-weight:bold;padding:4px 2px;}")
+        self.btn_expert.setToolTip(
+            "Photometry, fit mode (including the HOPS-compatible fit), "
+            "limb darkening, calibration and submission switches. Their "
+            "defaults are what the script is tested with.")
+        self.btn_expert.toggled.connect(self._on_expert_toggled)
+        head.addWidget(self.btn_expert)
+        self.lbl_expert = QLabel("all at their defaults")
+        self.lbl_expert.setStyleSheet("color:#888888;font-size:8pt;")
+        self.lbl_expert.setWordWrap(True)
+        self.lbl_expert.setAlignment(Qt.AlignmentFlag.AlignRight
+                                     | Qt.AlignmentFlag.AlignVCenter)
+        head.addWidget(self.lbl_expert, 1)
+        parent.addLayout(head)
+
+        self.expert_box = QWidget()
+        clay = QVBoxLayout(self.expert_box)
+        clay.setContentsMargins(0, 0, 0, 0)
+        self.btn_expert_reset = QPushButton("Reset to defaults")
+        self.btn_expert_reset.setToolTip(
+            "Put every expert setting back to its default. The rows "
+            "above, the observer code and the library folder are not "
+            "touched.")
+        self.btn_expert_reset.clicked.connect(self._on_reset_expert)
+        clay.addWidget(self.btn_expert_reset)
+        self._build_photometry_group(clay)
+        self._build_analysis_group(clay)
+        box = QGroupBox("Files and submission")
+        lay = QVBoxLayout(box)
+        lay.addWidget(self.chk_calibrate)
+        lay.addWidget(self.chk_copy)
+        lay.addWidget(self.chk_aavso)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Camera type in the AAVSO file:"))
         row.addWidget(self.cmb_obstype)
+        row.addStretch()
         lay.addLayout(row)
-        # The target NAME and the archive lookup live in group 3, where
-        # they belong: they decide the target POSITION, not the submission.
-        # Having them here meant the one control that spares you typing
-        # coordinates sat in a group about filing the result.
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Filter"))
-        self.ed_filter = QLineEdit()
-        self.ed_filter.setPlaceholderText("CV")
-        self.ed_filter.setFixedWidth(70)
-        row2.addWidget(self.ed_filter)
-        lay.addLayout(row2)
-        parent.addWidget(box)
+        clay.addWidget(box)
+        self.expert_box.setVisible(False)
+        parent.addWidget(self.expert_box)
+
+        for chk in (self.chk_calibrate, self.chk_copy, self.chk_aavso,
+                    self.chk_scan_aper, self.chk_screen, self.chk_autoring,
+                    self.chk_auto_ldc, self.chk_detrend):
+            chk.toggled.connect(self._refresh_expert_note)
+        for spin in (self.spin_comps, self.spin_snr, self.spin_channel,
+                     self.spin_hops_iter):
+            spin.valueChanged.connect(self._refresh_expert_note)
+        for cmb in (self.cmb_fit_mode, self.cmb_hops_detrend,
+                    self.cmb_obstype):
+            cmb.currentIndexChanged.connect(self._refresh_expert_note)
+        self.ed_hops_ldc.textChanged.connect(self._refresh_expert_note)
+        self.chk_calibrate.toggled.connect(self._refresh_checklist)
+
+    def _on_expert_toggled(self, on: bool) -> None:
+        self.expert_box.setVisible(bool(on))
+        self.btn_expert.setArrowType(Qt.ArrowType.DownArrow if on
+                                     else Qt.ArrowType.RightArrow)
+
+    def _expert_values(self) -> dict:
+        return {
+            "fit_mode": ("hops" if self.cmb_fit_mode.currentIndex() == 1
+                         else "blind"),
+            "n_comps": int(self.spin_comps.value()),
+            "min_snr": float(self.spin_snr.value()),
+            "channel": int(self.spin_channel.value()),
+            "scan_aperture": self.chk_scan_aper.isChecked(),
+            "screen_comps": self.chk_screen.isChecked(),
+            "autoring": self.chk_autoring.isChecked(),
+            "auto_ldc": self.chk_auto_ldc.isChecked(),
+            "hops_detrend": int(self.cmb_hops_detrend.currentIndex()),
+            "hops_iterations": int(self.spin_hops_iter.value()),
+            "hops_ldc": self.ed_hops_ldc.text().strip(),
+            "detrend": self.chk_detrend.isChecked(),
+            "calibrate": self.chk_calibrate.isChecked(),
+            "copy_frames": self.chk_copy.isChecked(),
+            "aavso": self.chk_aavso.isChecked(),
+            "obstype": self.cmb_obstype.currentText(),
+        }
+
+    def _refresh_expert_note(self, *_args) -> None:
+        """Say on the folded header what is off its default."""
+        if not getattr(self, "_ui_ready", False):
+            return
+        changed = expert_changes(self._expert_values())
+        if not changed:
+            self.lbl_expert.setText("all at their defaults")
+            self.lbl_expert.setStyleSheet("color:#888888;font-size:8pt;")
+        else:
+            shown = ", ".join(changed[:3]) + ("…" if len(changed) > 3 else "")
+            self.lbl_expert.setText(f"{len(changed)} changed: {shown}")
+            self.lbl_expert.setStyleSheet("color:#e0b060;font-size:8pt;")
+        self.btn_expert_reset.setEnabled(bool(changed))
+
+    def _on_reset_expert(self) -> None:
+        d = EXPERT_DEFAULTS
+        self.cmb_fit_mode.setCurrentIndex(1 if d["fit_mode"] == "hops" else 0)
+        self.spin_comps.setValue(int(d["n_comps"]))
+        self.spin_snr.setValue(float(d["min_snr"]))
+        self.spin_channel.setValue(int(d["channel"]))
+        self.chk_scan_aper.setChecked(bool(d["scan_aperture"]))
+        self.chk_screen.setChecked(bool(d["screen_comps"]))
+        self.chk_autoring.setChecked(bool(d["autoring"]))
+        self.chk_auto_ldc.setChecked(bool(d["auto_ldc"]))
+        self.cmb_hops_detrend.setCurrentIndex(int(d["hops_detrend"]))
+        self.spin_hops_iter.setValue(int(d["hops_iterations"]))
+        self.ed_hops_ldc.setText(str(d["hops_ldc"]))
+        self._ldc_bound = ""
+        self._ldc_fresh = False
+        self.chk_detrend.setChecked(bool(d["detrend"]))
+        self.chk_calibrate.setChecked(bool(d["calibrate"]))
+        self.chk_copy.setChecked(bool(d["copy_frames"]))
+        self.chk_aavso.setChecked(bool(d["aavso"]))
+        self.cmb_obstype.setCurrentText(str(d["obstype"]))
+        self._refresh_expert_note()
 
     def _build_action_buttons(self, parent: QVBoxLayout) -> None:
         self.progress = QProgressBar()
@@ -16613,6 +17213,30 @@ class SvenesisLightCurveWindow(QMainWindow):
             "see the identical numbers.")
         self.chk_expected.toggled.connect(self._redraw)
         prow.addWidget(self.chk_expected)
+        self.chk_errbars = QCheckBox("Error bars")
+        self.chk_errbars.setChecked(False)
+        self.chk_errbars.setToolTip(
+            "Draw each raw point's 1-sigma uncertainty as a whisker — the "
+            "same per-point error the fit weights with and the CSV carries "
+            "as err_mag (CCD equation: star + sky photon noise and read "
+            "noise).\n\n"
+            "Presentation only, like binning: on or off, the fit and the "
+            "significance see the identical numbers. Off by default "
+            "because a few hundred whiskers bury the transit shape.")
+        self.chk_errbars.toggled.connect(self._redraw)
+        prow.addWidget(self.chk_errbars)
+        prow.addWidget(QLabel("Bin into:"))
+        self.spin_bins = QSpinBox()
+        self.spin_bins.setRange(0, 200)
+        self.spin_bins.setValue(0)
+        self.spin_bins.setSpecialValueText("off")
+        self.spin_bins.setToolTip(
+            "Draw binned points on top of the raw ones.\n\n"
+            "Presentation only. The fit always sees every point — binning "
+            "first would throw away the very scatter the significance test "
+            "needs to be honest about itself.")
+        self.spin_bins.valueChanged.connect(self._redraw)
+        prow.addWidget(self.spin_bins)
         prow.addStretch()
         pv.addLayout(prow)
         pv.addWidget(self.plot)
@@ -16693,6 +17317,7 @@ class SvenesisLightCurveWindow(QMainWindow):
         -- measured at 153 ms for 30 compressed N.I.N.A. subs, which is a
         click, while several hundred would be a freeze.
         """
+        self._probe = {}
         if not files:
             return
         infos = []
@@ -16774,7 +17399,7 @@ class SvenesisLightCurveWindow(QMainWindow):
             self.ed_hops_ldc.setText("")
             self._ldc_bound = ""
             found.append(
-                f"cleared the Claret coefficients in group 5 — they were "
+                f"cleared the Claret coefficients in the expert settings — they were "
                 f"entered for {ldc_for!r}"
                 + (", and the run computes this star's from the Phoenix "
                    "models" if self.chk_auto_ldc.isChecked() else
@@ -16794,14 +17419,57 @@ class SvenesisLightCurveWindow(QMainWindow):
             self.ed_aperture_mm.setText("")
             self._aperture_focal_bound = 0.0
             found.append(
-                f"cleared the telescope aperture in group 5 ({ap_text} "
-                f"mm) — {why}. The header's APTDIA is used when there is "
-                "one; otherwise enter this telescope's, or the error "
-                "bars carry no scintillation term")
+                f"cleared the telescope aperture ({ap_text} mm) — {why}. "
+                "The header's APTDIA is used when there is one; otherwise "
+                "the Telescope row asks for this telescope's")
         elif ap_text and focal and not getattr(
                 self, "_aperture_focal_bound", 0.0):
             # First sight of a plausible pair: bound from here on.
             self._aperture_focal_bound = focal
+        self._aperture_note = ""
+        if not self.ed_aperture_mm.text().strip() and focal:
+            # This telescope was typed before: its aperture comes back
+            # with its frames.
+            known = remembered_aperture(getattr(self, "_apertures", {}),
+                                        focal)
+            if known:
+                self.ed_aperture_mm.setText(f"{known:g}")
+                self._aperture_focal_bound = focal
+                self._aperture_note = (f"Aperture remembered for frames "
+                                       f"of {focal:g} mm focal length")
+                found.append(f"telescope aperture {known:g} mm, remembered "
+                             f"for frames of {focal:g} mm focal length")
+        # What the rows of the checklist state.  One more header read
+        # for the two things `inspect_frame` does not carry: the site
+        # and whether the frames were calibrated before.
+        hdr0, site, calibrated = None, None, False
+        try:
+            hdr0 = _read_header(lights[0]["path"]) if lights else None
+            got = site_from_header(hdr0) if hdr0 is not None else None
+            if got:
+                site = (float(got[0]), float(got[1]))
+            if hdr0 is not None:
+                calibrated = frames_are_calibrated(hdr0)[0] is True
+        except Exception as exc:                   # noqa: BLE001
+            _log_swallowed(exc)
+        bayer = next((str(i.get("bayer")) for i in lights
+                      if i.get("bayer")), "")
+        if bayer and not self.chk_cfa.isChecked():
+            # A Bayer frame flat-fielded as mono has the mosaic written
+            # into the correction.  Switched ON by the headers; never
+            # off, because not every program writes the keyword.
+            self.chk_cfa.setChecked(True)
+            found.append(f"a colour camera (Bayer pattern {bayer}): the "
+                         "colour-camera switch in the Filter row is now on")
+        self._probe = {
+            "object": name, "radec": ra is not None, "site": site,
+            "aptdia": next((i.get("aptdia") for i in lights
+                            if i.get("aptdia")), None),
+            "focal_mm": focal or None,
+            "filter": next((str(i.get("filter")).strip() for i in lights
+                            if (i.get("filter") or "").strip()), ""),
+            "bayer": bayer, "calibrated": calibrated,
+        }
         if found:
             self._log("Read from the first "
                       f"{min(len(files), PROBE_HEADERS)} header(s): "
@@ -16809,8 +17477,8 @@ class SvenesisLightCurveWindow(QMainWindow):
         else:
             self._log(
                 "The headers name no target and carry no OBJCTRA/OBJCTDEC. "
-                "Type the planet's name in group 3 and the archive will "
-                "supply the coordinates, or pick another target mode.",
+                "Type the planet's name in the Target row and the archive "
+                "will supply the coordinates, or pick another target mode.",
                 LogColor.SALMON)
 
     def _on_pick_folder(self) -> None:
@@ -16831,13 +17499,14 @@ class SvenesisLightCurveWindow(QMainWindow):
             f"you run.")
         self._refresh_calib_preview()
         self._probe_target(files)
+        asks = self._refresh_checklist(open_asks=True)
         self.btn_run.setEnabled(len(files) >= 10)
         if len(files) < 10:
             self.lbl_status.setText(
                 f"Only {len(files)} frame(s) — a light curve needs a time "
                 "series. Ten is the bare minimum.")
         else:
-            self.lbl_status.setText("Ready.")
+            self.lbl_status.setText(self._ready_text(asks))
 
     def _target_mode(self) -> str:
         return ("auto", "brightest", "pixel",
@@ -16866,7 +17535,7 @@ class SvenesisLightCurveWindow(QMainWindow):
         band = hops_filter_name(self.ed_filter.text())
         if not name:
             QMessageBox.warning(self, "Svenesis LightCurve",
-                                "Name the planet in group 3 first — the "
+                                "Name the planet in the Target row first — the "
                                 "star's temperature and gravity come from "
                                 "the archive.")
             return
@@ -16882,7 +17551,7 @@ class SvenesisLightCurveWindow(QMainWindow):
                 return
             QMessageBox.warning(
                 self, "Svenesis LightCurve",
-                f"The filter '{self.ed_filter.text().strip()}' in group 6 "
+                f"The filter '{self.ed_filter.text().strip()}' in the Filter row "
                 "is not one HOPS knows. Accepted: "
                 + ", ".join(sorted(set(HOPS_FILTERS)))
                 + "; also Red/Green/Blue (nearest standard passband), "
@@ -16918,6 +17587,8 @@ class SvenesisLightCurveWindow(QMainWindow):
         self._aperture_focal_bound = (
             float(getattr(self, "_probe_focal_mm", 0.0) or 0.0)
             if self.ed_aperture_mm.text().strip() else 0.0)
+        self._aperture_note = ""
+        self._refresh_checklist()
 
     def _on_hops_ldc_done(self, vals, note: str) -> None:
         self.btn_hops_ldc.setEnabled(True)
@@ -17682,6 +18353,11 @@ class SvenesisLightCurveWindow(QMainWindow):
                 st.value("aperture_focal_mm", 0.0) or 0.0)
         except (TypeError, ValueError):
             self._aperture_focal_bound = 0.0
+        try:
+            table = json.loads(str(st.value("apertures_by_focal", "") or "{}"))
+            self._apertures = table if isinstance(table, dict) else {}
+        except (TypeError, ValueError):
+            self._apertures = {}
         self._on_fit_mode()
 
     def _save_settings(self) -> None:
@@ -17725,6 +18401,14 @@ class SvenesisLightCurveWindow(QMainWindow):
         st.setValue("aperture_focal_mm",
                     float(getattr(self, "_aperture_focal_bound", 0.0) or 0.0)
                     if self.ed_aperture_mm.text().strip() else 0.0)
+        ap_now = _parse_aperture_mm(self.ed_aperture_mm.text())
+        focal_now = float(getattr(self, "_aperture_focal_bound", 0.0) or 0.0)
+        if ap_now and focal_now > 0:
+            table = dict(getattr(self, "_apertures", {}) or {})
+            table[str(int(round(focal_now)))] = float(ap_now)
+            self._apertures = table
+        st.setValue("apertures_by_focal",
+                    json.dumps(getattr(self, "_apertures", {}) or {}))
 
     # -- coffee -----------------------------------------------------------
     def _show_coffee_dialog(self) -> None:
@@ -17848,6 +18532,23 @@ simultaneous limb-darkened fit, calibrated significance, O−C and the
 AAVSO file. The full point-by-point comparison, with the Siril
 documentation linked, is in the manual's FAQ — links below this
 window.</p>
+<h3 style='color:#88aaff'>The dialog</h3>
+<p>Three things to do on the left: <b>choose the folder</b>, look at
+<b>What the frames say</b>, press <b>Measure light curve</b>.</p>
+<p>The five rows — target, site, telescope, filter and camera,
+calibration — are filled from the headers of the folder you chose.
+A green tick is a value and where it came from; an amber mark is
+something the headers do not say, with what the run loses without it,
+and that row's field is already unfolded. Nothing blocks the run.
+<b>Change</b> unfolds any row's own fields: another target mode or
+coordinates, a site that overrides the header, the telescope's aperture
+(remembered per focal length, so it is typed once per telescope), a
+filter name, the library folder for darks and bias.</p>
+<p><b>Expert settings</b> holds everything with a default that is what
+the script is tested with: photometry switches, the fit mode with the
+HOPS-compatible fit, limb darkening, calibration on/off, submission.
+Folded, its header says how many settings are off their default and
+which; <b>Reset to defaults</b> puts them back.</p>
 <h3 style='color:#88aaff'>The steps</h3>
 <ol>
 <li><b>Stage</b> — your subs are symlinked into a working folder. The
@@ -18250,7 +18951,7 @@ from ExoTETHyS: Phoenix model intensities integrated over the passband,
 the spherical model's outer drop-off cut away, a weighted fit,
 interpolated between the star's grid neighbours. <b>Compute Claret
 (Phoenix)</b> does exactly that here, for the named planet's Teff and
-log g from the archive and the filter in group 6, with the transmission
+log g from the archive and the filter in the Filter row, with the transmission
 curve from the SVO Filter Profile Service. The filter name may be HOPS's
 spelling (R, V, r', …), a Johnson/Cousins/Sloan/SDSS/2MASS name, or what
 an RGB wheel writes (RED, GREEN, BLUE — taken as Cousins R, Johnson V,
@@ -18384,7 +19085,7 @@ when the star never moves anyway.</td></tr>
 <td>Flats above all: a star drifting across a dust shadow is a slow trend
 that looks exactly like a shallow transit, and after a meridian flip the
 target lands on a different patch of sensor — that is a step, not a wobble.
-Point <b>2 · Calibration</b> at your masters, or calibrate the frames
+Point the <b>Calibration</b> row's library at your masters, or calibrate the frames
 before pointing this script at them; either way, do it.</td></tr>
 <tr><td style='color:#88aaff'><b>Same exposure throughout</b></td>
 <td>Changing exposure mid-run changes the saturation margin and the

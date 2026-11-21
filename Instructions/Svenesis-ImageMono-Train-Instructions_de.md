@@ -1,6 +1,6 @@
 # Svenesis ImageMono Train — Benutzeranleitung
 
-**Version 1.8.1** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
+**Version 1.8.2** | Siril Python-Skript für Mono-Filterrad-Stacking und Farbkomposition
 
 > *Einen N.I.N.A.-Zielordner auswählen und mit fertigen Kanal-Mastern und einem kalibrierten Farbbild zurückkommen — Kalibrierung, Stacking, Kanalausrichtung, Palettenkomposition und Farbkalibrierung in einem Durchgang.*
 
@@ -24,7 +24,7 @@
 14. [Fehlerbehebung](#14-fehlerbehebung)
 15. [Tipps & Empfehlungen](#15-tipps--empfehlungen)
 16. [Häufige Fragen](#16-häufige-fragen)
-17. [Neu in 1.8.1](#17-neu-in-181)
+17. [Neu in 1.8.2](#17-neu-in-182)
 
 ---
 
@@ -177,7 +177,8 @@ Was es ändert, und was nicht:
 | `lights[].status`, `reason`, `detail`, `rejectedBy` | Lässt einen Frame, der nicht `ok` ist, weg und nennt den Grund |
 | `lights[].night`, `flatSet` | Die Nacht, als die das Light kalibriert wird, und der Flat-Satz, durch den es geteilt wird |
 | `lights[].panel` | Welcher Panel-Lauf das Light übernimmt |
-| `lights[].filter`, `exposureS` | Nur zum Abgleich mit dem Header |
+| `lights[].filter`, `ninaFilter`, `exposureS` | Nur zum Abgleich mit dem Header |
+| `filters[].ninaName` | N.I.N.A.s Name für den Filter — der im Header — bekommt die Rolle des NINA-PM-Filters (`S` → SII) |
 | `flatSets[]` | Die Flat-Dateien jedes Satzes — zuerst die Kopie im Projektordner (`flatsInProjectFolder`), dann der Originalname (`flats`) —, die Nacht, der er dient, wann er aufgenommen wurde, nachgeholt oder nicht |
 | `equipment.spccSensor`, `filters[].spccFilter` | SPCC-Sensor- und Filternamen, genutzt nach einer Prüfung gegen Sirils Tabellen |
 | `filters[].filterType`, `centerWavelengthNm`, `bandwidthNm` | Schmalband-Bandbreite für SPCC; eine Rolle für einen Filternamen, den das Skript nicht kennt |
@@ -950,7 +951,11 @@ Nein. Alles wird unter `Stacked/` geschrieben, die Rohframes werden nur gelesen.
 
 ---
 
-## 17. Neu in 1.8.1
+## 17. Neu in 1.8.2
+
+**N.I.N.A.s Filternamen, wie der Header sie trägt.** Im Header steht der Name des Filters im Filterrad von N.I.N.A., und der muss nicht der von NINA-PM sein: An der SFRO2-Rig heißen die Filter dort `S`, `H` und `Oiii`, in NINA-PM SII, HA und OIII. Ein bloßes `S` oder `H` nennt keine Emissionslinie, also wäre der M 1-Export als zwei Filter ohne Rolle gestackt worden — RGB statt SHO vorgeschlagen, die 3-nm-Bandbreiten bei keinem Kanal angekommen und jedes SII- und HA-Light als Widerspruch im Log. Der Export nennt jetzt N.I.N.A.s Namen (`ninaName` in der Filterliste, `ninaFilter` bei Lights und Flat-Sätzen); dieser Name bekommt die Rolle des NINA-PM-Filters, und ein Header, der ihm entspricht, ist kein Widerspruch. In der Tabelle und in den Dateinamen behält der Filter seinen Header-Namen.
+
+## Was neu war in 1.8.1
 
 **Ein Flat-Lauf, ein Master — egal für wie viele Nächte.** NINA-PM führt einen Flat-Satz einmal pro Nacht, deren Lights er dient; Flats, die für spätere Nächte wiederverwendet werden, kommen daher als mehrere Sätze mit denselben Dateien. Bei IC434 diente ein OIII-Flat-Lauf vom 19.10. drei Nächten: der zweite und dritte Satz fanden jede Datei schon vergeben, ihre Lights fielen auf den gepoolten Master zurück, und der Bericht zählte 50 Flats als fehlend. Die Kalibrierung gruppiert die Lights jetzt nach dem Flat-Lauf, den sie nutzen — der Nacht, in der die Flats aufgenommen wurden —, so teilen sich diese 26 OIII-Lights einen Master, und zwei einzelne RED-Frames mit denselben Flats werden zusammen statt allein kalibriert. Die Lights-Tabelle zeigt weiterhin die Nächte, in denen die Lights entstanden.
 

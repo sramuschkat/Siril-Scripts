@@ -1,6 +1,6 @@
 """
 Svenesis ImageMono Train
-Script Version: 1.8.1
+Script Version: 1.8.2
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -76,7 +76,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Script Name: Svenesis ImageMono Train
-# Script Version: 1.8.1
+# Script Version: 1.8.2
 # Siril Version: 1.4.0
 # Python Module Version: 1.0.0
 # Script Category: preprocessing
@@ -100,6 +100,19 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #   fallback and the content-based IMAGETYP inference.  Thank you.
 
 CHANGELOG:
+1.8.2 - N.I.N.A.'s filter names, as the header carries them
+      - THE HEADER'S FILTER NAME GETS ITS ROLE FROM NINA-PM.  On the SFRO2
+        rig the filter wheel calls the filters "S", "H" and "Oiii", which
+        is what N.I.N.A. writes into FILTER, while NINA-PM calls them SII,
+        HA and OIII.  A bare "S" or "H" has no role by name, so the M 1
+        export would have been stacked as two role-less filters plus OIII:
+        RGB proposed instead of SHO, the 3 nm bandwidths reaching no
+        channel, and every SII and HA light logged as a disagreement.  The
+        export now names N.I.N.A.'s filter (filters[].ninaName, and
+        ninaFilter on lights and flat sets).  The role of the NINA-PM
+        filter goes to that name as well, and a header matching
+        ninaFilter is no disagreement.  The header stays the group name.
+
 1.8.1 - One flat run, one master -- however many nights it serves
       - FLAT SETS THAT SHARE THEIR FILES MAKE ONE MASTER.  NINA-PM lists a
         set once per night of lights it serves, so flats reused for later
@@ -793,7 +806,7 @@ from PyQt6.QtGui import QColor, QDesktopServices, QPalette
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VERSION = "1.8.1"
+VERSION = "1.8.2"
 SETTINGS_ORG = "Svenesis"
 SETTINGS_APP = "ImageMonoTrain"
 LEFT_PANEL_WIDTH = 380
@@ -2891,6 +2904,12 @@ def _manifest_role_overrides(man: dict) -> tuple:
     called "H-Alpha 3nm Edge" carries no name `_filter_role` knows, and
     its 656 nm centre does.  A role the name already gets right is not
     repeated, so a manifest cannot quietly change a working LRGB run.
+
+    `ninaName` is the filter's name in N.I.N.A.'s filter wheel, which is
+    what the FITS header carries -- and what discovery groups by.  On the
+    SFRO2 rig that is "S" / "H" / "Oiii" where NINA-PM says SII / HA /
+    OIII, and a bare "S" or "H" has no role by name.  The role goes to
+    that name too, so the header's filter is what gets it.
     """
     roles, notes = {}, []
     for entry in (man or {}).get("filters") or []:
@@ -2906,6 +2925,12 @@ def _manifest_role_overrides(man: dict) -> tuple:
             roles[_norm_filter(short)] = role
             notes.append(f"{short} is read as {_ROLE_LABEL.get(role, role)} "
                          "— from the NINA-PM filter list, not its name.")
+        nina = str(entry.get("ninaName") or "").strip()
+        if (role and nina and _norm_filter(nina) != _norm_filter(short)
+                and role != _name_role(nina)):
+            roles[_norm_filter(nina)] = role
+            notes.append(f"{nina} is read as {_ROLE_LABEL.get(role, role)} "
+                         f"— N.I.N.A.'s name for NINA-PM's {short}.")
     return roles, notes
 
 
@@ -3099,8 +3124,12 @@ def _apply_manifest(groups: dict, calib: dict, nights: dict, man: dict,
                 continue
             seen.add(name)
             report["matched"] += 1
+            # The header carries N.I.N.A.'s filter name (ninaFilter), which
+            # need not be NINA-PM's: "S" for SII on the SFRO2 rig.
             mf = str(entry.get("filter") or "")
-            if mf and _norm_filter(mf) != _norm_filter(filt):
+            nf = str(entry.get("ninaFilter") or "")
+            if mf and _norm_filter(filt) not in (_norm_filter(mf),
+                                                 _norm_filter(nf or mf)):
                 report["mismatch"].append(
                     f"{name}: NINA-PM says filter {mf}, the header {filt}")
             try:
