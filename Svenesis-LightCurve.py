@@ -1,6 +1,6 @@
 """
 Svenesis LightCurve
-Script Version: 1.0.21
+Script Version: 1.0.23
 =====================================
 
 Author: Svenesis-Siril-Scripts project.
@@ -92,6 +92,135 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 
 CHANGELOG:
+1.0.23 - Ten runs in Siril: what the logs asked for
+      1.0.21 and 1.0.22 went through ten runs in Siril on eight nights.
+      Every claim came out as it should; fourteen things in the logs
+      and the dialog did not, and two of the safeguards turned out to
+      rest on less than they said.
+      Comparison stars
+      - THE ONE-STAR TEST REMOVES ONLY A STAR THE TRANSIT IS DEEPER
+        WITH.  It judged by the size of the shift, and the test is not
+        symmetric: beside one star that brightens through the window,
+        every good star reads "shallower with it than without".
+        Replayed with five stars, TOI-3540.01 lost its three good ones
+        in turn and came out as a 40 mmag transit at 5.9 sigma on the
+        variable star and one other -- had the night crossed the
+        detection floor (it read 4.3).  A guard against false claims
+        must never raise one: a star that makes the transit shallower
+        is reported, with what the depth would be without it, and
+        stays.
+      - THE SELECTION BY THE FIT'S RESIDUAL NO LONGER CHASES NOISE.
+        On TOI-4033.01 (47 points) four of six stars were dropped for
+        gains of 3-5 % each, where a residual of 47 points is known to
+        11 % and the point-to-point noise was 13.1-13.3 mmag for every
+        ensemble; the two that stayed had the largest scatter of their
+        own.  With two stars the one-star test and the shared-term
+        test could not run, and the false transit was caught by the
+        last line only.  The gain asked for now grows as the run gets
+        shorter (1/sqrt(2 dof), never under 3 %), and three stars
+        always stay.  On that night all six stay and the x term is
+        taken out as the target's alone.
+      - THE HEADROOM GUARD READS THE NIGHT, NOT ONE FRAME.  Under 2 px
+        of FWHM the brightest pixel holds 16 % of a star's flux between
+        four pixels and 29 % on one: measured on WASP-75 b, every
+        star's peak swung by a factor 1.5-1.8 where the guard allowed
+        1.08 for the seeing.  A star promoted "at 68 %" was clipped in
+        52 of 160 frames.  The peak is now read on twelve frames across
+        the run and the sharpest one, and the highest counts.  A star
+        whose core is clipped is called clipped, not "at 116 % of the
+        clip level".
+      - "SHARED" MEANS THE COMPARISON STARS SHOW IT.  HAT-P-25 b's six
+        read a median of -0.5 +- 0.5 mmag/px against the target's -3.2;
+        that the target lay within 2 sigma of them made the log say
+        "shared by the ensemble, an instrumental dependence".  That
+        case now reads NOT TOLD APART, and the term is kept as before.
+      The aperture
+      - THE SEEING CORRELATION TAKES THE PREDICTED TRANSIT OUT FIRST.
+        On TOI-3856 b the seeing improved all night (9.9 -> 7.8 px)
+        while the target came out of transit, so the transit itself
+        correlated with the seeing (+0.56) and every aperture read
+        "tracks the seeing" at +0.55...+0.61.  Five were passed over
+        and the smallest chosen: 5.68 mmag where 12.98 px had 3.18.
+        With the predicted transit (and a flip step) out of both, and
+        the minutes round the contacts left aside, the curve reads
+        under 0.1.
+      A run with one contact
+      - "0.0 SIGMA" IS EXPLAINED, AND THE EVIDENCE IS SHOWN.  A transit
+        is claimed only with a baseline on both sides -- a step that
+        does not return cannot be told from a trend -- and that rule
+        stands.  But TOI-3856 b, begun twelve minutes before
+        mid-transit, was told "0.0 sigma" over an egress of 12.7 +-
+        2.2 mmag.  The log and the verdict now name the missing side,
+        and for an anchored fit describe what is there: the depth, and
+        whether a transit profile fits better than a smooth trend (a
+        quadratic in time beside the same systematics) as a difference
+        in BIC.  Evidence, said as such.
+      The dialog
+      - A SITE THE LAST RUN COPIED FROM ITS FRAMES IS NOT "THE SITE IN
+        THE FORM".  Every change of observatory drew a warning about an
+        entry nobody had typed, with the advice to tick a box.  Only a
+        typed site is compared with the header's now; and when frames
+        carry no site, a value carried over from another run's headers
+        makes the Site row ask.
+      - AN APERTURE THAT MAKES NO TELESCOPE IS NOT TICKED GREEN.  2032
+        mm on 2032 mm of focal length had been typed, remembered and
+        shown as "f/1.0" with a tick while the run's log objected.
+        Such a pair is cleared on the next folder, never offered from
+        the memory again, and the row asks.
+      The log and the plot
+      - The saturation exit states its reason once.
+      - Darks that are the flats' dark-flats get one statement instead
+        of a rejection followed by "but".
+      - The AAVSO file of a night without a claimed transit is called
+        what it is: photometry only, no #RESULTS.
+      - The one-star test says when it did not run, and why.
+      - "On its own side of the flip" is said only on a night with a
+        flip.
+      - The duration labels stay clear of the clock stamps along the
+        bottom of the plot.
+1.0.22 - The shared-term test on a night with a meridian flip
+      1.0.21 made "only the target shows this term" a reason to take
+      the term out.  The first runs of it in Siril showed that the test
+      behind that sentence did not measure what it said on a night
+      with a flip -- five of the test nights had one.
+      - THE COMPARISON STARS' POSITIONS ARE REFERRED TO EACH SIDE OF
+        THE FLIP, as the target's always were.  A flip throws a star
+        across the sensor: 620 to 2790 px on TOI-3540.01, against 4-5
+        px of drift within a side.  Its raw x is therefore the step
+        itself, and the "slope per pixel" was the star's flip offset
+        divided by that jump: +0.00...+0.02 mmag/px with a bar of 0.00,
+        whatever the star did.  Against that, any significant slope on
+        the target read "only the target shows it" -- the position
+        terms were in effect switched off on every flip night, and
+        TOI-4033.01's x term had been removed for the wrong reason.
+        Measured properly its five comparison stars read +4.6, -1.5,
+        +6.7, -20.0 and +3.1 mmag/px (bars 1.8-3.1) against the
+        target's -29.4 +- 5.5: still the target alone, still not
+        claimed.
+      - THE FLIP STEP IS A COLUMN OF ITS OWN ON THE COMPARISON STARS
+        TOO.  A comparison star measured against the others has a flip
+        offset like the target; without a column for it the offset went
+        into whatever term differed between the two sides.  On
+        HAT-P-25 b the seeing did: six stars read +5.5, -12.2, +0.7,
+        +7.2, -7.8 and +3.2 mmag per px of FWHM with bars of 0.2-0.45
+        -- significant, contradictory, and the reason the test said
+        "not decidable".  With the step fitted they read +1.9, +0.5,
+        -0.2, -0.9, -1.2 and -1.6 with bars of 0.5-0.8: a median of
+        -0.5 and a spread of 1.2.  The target's -3.2 +- 0.85 lies 2.6
+        from that median where the test allows 3.0, so it is not told
+        apart from the ensemble and the term stays; the depth is
+        unchanged at 1.77 %, and the verdict keeps saying that it
+        reads 1.62 % without the term.  (The figures 1.0.21's entry
+        quotes for this night, -5.5 to +3.3 around -1.8, came from a
+        replay that had read the weighted-FWHM column; the run's own
+        were -12.2 to +7.2 around -3.2.)
+      - THE TEST ASKS THE STARS THAT ARE STILL IN.  The loop that
+        leaves comparison stars out one at a time updated the list of
+        kept stars only when it had finished, so the selection inside
+        it judged TOI-3540.01's seeing term with the star it had just
+        removed for varying (+349 mmag/px on that star alone).  On the
+        three that remain the term is not told apart from the ensemble
+        and stays; the night is not claimed either way.
 1.0.21 - Eight nights: two false alarms, and what stops them
       Eight folders went through 1.0.20: three real transits, three
       nights with nothing to find -- and two transits claimed that were
@@ -942,7 +1071,7 @@ from matplotlib.ticker import FuncFormatter
 
 from sirilpy import LogColor
 
-VERSION = "1.0.21"
+VERSION = "1.0.23"
 
 # The full manual on GitHub, linked from the help dialog.  The in-app
 # tabs are the quick reference; the manual carries the measurements
@@ -1490,6 +1619,16 @@ RUN_FWHM_RATIO_RANGE = (0.5, 3.0)
 # flux loss, so a radius whose light curve correlates with the seeing
 # beyond this |r| is not eligible while a less correlated one exists.
 APERTURE_MAX_SEEING_R = 0.5
+PLOT_STAMP_BAND = 0.24     # of the plot's height, kept free of labels in
+                           # data coordinates: the clock stamps live there
+CONTACT_GUARD_MIN = 10.0   # minutes round a predicted contact left out of
+                           # the seeing correlation: the engine works in
+                           # JD_UTC, up to 9 min from the archive's BJD
+ONE_SIDED_MIN_POINTS = 8   # points on the floor and on the one baseline
+                           # before a one-contact run is described
+COMP_SHARE_SHOWN_SIGMAS = 2.0   # the comparison stars' median slope must
+                                # stand this far from zero to be "shared"
+COMP_RESIDUAL_FLOOR = 3    # comparison stars the residual selection leaves
 # HOPS mode: the post-burn-in chain should span at least this many
 # autocorrelation times (emcee's rule of thumb is 50) before its
 # percentiles are trusted; shorter chains are said so in the log.
@@ -5220,7 +5359,7 @@ def select_bases_bic(t, mag, always, candidates, u1: float = LD_U1,
 
 
 def basis_shared_by_comps(raw, jd_rows, name, basis_rows, airmass_rows,
-                          target_slope, target_sigma):
+                          target_slope, target_sigma, flip_rows=None):
     """Whether the comparison stars show the target's dependence on a
     basis.  ``None`` when it cannot be measured, else a dict with the
     comparison slopes (mag per basis unit), their median and spread, and
@@ -5233,6 +5372,17 @@ def basis_shared_by_comps(raw, jd_rows, name, basis_rows, airmass_rows,
     ensemble of the others, on its OWN centroid for the x/y bases and on
     the frame's value for the rest, with the airmass column alongside so
     extinction does not masquerade as the basis.
+
+    ``flip_rows`` is the fit's flip step.  A meridian flip throws a
+    comparison star hundreds to thousands of pixels across the sensor
+    (TOI-3540.01: 620 to 2790 px, against a drift of 4-5 px within a
+    side), so its raw x or y IS the step, and a slope "per pixel" of it
+    is the star's flip offset divided by that jump: 0.00-0.02 mmag/px
+    with a bar of 0.00, whatever the star does.  Against that any
+    significant slope on the target read "only the target shows it",
+    and the position terms were in effect switched off on every flip
+    night.  The target's column is referred to each side's own median;
+    the comparison stars' are too, and the step gets its own column.
     """
     try:
         flux = np.asarray(raw["flux"], dtype=float)
@@ -5264,6 +5414,11 @@ def basis_shared_by_comps(raw, jd_rows, name, basis_rows, airmass_rows,
     airm = (np.asarray(airmass_rows, dtype=float)
             if airmass_rows is not None
             and np.asarray(airmass_rows).size == jd_rows.size else None)
+    flip = None
+    if flip_rows is not None and np.asarray(flip_rows).size == jd_rows.size:
+        flip = np.asarray(flip_rows, dtype=float)[ok]
+        if np.unique(flip[np.isfinite(flip)]).size < 2:
+            flip = None
     slopes, sigmas = [], []
     for i in active:
         others = [j for j in active if j != i]
@@ -5271,9 +5426,17 @@ def basis_shared_by_comps(raw, jd_rows, name, basis_rows, airmass_rows,
         fo = np.sum(flux[others][:, idx[ok]], axis=0)
         with np.errstate(divide="ignore", invalid="ignore"):
             rel = -2.5 * np.log10(fi / fo)
-        col = (per_star[i][idx[ok]] if per_star is not None
+        col = (np.array(per_star[i][idx[ok]], dtype=float)
+               if per_star is not None
                else np.asarray(basis_rows, dtype=float)[ok])
+        if per_star is not None and flip is not None:
+            for sd in np.unique(flip[np.isfinite(flip)]):
+                m_sd = (flip == sd) & np.isfinite(col)
+                if int(m_sd.sum()) >= 3:
+                    col[m_sd] -= float(np.median(col[m_sd]))
         cols = [np.ones(rel.size), col]
+        if flip is not None:
+            cols.insert(1, flip)
         if airm is not None:
             cols.insert(1, airm[ok])
         A = np.column_stack(cols)
@@ -5309,8 +5472,26 @@ def basis_shared_by_comps(raw, jd_rows, name, basis_rows, airmass_rows,
             # comps' spread: when the comps scatter more widely than the
             # effect is large (-10...+11 against a target at -5), any
             # target value passes and the test has decided nothing.
+            #
+            # And more than a spread narrower than the effect: the
+            # comparison stars have to SHOW the dependence.  HAT-P-25 b's
+            # six read a median of -0.5 +- 0.5 against the target's
+            # -3.2; that the target lay inside 2 sigma of them made the
+            # log say "shared ... an instrumental dependence" of a slope
+            # none of them had.  Three stars at -50, +20 and +33 "shared"
+            # a +56.
+            "shown": bool(
+                len(slopes) >= 3 and spread > 0
+                and med * float(target_slope) > 0
+                and abs(med) >= COMP_SHARE_SHOWN_SIGMAS * spread
+                / math.sqrt(len(slopes))),
             "verdict": ("target-only" if not shared else
-                        "shared" if spread <= abs(float(target_slope))
+                        "undecided" if spread > abs(float(target_slope))
+                        else "shared" if (
+                            len(slopes) >= 3 and spread > 0
+                            and med * float(target_slope) > 0
+                            and abs(med) >= COMP_SHARE_SHOWN_SIGMAS * spread
+                            / math.sqrt(len(slopes)))
                         else "undecided")}
 
 
@@ -5373,11 +5554,23 @@ def select_comps_by_residual(jd, target_flux, comp_fluxes, target_err=None,
 
     rows = []
     cur, mag, err = score(active)
-    while len(active) > 2 and math.isfinite(cur):
+    # A residual is itself only known to 1/sqrt(2 dof).  On TOI-4033.01
+    # (47 points) four of six stars were dropped for gains of 3-5 % each
+    # -- 18.6 -> 17.7 -> 17.1 -> 16.4 -> 15.6 mmag, where the point-to-
+    # point noise was 13.1-13.3 for every ensemble -- and the two that
+    # stayed were the ones with the largest scatter of their own.  The
+    # selection was fitting the ensemble to the model.  The gain asked
+    # for now grows as the run gets shorter, and three stars always
+    # stay: the checks that follow (one star at a time, the shared-term
+    # test) need an ensemble to work on.
+    n_fit = int(np.count_nonzero(np.isfinite(jd)))
+    need = max(COMP_RESIDUAL_GAIN,
+               1.0 / math.sqrt(2.0 * max(1, n_fit - len(bases) - 4)))
+    while len(active) > COMP_RESIDUAL_FLOOR and math.isfinite(cur):
         trial = sorted((score([j for j in active if j != i])[0], i)
                        for i in active)
         best, i = trial[0]
-        if math.isfinite(best) and best < cur * (1.0 - COMP_RESIDUAL_GAIN):
+        if math.isfinite(best) and best < cur * (1.0 - need):
             rows.append((int(i), float(cur), float(best)))
             active.remove(i)
             cur = best
@@ -6210,6 +6403,10 @@ def fit_transit(t, mag, bases=None, u1: float = LD_U1, u2: float = LD_U2,
 
     sig = stacked_significance(t, detrended, best["t0"], best["duration"],
                                sigma)
+    _half = float(best["duration"]) / 2.0
+    n_in_tr = int(np.count_nonzero(np.abs(t - best["t0"]) < _half))
+    n_before = int(np.count_nonzero(t <= best["t0"] - _half))
+    n_after = int(np.count_nonzero(t >= best["t0"] + _half))
     # Beta is measured on the residuals in units of their own error
     # bars.  The estimator compares the scatter of bin means with what
     # ONE noise level predicts, so a night whose noise grows -- a target
@@ -6365,6 +6562,7 @@ def fit_transit(t, mag, bases=None, u1: float = LD_U1, u2: float = LD_U2,
         "sigma_postfit_mmag": sigma * 1000.0,
         "rms_resid_mmag": rms_resid * 1000.0,
         "significance": sig,
+        "n_in_transit": n_in_tr, "n_before": n_before, "n_after": n_after,
         "significance_white": sig_white,
         "red_noise_beta": beta,
         "red_noise_rows": beta_rows,
@@ -7844,11 +8042,12 @@ def form_aperture_stale(aperture_mm, focal_mm, bound_focal_mm=None) -> str:
         bound = float(bound_focal_mm or 0.0)
     except (TypeError, ValueError):
         bound = 0.0
-    if bound > 0:
-        if abs(fo - bound) > FLAT_FOCAL_TOL * bound:
-            return (f"it was entered for frames of {bound:g} mm focal "
-                    f"length, and these are {fo:g} mm")
-        return ""
+    if bound > 0 and abs(fo - bound) > FLAT_FOCAL_TOL * bound:
+        return (f"it was entered for frames of {bound:g} mm focal "
+                f"length, and these are {fo:g} mm")
+    # Bound to these frames or not: 2032 mm of aperture on 2032 mm of
+    # focal length had been typed, bound, remembered and shown with a
+    # green tick, while the run's log said "f/1, which no telescope is".
     lo, hi = PLAUSIBLE_F_RATIO
     ratio = fo / ap
     if not lo <= ratio <= hi:
@@ -8077,12 +8276,24 @@ def choose_masters(groups: dict, light_info: dict) -> tuple:
                     # Its "REJECTED" line above advised shooting other
                     # darks; these are not failed darks but dark-flats.
                     tag = f"dark REJECTED ({len(grp['files'])} frame(s)):"
-                    notes[:] = [
-                        ("dark not used for the lights "
-                         f"({len(grp['files'])} frame(s)):" + n[len(tag):]
-                         + " But they are the flats' dark-flats, and are "
-                         "used as such below.")
-                        if n.startswith(tag) else n for n in notes]
+                    # One statement, not the rejection with a "but":
+                    # "Siril subtracts it as it is ... leave the dark
+                    # out" followed by "the 3 s dark is subtracted as
+                    # their offset" read as a contradiction.
+                    def _as_dark_flat(n):
+                        pct = re.search(r"removes (\d+)% of the dark "
+                                        "current", n)
+                        return (
+                            f"dark: {len(grp['files'])} frame(s) at "
+                            f"{float(grp['info'].get('exp_s') or 0):g} s "
+                            "are not darks for the lights"
+                            + (f" (as such they would take out {pct.group(1)}"
+                               "% of the dark current and add their own "
+                               "read noise)" if pct else "")
+                            + ", but they are the flats' dark-flats and "
+                            "are used as such below.")
+                    notes[:] = [_as_dark_flat(n) if n.startswith(tag) else n
+                                for n in notes]
                     notes.append(
                         "flat offset: dark at the flats' own exposure "
                         f"({float(grp['info'].get('exp_s') or 0):g} s) "
@@ -8488,6 +8699,8 @@ NATIVE_MIN_YIELD = 0.30    # below this fraction of frames measured, the
                            # fallback runs instead
 SAT_FRACTION = 0.98        # of full scale: the same clip criterion the
                            # saturation verdict uses
+PEAK_SAMPLE_FRAMES = 12    # frames across the run the headroom guard reads
+PEAK_SAMPLE_RESERVE = 60   # reserve stars it reads them for
 COMP_CLIP_HEADROOM = 0.7   # of the clip level: a comp whose reference
                            # peak already sits above this is one good-
                            # seeing frame away from clipping, and
@@ -8824,6 +9037,180 @@ def aperture_seeing_pick(noises, radii, rsee, picked):
              and rsee[i] is not None and math.isfinite(float(rsee[i]))
              and abs(float(rsee[i])) <= APERTURE_SEEING_QUIET]
     return max(quiet, key=lambda i: float(radii[i])) if quiet else picked
+
+
+def jackknife_pick(rows, bar: float):
+    """Which comparison star the transit hangs on, from the rows of
+    `comp_jackknife`: ``(pick, hides)``.
+
+    ``pick`` is ``(comp, shift, sigma, z)`` for the star the depth is
+    most significantly DEEPER with than without -- at least
+    COMP_JACKKNIFE_Z of the difference curve's own bar and more than
+    QUALITY_MODEL_SIGMA of the depth's (``bar``) -- or ``None``.
+    ``hides`` lists the stars the depth is as significantly SHALLOWER
+    with: reported, never removed.
+    """
+    fin = [(c, float(sh), float(sg)) for c, sh, sg in rows or []
+           if math.isfinite(sh) and math.isfinite(sg) and sg > 0]
+    hides = [(c, sh, sg) for c, sh, sg in fin
+             if sh < 0 and -sh / sg >= COMP_JACKKNIFE_Z
+             and -sh > QUALITY_MODEL_SIGMA * float(bar)]
+    deeper = [(sh / sg, c, sh, sg) for c, sh, sg in fin if sh > 0]
+    pick = None
+    if deeper:
+        z, c, sh, sg = max(deeper)
+        if z >= COMP_JACKKNIFE_Z and sh > QUALITY_MODEL_SIGMA * float(bar):
+            pick = (c, sh, sg, z)
+    return pick, hides
+
+
+def seeing_correlation(mag, fwhm, nuisance=(), mask=None) -> float:
+    """How much of a light curve is the seeing: the correlation of
+    ``mag`` with ``fwhm`` once a constant and the ``nuisance`` columns
+    are taken out of BOTH, on the rows ``mask`` allows.  NaN when fewer
+    than ten rows are left or one side has no variance.
+
+    Plain correlation asked the wrong question on a night whose seeing
+    improved steadily while the target came out of transit (TOI-3856 b:
+    FWHM 9.9 -> 7.8 px, r(FWHM, time) = -0.72).  The transit itself then
+    correlates with the seeing -- +0.56 for the profile alone -- and
+    every aperture read "tracks the seeing" at +0.55...+0.61, whatever
+    its radius.  Five were passed over and the smallest, noisiest one
+    chosen: 5.68 mmag where 12.98 px had 3.18.  With the predicted
+    transit taken out the same curve reads -0.03.
+    """
+    y = np.asarray(mag, dtype=float)
+    x = np.asarray(fwhm, dtype=float)
+    if y.shape != x.shape:
+        return float("nan")
+    ok = np.isfinite(y) & np.isfinite(x)
+    cols = []
+    for c in nuisance or ():
+        c = np.asarray(c, dtype=float)
+        if c.shape != y.shape:
+            continue
+        cols.append(c)
+        ok &= np.isfinite(c)
+    if mask is not None and np.asarray(mask).shape == y.shape:
+        ok &= np.asarray(mask, dtype=bool)
+    if int(ok.sum()) < 10:
+        return float("nan")
+    A = np.column_stack([np.ones(int(ok.sum()))]
+                        + [c[ok] for c in cols
+                           if float(np.std(c[ok])) > 0])
+    try:
+        ry = y[ok] - A @ np.linalg.lstsq(A, y[ok], rcond=None)[0]
+        rx = x[ok] - A @ np.linalg.lstsq(A, x[ok], rcond=None)[0]
+    except np.linalg.LinAlgError:
+        return float("nan")
+    if not (float(np.std(ry)) > 0 and float(np.std(rx)) > 0):
+        return float("nan")
+    return float(np.corrcoef(ry, rx)[0, 1])
+
+
+def predicted_transit_box(eph, jd, guard_min: float = CONTACT_GUARD_MIN):
+    """``(box, away)`` for the transit the ephemeris predicts inside a
+    run: 1 between the predicted contacts, and the rows farther than
+    ``guard_min`` minutes from either contact.  ``(None, None)`` without
+    an ephemeris that predicts to better than half a transit, or when
+    the run holds fewer than three rows on either side of the box.
+
+    Meant for JD_UTC times as well as BJD: the difference is at most
+    nine minutes, which is what the guard is for.
+    """
+    t = np.asarray(jd, dtype=float)
+    fin = np.isfinite(t)
+    if int(fin.sum()) < 10:
+        return None, None
+    try:
+        anc, _why = ephemeris_anchor(eph, t[fin], "BJD_TDB")
+    except Exception as exc:                    # noqa: BLE001
+        _log_swallowed(exc)
+        return None, None
+    if not anc or anc.get("wide") or not anc.get("duration_d"):
+        return None, None
+    half = float(anc["duration_d"]) / 2.0
+    with np.errstate(invalid="ignore"):
+        d = np.abs(t - float(anc["t0"]))
+        box = np.where(fin, (d < half).astype(float), np.nan)
+        away = fin & (np.abs(d - half) > float(guard_min) / 1440.0)
+    n_in = int(np.nansum(box))
+    if n_in < 3 or int(fin.sum()) - n_in < 3:
+        return None, None
+    return box, away
+
+
+def one_sided_evidence(t, mag, fit, bases=None, err=None):
+    """What a run with ONE contact shows, or ``None`` when the fit's
+    best template has points on both sides (or too few to say).
+
+    A transit is claimed only with a baseline before the ingress and
+    after the egress: `stacked_significance` is zero otherwise, because
+    a step that never returns cannot be told from a trend.  That rule
+    stands.  But "0.0 sigma" beside a run that holds thirty points on
+    the floor, an egress and thirty-eight points after it says nothing
+    of what is there (TOI-3856 b, begun twelve minutes before
+    mid-transit: 12.7 +- 2.2 mmag).  This is the description: which
+    side is missing, the depth the fit wanted with its bar, and whether
+    a transit profile fits better than the smooth trend it has to be
+    told from -- a quadratic in time beside the fit's own systematics --
+    as a difference in BIC (negative favours the transit).
+    """
+    try:
+        n_b, n_a = int(fit["n_before"]), int(fit["n_after"])
+        n_i = int(fit["n_in_transit"])
+        good = np.asarray(fit["good_mask"], dtype=bool)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (n_b > 0 and n_a > 0) or n_i < ONE_SIDED_MIN_POINTS \
+            or max(n_b, n_a) < ONE_SIDED_MIN_POINTS:
+        return None
+    t = np.asarray(t, dtype=float)
+    y = np.asarray(mag, dtype=float)
+    prof = transit_shape(fit)
+    if prof is None or good.size != t.size or prof.size != int(good.sum()):
+        return None
+    y = y[good]
+    tt = t[good] - float(np.mean(t[good]))
+    span = float(np.ptp(tt))
+    if not span > 0:
+        return None
+    tt = tt / span
+    w = np.ones(y.size)
+    if err is not None and np.asarray(err).size == t.size:
+        e = np.asarray(err, dtype=float)[good]
+        if np.all(np.isfinite(e) & (e > 0)):
+            w = 1.0 / e
+    cols = [np.ones(y.size)]
+    for name in fit.get("bases") or []:
+        c = (bases or {}).get(name)
+        if c is not None and np.asarray(c).size == t.size:
+            c = np.asarray(c, dtype=float)[good]
+            if np.all(np.isfinite(c)) and float(np.std(c)) > 0:
+                cols.append(c)
+
+    def ssr(extra):
+        A = np.column_stack(cols + extra) * w[:, None]
+        r = y * w - A @ np.linalg.lstsq(A, y * w, rcond=None)[0]
+        return float(r @ r)
+
+    try:
+        s_tr, s_q, s_0 = ssr([prof]), ssr([tt, tt * tt]), ssr([])
+    except np.linalg.LinAlgError:
+        return None
+    if not (s_tr > 0 and s_q > 0 and s_0 > 0):
+        return None
+    n = float(y.size)
+    return {
+        "missing": "before the ingress" if n_b == 0 else "after the egress",
+        "seen": "egress" if n_b == 0 else "ingress",
+        "n_in": n_i, "n_out": max(n_b, n_a),
+        "depth_mmag": float(fit.get("depth_mmag") or 0.0),
+        "depth_sigma_mmag": float(fit.get("depth_sigma_mmag") or 0.0),
+        # the transit has one parameter fewer than the quadratic trend
+        "dbic_trend": n * math.log(s_tr / s_q) - math.log(n),
+        "dbic_none": n * math.log(s_tr / s_0) + math.log(n),
+    }
 
 
 def transit_shape(fit):
@@ -10348,7 +10735,8 @@ class LightCurveWorker(QThread):
                      if len(sig) > 1 + i and sig[1 + i] is not None
                      else float("nan"))
             res = basis_shared_by_comps(raw, jd_utc, name, bases.get(name),
-                                        X, slope, s_sig)
+                                        X, slope, s_sig,
+                                        flip_rows=bases.get("flip"))
             if not res:
                 continue
             u = units.get(name, "unit")
@@ -10360,6 +10748,12 @@ class LightCurveWorker(QThread):
                        "dependence" if res["verdict"] == "shared" else
                        " — NOT DECIDABLE: the comparison stars scatter "
                        "more widely than the effect is large, so they "
+                       "neither confirm nor refute it"
+                       if res["verdict"] == "undecided"
+                       and res["spread"] > abs(res["target"]) else
+                       " — NOT TOLD APART: the target's slope lies "
+                       "within the comparison stars' scatter, but they "
+                       "do not show the dependence themselves, so they "
                        "neither confirm nor refute it"
                        if res["verdict"] == "undecided" else
                        " — NOT shared: only the target shows it, and a "
@@ -10500,6 +10894,12 @@ class LightCurveWorker(QThread):
         err = np.asarray(err, dtype=float)
         active = [i + 1 for i, k in enumerate(keep)
                   if k and i + 1 < flux.shape[0]]
+        if 0 < len(active) < 3 and mag.size == jd.size:
+            self._emit(
+                "  Comparison stars one at a time: not tested — "
+                f"{len(active)} comparison star(s) are left, and with "
+                "fewer than three there is no ensemble to leave one out "
+                "of.", LogColor.SALMON)
         if len(active) < 3 or mag.size != jd.size \
                 or jd_frames.size != flux.shape[1]:
             return None
@@ -10541,7 +10941,10 @@ class LightCurveWorker(QThread):
         removed, last_rows, last_bar = [], [], 0.0
         cur_mag, cur_err = mag, err
         unresolved = False
+        undetected = False
+        hides = []
         while len(active) >= 3:
+            hides = []
             # The engine's screen again, on the ensemble as it is now.
             keep_s, _scores = rank_comps_by_scatter(
                 [fl[i] for i in active], detrend=det_cols or None)
@@ -10563,9 +10966,15 @@ class LightCurveWorker(QThread):
                     active, (cur_mag, cur_err) = trial, got
                     continue
             err_fit = cur_err if cur_err.size == jd.size else None
+            # The selection asks the comparison stars whether they share
+            # a term, and it must ask the ones that are still in: with
+            # the list updated only after the loop, TOI-3540.01's seeing
+            # term was judged with the star just removed for varying.
+            raw["keep"] = [(i + 1) in active for i in range(len(keep))]
             chosen, _rows, _unc, pre = self._choose_bases(
                 jd, jd_utc, cur_mag, err_fit, bases, anchor, u1, u2, X)
             if pre is None or not pre.get("detected"):
+                undetected = True
                 break
             prof = transit_shape(pre)
             good = np.asarray(pre.get("good_mask"), dtype=bool)
@@ -10583,14 +10992,21 @@ class LightCurveWorker(QThread):
                          for c, sh, sg in rows]
             bar = float(pre.get("depth_sigma_mmag") or 0.0) / 1000.0
             last_bar = 1000.0 * bar
-            scored = [(abs(sh / sg), c, sh, sg) for c, sh, sg in rows
-                      if math.isfinite(sh) and math.isfinite(sg) and sg > 0]
-            if not scored:
+            # Only a star the transit is DEEPER with can be carrying
+            # it.  The test is not symmetric: in an ensemble with one
+            # star that brightens through the window, every GOOD star
+            # reads "shallower with it than without" -- leaving one of
+            # them out hands its weight to the bad one.  Judged by the
+            # size of the shift alone, TOI-3540.01 with five stars lost
+            # its three good ones in turn (4.9, 7.9 and 22.8 mmag
+            # "shallower", 5.6-6.6 sigma each) and came out as a 40 mmag
+            # transit at 5.9 sigma on the variable star and one other.
+            # A guard against false claims must never raise one: a star
+            # that makes the transit shallower is reported, not removed.
+            pick, hides = jackknife_pick(rows, bar)
+            if pick is None:
                 break
-            z, c, sh, sg = max(scored)
-            if not (z >= COMP_JACKKNIFE_Z
-                    and abs(sh) > QUALITY_MODEL_SIGMA * bar):
-                break
+            c, sh, sg, z = pick
             trial = [a for a in active if a != c]
             got = _rebuild(trial)
             if got is None:
@@ -10599,15 +11015,24 @@ class LightCurveWorker(QThread):
             removed.append((x_, y_, "depth", 1000.0 * sh, 1000.0 * sg))
             self._emit(
                 f"    comp ({x_:.1f}, {y_:.1f})  LEFT OUT: the transit "
-                f"depth is {1000.0 * abs(sh):.1f} ± {1000.0 * sg:.1f} mmag "
-                f"{'deeper' if sh > 0 else 'shallower'} with this star than "
-                f"without it ({z:.1f} sigma, the depth's own bar is "
+                f"depth is {1000.0 * sh:.1f} ± {1000.0 * sg:.1f} mmag "
+                "deeper with this star than without it "
+                f"({z:.1f} sigma, the depth's own bar is "
                 f"{1000.0 * bar:.1f}). A star the depth hangs on is "
                 "showing its own variation, not the target's.",
                 LogColor.RED)
             active, (cur_mag, cur_err) = trial, got
             if len(active) < 3:
                 unresolved = True
+        hide_rows = [(_xy(c_) + (1000.0 * sh_, 1000.0 * sg_))
+                     for c_, sh_, sg_ in hides if c_ in active]
+        for hx, hy, hsh, hsg in hide_rows:
+            self._emit(
+                f"    comp ({hx:.1f}, {hy:.1f})  the transit is "
+                f"{-hsh:.1f} ± {hsg:.1f} mmag SHALLOWER with this star "
+                "than without it. It stays: a star is left out when the "
+                "transit depends on it, never to make one deeper — but "
+                "the depth is uncertain by that much.", LogColor.SALMON)
         if not removed:
             fin_rows = [r_ for r_ in last_rows if math.isfinite(r_[2])]
             if fin_rows:
@@ -10615,18 +11040,27 @@ class LightCurveWorker(QThread):
                 self._emit(
                     "  Comparison stars one at a time: leaving any one of "
                     f"the {len(active)} out moves the depth by at most "
-                    f"{worst:.1f} mmag (its own bar: {last_bar:.1f}) — the "
-                    "transit does not hang on a single star.",
+                    f"{worst:.1f} mmag (its own bar: {last_bar:.1f}) — "
+                    + ("no star carries the transit."
+                       if hide_rows else
+                       "the transit does not hang on a single star."),
                     LogColor.BLUE)
                 self._comp_jackknife = {"removed": [], "rows": last_rows,
                                         "left": len(active),
-                                        "unresolved": False}
+                                        "unresolved": False,
+                                        "hides": hide_rows}
+            elif undetected:
+                self._emit(
+                    "  Comparison stars one at a time: not tested — no "
+                    "transit is detected, so there is no depth for a "
+                    "single star to carry.", LogColor.BLUE)
             return None
         new_keep = [(i + 1) in active for i in range(len(keep))]
         raw["keep"] = new_keep
         self._comp_jackknife = {"removed": removed, "rows": last_rows,
                                 "left": len(active),
-                                "unresolved": unresolved}
+                                "unresolved": unresolved,
+                                "hides": hide_rows}
         self._emit(
             f"  Comparison stars one at a time: {len(removed)} left out, "
             f"{len(active)} remain"
@@ -11845,7 +12279,13 @@ class LightCurveWorker(QThread):
                     sig.emit(float(lat), float(lon), str(where))
                 except (RuntimeError, TypeError):
                     pass
-            if f_lat is not None:
+            if f_lat is not None and not self.opts.get("site_from_header"):
+                # Only a site somebody TYPED is worth a line.  The run
+                # writes the header's site into the form, so on the next
+                # folder "the site in the form" was the last run's
+                # header -- and every change of observatory drew a
+                # warning about an entry nobody had made, with the advice
+                # to tick a box (Texas after Maryland: "2228 km").
                 gap = site_distance_km(f_lat, f_lon, lat, lon)
                 if gap > SITE_DISAGREE_KM:
                     self._emit(
@@ -12231,7 +12671,6 @@ class LightCurveWorker(QThread):
             arr0 = np.asarray(d0)
             if arr0.ndim > 2:
                 arr0 = arr0[0]
-            h0, w0 = arr0.shape[-2], arr0.shape[-1]
             hom0 = frames[0][1]
             # The peak is read on frame 0, but the clip happens on the
             # SHARPEST frame.  A star's peak scales as 1/FWHM^2 at fixed
@@ -12249,40 +12688,114 @@ class LightCurveWorker(QThread):
             except (IndexError, ValueError, TypeError):
                 pass
 
-            def _peak_at(sx, sy):
-                pos = ref_to_frame(hom0, sx, sy, w0, h0, star_rows=star_rows)
+            def _box_peak(arr, hom, sx, sy):
+                h_, w_ = arr.shape[-2], arr.shape[-1]
+                pos = ref_to_frame(hom, sx, sy, w_, h_, star_rows=star_rows)
                 if pos is None:
                     return float("nan")
                 xi, yi = int(round(pos[0])), int(round(pos[1]))
-                if not (0 <= xi < w0 and 0 <= yi < h0):
+                if not (0 <= xi < w_ and 0 <= yi < h_):
                     return float("nan")
-                box = arr0[max(0, yi - SATURATION_BOX_PX):
-                           yi + SATURATION_BOX_PX + 1,
-                           max(0, xi - SATURATION_BOX_PX):
-                           xi + SATURATION_BOX_PX + 1]
+                box = np.asarray(arr[max(0, yi - SATURATION_BOX_PX):
+                                     yi + SATURATION_BOX_PX + 1,
+                                     max(0, xi - SATURATION_BOX_PX):
+                                     xi + SATURATION_BOX_PX + 1],
+                                 dtype=float)
                 # Relative to the LOCAL clip level: a peak at 0.94 where
                 # a saturated pixel reads 0.96 is at 98 %, not at 94 %.
-                return (float(np.nanmax(box)) * peak_scale
+                return (float(np.nanmax(box))
                         / clip_factor_at(clip_map, xi, yi) if box.size
                         else float("nan"))
+
+            # ONE FRAME DOES NOT KNOW THE NIGHT'S PEAK.  Under 2 px of
+            # FWHM the brightest pixel holds 16 % of a star's flux when
+            # the star sits between four pixels and 29 % when it sits on
+            # one; measured over a night (WASP-75 b, 1.8-1.9 px) the
+            # peak of every star swung by a factor 1.5-1.8, where the
+            # seeing scale above allowed for 1.08.  A star promoted "at
+            # 68 % of the clip level" was clipped in 52 of 160 frames
+            # and lost.  So the peak is read on a spread of frames, the
+            # sharpest among them, and the guard takes the highest.
+            cands = [(float(x_), float(y_)) for x_, y_ in stars[1:]] \
+                + [(float(x_), float(y_))
+                   for x_, y_ in list(reserves)[:PEAK_SAMPLE_RESERVE]]
+            seen = {c_: [] for c_ in cands}
+            picks = sorted({int(round(v_)) for v_ in np.linspace(
+                0, len(frames) - 1, min(PEAK_SAMPLE_FRAMES, len(frames)))})
+            try:
+                fw_fr = [float(fw[f_[0]]) for f_ in frames]
+                if np.any(np.isfinite(fw_fr)):
+                    picks = sorted(set(picks) | {int(np.nanargmin(fw_fr))})
+            except (IndexError, ValueError, TypeError):
+                pass
+            n_sampled = 0
+            for k_ in picks:
+                if k_ == 0:
+                    arr_k = arr0
+                else:
+                    arr_k = None
+                    for mm_ in (True, False):
+                        try:
+                            with fits.open(frames[k_][3], memmap=mm_) as hk:
+                                for u_ in hk:
+                                    if u_.data is not None:
+                                        a_ = u_.data
+                                        if a_.ndim > 2:
+                                            a_ = a_[0]
+                                        # only the boxes are read
+                                        for c_ in cands:
+                                            seen[c_].append(_box_peak(
+                                                a_, frames[k_][1], *c_))
+                                        arr_k = True
+                                        break
+                            if arr_k is not None:
+                                break
+                        except Exception as exc:        # noqa: BLE001
+                            _log_swallowed(exc)
+                    if arr_k is not None:
+                        n_sampled += 1
+                    continue
+                for c_ in cands:
+                    seen[c_].append(_box_peak(arr_k, hom0, *c_))
+                n_sampled += 1
+
+            def _peak_at(sx, sy):
+                """(the peak the guard judges, the highest one read)."""
+                one = _box_peak(arr0, hom0, sx, sy)
+                got = [v_ for v_ in seen.get((float(sx), float(sy)), [])
+                       if math.isfinite(v_)]
+                top = max(got) if got else one
+                if not math.isfinite(one) and not got:
+                    return float("nan"), float("nan")
+                est = max([v_ for v_ in (one * peak_scale, top)
+                           if math.isfinite(v_)])
+                return est, (top if math.isfinite(top) else one)
+
+            def _why(est, top):
+                if top >= 0.98 * sat_adu:
+                    return (f"its core is at the clip level in the "
+                            f"{n_sampled} frame(s) read across the run")
+                return (f"its peak reaches {100.0 * est / sat_adu:.0f}% "
+                        f"of the clip level ({100.0 * top / sat_adu:.0f}% "
+                        f"on the {n_sampled} frame(s) read across the "
+                        "run, the rest allowed for the sharpest frame) "
+                        f"— the limit is "
+                        f"{100.0 * COMP_CLIP_HEADROOM:.0f}%")
 
             n_want = len(stars) - 1
             kept_stars = [stars[0]]
             n_dropped = 0
             dropped_stars = []
             for sx, sy in stars[1:]:
-                peak0 = _peak_at(sx, sy)
+                peak0, top0 = _peak_at(sx, sy)
                 if math.isfinite(peak0) \
                         and peak0 >= COMP_CLIP_HEADROOM * sat_adu:
                     n_dropped += 1
                     dropped_stars.append((peak0, (sx, sy)))
                     self._emit(
                         f"    comp ({sx:7.1f}, {sy:7.1f})  dropped up "
-                        f"front: peak already at "
-                        f"{100.0 * peak0 / sat_adu:.0f}% of the clip "
-                        "level — one good-seeing frame from clipping, "
-                        "and intermittent clipping reads as "
-                        "variability.", LogColor.SALMON)
+                        f"front: {_why(peak0, top0)}. Intermittent "
+                        "clipping reads as variability.", LogColor.SALMON)
                 else:
                     kept_stars.append((sx, sy))
             # PROMOTE from the reserve.  The selection ranked more
@@ -12299,7 +12812,7 @@ class LightCurveWorker(QThread):
                 for sx, sy in reserves:
                     if len(kept_stars) - 1 >= n_want:
                         break
-                    peak0 = _peak_at(sx, sy)
+                    peak0, _top0 = _peak_at(sx, sy)
                     if not math.isfinite(peak0) \
                             or peak0 >= COMP_CLIP_HEADROOM * sat_adu:
                         continue
@@ -12307,9 +12820,10 @@ class LightCurveWorker(QThread):
                     n_promoted += 1
                     self._emit(
                         f"    comp ({sx:7.1f}, {sy:7.1f})  promoted "
-                        f"from the reserve: peak at "
+                        f"from the reserve: peak at most "
                         f"{100.0 * peak0 / sat_adu:.0f}% of the clip "
-                        "level — the next ranked star with headroom.",
+                        f"level on the {n_sampled} frame(s) read across "
+                        "the run — the next ranked star with headroom.",
                         LogColor.BLUE)
                 if len(kept_stars) - 1 < n_want:
                     self._emit(
@@ -12486,11 +13000,10 @@ class LightCurveWorker(QThread):
                 "the same reason. This is an exposure problem: shorten the "
                 "sub-exposure (or defocus slightly) until the target peaks "
                 "below about half of full scale.")
+            # The reason is in the failure message, once.
             self._emit(
-                f"  The target's core is clipped in {sat_dropped} of "
-                f"{n_frames} frame(s). The run stops here: Siril's "
-                "light_curve refuses clipped frames too, so there is "
-                "nothing to hand over.", LogColor.RED)
+                f"  Target core clipped in {sat_dropped} of {n_frames} "
+                "frame(s) — the run stops here.", LogColor.RED)
             return None
         if yield_frac < NATIVE_MIN_YIELD:
             self._emit(
@@ -12637,6 +13150,19 @@ class LightCurveWorker(QThread):
         best = None
         aper_rows = []
         cands = []
+        # What the seeing correlation must not mistake for the seeing:
+        # the transit the ephemeris predicts, and the step at a flip.
+        see_cols, see_mask, see_note = [], None, ""
+        tr_box, tr_away = predicted_transit_box(
+            getattr(self, "_engine_eph", None), jd)
+        if tr_box is not None:
+            see_cols.append(tr_box)
+            see_mask = tr_away
+            see_note = "the predicted transit"
+        if math.isfinite(flip_at):
+            see_cols.append(np.where(np.isfinite(jd),
+                                     (jd > flip_at).astype(float), np.nan))
+            see_note += (" and " if see_note else "") + "the flip step"
         for r in radii:
             cf = [flux[r][i + 1] for i in range(len(keep)) if keep[i]]
             ce = [ferr[r][i + 1] for i in range(len(keep)) if keep[i]]
@@ -12647,11 +13173,7 @@ class LightCurveWorker(QThread):
             # How much of this aperture's light curve is the seeing: a
             # radius that is too small loses flux slowly as the FWHM
             # grows, a trend the point-to-point scatter never sees.
-            r_see = float("nan")
-            pair = np.isfinite(mag) & np.isfinite(fw_k)
-            if int(pair.sum()) >= 10 and np.std(fw_k[pair]) > 0 \
-                    and np.std(mag[pair]) > 0:
-                r_see = float(np.corrcoef(mag[pair], fw_k[pair])[0, 1])
+            r_see = seeing_correlation(mag, fw_k, see_cols, see_mask)
             is_witness = witness is not None and r == witness
             if not is_witness:
                 aper_rows.append((float(r), npts,
@@ -12670,6 +13192,11 @@ class LightCurveWorker(QThread):
             self._emit("  No aperture produced a finite light curve — "
                        "Siril's light_curve takes over.", LogColor.SALMON)
             return None
+        if see_note:
+            self._emit(f"    (seeing r is measured with {see_note} taken "
+                       "out of the curve and of the seeing: a transit "
+                       "during a night of changing seeing is not an "
+                       "aperture that tracks it)", LogColor.BLUE)
         # Lowest point-to-point scatter among the apertures whose curve
         # does not follow the seeing; if none qualifies, the plain
         # scatter optimum, said so.
@@ -13772,6 +14299,7 @@ class LightCurveWorker(QThread):
                 42, "Aperture photometry (star-following)…")
             self._native_abort = ""
             self._fallback_comps = None
+            self._engine_eph = eph if isinstance(eph, dict) else None
             native = self._native_photometry(seq, proc, (tx, ty), comps,
                                              fwhm, comp_reserves)
             if native is None and self._native_abort:
@@ -14035,7 +14563,7 @@ class LightCurveWorker(QThread):
                 hdr_ap = infos0[0].get("aptdia")
                 if focal and focal > 0:
                     f_ratio = focal / float(ap_mm)
-                    if not 1.5 <= f_ratio <= 20.0:
+                    if not plausible_f_ratio(focal, ap_mm):
                         self._emit(
                             f"  The telescope aperture in the Telescope row "
                             f"({float(ap_mm):g} mm) and the frames' focal "
@@ -14217,9 +14745,11 @@ class LightCurveWorker(QThread):
                     seen = {"ingress": "only the INGRESS is observed",
                             "egress": "only the EGRESS is observed",
                             "none": "NEITHER contact is observed"}[cover]
+                    _side = (" on its own side of the flip"
+                             if bases.get("flip") is not None else "")
                     self._emit(
                         f"  PARTIAL TRANSIT: {seen} with a baseline and a "
-                        "floor on its own side of the flip (before ingress "
+                        f"floor{_side} (before ingress "
                         f"{cdet['pre']} point(s), floor on that side "
                         f"{cdet['floor_in']}; after egress {cdet['post']}, "
                         f"floor on that side {cdet['floor_out']}). The "
@@ -14574,6 +15104,53 @@ class LightCurveWorker(QThread):
             if not fit.get("detected") and fit.get("claim_note"):
                 self._emit("  No transit claimed: " + fit["claim_note"]
                            + ".", LogColor.SALMON)
+            elif not fit.get("detected") and (
+                    fit.get("n_in_transit", 0) > 0
+                    and (fit.get("n_before") == 0
+                         or fit.get("n_after") == 0)):
+                # 0.0 sigma, and why: the rule, not the data.
+                gone = ("before the ingress" if fit.get("n_before") == 0
+                        else "after the egress")
+                ev = None
+                if anchor is not None and not anchor.get("wide"):
+                    try:
+                        ev = one_sided_evidence(jd, mag, fit, bases,
+                                                err_fit)
+                    except Exception as exc:        # noqa: BLE001
+                        _log_swallowed(exc)
+                if ev:
+                    fit["one_sided"] = ev
+                else:
+                    fit["one_sided"] = {"missing": gone}
+                self._emit(
+                    "  No transit claimed: the best template has "
+                    f"{fit.get('n_in_transit', 0)} point(s) in transit and "
+                    f"none {gone}. A transit is claimed only with a "
+                    "baseline on both sides — a step that does not return "
+                    "cannot be told from a trend — so the significance "
+                    "reads 0.0 by that rule, whatever the data hold."
+                    + (f" It wanted {fit['depth_mmag']:.1f} mmag over "
+                       f"{fit['duration_h']:.2f} h." if not ev else ""),
+                    LogColor.SALMON)
+                if ev:
+                    better = (
+                        "clearly better than" if ev["dbic_trend"] <= -6
+                        else "somewhat better than"
+                        if ev["dbic_trend"] <= -2 else "no better than")
+                    self._emit(
+                        f"  ONE CONTACT ONLY — what the data show: the "
+                        f"{ev['seen']} at the predicted time, "
+                        f"{ev['n_in']} point(s) inside the transit and "
+                        f"{ev['n_out']} on the baseline, a depth of "
+                        f"{ev['depth_mmag']:.1f} ± "
+                        f"{ev['depth_sigma_mmag']:.1f} mmag. A transit "
+                        f"profile fits {better} a smooth trend (a "
+                        "quadratic in time beside the same systematics): "
+                        f"BIC {ev['dbic_trend']:+.1f}, and "
+                        f"{ev['dbic_none']:+.1f} against no step at all. "
+                        "That is evidence, not a detection. To claim "
+                        "this planet, start at least half an hour before "
+                        "the ingress.", LogColor.SALMON)
             elif not fit.get("detected"):
                 # The log used to fall silent here, and "the fit ran" with
                 # no number after it read like a crash.
@@ -15119,10 +15696,21 @@ class LightCurveWorker(QThread):
                 os.fsync(fh.fileno())
             os.replace(partial, path)
             r["aavso_path"] = path
-            self._emit(f"  AAVSO submission file written to {path}"
-                       + ("" if obscode else
-                          " — fill in #OBSCODE before submitting."),
-                       LogColor.GREEN)
+            if fit is not None and fit.get("detected"):
+                self._emit(f"  AAVSO submission file written to {path}"
+                           + ("" if obscode else
+                              " — fill in #OBSCODE before submitting."),
+                           LogColor.GREEN)
+            else:
+                # The file itself has said so since it was written
+                # (#NOTES, no #RESULTS); the log called it a submission.
+                self._emit(
+                    f"  AAVSO-format file written to {path} — PHOTOMETRY "
+                    "ONLY: no transit was claimed, so it carries no "
+                    "#RESULTS and says so in #NOTES. It is a record of "
+                    "the night, not the submission of a transit; the "
+                    "Exoplanet Database is for observed transits.",
+                    LogColor.SALMON)
             if candidate_note:
                 self._emit("  NOTE: " + candidate_note, LogColor.SALMON)
         except OSError as exc:
@@ -17020,8 +17608,15 @@ class LightCurvePlot(FigureCanvas):
         _ys = [t_.get_position()[1] for t_ in ax.texts
                if t_.get_transform() is ax.transData]
         if _ys:
+            # The bottom of the frame belongs to the clock stamps and
+            # the contact spans, which are placed in fractions of the
+            # axes (0.03 to about 0.16).  A label that merely fits
+            # inside the frame lands on top of them: "expected 2 h 49
+            # min" was printed through "mid 23:10".  The lowest label
+            # is kept above that band.
             _lo, _hi = sorted(ax.get_ylim())
-            _need = max(_ys) + 0.07 * (_hi - _lo)
+            _need = (max(_ys) - PLOT_STAMP_BAND * _lo) \
+                / (1.0 - PLOT_STAMP_BAND)
             if _need > _hi:
                 ax.set_ylim(_lo, _need)
         ax.invert_yaxis()
@@ -17157,6 +17752,26 @@ def measurement_quality(fit, ctx=None) -> dict:
             out["headline"] = (f"No transit claimed: {fit['claim_note']}. "
                                "There is no measurement to grade.")
             return out
+        one = fit.get("one_sided") or {}
+        if one.get("missing"):
+            out["headline"] = (
+                f"No transit claimed: no point {one['missing']}, and a "
+                "transit seen from one side only cannot be told from a "
+                "trend. There is no measurement to grade.")
+            if one.get("depth_mmag") is not None:
+                better = ("clearly better than"
+                          if one["dbic_trend"] <= -6 else
+                          "somewhat better than"
+                          if one["dbic_trend"] <= -2 else "no better than")
+                out["reasons"] = [(1, (
+                    f"What the data show: the {one['seen']} at the "
+                    f"predicted time, {float(one['depth_mmag']):.1f} ± "
+                    f"{float(one['depth_sigma_mmag']):.1f} mmag deep; a "
+                    f"transit profile fits {better} a smooth trend (BIC "
+                    f"{float(one['dbic_trend']):+.1f}). Evidence, not a "
+                    "detection — the run began or ended inside the "
+                    "transit."))]
+            return out
         bd0 = fit.get("basis_depth") or {}
         if bd0.get("without_detected"):
             # The one case where "not claimed" needs a second sentence.
@@ -17241,6 +17856,12 @@ def measurement_quality(fit, ctx=None) -> dict:
             add(1, text + " Too few to check one another any further.")
         else:
             out["notes"].append(text)
+    for hx, hy, hsh, hsg in (jk.get("hides") or []):
+        add(1, f"The depth would read {-float(hsh):.1f} ± {float(hsg):.1f} "
+               f"mmag deeper without the comparison star at ({float(hx):.0f}"
+               f", {float(hy):.0f}). It was kept — a star is only left out "
+               "when the transit depends on it — so the depth is uncertain "
+               "by that much.")
 
     # -- a detection close to its floor
     if sig < QUALITY_COMFORT_SIGMA:
@@ -17493,10 +18114,25 @@ def remembered_aperture(table, focal_mm, tol: float = FLAT_FOCAL_TOL):
             f, ap = float(key), float(val)
         except (TypeError, ValueError):
             continue
-        if f > 0 and ap > 0 and abs(f - focal) <= tol * focal:
+        if f > 0 and ap > 0 and abs(f - focal) <= tol * focal \
+                and plausible_f_ratio(f, ap):
             if best is None or abs(f - focal) < abs(best[0] - focal):
                 best = (f, ap)
     return best[1] if best else None
+
+
+def plausible_f_ratio(focal_mm, aperture_mm) -> bool:
+    """Whether a focal length and an aperture make a telescope
+    (`PLAUSIBLE_F_RATIO`).  False for anything that is not two positive
+    numbers."""
+    try:
+        fo, ap = float(focal_mm), float(aperture_mm)
+    except (TypeError, ValueError):
+        return False
+    if not (fo > 0 and ap > 0):
+        return False
+    lo, hi = PLAUSIBLE_F_RATIO
+    return lo <= fo / ap <= hi
 
 
 def _html_text(text) -> str:
@@ -17605,10 +18241,18 @@ def checklist_rows(probe: dict, form: dict) -> list:
                      and abs(h_site[0] - f_site[0]) < 0.01
                      and abs(h_site[1] - f_site[1]) < 0.01)
     if f_site and not same_site and (form.get("site_force") or not h_site):
-        rows.append({"key": "site", "level": "ok",
+        # A site an earlier run copied from ITS frames is not a
+        # statement about these: frames without a site would silently
+        # be reduced for the last observatory.
+        borrowed = bool(form.get("site_from_header")) and not h_site
+        rows.append({"key": "site", "level": "ask" if borrowed else "ok",
                      "title": "Site: " + site_text(*f_site),
                      "source": ("Typed, overriding the headers' "
                                 + site_text(*h_site) + "." if h_site else
+                                "Carried over from the headers of the "
+                                "last run; these frames carry no site. "
+                                "Check that they were taken there, or "
+                                "type the right one." if borrowed else
                                 "From this row's fields, kept from the "
                                 "last session; the headers carry no "
                                 "site.")})
@@ -17631,7 +18275,19 @@ def checklist_rows(probe: dict, form: dict) -> list:
     ap_form, ap_hdr = form.get("aperture_mm"), probe.get("aptdia")
     ap = ap_form or ap_hdr
     focal = probe.get("focal_mm")
-    if ap:
+    if ap and focal and not plausible_f_ratio(focal, ap):
+        rows.append({"key": "telescope", "level": "ask",
+                     "title": f"Telescope: {float(ap):g} mm aperture, "
+                              f"{float(focal):g} mm focal length "
+                              f"(f/\u2060{float(focal) / float(ap):.1f})",
+                     "source": "That focal ratio is no telescope's: the "
+                               "aperture is probably another "
+                               "instrument's, or a focal length typed "
+                               "into the aperture field. Type this "
+                               "telescope's aperture; the scintillation "
+                               "term of the error bars is computed "
+                               "from it."})
+    elif ap:
         rows.append({"key": "telescope", "level": "ok",
                      "title": f"Telescope: {float(ap):g} mm aperture"
                               + (f", {float(focal):g} mm focal length "
@@ -18302,6 +18958,8 @@ class SvenesisLightCurveWindow(QMainWindow):
             "site": ((float(lat), float(lon))
                      if np.isfinite(lat) and np.isfinite(lon) else None),
             "site_force": self.chk_site_force.isChecked(),
+            "site_from_header": bool(getattr(self, "_site_from_header",
+                                             False)),
             "aperture_mm": _parse_aperture_mm(self.ed_aperture_mm.text()),
             "aperture_note": getattr(self, "_aperture_note", ""),
             "filter": self.ed_filter.text().strip(),
@@ -18403,6 +19061,12 @@ class SvenesisLightCurveWindow(QMainWindow):
         self._apertures = {}
         self._aperture_note = ""
         self.ed_aperture_mm.textEdited.connect(self._on_aperture_edited)
+        # Whether the site in the fields was typed, or written there by
+        # a run from its frames' headers.  textEdited fires for typing
+        # only, not for setText.
+        self._site_from_header = False
+        self.ed_lat.textEdited.connect(self._on_site_edited)
+        self.ed_lon.textEdited.connect(self._on_site_edited)
         for w in (self.ed_lat, self.ed_lon, self.ed_aperture_mm):
             w.textChanged.connect(self._refresh_checklist)
         self.chk_site_force.toggled.connect(self._refresh_checklist)
@@ -19102,6 +19766,8 @@ class SvenesisLightCurveWindow(QMainWindow):
             "site_lon_deg": lon if np.isfinite(lon) else None,
             "aperture_mm": _parse_aperture_mm(self.ed_aperture_mm.text()),
             "site_force_form": self.chk_site_force.isChecked(),
+            "site_from_header": bool(getattr(self, "_site_from_header",
+                                             False)),
             "auto_ldc": self.chk_auto_ldc.isChecked(),
             "n_comps": self.spin_comps.value(),
             "min_comp_snr": self.spin_snr.value(),
@@ -19179,6 +19845,15 @@ class SvenesisLightCurveWindow(QMainWindow):
         self.ed_lon.setText(f"{lon:.4f}")
         self.ed_lat.setToolTip(f"Read from the {where} of the last run.")
         self.ed_lon.setToolTip(f"Read from the {where} of the last run.")
+        self._site_from_header = True
+        self._refresh_checklist()
+
+    def _on_site_edited(self, *_args) -> None:
+        """A site somebody typed is theirs, whatever was there before."""
+        self._site_from_header = False
+        self.ed_lat.setToolTip("")
+        self.ed_lon.setToolTip("")
+        self._refresh_checklist()
 
     def _set_running(self, busy: bool) -> None:
         self.btn_run.setEnabled(not busy and bool(self._folder))
@@ -19822,6 +20497,8 @@ class SvenesisLightCurveWindow(QMainWindow):
         self.ed_aperture_mm.setText(str(st.value("aperture_mm", "")))
         self.chk_site_force.setChecked(
             str(st.value("site_force", "false")).lower() == "true")
+        self._site_from_header = (
+            str(st.value("site_from_header", "false")).lower() == "true")
         self.chk_auto_ldc.setChecked(
             str(st.value("auto_ldc", "true")).lower() == "true")
         try:
@@ -19889,6 +20566,9 @@ class SvenesisLightCurveWindow(QMainWindow):
         st.setValue("aperture_mm", self.ed_aperture_mm.text())
         st.setValue("site_force",
                     "true" if self.chk_site_force.isChecked() else "false")
+        st.setValue("site_from_header",
+                    "true" if getattr(self, "_site_from_header", False)
+                    else "false")
         st.setValue("auto_ldc",
                     "true" if self.chk_auto_ldc.isChecked() else "false")
         st.setValue("n_comps", self.spin_comps.value())
@@ -19923,10 +20603,13 @@ class SvenesisLightCurveWindow(QMainWindow):
                     if self.ed_aperture_mm.text().strip() else 0.0)
         ap_now = _parse_aperture_mm(self.ed_aperture_mm.text())
         focal_now = float(getattr(self, "_aperture_focal_bound", 0.0) or 0.0)
-        if ap_now and focal_now > 0:
-            table = dict(getattr(self, "_apertures", {}) or {})
+        table = {k: v for k, v in dict(getattr(self, "_apertures", {})
+                                       or {}).items()
+                 if plausible_f_ratio(k, v)}
+        if ap_now and focal_now > 0 \
+                and plausible_f_ratio(focal_now, ap_now):
             table[str(int(round(focal_now)))] = float(ap_now)
-            self._apertures = table
+        self._apertures = table
         st.setValue("apertures_by_focal",
                     json.dumps(getattr(self, "_apertures", {}) or {}))
 

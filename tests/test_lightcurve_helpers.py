@@ -4697,7 +4697,7 @@ check("d = d[min(max(ch, 0), d.shape[0] - 1)]" in _nat and 'self.opts.get("chann
       "the native engine measures the chosen channel of a debayered OSC frame, not plane 0")
 check("run_med = float(np.median(qf))" in _nat and "fwhm = grid_fwhm(fwhm_ref, q_fwhm)" in _nat and "RUN_FWHM_RATIO_RANGE" in _nat,
       "the aperture grid is scaled to the run's median seeing, never smaller than the reference frame's, inside a trust range")
-check("APERTURE_MAX_SEEING_R" in _nat and "np.corrcoef(mag[pair], fw_k[pair])" in _nat and "stable = [c for c in cands" in _nat,
+check("APERTURE_MAX_SEEING_R" in _nat and "r_see = seeing_correlation(mag, fw_k, see_cols, see_mask)" in _nat and "stable = [c for c in cands" in _nat,
       "an aperture whose curve tracks the seeing is passed over for a less correlated one")
 check("TARGET_LINEAR_HEADROOM" in _nat and "self._target_headroom = frac" in _nat and "CMOS" in _nat,
       "the target's brightest peak is compared with the linearity margin and warned about")
@@ -4800,7 +4800,7 @@ check(abs(_dist(38.93, -76.488, 31.5469, -99.3822) - 2210) < 30,
 check(_dist(51.0, 179.9, 51.0, -179.9) < 20 and _dist(0.0, 0.0, 0.0, 0.0) == 0.0,
       "the longitude difference is wrapped: 179.9 E and 179.9 W are neighbours")
 check(ns["SITE_DISAGREE_KM"] == 50.0, "the form/header site tolerance is 50 km")
-_site_src = src[src.index("def _resolve_site"):src.index("def _resolve_site") + 4000]
+_site_src = src[src.index("def _resolve_site"):src.index("def _resolve_site") + 5000]
 check("site_distance_km(f_lat, f_lon, lat, lon)" in _site_src
       and "Using the site in the form, but it is" in _site_src
       and "was set aside" in _site_src
@@ -6114,8 +6114,212 @@ if _fits18 is not None:
               "a folder of flats only: nothing is taken from them, the name field is left alone, the rows ask")
 check("_ys = [t_.get_position()[1] for t_ in ax.texts" in src and "ax.set_ylim(_lo, _need)" in src,
       "the plot makes room for the duration labels parked below a deep transit")
-check('VERSION = "1.0.21"' in src and "1.0.21 - Eight nights: two false alarms, and what stops them" in src,
-      "version 1.0.21 with its changelog entry")
+# A meridian flip in the shared-term check.  Seven stars that each follow
+# -8 mmag/px along their OWN path within a side of the flip (a common
+# drift would cancel in differential photometry and show nothing); the
+# flip throws each of them 13-2800 px across the sensor and gives each
+# its own offset.
+_rf = np.random.default_rng(2121)
+_nf, _nflip = 160, 110
+_jdf = 2461283.6 + np.arange(_nf) * 80.0 / 86400.0
+_stepf = (np.arange(_nf) >= _nflip).astype(float)
+_drift = np.zeros(_nf)
+_x0 = [1492.0, 2811.0, 637.0, 2894.0, 1091.0, 2662.0, 1810.0]
+_jump = [13.0, -2626.0, 1722.0, -2793.0, 813.0, -2329.0, -624.0]
+_pers = _rf.normal(0.0, 1.0, (7, _nf))                           # each star's own sub-pixel path
+_pers -= _pers.mean(axis=1, keepdims=True)
+_xf = np.array([x0 + _drift + _pers[k] + jmp * _stepf for k, (x0, jmp) in enumerate(zip(_x0, _jump))])
+_slope_true = -0.008                                              # mag per px, every star
+_offs = _rf.normal(0.0, 0.02, 7)                                  # each star's own flip offset
+_magf = np.array([_slope_true * (_xf[k] - _x0[k] - _jump[k] * _stepf) + _offs[k] * _stepf
+                  + _rf.normal(0.0, 0.004, _nf) for k in range(7)])
+_rawf = {"flux": 1e5 * 10 ** (-0.4 * _magf), "jd": _jdf, "keep": [True] * 6, "x": _xf, "y": _xf.copy()}
+_tcol = _xf[0].copy()
+for _sd in (0.0, 1.0):
+    _tcol[_stepf == _sd] -= np.median(_tcol[_stepf == _sd])
+_no = _shared(_rawf, _jdf, "xpos", _tcol, None, _slope_true, 0.001)
+_yes = _shared(_rawf, _jdf, "xpos", _tcol, None, _slope_true, 0.001, flip_rows=_stepf)
+check(_no is not None and _no["verdict"] == "target-only" and max(abs(v) for v in _no["slopes"]) < 2e-4,
+      "the defect: with raw positions a flip makes every comparison star's slope zero, so a real shared term reads 'target-only'")
+check(_yes is not None and _yes["verdict"] == "shared" and abs(_yes["median"] - _slope_true) < 0.002
+      and min(_yes["sigmas"]) > 10 * max(_no["sigmas"]),
+      "with the flip step the comparison stars' positions are referred to each side: the term every star has is found on them (-8 mmag/px) and called shared")
+_one = _shared(_rawf, _jdf, "xpos", _tcol, None, -0.060, 0.004, flip_rows=_stepf)
+check(_one is not None and _one["verdict"] == "target-only",
+      "a slope only the target has is still caught on a flip night (-60 mmag/px against stars at -8)")
+_nofl = _shared(_rawf, _jdf, "xpos", _tcol, None, _slope_true, 0.001, flip_rows=np.zeros(_nf))
+check(_nofl is not None and _nofl["slopes"] == _no["slopes"],
+      "a flip column that never changes is ignored: a night without a flip is measured as before")
+_jks = src[src.index("    def _jackknife_comps("):src.index("    def _aperture_stability(")] if "    def _aperture_stability(" in src[src.index("    def _jackknife_comps("):] else src[src.index("    def _jackknife_comps("):]
+check(_jks.index('raw["keep"] = [(i + 1) in active for i in range(len(keep))]') < _jks.index("chosen, _rows, _unc, pre = self._choose_bases(")
+      and 'flip_rows=bases.get("flip")' in src,
+      "the one-star loop tells the shared-term check which stars are still in before it asks, and the check gets the flip step")
+
+print("\n9z) 1.0.23: what the runs of 1.0.21 and 1.0.22 in Siril showed")
+# -- the site in the form, and where it came from
+_fz = dict(_fm, site=(38.9301, -76.4883))
+_pz = dict(_pr, site=None)
+check(_row(_pz, _fz, "site")["level"] == "ok" and "kept from the last session" in _row(_pz, _fz, "site")["source"]
+      and _row(_pz, dict(_fz, site_from_header=True), "site")["level"] == "ask"
+      and "Carried over from the headers of the last run" in _row(_pz, dict(_fz, site_from_header=True), "site")["source"]
+      and _row(_pr, dict(_fz, site_from_header=True), "site")["title"] == "Site: 31.55° N, 99.38° W",
+      "a site an earlier run copied from its frames is not a statement about frames that carry none: the row asks; headers still win")
+_site_z = src[src.index("def _resolve_site"):src.index("def _resolve_site") + 5000]
+check('if f_lat is not None and not self.opts.get("site_from_header"):' in _site_z
+      and "self.ed_lat.textEdited.connect(self._on_site_edited)" in src and "self._site_from_header = True" in src
+      and 'st.setValue("site_from_header",' in src and '"site_from_header": bool(getattr(self, "_site_from_header",' in src,
+      "only a typed site is compared with the header's: the last run's header in the form no longer draws a warning")
+# -- an aperture that makes no telescope
+_pfr, _rap, _stale = ns["plausible_f_ratio"], ns["remembered_aperture"], ns["form_aperture_stale"]
+check(_pfr(382, 81) and _pfr(2032, 203.2) and not _pfr(2032, 2032) and not _pfr(382, 8) and not _pfr("x", 81) and not _pfr(0, 81),
+      "f/4.7 and f/10 are telescopes; f/1 and f/48 are not")
+check(_rap({"2032": 2032.0, "382": 81.0}, 2032.0) is None and _rap({"2032": 2032.0, "382": 81.0}, 382.0) == 81.0
+      and _rap({"2032": 203.2}, 2030.0) == 203.2,
+      "an aperture remembered for a focal length it cannot belong to is not offered again")
+check("f/1" in _stale(2032.0, 2032.0, 2032.0) and _stale(81.0, 382.0, 382.0) == "" and "entered for frames of 382 mm" in _stale(81.0, 2032.0, 382.0),
+      "a value bound to these very frames is still cleared when it makes no telescope")
+_tz = _row(dict(_pr, focal_mm=2032.0), dict(_fm, aperture_mm=2032.0), "telescope")
+check(_tz["level"] == "ask" and "no telescope's" in _tz["source"] and "f/⁠1.0" in _tz["title"]
+      and _row(dict(_pr, focal_mm=2032.0), dict(_fm, aperture_mm=203.2), "telescope")["level"] == "ok"
+      and "plausible_f_ratio(focal_now, ap_now)" in src,
+      "the Telescope row asks instead of ticking f/1.0 green, and such a pair is not written to the memory")
+# -- the headroom guard reads the night, not one frame
+_natz = src[src.index("    def _native_photometry("):src.index("    def _native_photometry(") + 40000]
+check(ns["PEAK_SAMPLE_FRAMES"] >= 8 and "np.linspace(\n                0, len(frames) - 1, min(PEAK_SAMPLE_FRAMES, len(frames)))" in _natz
+      and "int(np.nanargmin(fw_fr))" in _natz and "seen[c_].append(_box_peak(" in _natz
+      and "est = max([v_ for v_ in (one * peak_scale, top)" in _natz,
+      "the peak of a comparison star is read on a spread of frames with the sharpest among them, and the highest counts")
+check("its core is at the clip level in the" in _natz and "peak already at" not in _natz
+      and "peak at most" in _natz and "Intermittent \"\n                        \"clipping reads as variability." in _natz,
+      "a clipped star is called clipped; no '116 % of the clip level'")
+# -- the messages
+check(src.count("Target core clipped in {sat_dropped} of {n_frames}") == 1 and "so there is \"\n                \"nothing to hand over" not in src,
+      "the saturation exit states its reason once")
+_cmz, _ntz = _cm(_gc(_inf("flat", 3.0, "2026-08-31", 20, "fA", "L") + _inf("dark", 3.0, "2026-08-31", 20, "dA"), "L"), _lights)
+check(any("are not darks for the lights" in t and "read noise" in t and "they are the flats' dark-flats" in t for t in _ntz)
+      and not any("Shoot darks" in t or "Siril subtracts it as it is" in t for t in _ntz if "dark-flats" in t),
+      "darks that are the flats' dark-flats get one statement, not a rejection with a 'but'", str([t for t in _ntz if "dark" in t][:1]))
+check("PHOTOMETRY \"\n                    \"ONLY: no transit was claimed" in src and "AAVSO-format file written to" in src,
+      "the AAVSO file of a night without a claimed transit is called what it is in the log")
+check("not tested — no \"\n                    \"transit is detected, so there is no depth for a \"\n                    \"single star to carry." in src
+      and "fewer than three there is no ensemble to leave one out \"\n                \"of." in src,
+      "the one-star test says when it did not run, and why")
+check('if bases.get("flip") is not None else "")' in src, "'its own side of the flip' is said only on a night with a flip")
+check(ns["PLOT_STAMP_BAND"] > 0.2 and "_need = (max(_ys) - PLOT_STAMP_BAND * _lo) \\\n                / (1.0 - PLOT_STAMP_BAND)" in src and "ax.set_ylim(_lo, _need)" in src,
+      "labels written in data coordinates stay above the band the clock stamps own")
+# -- the one-star test removes only a star that carries the transit
+_jpk = ns["jackknife_pick"]
+# five stars, one of which brightens through the window: every good star
+# reads "shallower with it", and by the size of the shift alone a good
+# one would go first
+_rows5 = [(1, 0.0078, 0.0024), (3, -0.0228, 0.0035), (4, -0.0049, 0.0008), (5, 0.0011, 0.0030), (6, -0.0079, 0.0014)]
+_pk5, _hd5 = _jpk(_rows5, 0.0023)
+check(_pk5 is not None and _pk5[0] == 1 and abs(_pk5[3] - 3.25) < 0.01 and sorted(h[0] for h in _hd5) == [3, 4, 6]
+      and max(_rows5, key=lambda r: abs(r[1] / r[2]))[0] == 3,
+      "only a star the transit is DEEPER with can carry it: the one at +3.2 sigma goes, not the good star at -6.5",
+      str((_pk5, [h[0] for h in _hd5])))
+check(_jpk([(1, -0.008, 0.001), (2, -0.002, 0.001), (3, 0.0004, 0.001)], 0.002)[0] is None
+      and [h[0] for h in _jpk([(1, -0.008, 0.001), (2, -0.002, 0.001), (3, 0.0004, 0.001)], 0.002)[1]] == [1]
+      and _jpk([(1, 0.008, 0.001)], 0.01) == (None, []) and _jpk([(1, float("nan"), 0.001), (2, 0.004, 0.0)], 0.001) == (None, [])
+      and _jpk([], 0.001) == (None, []),
+      "a star the transit is shallower with is reported and kept — a guard against false claims never makes a transit deeper; "
+      "a shift inside the depth's own bar is nobody's")
+check("pick, hides = jackknife_pick(rows, bar)" in src and "SHALLOWER with this star" in src and '"hides": hide_rows}' in src,
+      "the worker removes the pick, reports the rest and hands them to the verdict")
+check(_g({"comp_jackknife": {"removed": [], "left": 4, "unresolved": False, "hides": [(100.0, 50.0, -8.0, 1.0)]}})["grade"] == "usable"
+      and "8.0 ± 1.0 mmag deeper without the comparison star at (100, 50)" in _g({"comp_jackknife": {"removed": [], "left": 4, "unresolved": False, "hides": [(100.0, 50.0, -8.0, 1.0)]}})["reasons"][0][1]
+      ,
+      "and the verdict says the depth is uncertain by that much")
+# -- 'shared' means the comparison stars show it
+_rz = np.random.default_rng(2323)
+_nz = 150
+_jz = 2461364.6 + np.arange(_nz) * 100.0 / 86400.0
+_fwz = 6.0 + np.cumsum(_rz.normal(0, 0.15, _nz))
+def _raw_z(slopes, noise=0.004):
+    mags = np.array([sl * (_fwz - _fwz.mean()) + _rz.normal(0.0, noise, _nz) for sl in slopes])
+    return {"flux": 1e5 * 10 ** (-0.4 * np.vstack([np.zeros(_nz), mags])), "jd": _jz, "keep": [True] * len(slopes)}
+_sz = _shared(_raw_z([0.0005, -0.0004, 0.0002, -0.0006, 0.0003, -0.0001]), _jz, "fwhm", _fwz, None, -0.0012, 0.0006)
+check(_sz is not None and _sz["shared"] and _sz["verdict"] == "undecided" and not _sz["shown"] and _sz["spread"] <= abs(_sz["target"]),
+      "a target inside the comparison stars' scatter is not 'shared' when they show no slope themselves (HAT-P-25 b: -3.2 against a median of -0.5)",
+      str(_sz and (_sz["verdict"], round(1000 * _sz["median"], 2), round(1000 * _sz["spread"], 2))))
+check("NOT TOLD APART: the target's slope lies \"\n                       \"within the comparison stars' scatter" in src and ns["COMP_SHARE_SHOWN_SIGMAS"] == 2.0,
+      "and the log says 'not told apart', not 'an instrumental dependence'")
+# -- the residual selection does not chase noise
+_rs2 = np.random.default_rng(4033)
+def _sel_z(n, wobble=0.0, ncomp=6):
+    t = 2461285.6 + np.linspace(0.0, 0.16, n)
+    Xz = 1.3 + 1.5 * ((t - t.min()) / 0.16 - 0.5) ** 2
+    slow = lambda: np.cumsum(_rs2.normal(0, 0.0015, n))
+    tar = 1e5 * 10 ** (-0.4 * (slow() + _rs2.normal(0, 0.008, n)))
+    cs = [8e4 * 10 ** (-0.4 * (slow() + _rs2.normal(0, 0.008, n))) for _ in range(ncomp)]
+    if wobble:
+        cs[2] = 3e5 * 10 ** (-0.4 * (wobble * np.sin(2 * np.pi * (t - t.min()) / 0.11) + _rs2.normal(0, 0.004, n)))
+    az = {"t0": float(t.mean()), "window_min": 30.0, "sigma_min": 2.0, "epoch": 0, "duration_d": 2.0 / 24.0, "duration_tol": 0.05}
+    return _selc(t, tar, cs, np.sqrt(tar) * 30, [np.sqrt(c) * 30 for c in cs], bases={"airmass": Xz}, anchor=az)
+_kept_z = [len(_sel_z(47)[0]) for _ in range(12)]
+check(min(_kept_z) >= 5 and sum(k == 6 for k in _kept_z) >= 9,
+      "on 47 points of noise with slow structure the selection keeps its stars: a 3-5 % gain is inside what a residual is known to",
+      str(_kept_z))
+_az, _rwz, *_ = _sel_z(47, wobble=0.06)
+check(2 not in _az and len(_az) >= 3, "a bright star with a 60 mmag wobble is still dropped on a short run", f"{_az} {_rwz}")
+_a3, _r3, *_ = _sel_z(120, wobble=0.06, ncomp=3)
+check(len(_a3) == 3 and not _r3 and ns["COMP_RESIDUAL_FLOOR"] == 3,
+      "three comparison stars always stay: the checks that follow need an ensemble")
+# -- the seeing correlation and a transit on a night of changing seeing
+_scz, _boxz = ns["seeing_correlation"], ns["predicted_transit_box"]
+_nq = 80
+_tq = 2461366.89 + np.linspace(0.0, 2.2 / 24.0, _nq)                 # begins inside the transit
+_ephq = {"period_d": 2.043604, "t0_bjd": 2461366.90363, "t0_err_d": 0.0003, "period_err_d": 4e-7, "duration_h": 1.82}
+_inq = (np.abs(_tq - 2461366.90363) < 0.91 / 24.0)
+_fwq = np.linspace(9.9, 7.8, _nq) + _rz.normal(0, 0.25, _nq)         # the seeing improves all night
+_mq3 = 0.014 * _inq + _rz.normal(0, 0.003, _nq)
+_bq, _aq = _boxz(_ephq, _tq + 160.0 / 86400.0 - 160.0 / 86400.0)
+check(_bq is not None and int(np.nansum(_bq)) == int(_inq.sum()) and int(_aq.sum()) < _nq
+      and abs(_scz(_mq3, _fwq)) > 0.5 and abs(_scz(_mq3, _fwq, [_bq], _aq)) < 0.3,
+      "a transit egress on a night of improving seeing: plain correlation calls every aperture seeing-bound, with the predicted transit out it does not",
+      f"{_scz(_mq3, _fwq):+.2f} -> {_scz(_mq3, _fwq, [_bq], _aq):+.2f}")
+_mloss = _mq3 + 0.004 * (_fwq - np.linspace(9.9, 7.8, _nq))          # an aperture that does lose flux with the seeing
+check(abs(_scz(_mloss + 0.02 * (_fwq - _fwq.mean()), _fwq, [_bq], _aq)) > 0.5,
+      "a curve that really follows the seeing still reads so once the transit is out")
+check(_boxz({"period_d": 3.11984, "t0_bjd": 2459826.73643, "t0_err_d": 0.002, "period_err_d": 1.28e-4, "duration_h": 1.76},
+            2461283.62 + np.linspace(0, 0.15, 160))[0] is None and _boxz(None, _tq)[0] is None
+      and math.isnan(_scz(_mq3[:5], _fwq[:5]))
+      and "r_see = seeing_correlation(mag, fw_k, see_cols, see_mask)" in src and "self._engine_eph = eph if isinstance(eph, dict) else None" in src,
+      "no box from an ephemeris that predicts to hours or from none; the engine is given the ephemeris")
+# -- a run with one contact
+_ose = ns["one_sided_evidence"]
+_tmq = ns["ld_template"](0.118, 0.75, 0.493, 0.148)
+_shq = np.asarray(ns["ld_shape"](_tq, 2461366.90363, 1.82 / 24.0, _tmq), float)
+_Xq = 1.24 - 0.23 * np.linspace(0, 1, _nq) ** 0.7
+_ancq = dict(_anc and ns["ephemeris_anchor"](_ephq, _tq, "BJD_TDB")[0], duration_tol=0.02)
+_m1 = 0.0135 * _shq / _shq.max() + 0.01 * (_Xq - _Xq.mean()) + _rz.normal(0, 0.004, _nq)
+_m1 = _m1 - np.median(_m1)
+_f1 = ns["fit_transit"](_tq, _m1, bases={"airmass": _Xq}, u1=0.493, u2=0.148, anchor=_ancq)
+_e1 = _ose(_tq, _m1, _f1, {"airmass": _Xq})
+check(_f1 is not None and not _f1["detected"] and _f1["significance"] == 0.0 and _f1["n_before"] == 0 and _f1["n_after"] > 8 and _f1["n_in_transit"] > 8,
+      "a run that begins inside the transit: no point before the ingress, and the significance is zero by rule",
+      str(_f1 and (_f1["n_before"], _f1["n_in_transit"], _f1["n_after"], _f1["significance"])))
+check(_e1 is not None and _e1["seen"] == "egress" and _e1["missing"] == "before the ingress" and _e1["dbic_trend"] < -2 and _e1["dbic_none"] < -10
+      and abs(_e1["depth_mmag"] - 13.5) < 4.0,
+      "what such a run shows is described: the egress, its depth, and that a transit profile beats a smooth trend",
+      str(_e1 and {k: round(v, 1) if isinstance(v, float) else v for k, v in _e1.items()}))
+_m2 = 0.035 * ((_tq - _tq.mean()) / np.ptp(_tq)) + 0.02 * ((_tq - _tq.mean()) / np.ptp(_tq)) ** 2 + _rz.normal(0, 0.004, _nq)
+_f2 = ns["fit_transit"](_tq, _m2 - np.median(_m2), bases={"airmass": _Xq}, u1=0.493, u2=0.148, anchor=_ancq)
+_e2 = _ose(_tq, _m2 - np.median(_m2), _f2, {"airmass": _Xq}) if _f2 is not None else None
+check(_e2 is None or _e2["dbic_trend"] > -2,
+      "a smooth trend is not described as an egress", str(_e2 and round(_e2["dbic_trend"], 1)))
+check(_ose(_tq, _m1, dict(_f1, n_before=12), {"airmass": _Xq}) is None and _ose(_tq, _m1, dict(_f1, n_in_transit=3), {"airmass": _Xq}) is None,
+      "with points on both sides, or too few on the floor, there is nothing to describe")
+_q1 = _mq(dict(_f1, one_sided=_e1))
+check(_q1["detection"] == "not detected" and "no point before the ingress" in _q1["headline"] and _q1["grade"] is None
+      and "Evidence, not a detection" in _q1["reasons"][0][1]
+      and "no point after the egress" in _mq({"detected": False, "significance": 0.0, "one_sided": {"missing": "after the egress"}})["headline"]
+      and "ONE CONTACT ONLY — what the data show" in src and "reads 0.0 by that rule, whatever the data hold." in src,
+      "the verdict names the missing side instead of '0.0 sigma', and carries the evidence as evidence")
+check("1.0.21 - Eight nights: two false alarms, and what stops them" in src
+      and "1.0.22 - The shared-term test on a night with a meridian flip" in src
+      and 'VERSION = "1.0.23"' in src and "1.0.23 - Ten runs in Siril: what the logs asked for" in src,
+      "version 1.0.23 with its changelog entry, the earlier ones kept")
 
 if fails:
     print(f"{len(fails)} FAILURE(S)")
