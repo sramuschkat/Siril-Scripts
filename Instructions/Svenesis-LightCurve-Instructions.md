@@ -1,6 +1,6 @@
 # Svenesis LightCurve — User Instructions
 
-**Version 1.0.19** | Siril Python Script for Exoplanet Transit Photometry
+**Version 1.0.21** | Siril Python Script for Exoplanet Transit Photometry
 
 > *A folder of sub-exposures in, a light curve out — and an honest answer to the only question that matters: is there a transit in it?*
 
@@ -157,6 +157,8 @@ A flat does **not** have to match the lights' exposure. A flat is a ratio; its o
 
 **One optical train, and the gain, since v1.0.17.** Camera, size, binning and filter do not tell two telescopes apart, and a library folder left in the form from another instrument serves exactly such flats. A flat whose `FOCALLEN` differs from the lights' by more than 5 % is now rejected by name (*taken at 382 mm focal length, the lights at 2032 mm — another telescope*), and flats of two focal lengths are never stacked into one master. A focal length missing on either side decides nothing. — When the header carries no `EGAIN`, the conversion factor is **measured from two of the run's own raw flats** and their offset frames: in the difference of two flats everything fixed cancels (vignetting, dust, pixel response) and the photon noise of both remains, whose size is known in electrons. Tiles of 64 px on the central half of the frame, the second flat scaled to the first, the median over the tiles. Right to 0.6 % on synthetic flats from 0.06 to 4 e⁻/ADU, including a drifting panel and a colour mosaic; 0.258 e⁻/ADU on a camera whose frames had been measured with an assumed 1 (four pairs: 0.2573–0.2583). The value sets the error bars and the weights of the fit, not the depth. Masters and calibrated flats are refused (their noise has been averaged away, and two 8-frame masters read eight times high), and so are flats taken at another gain setting. A header `EGAIN` that disagrees by more than 25 % is reported and stays in use.
 
+**The measured gain is remembered, since v1.0.21** — per camera, gain setting and binning. A night whose flats came without dark-flats or bias cannot measure it, and four of eight test nights ran with "gain 1 assumed" on a camera measured at 0.258 on the others. Such a night now uses the value on record and the log says where it came from; a measurement of the run's own, or a header `EGAIN`, takes precedence.
+
 ### What it does not do
 
 The pixel work is Siril's `calibrate`. There is no bias/dark/flat arithmetic in this script, for the same reason there is no photometry in it. And it does **not** resample — bias, dark and flat are per-pixel arithmetic, so the promise the registration keeps is untouched. It does write a second copy of every frame, so the working folder doubles.
@@ -263,7 +265,7 @@ A correct header is **confirmed**, not flipped. With no altitude to check agains
 
 The error bars come from the CCD equation — the star's photon noise plus the measured sky noise — with every term measured, none assumed.
 
-Measured on the same 142-frame drifting run: this engine keeps 140 points at 7.2 mmag point-to-point where Siril's `light_curve` kept 67. If the engine measures fewer than 30% of the frames it says so and Siril's `light_curve` takes over — the whole old path remains intact as the fallback, including everything below.
+Measured on the same 142-frame drifting run: this engine keeps 140 points at 7.2 mmag point-to-point where Siril's `light_curve` kept 67. If the engine measures fewer than 30% of the frames it says so and Siril's `light_curve` takes over — the whole old path remains intact as the fallback, including everything below. One case is excepted since v1.0.21: when the frames are missing because the target is clipped in most of them, the run stops with that reason, because `light_curve` refuses the same frames (§10).
 
 **The 160-pixel wall.** Siril refuses `light_curve` outright when any frame's registration shift exceeds 160 px from the reference. It prints a line it calls a "Warning" about "heavy drifted images" and then returns a generic error — the warning *is* the abort, and it names a frame, never a star. The threshold was found by bisection against Siril 1.4.4: 159.6 px runs, 160.7 px does not.
 
@@ -329,6 +331,7 @@ Nothing here can mis-point quietly.
 - **The telescope aperture is remembered per focal length.** Type it once for a telescope; when frames of that focal length come back, so does the aperture, and the row says *remembered*.
 - **A Bayer pattern in the headers switches the colour-camera option on.** It is never switched off automatically, because not every capture program writes the keyword; a switch that disagrees with the headers turns the row amber.
 - **A filter typed in an earlier session** is shown together with what the headers say.
+- **The rows describe the light frames, since v1.0.21.** A sub-folder `flat` that sorted ahead of the lights once filled the whole sample, and the row read *Target: flat* with a green tick. Calibration folders are now read last, reading goes on until thirty lights are in hand, and nothing is taken from a calibration frame; a folder in which no light frame was found makes the rows say so.
 - To use a value the frames contradict, type it *after* choosing the folder; nothing re-probes.
 
 **Expert settings.** Comparison count, SNR floor, channel, aperture search, comparison check, sky rings; the fit mode (blind detection or the HOPS-compatible fit, §9) with HOPS detrending and iterations; the Phoenix limb-darkening switch and the Claret field with *Compute Claret (Phoenix)*; the airmass term; calibration on/off; frame copies; the AAVSO file and its camera type. Their defaults are what the script is tested with. The folded header reads *all at their defaults* or, in amber, how many are changed and which — a switch forgotten in there cannot hide — and **Reset to defaults** puts them back.
@@ -486,7 +489,7 @@ It is also **faster**. Only the transit column changes from node to node, so the
 
 **Anchored, selected and cross-checked, since v1.0.13.** Three rules, the ones TFOP's follow-up guidelines and AIJ's users apply, decide what the fit may do with a known planet:
 
-1. **Anchored on the ephemeris.** When the archive knows the planet, the mid-time is searched only within a window round the prediction — the ephemeris error grown over the epochs, times three, never under 30 minutes, because the archive's timing error is often missing — and the duration within 15 % of the archive's first-to-fourth contact (or the orbit's, from a/R★ and inclination); the period is fixed. Only the depth and the systematics are free, which is how EXOTIC and TFOP fit a known planet. A free mid-time and duration remain the right tool for a signal nobody has an ephemeris for, and the free scan still runs on every anchored fit as a cross-check, logged and reported. On JD_UTC times there is no anchor: an archive T0 is BJD_TDB and would be minutes off.
+1. **Anchored on the ephemeris.** When the archive knows the planet, the mid-time is searched only within a window round the prediction — the ephemeris error grown over the epochs, times three, never under 30 minutes, because the archive's timing error is often missing — and the duration within 5 % of the archive's first-to-fourth contact (15 % until v1.0.20; §10 says what changed it) (or the orbit's, from a/R★ and inclination); the period is fixed. Only the depth and the systematics are free, which is how EXOTIC and TFOP fit a known planet. A free mid-time and duration remain the right tool for a signal nobody has an ephemeris for, and the free scan still runs on every anchored fit as a cross-check, logged and reported. On JD_UTC times there is no anchor: an archive T0 is BJD_TDB and would be minutes off.
 2. **Bases by the BIC.** Airmass, and the meridian-flip step when a flip was seen, are always in. Seeing, sky, star count and the target's x/y drift each enter only when they lower the Bayesian Information Criterion by 2 or more (Kass & Raftery's "positive evidence") with the transit in the model — forward selection, best candidate first, one log line with every delta. Why this matters was measured on a 2026-08-31 night of TOI-2040.01: with all six bases offered unasked and a free duration, a 7 px drift of the star in x stretched the 2.6 h transit to 3.5 h and took a 6 σ detection to 1 σ without lowering the residual scatter at all. Anchored, the BIC rejects the same basis (+4.9) and the fit gives (Rp/R★)² = 1.42 % against TESS's 1.47 %, the mid-time 0.1 min from the prediction. On EXOTIC's HAT-P-32 set the x drift earns its place (−3.0) and stays.
 3. **A kept basis is measured on the comparison stars.** An instrumental dependence — a flat-field residual, a pixel-phase effect on an undersampled star — moves every star that drifts across the same pixels; a transit moves one. Each active comparison is fitted against the ensemble of the others, on its own centroid for the x/y bases and on the frame's value for the rest, with the airmass column alongside, and the target's slope must sit within two sigma of what the ensemble shows. A dependence only the target has is called out in red: a basis only the target follows is fitting the transit.
 
@@ -649,6 +652,38 @@ Simulated with the target's PSF 15 % wider than the comparison stars' and the se
 
 Three outcomes besides *stands* and *moved*. **No radius holds**: the aperture stays and the range of depths across the radii is printed in red — that range, not the formal bar, is what the run supports. **A larger radius would hold but another detected star would be inside it**: the aperture is not enlarged, because that star's light dilutes the transit, and the range is printed. **Not tested**: no transit is detected at the chosen aperture, or this script's own engine did not run. The table — depth, (Rp/R★)², airmass term and the largest disagreement with a larger radius, per aperture — is in the log and in the report.
 
+### What a low, crowded night taught (v1.0.20)
+
+A run of 558 frames on WASP-3 b held a 1.1 % transit and reported *not claimed, 4.2 sigma*. Three causes, each measured on the frames, each now a rule.
+
+**A detrending term must be confirmed outside the transit's flanks.** The BIC had admitted the star's x position on a gain of 3.3. The field had drifted 1.3 px between baseline and transit, and between those stretches a slow term and the depth are the same information: the term paid for itself out of the transit, which went from 11.6 to 7.1 mmag and under the detection floor. A term that passes the BIC must now lower it by the same amount *inside* the stretches where the transit's profile is flat — before ingress, on the floor, after egress, each with its own level and split at a flip — where it has to stand on structure the transit does not have. There the x term read −4.5 ± 2.6 mmag/px and failed. A term that fails is not used; the log says what the depth would have been with it, and the verdict lists it. Simulated: a real term that varies within the stretches is kept in 40 of 40 runs and the depth is unchanged; nothing is lost on white noise; a real term that is *only* a slow drift is rarely admitted by either rule (5 and 1 of 40) — one night cannot establish it. HAT-P-25 b's seeing term passes and stays.
+
+**The red-noise beta is measured in units of each point's own error bar.** The estimator compares the scatter of bin means with what one noise level predicts. That night the target sank to airmass 2.9 and its bars grew from 9 to 18 mmag — independent points, read as correlated noise. White noise with those bars gave beta 1.21 on average and 1.58 one time in ten; scaled by the bars, 1.08 and 1.29, the estimator's own scatter. Without this, the corrected run's 7.8 sigma would have been divided by 1.76 where 1.33 is right, and it would have missed the floor a second time. With equal bars nothing changes, the calibration of the detection floor included.
+
+**Another star's light is found by the curve of growth.** From one radius to the next every star gains the same share of its flux — the PSF is the field's — so a target that gains more has company in that ring. From 7.49 to 8.98 px the target gained 3.25 % where six comparison stars gained 0.92–1.58 %: a star of 2 % of its flux, 8 px away, that the detection had not listed. Such a radius is never chosen, and in the aperture test it is a witness only when it agrees: its light curve carries the neighbour's share, so its disagreement says nothing about the smaller radius, while agreement in spite of it still confirms.
+
+With the three, the same frames give (Rp/R★)² = 1.06 ± 0.12 % (published 1.10 %) at 5.9 sigma.
+
+### What eight nights taught (v1.0.21)
+
+Eight folders went through v1.0.20: three real transits, three nights with nothing to find — and two transits reported that were not there. Each of the two had passed every check that existed. What stops them now, and what the other six showed on the way:
+
+**No single comparison star may carry the transit.** On TOI-3540.01 one star of four ran from −39 to +117 mmag against the others inside the transit window. Against that star alone the target showed a 79 mmag "transit"; against the ensemble without it, none; the run had reported 5.1 sigma. The star's scatter was unremarkable and the fit's residual was even *better* with it (8.5 against 9.8 mmag), so neither existing screen had an objection. Now the depth with each star is compared with the depth without it, on the difference of the two light curves — where everything the two share cancels and the bar is the difference's own. A star that moves the depth by 3 sigma of that difference *and* by more than the depth's bar is left out, worst first, as long as three remain. And the scatter screen runs again whenever the ensemble has changed: it measures each star against the others, and that yardstick moves when one of them leaves. On TOI-3540.01 the re-check alone drops the star. All four real transits keep every star (largest shift: 1.1 mmag at a bar of 1.5).
+
+**A term only the target shows is not used.** On TOI-4033.01 the x position passed the BIC and the test outside the flanks. It read −30 mmag per pixel on the target and −0.1 to +0.3 on five comparison stars; the log said so in red, and the fit used it anyway — turning 1.3 sigma into a 7.6 sigma "transit" of three times the expected depth. A dependence no comparison star has is not the instrument's. Such a term is now taken out and the selection runs again without it; the log and the verdict give the depth both ways. Where the comparison stars cannot decide — HAT-P-25 b's seeing term, −1.8 mmag/px on the target with six comparison stars scattered from −5.5 to +3.3 — the term stays, and the verdict keeps reporting what it costs.
+
+**A claim that rests on an optional term is withdrawn.** If the fit with airmass and the flip step alone stays under the detection floor, nothing is claimed, whatever a further term adds: *CLAIM WITHDRAWN* in the log, and the reason as the verdict's headline.
+
+**A known planet's duration is held to 5 %** (15 % until v1.0.20). A night at 10 mmag per point does not measure a duration: the fit went to the edge of its range every time (WASP-3 b +13 %, TOI-2040.01 +16 %) for a gain in chi² of 5 and 2, and the mid-time moved by more than its bar with the choice. The freedom is also what a false alarm needs — TOI-3540.01 read 5.1 sigma at 85 % of the planet's duration and 3.9 at the real one. A clean curve does measure it (WASP-11 b at 2 mmag: +2.6 %), which is why it is 5 and not 0. The held duration is then tested against a free one: when the data prefer another by a Δχ² of 9, deflated by the red-noise beta, the log says *THE DATA PREFER ANOTHER DURATION* and the verdict limits the timing. Otherwise nothing is said, and a duration no longer reports "at the bound".
+
+**An ephemeris that predicts to hours is no anchor in time.** The search window is three times the propagated ephemeris error. When it is wider than half the transit the fit is in effect a blind search for the mid-time: the log says *NOT AN ANCHOR IN TIME*, the false-alarm rate quoted is the blind search's, and the verdict notes that a dip near the predicted minute proves little. Old TOI ephemerides do this.
+
+**A target clipped in most frames ends the run.** The engine refuses a frame whose aperture holds a clipped pixel, and so does Siril's `light_curve` — but the run used to fall back on it: TOI-1518 b came out as 37 points with 1.2 mag of scatter, fitted and plotted. Now the run stops and says the target is saturated and that a shorter exposure is the remedy. When the fallback is taken for another reason it gets the comparison stars that passed the headroom guard.
+
+**Smaller things.** An airmass term beyond 150 mmag per airmass is called what it is — not extinction, and a sign that the airmass curve has the transit's shape that night. A non-detection no longer prints a mid-time pinned at a bound, a depth range for the flip or a free scan: they describe a measurement that does not exist. A luminance filter named `LUMINOS` is recognised as a passband.
+
+Replayed on the nights' own photometry: both false alarms are not claimed (TOI-4033.01: 1.0 sigma), WASP-3 b 6.2 sigma, TOI-2040.01 5.6, WASP-11 b 25.5, HAT-P-25 b unchanged.
+
 ### Clipping is not variability — and no frame vanishes unnamed
 
 A pixel stuck at its ceiling cannot get any brighter. A comparison star whose core is *sometimes* at that ceiling — over the line on the good-seeing frames, just under it on the rest — therefore scatters exactly the way a variable star would. The scatter check cannot tell the two apart, and in the frames where the whole ensemble clipped at once, the measured points used to vanish from the curve without a word.
@@ -721,10 +756,16 @@ Every run ends with one statement of how good it was, at the top of the **Result
 | Fewer than 10 baseline points beyond a contact | usable |
 | Detected below 7 sigma | usable |
 | Red-noise beta above 1.5 / above 2.0 | usable / limited |
-| The depth depends on the aperture, or a larger aperture would take in another star (§10) | limited |
+| The depth depends on the aperture, or a larger aperture would take in another star (§10) | limited; usable when the range lies inside the depth's own bar |
+| A term the BIC admitted but that is not confirmed outside the transit's flanks would move the depth by more than its bar (§10) | usable |
 | The depth moves by more than its own bar when a detrending term the BIC admitted is left out | limited |
-| A detrending term seen in the target only | usable |
-| Mid-time or duration at the edge of the ephemeris window | limited |
+| A term only the target shows, taken out of the model, would move the depth by more than its bar (§10) | usable |
+| Mid-time at the edge of the ephemeris window | limited |
+| The data prefer another duration than the archive's (Δχ² ≥ 9) | limited |
+| The ephemeris predicts the transit only to within more than half its duration | usable |
+| An airmass term beyond 150 mmag per airmass | usable |
+| Comparison stars left out one at a time, and fewer than three remain to check one another | usable (a note otherwise) |
+| Detected only with an optional detrending term | no transit claimed |
 | Flip inside the transit, and the data cannot choose the model / can | limited / usable |
 | Target saturated / above 80 % of the clip level | limited / usable |
 | One / two comparison stars | limited / usable |

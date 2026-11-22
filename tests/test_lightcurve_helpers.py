@@ -4705,7 +4705,7 @@ _hm_src = src[src.index("    def _hops_mode(self"):src.index("    def _hops_mode
 check("red_noise_beta(np.asarray(res[\"t\"], float)" in _hm_src and "rp_sig *= beta_h" in _hm_src and "mid_sig *= beta_h" in _hm_src
       and "chain_autocorr_time(res.get(\"chain\"))" in _hm_src and '"converged": bool(' in _hm_src and "HOPS_MIN_CHAIN_TAUS" in _hm_src,
       "HOPS mode scales its headline bars by the Pont beta and reports the chain length in autocorrelation times")
-_fs_src = src[src.index("        X, airmass_note = self._airmass_series(jd_utc)"):src.index("        fit = fit_transit(jd, mag, bases=bases, u1=u1_fit")]
+_fs_src = src[src.index("        X, airmass_note = self._airmass_series(jd_utc)"):src.index("        bases, bic_rows, unconfirmed, fit = self._choose_bases(")]
 check("scintillation_mag(X, exp_for_scint, ap_mm" in _fs_src and "sc_term = np.where(np.isfinite(sc), sc, 0.0)" in _fs_src and "err = np.hypot(err, sc_term)" in _fs_src
       and "err_fit = err if err.size == jd.size else None" in src and "err=err_fit, anchor=anchor" in src and 'fit["ld_note"] = ld_source' in src,
       "scintillation joins the error bars before both fits see them; the blind fit is weighted and names its limb-darkening source")
@@ -4891,9 +4891,10 @@ check(_shared(dict(_raw, keep=[True, False, False]), _t, "xpos", _x, _X, _slope,
       "one active comparison star is not an ensemble, so there is no verdict")
 _wsrc = src[src.index("anchor, anchor_why = ephemeris_anchor(eph, jd, time_system)"):]
 _wsrc = _wsrc[:_wsrc.index("self._comp_share_check(fit, bases, jd_utc, X)") + 60]
-check("select_bases_bic(" in _wsrc and "Bases by BIC" in _wsrc and "Anchored on the ephemeris" in _wsrc
+check("self._choose_bases(" in _wsrc and "Bases by BIC" in _wsrc and "Anchored on the ephemeris" in _wsrc
       and "Free scan as a cross-check" in _wsrc and 'k in ("airmass", "flip")' in _wsrc
-      and _wsrc.index("select_bases_bic(") < _wsrc.index("fit = fit_transit("),
+      and "select_bases_bic(" in src[src.index("    def _choose_bases(self"):src.index("    def _jackknife_comps(self")]
+      and _wsrc.index("self._choose_bases(") < _wsrc.index("Bases by BIC"),
       "the worker anchors, selects by BIC before the fit, cross-checks with a free scan and measures kept bases on the comparison stars")
 check("bases (BIC)" in src and "free scan      T0" in src and "comp_share" in src,
       "the report carries the BIC table, the comparison-star verdicts and the free scan")
@@ -5410,12 +5411,21 @@ for _node in tree.body:
 _ans = dict(ns)
 _ans["LogColor"] = _LC
 exec(textwrap.dedent(_asm), _ans)
+# the selection and the ensemble checks the stability test now goes through
+for _node in tree.body:
+    if isinstance(_node, ast.ClassDef) and _node.name == "LightCurveWorker":
+        for _m in _node.body:
+            if isinstance(_m, ast.FunctionDef) and _m.name in ("_choose_bases", "_comp_share_check", "_jackknife_comps"):
+                exec(textwrap.dedent(ast.get_source_segment(src, _m)), _ans)
 class _SW:
     def __init__(self, raw, near=None, mode="blind"):
         self.opts, self.log, self._native_raw, self._target_neighbour_px = {"fit_mode": mode}, [], raw, near
     def _emit(self, msg, color=None):
         self.log.append((color, msg))
 _SW._aperture_stability = _ans["_aperture_stability"]
+_SW._choose_bases = _ans["_choose_bases"]
+_SW._comp_share_check = _ans["_comp_share_check"]
+_SW._jackknife_comps = _ans["_jackknife_comps"]
 def _raw_for(loss_mmag):
     """Target and three comps at five radii.  The target's flux at the
     two smallest radii carries an extra loss shaped like the transit
@@ -5466,7 +5476,7 @@ _nat17 = src[src.index("    def _native_photometry(self"):src.index("    def _ru
 check("witness = round(max(1.5, float(fwhm) * APERTURE_WITNESS_FWHM), 2)" in _nat17
       and "if math.isfinite(p2p) and not is_witness:" in _nat17 and '"flux_by_r": {float(r): flux[r] for r in radii}' in _nat17
       and "swap = self._aperture_stability(jd, jd_utc, mag, err, bases, anchor," in src
-      and src.index("swap = self._aperture_stability(") < src.index("            bases, bic_rows = _pre if _pre else select_bases_bic("),
+      and src.index("swap = self._aperture_stability(") < src.index("        bases, bic_rows, unconfirmed, fit = self._choose_bases("),
       "the engine measures a witness radius it never chooses, keeps every radius, and the test runs before the bases are chosen")
 check('"aper_stability": getattr(self, "_aper_stability", None)' in src and "stability      {stab['text']}" in src
       and "stability: {stab['text']}.</span><br>" in src and 'fit["aperture_stability"] = getattr(self, "_aper_stability",' in src,
@@ -5575,8 +5585,8 @@ check(_all["target"]["level"] == "ok" and _all["target"]["title"] == "Target: HA
 check(_all["telescope"]["level"] == "ask" and "not in the headers" in _all["telescope"]["title"] and "scintillation" in _all["telescope"]["source"]
       and sum(1 for r in _all.values() if r["level"] == "ask") == 1,
       "the one thing these headers do not say is the one row that asks, and it names what is lost without it")
-_t = _row(_pr, dict(_fm, aperture_mm=203.0), "telescope")
-check(_t["level"] == "ok" and _t["title"] == "Telescope: 203 mm aperture, 2032 mm focal length (f/10.0)" and "typed in this row" in _t["source"]
+_trow = _row(_pr, dict(_fm, aperture_mm=203.0), "telescope")
+check(_trow["level"] == "ok" and _trow["title"] == "Telescope: 203 mm aperture, 2032 mm focal length (f/\u206010.0)" and "typed in this row" in _trow["source"]
       and "remembered" in _row(_pr, dict(_fm, aperture_mm=203.0, aperture_note="Aperture remembered for frames of 2032 mm focal length"), "telescope")["source"]
       and "APTDIA" in _row(dict(_pr, aptdia=203.0), _fm, "telescope")["source"],
       "an aperture says whether it was typed, remembered for this telescope, or read from APTDIA")
@@ -5693,7 +5703,7 @@ else:
         fake_qt.QFileDialog.answer = _n1
         _w2._on_pick_folder()
         check(_plain(_w2, "target").startswith("Target: TEST-1 b | OBJECT and OBJCTRA/OBJCTDEC") and _plain(_w2, "site").startswith("Site: 31.55° N, 99.38° W")
-              and _plain(_w2, "telescope").startswith("Telescope: 81 mm aperture, 382 mm focal length (f/4.7)")
+              and _plain(_w2, "telescope").startswith("Telescope: 81 mm aperture, 382 mm focal length (f/\u20604.7)")
               and _plain(_w2, "filter").startswith("Filter: L · mono camera") and _plain(_w2, "calibration").startswith("Calibration: DARKFLAT (3), FLAT (3)")
               and all(_w2._rows[k]["icon"].text() == "✓" for k in _w2._rows) and not any(_w2._rows[k]["button"].isChecked() for k in _w2._rows)
               and _w2.lbl_status.text() == "Ready — every row is answered." and _w2.btn_run.isEnabled()
@@ -5712,7 +5722,7 @@ else:
               "another telescope's frames: the 81 mm is cleared and its row asks, unfolded; the missing site asks; the Bayer pattern switches the colour camera on",
               " / ".join(_plain(_w2, k) for k in _w2._rows))
         _w2.ed_aperture_mm.type("203")
-        check(_plain(_w2, "telescope").startswith("Telescope: 203 mm aperture, 2032 mm focal length (f/10.0) | Aperture typed in this row")
+        check(_plain(_w2, "telescope").startswith("Telescope: 203 mm aperture, 2032 mm focal length (f/\u206010.0) | Aperture typed in this row")
               and _w2.lbl_status.text().startswith("Ready. 1 row(s) above ask"),
               "typing the aperture answers the row at once, and the status line follows")
         _w2._save_settings()
@@ -5721,8 +5731,8 @@ else:
         _back1 = _plain(_w2, "telescope")
         fake_qt.QFileDialog.answer = _n2
         _w2._on_pick_folder()
-        check(_back1.startswith("Telescope: 81 mm aperture, 382 mm focal length (f/4.7) | Aperture remembered for frames of 382 mm")
-              and _plain(_w2, "telescope").startswith("Telescope: 203 mm aperture, 2032 mm focal length (f/10.0) | Aperture remembered for frames of 2032 mm")
+        check(_back1.startswith("Telescope: 81 mm aperture, 382 mm focal length (f/\u20604.7) | Aperture remembered for frames of 382 mm")
+              and _plain(_w2, "telescope").startswith("Telescope: 203 mm aperture, 2032 mm focal length (f/\u206010.0) | Aperture remembered for frames of 2032 mm")
               and __import__("json").loads(fake_qt.QSettings.store["apertures_by_focal"]) == {"382": 81.0, "2032": 203.0},
               "each telescope's aperture is typed once: it comes back with its frames, in both directions", _back1)
 _ui18 = src[src.index("    def _build_left_panel(self)"):src.index("    def _build_source_group(self")]
@@ -5792,8 +5802,8 @@ check(_many["grade"] == "limited" and [sv for sv, _t in _many["reasons"]] == [2,
       and [sv for sv, _t in _g({"partial": "none", "red_noise_beta": 2.5})["reasons"]] == [3, 2],
       "the grade is the weightiest finding, listed first — four lesser ones do not add up to a worse grade, and passed checks buy nothing back")
 _mqsrc = src[src.index("def measurement_quality(fit, ctx=None)"):src.index("# The form as a checklist")]
-check("rprs_archive" not in _mqsrc and "ephemeris" not in _mqsrc.replace("the ephemeris\n", "").replace("ephemeris was used", "").replace("an ephemeris", "").replace("the ephemeris \"", "")
-      and "depth_pct" not in _mqsrc and ns["QUALITY_GRADES"] == ("good", "usable", "limited", "not usable")
+check("rprs_archive" not in _mqsrc and "depth_pct" not in _mqsrc and 'ctx.get("ephemeris")' not in _mqsrc
+      and "eph.get" not in _mqsrc and "eph[" not in _mqsrc and ns["QUALITY_GRADES"] == ("good", "usable", "limited", "not usable")
       and set(ns["QUALITY_MEANING"]) == set(ns["QUALITY_GRADES"]),
       "the published value is no input to the grade")
 check('result["quality"] = quality' in src and 'self._emit("  VERDICT — " + quality["headline"],' in src
@@ -5812,8 +5822,300 @@ _htmlq = _w0._result_html(dict(_rq, quality=dict(_many, notes=["a <note>"])))
 check(_htmlq.index("<b>Verdict</b>") < _htmlq.index("<b>Photometry</b>") and "▲ Partial transit" in _htmlq
       and "5.5 σ" in _htmlq and "a &lt;note&gt;" in _htmlq and "#e0b060" in _htmlq,
       "the Result tab opens with the verdict, coloured by its grade, findings escaped")
-check('VERSION = "1.0.19"' in src and "1.0.19 - A verdict: detection and measurement, graded apart" in src,
-      "version 1.0.19 with its changelog entry")
+check("1.0.19 - A verdict: detection and measurement, graded apart" in src, "the 1.0.19 changelog entry stays")
+
+print("\n9x) 1.0.20: a transit found and not claimed — three causes")
+# -- a term must stand on its own where the transit is flat
+_bof = ns["basis_outside_flanks"]
+_rg = np.random.default_rng(320)
+_nx = 240
+_tx = 2460200.0 + np.linspace(0.0, 5.0 / 24.0, _nx)
+_t0x, _dx = _tx[0] + 2.5 / 24.0, 2.4 / 24.0
+_shx = ns["ld_shape"](_tx, _t0x, _dx, ns["ld_template"](0.11, 0.3, 0.40, 0.25))
+_amx = 1.25 + 0.20 * (np.linspace(-1.0, 1.0, _nx) ** 2)          # a target crossing the meridian
+_fast = 3.0 + 0.6 * np.sin(np.linspace(0.0, 9.0 * math.pi, _nx))  # seeing that swings inside every stretch
+_drift = np.linspace(1.0, -1.0, _nx)                               # a position that only drifts
+_noise = _rg.normal(0.0, 0.003, _nx)
+_y_fast = 0.013 * _shx + 0.004 * (_fast - _fast.mean()) + _noise
+_ev = _bof(_tx, _y_fast, _fast, [_amx], _t0x, _dx, profile=_shx)
+check(_ev is not None and _ev["delta_bic"] < -10 and abs(_ev["slope"] - 0.004) < 3 * _ev["sigma"] and _ev["stretches"] == 3,
+      "a seeing term that swings inside the stretches is confirmed there, its slope recovered", str(_ev))
+# the baseline after egress sits 4 mmag lower than before ingress: a drift can 'explain' that, and pay with the depth
+_step = np.where(_tx > _t0x + 0.5 * _dx, 0.004, 0.0)
+_y_step = 0.013 * _shx + _step + _noise
+_ev2 = _bof(_tx, _y_step, _drift, [_amx], _t0x, _dx, profile=_shx)
+check(_ev2 is not None and _ev2["delta_bic"] > -ns["BIC_KEEP_DELTA"],
+      "a drift has nothing to show inside the stretches when the data only differ BETWEEN them", str(_ev2))
+check(_bof(_tx[:9], _y_step[:9], _drift[:9], [_amx[:9]], _t0x, _dx) is None
+      and _bof(_tx, _y_step, np.ones(_nx), [_amx], _t0x, _dx) is None and _bof(_tx, _y_step, _drift[:-1], [_amx], _t0x, _dx) is None,
+      "too few points in such stretches, a constant basis or unequal lengths: no verdict")
+_side = (_tx > _t0x + 0.2 * _dx).astype(float)
+check(_bof(_tx, _y_fast, _fast, [_amx], _t0x, _dx, side=_side)["stretches"] == 4,
+      "a meridian flip splits the stretch it falls into, each side with its own level")
+_ancx = {"t0": _t0x, "window_min": 8.0, "sigma_min": 1.0, "epoch": 0, "duration_d": _dx, "duration_tol": 0.05, "impact_b": 0.3, "rprs": 0.11}
+_ancx, _whyx = ns["ephemeris_anchor"]({"period_d": 3.0, "t0_bjd": _t0x - 900.0, "t0_err_d": 0.0002, "period_err_d": 4e-7,
+                                       "duration_h": _dx * 24.0, "a_rs": 9.0, "inc_deg": math.degrees(math.acos(0.3 / 9.0)),
+                                       "rprs_archive": 0.11}, _tx, "BJD_TDB")
+_m_step = _y_step - np.median(_y_step)
+_ch_old, _rw_old = _sel(_tx, _m_step, {"airmass": _amx}, {"xpos": _drift}, u1=0.40, u2=0.25, anchor=_ancx, confirm=False)
+_unc = []
+_ch_new, _rw_new = _sel(_tx, _m_step, {"airmass": _amx}, {"xpos": _drift}, u1=0.40, u2=0.25, anchor=_ancx, unconfirmed=_unc)
+_f_old = _ft(_tx, _m_step, bases=_ch_old, u1=0.40, u2=0.25, anchor=_ancx)
+_f_new = _ft(_tx, _m_step, bases=_ch_new, u1=0.40, u2=0.25, anchor=_ancx)
+check("xpos" in _ch_old and "xpos" not in _ch_new and len(_unc) == 1 and _unc[0]["name"] == "xpos"
+      and _unc[0]["delta_joint"] <= -ns["BIC_KEEP_DELTA"] and _unc[0]["delta_outside"] > -ns["BIC_KEEP_DELTA"]
+      and ("xpos", False) in [(n, k) for n, _d, k in _rw_new]
+      and abs(_unc[0]["with_mmag"] - _f_old["depth_mmag"]) < 1e-6 and abs(_unc[0]["without_mmag"] - _f_new["depth_mmag"]) < 1e-6,
+      "the BIC alone admits the drift; with the confirmation it is not used, and what the depth would have been is kept",
+      f"old {sorted(_ch_old)} {_f_old['depth_mmag']:.2f} / new {sorted(_ch_new)} {_f_new['depth_mmag']:.2f}")
+_m_fast = _y_fast - np.median(_y_fast)
+_ch_f, _rw_f = _sel(_tx, _m_fast, {"airmass": _amx}, {"fwhm": _fast, "xpos": _drift}, u1=0.40, u2=0.25, anchor=_ancx)
+check("fwhm" in _ch_f, "a term that is real and varies within the stretches passes both tests and is kept", str(_rw_f))
+# -- noise that grows is not correlated noise
+_rnb = ns["red_noise_beta"]
+_errx = 0.009 + 0.009 * np.linspace(0.0, 1.0, 556) ** 3
+_t556 = 2460300.0 + np.linspace(0.0, 4.7 / 24.0, 556)
+_b_raw, _b_scl = [], []
+for _k in range(150):
+    _rr = _rg.normal(0.0, 1.0, 556) * _errx
+    _b_raw.append(_rnb(_t556, _rr, 0.116)[0])
+    _b_scl.append(_rnb(_t556, _rr * np.median(_errx) / _errx, 0.116)[0])
+check(np.mean(_b_raw) > np.mean(_b_scl) + 0.05 and np.mean(_b_scl) < 1.15 and np.percentile(_b_raw, 90) > np.percentile(_b_scl, 90) + 0.1,
+      "white noise whose bars double through the night reads as red until it is scaled by its bars",
+      f"raw {np.mean(_b_raw):.2f}/{np.percentile(_b_raw, 90):.2f}  scaled {np.mean(_b_scl):.2f}/{np.percentile(_b_scl, 90):.2f}")
+check('beta, beta_rows = red_noise_beta(t, resid * sw if weighted else resid,' in src
+      and "_resid_flux = _resid_flux * (float(np.median(_fe)) / _fe)" in src,
+      "both fits measure beta on the residuals in units of their own error bars")
+# -- another star's light, by the curve of growth
+_gex = ns["growth_excess"]
+_rr5 = [6.0, 7.5, 9.0]
+def _fl5(extra):
+    out = {}
+    for r in _rr5:
+        ee = 1.0 - math.exp(-r * r / (2.0 * 2.2 ** 2))
+        rows = [80000.0 * (ee + (extra if r >= 9.0 else 0.0)) * np.ones(60)]
+        rows += [c * ee * (1.0 + 0.002 * j) * np.ones(60) for j, c in enumerate((150000.0, 170000.0, 180000.0, 190000.0))]
+        out[r] = np.vstack(rows) * (1.0 + _rg.normal(0.0, 0.002, (5, 60)))
+    return out
+_g1 = _gex(_fl5(0.02), [1, 2, 3, 4], 6.0)
+_g0 = _gex(_fl5(0.0), [1, 2, 3, 4], 6.0)
+check([g[0] for g in _g1] == [7.5, 9.0] and not _g1[0][3] and _g1[1][3] and abs(_g1[1][1] - 0.02) < 0.004
+      and not any(g[3] for g in _g0) and _gex(_fl5(0.02), [1, 2], 6.0) == [] and _gex(_fl5(0.02), [1, 2, 3, 4], 6.2) == [],
+      "a star of 2 % of the target's flux entering between 7.5 and 9 px is found from the fluxes alone; two comparison stars are not enough to say so",
+      str([(g[0], round(g[1], 4), g[3]) for g in _g1]))
+_w3r = [5.99, 7.49, 8.98]
+_w3 = {(0, 1): (1.69e-3, 0.21e-3), (0, 2): (0.07e-3, 0.41e-3), (1, 2): (-1.62e-3, 0.43e-3)}
+check(_ast(_w3r, _w3, 0, eligible=[0, 1], tainted={2})[:2] == (0, "unstable")
+      and _ast(_w3r, {**_w3, (1, 2): (0.17e-3, 0.43e-3)}, 0, eligible=[0, 1], tainted={2})[:2] == (1, "moved")
+      and _ast(_w3r, {(0, 1): (0.1e-3, 0.21e-3), (0, 2): (2.0e-3, 0.41e-3), (1, 2): (2.0e-3, 0.43e-3)}, 0, eligible=[0, 1], tainted={2})[:2] == (0, "stable")
+      and _ast(_w3r, {(0, 2): (2.0e-3, 0.41e-3)}, 0, eligible=[0], tainted={2})[:2] == (0, "unconfirmed")
+      and _ast(_w3r, {**_w3, (1, 2): (0.17e-3, 0.43e-3)}, 0, tainted={1})[:2] != (1, "moved"),
+      "a radius with company confirms a smaller one by agreeing, is not heard when it disagrees, and is never moved to")
+# -- the verdict follows
+_unq = {"name": "xpos", "with_mmag": 7.1, "without_mmag": 11.6, "sigma_mmag": 1.5}
+_qu = _g({"unconfirmed_bases": [_unq]})
+check(_qu["grade"] == "usable" and "xpos term would move the depth from 11.6 to 7.1 mmag" in _qu["reasons"][0][1]
+      and _g({"unconfirmed_bases": [dict(_unq, with_mmag=11.0)]})["grade"] == "good",
+      "a term that was not used is listed when it would have moved the depth by more than its bar")
+_qa1 = _g({"aperture_stability": {"verdict": "unstable", "lo": 1.00, "hi": 1.08, "unit": "%"}, "depth_rprs2_pct_sigma": 0.12})
+_qa2 = _g({"aperture_stability": {"verdict": "unstable", "lo": 0.98, "hi": 1.11, "unit": "%"}, "depth_rprs2_pct_sigma": 0.12})
+check(_qa1["grade"] == "usable" and _qa2["grade"] == "limited"
+      and "another star's light (1.9 %" in _g({"aperture_stability": {"verdict": "stable", "company": [(8.98, 0.019)]}})["notes"][0],
+      "a depth that moves with the aperture inside its own bar is worth knowing, beyond it a limit; company in the aperture is noted")
+_nd2 = _mq({"detected": False, "significance": 4.2, "basis_depth": {"names": ["xpos"], "with_mmag": 7.1, "without_mmag": 11.6,
+                                                                    "sigma_mmag": 1.8, "without_sigma": 5.4, "without_detected": True}})
+check(_nd2["detection"] == "not detected" and _nd2["grade"] is None and len(_nd2["reasons"]) == 1
+      and "Without the xpos term the same data reach 5.4 sigma" in _nd2["reasons"][0][1]
+      and _mq({"detected": False, "significance": 2.0, "basis_depth": {"names": ["xpos"], "without_detected": False}})["reasons"] == [],
+      "'not claimed' gets its second sentence when the data would reach the floor without a term the fit carries")
+check('"  Basis {_u[\'name\']} NOT USED: it lowers the BIC by "' in src.replace("f\"", "\"") and 'fit["unconfirmed_bases"] = list(unconfirmed)' in src
+      and "tainted=bad)" in src and "prow.setSpacing(18)" in src and "WA_LayoutUsesWidgetRect" in src,
+      "the log names a term that was not used, the aperture test knows which radii have company, the plot's switches keep their distance")
+check("1.0.20 - What a low, crowded night taught: WASP-3 b, found and not claimed" in src, "the 1.0.20 changelog entry stays")
+
+print("\n9y) 1.0.21: eight nights — two false alarms, and what stops them")
+# -- no single comparison star may carry the transit
+_cjk = ns["comp_jackknife"]
+_rj = np.random.default_rng(521)
+def _ens(fake_mmag=0.0, real_mmag=0.0, n=_n):
+    """Target and four comparison stars at one aperture.  Comparison star
+    2 can brighten by ``fake_mmag`` with the transit's own profile -- its
+    own variation, which the ensemble writes into the target inverted."""
+    tgt = 60000.0 * 10 ** (-0.4 * (1e-3 * real_mmag * _shape_true + 0.02 * (_Xu - _Xu.mean()))) * (1 + _rj.normal(0, 0.002, n))
+    comps = []
+    for j, c in enumerate((50000.0, 90000.0, 70000.0, 80000.0)):
+        f = c * (1 + _rj.normal(0, 0.002, n))
+        if j == 1:
+            f = f * 10 ** (0.4 * 1e-3 * fake_mmag * _shape_true)
+        comps.append(f)
+    fl = np.vstack([tgt] + comps)
+    return fl, np.sqrt(fl)
+_flj, _fej = _ens(fake_mmag=40.0)
+_mj, _ej = _apc(_flj, _fej, [1, 2, 3, 4])
+_fj = ns["fit_transit"](_t, _mj, bases={"airmass": _Xu}, u1=0.40, u2=0.25, anchor=_anc)
+_rows_j = _cjk(_flj, _fej, [1, 2, 3, 4], _ts if _fj is None else ns["transit_shape"](_fj), [_Xu], t=_t, duration_d=_duru)
+_zj = {c: sh / sg for c, sh, sg in _rows_j}
+check(_fj is not None and _fj["detected"] and max(_zj, key=lambda c: abs(_zj[c])) == 2 and abs(_zj[2]) > 5
+      and abs(1000 * dict((c, sh) for c, sh, _sg in _rows_j)[2]) > 3 * _fj["depth_sigma_mmag"]
+      and _cjk(_flj, _fej, [1, 2], _ts) == [],
+      "a comparison star that brightens with the transit's shape makes a 'transit' in the target — and leaving it out is what moves the depth",
+      str({c: round(z, 1) for c, z in _zj.items()}))
+def _jk_run(fake, real):
+    fl, fe = _ens(fake_mmag=fake, real_mmag=real)
+    raw = {"flux": fl, "ferr": fe, "jd": _t.copy(), "keep": [True] * 4,
+           "stars_ref": [(100.0 * i, 50.0 * i) for i in range(5)]}
+    m, e = _apc(fl, fe, [1, 2, 3, 4])
+    w = _SW(raw)
+    w._bases_memo = None
+    out = w._jackknife_comps(_t, _t, m, e, {"airmass": _Xu}, _anc, 0.40, 0.25, np.full(_n, 0.001), _Xu)
+    return w, raw, out, m, e
+_wj, _rawj, _oj, _mj0, _ej0 = _jk_run(40.0, 0.0)
+_after = _wj._choose_bases(_t, _t, _oj["mag"], _oj["err"], {"airmass": _Xu}, _anc, 0.40, 0.25, _Xu)[3] if _oj else None
+check(_oj is not None and _rawj["keep"] == [True, False, True, True] and _oj["removed_index"] == [1]
+      and len(_wj._comp_jackknife["removed"]) == 1 and _wj._comp_jackknife["left"] == 3 and not _wj._comp_jackknife["unresolved"]
+      and (_after is None or not _after["detected"]),
+      "the star is left out, the raw record follows, and without it nothing is detected: the false alarm of TOI-3540.01",
+      str(_wj._comp_jackknife and _wj._comp_jackknife["removed"]))
+_wk, _rawk, _ok, _mk, _ek = _jk_run(0.0, 15.0)
+check(_ok is None and _rawk["keep"] == [True] * 4 and _wk._comp_jackknife is not None and _wk._comp_jackknife["removed"] == []
+      and any("does not hang on a single star" in m for _c, m in _wk.log),
+      "a real transit seen against clean comparison stars loses none of them")
+# -- a term only the target shows
+_xw = 0.8 * np.sin(np.linspace(0.0, 11.0 * math.pi, _n))          # a wobble every star makes, inside every stretch
+_flx, _fex = _ens(real_mmag=15.0)
+_flx[0] = _flx[0] * 10 ** (-0.4 * 0.012 * _xw)                    # ...and only the target answers it
+_rawx = {"flux": _flx, "ferr": _fex, "jd": _t.copy(), "keep": [True] * 4, "x": np.tile(1500.0 + _xw, (5, 1)),
+         "y": np.tile(1500.0 + 0 * _xw, (5, 1)), "stars_ref": [(0.0, 0.0)] * 5}
+_mx, _ex = _apc(_flx, _fex, [1, 2, 3, 4])
+_wx = _SW(_rawx)
+_wx._bases_memo = None
+_chx, _rwx, _unx, _fx = _wx._choose_bases(_t, _t, _mx, _ex, {"airmass": _Xu, "xpos": _xw}, _anc, 0.40, 0.25, _Xu)
+check("xpos" not in _chx and len(_unx) == 1 and _unx[0]["name"] == "xpos" and _unx[0]["reason"] == "target-only"
+      and ("xpos", False) in [(n, k) for n, _d, k in _rwx] and _unx[0]["without_mmag"] is not None
+      and abs(_unx[0]["without_mmag"] - _fx["depth_mmag"]) < 1e-9 and "comparison star" in _unx[0]["text"],
+      "a term the BIC wants and the flanks confirm is still not used when no comparison star shows it",
+      str([(u["name"], u.get("reason")) for u in _unx]) + " " + str(sorted(_chx)))
+_wx2 = _SW(dict(_rawx, flux=np.vstack([_flx[0]] + [f * 10 ** (-0.4 * 0.012 * _xw) for f in _flx[1:]])))
+_wx2._bases_memo = None
+_m2x, _e2x = _apc(_wx2._native_raw["flux"], _fex, [1, 2, 3, 4])
+check(_wx._choose_bases(_t, _t, _mx, _ex, {"airmass": _Xu, "xpos": _xw}, _anc, 0.40, 0.25, _Xu) is not None
+      and _wx._bases_memo is not None
+      and "xpos" not in _wx2._choose_bases(_t, _t, _m2x, _e2x, {"airmass": _Xu, "xpos": _xw}, _anc, 0.40, 0.25, _Xu)[0],
+      "the answer is remembered for the same curve; and a dependence every star shares cancels in the ensemble and asks for no term")
+# -- the anchor: a held duration, and a window that is none
+_ea = ns["ephemeris_anchor"]
+_ephq = {"period_d": 3.0, "t0_bjd": _t0u - 900.0, "t0_err_d": 0.0002, "period_err_d": 4e-7, "duration_h": _duru * 24.0}
+_a_ok, _ = _ea(_ephq, _t, "BJD_TDB")
+_a_st, _ = _ea(dict(_ephq, period_err_d=2e-4), _t, "BJD_TDB")
+check(abs(ns["ANCHOR_DURATION_TOL"] - 0.05) < 1e-12 and _a_ok["duration_tol"] == 0.05 and _a_ok["wide"] is False
+      and _a_st["wide"] is True and _a_st["window_min"] > 0.5 * _duru * 1440.0,
+      "a known planet's duration is held within 5 %; a window wider than half a transit is flagged as no anchor in time",
+      f"{_a_ok['window_min']:.0f} / {_a_st['window_min']:.0f} min")
+_fat = ns["false_alarm_text"]
+check("anchored search" in _fat({"anchored": True, "anchor": _a_ok}) and "anchored search" not in _fat({"anchored": True, "anchor": _a_st})
+      and "40 000-node" in _fat({"anchored": True, "anchor": _a_st}),
+      "a fit on a stale ephemeris quotes the false-alarm rate of the blind search it is")
+# -- the verdict follows
+_qw = _mq({"detected": False, "significance": 7.6, "claim_note": "the 7.6 sigma rest on the xpos term; with airmass and the flip step alone the same data reach 1.3 sigma"})
+check(_qw["detection"] == "not detected" and _qw["grade"] is None and "rest on the xpos term" in _qw["headline"] and "1.3 sigma" in _qw["headline"],
+      "a claim that rested on an optional term is withdrawn, and the verdict says on what it rested")
+check(_g({"duration_preference": {"free_h": 3.5, "archive_h": 2.8, "dchi2": 14.0, "free_t0_min": -6.0}})["grade"] == "limited"
+      and _g({"anchor": {"wide": True, "sigma_min": 86.0}})["grade"] == "usable"
+      and _g({"airmass_implausible": {"slope_mmag": 918.0, "range": 0.08}})["grade"] == "usable"
+      and "918" in _g({"airmass_implausible": {"slope_mmag": 918.0, "range": 0.08}})["reasons"][0][1],
+      "data that prefer another duration limit the timing; a stale ephemeris and an airmass term that is no extinction are worth knowing")
+_qj = _g({"comp_jackknife": {"removed": [(1.0, 2.0, "depth", 10.0, 2.0)], "left": 3, "unresolved": False}})
+_qj2 = _g({"comp_jackknife": {"removed": [(1.0, 2.0, "depth", 10.0, 2.0), (3.0, 4.0, "screen", float("nan"), float("nan"))], "left": 2, "unresolved": True}})
+check(_qj["grade"] == "good" and "1 comparison star(s) left out" in _qj["notes"][0] and _qj2["grade"] == "usable"
+      and "Too few to check one another" in _qj2["reasons"][0][1],
+      "stars left out are noted; when too few remain to check one another, that is a finding")
+check("only the target shows it, not the comparison stars" in _g({"unconfirmed_bases": [dict(_unq, reason="target-only")]})["reasons"][0][1],
+      "a term left out for want of comparison stars that share it is listed with what the depth would have been")
+_runsrc = src[src.index("    def _run(self) -> None:"):src.index("    def _write_field_image(self")]
+check("CLAIM WITHDRAWN: " in _runsrc and 'fit["claim_note"] = (' in _runsrc and "THE DATA PREFER ANOTHER DURATION: " in _runsrc
+      and "anchor=dict(anchor, duration_tol=ANCHOR_DURATION_WIDE))" in _runsrc and "NOT AN ANCHOR IN TIME" in _runsrc
+      and _runsrc.index("jk = self._jackknife_comps(") < _runsrc.index("swap = self._aperture_stability(")
+      and 'if fit.get("anchored") and fit.get("detected"):' in _runsrc and "and fit.get(\"detected\"):\n                stp = np.asarray" in _runsrc,
+      "the run checks the ensemble before the aperture, withdraws a claim an optional term made, tests the held duration, and keeps measurement caveats out of a non-detection")
+# -- a saturated target ends the run
+_nat21 = src[src.index("    def _native_photometry(self"):src.index("    def _run_light_curve(self")]
+check("if yield_frac < NATIVE_MIN_YIELD and sat_dropped >= 0.5 * n_frames:" in _nat21 and "self._native_abort = (" in _nat21
+      and "if native is None and self._native_abort:" in _runsrc and "self._fail(self._native_abort)" in _runsrc
+      and "self._fallback_comps = [(float(sx), float(sy))" in _nat21 and "for x_, y_ in self._fallback_comps]" in _runsrc
+      and "saturation: Siril refuses a frame whose aperture holds a" in src,
+      "a target clipped in most frames stops the run with the reason; a fallback, when one is taken, gets the comparison stars with headroom")
+# -- the gain, remembered
+_gk = ns["gain_key"]
+check(_gk({"instrument": "Ares-M PRO", "gain_v": 125.0, "binning": 1}) == "Ares-M PRO|gain 125|bin 1"
+      and _gk({"instrument": "", "gain_v": 125.0}) == "" and _gk({"instrument": "X", "gain_v": None}) == "X|gain ?|bin 1",
+      "a measured gain belongs to a camera, its gain setting and its binning; an unnamed camera gets none")
+_rg21 = None
+for _node in tree.body:
+    if isinstance(_node, ast.ClassDef) and _node.name == "LightCurveWorker":
+        for _m in _node.body:
+            if isinstance(_m, ast.FunctionDef) and _m.name == "_recall_gain":
+                _rg21 = ast.get_source_segment(src, _m)
+exec(textwrap.dedent(_rg21), _ans)
+_SW._recall_gain = _ans["_recall_gain"]
+_wg = _SW({})
+_wg.opts = {"gain_memory": {"Ares-M PRO|gain 125|bin 1": 0.258, "Other|gain 0|bin 1": 900.0}}
+_wg._recall_gain({"instrument": "Ares-M PRO", "gain_v": 125.0, "binning": 1})
+_g1 = dict(_wg._measured_gain or {})
+_wg._recall_gain({"instrument": "Ares-M PRO", "gain_v": 200.0, "binning": 1})
+_g2 = _wg._measured_gain
+_wg._recall_gain({"instrument": "Other", "gain_v": 0.0, "binning": 1})
+check(abs(_g1.get("gain", 0) - 0.258) < 1e-12 and _g1.get("remembered") is True and _g2 is None and _wg._measured_gain is None,
+      "the gain on record comes back for the same camera at the same setting, not at another, and never an impossible value")
+_w0._on_gain_found("Ares-M PRO|gain 125|bin 1", 0.258)
+check(_w0._opts()["gain_memory"] == {"Ares-M PRO|gain 125|bin 1": 0.258}
+      and __import__("json").loads(fake_qt.QSettings.store["gains_by_camera"]) == {"Ares-M PRO|gain 125|bin 1": 0.258}
+      and "gain_found = pyqtSignal(str, float)" in src and "self._worker.gain_found.connect(self._on_gain_found)" in src
+      and 'if mg.get("remembered") else' in _nat21,
+      "the dialog keeps what a run measured and hands it to the next one")
+check(_hfn("LUMINOS") == "luminance" and _hfn("Luminos") == "luminance",
+      "a luminance filter named LUMINOS is a passband, so the limb darkening is computed for it")
+# -- the checklist reads lights
+_nl = {r["key"]: r for r in _rows({"has_folder": True, "no_lights": True, "n_read": 150, "calib_found": [("flat", 50)]}, dict(_fm, target_name="", radec=False))}
+check(all(_nl[k]["level"] == "ask" and "no light frame was read" in _nl[k]["title"] for k in ("target", "site", "telescope", "filter"))
+      and _nl["calibration"]["title"] == "Calibration: flat (50)" and "150 files" in _nl["target"]["source"],
+      "when no light frame was read the rows say so instead of describing the flats")
+if _fits18 is not None:
+    with tempfile.TemporaryDirectory() as _td:
+        os.makedirs(os.path.join(_td, "flat"))
+        os.makedirs(os.path.join(_td, "wasp"))
+        for _i in range(40):
+            _h = _fits18.Header()
+            _h["IMAGETYP"], _h["OBJECT"], _h["EXPTIME"], _h["FILTER"] = "FLAT", "flat", 0.06, "Luminance"
+            _fits18.PrimaryHDU(np.zeros((8, 8), np.uint16), header=_h).writeto(os.path.join(_td, "flat", f"f_{_i:03d}.fit"))
+        for _i in range(12):
+            _h = _fits18.Header()
+            _h["IMAGETYP"], _h["OBJECT"], _h["EXPTIME"], _h["FILTER"], _h["FOCALLEN"], _h["APTDIA"] = "LIGHT", "wasp11", 180.0, "Luminance", 2563.0, 356.0
+            _h["DATE-OBS"] = f"2024-01-11T12:{_i:02d}:00"
+            _fits18.PrimaryHDU(np.zeros((8, 8), np.uint16), header=_h).writeto(os.path.join(_td, "wasp", f"l_{_i:03d}.fit"))
+        _w5 = _open({"target_name": "OLD-9 b"})
+        fake_qt.QFileDialog.answer = _td
+        _w5._on_pick_folder()
+        check(_plain(_w5, "target").startswith("Target: wasp11") and _w5.ed_target_name.text() == "wasp11"
+              and _plain(_w5, "telescope").startswith("Telescope: 356 mm aperture, 2563 mm focal length (f/\u20607.2) | APTDIA")
+              and _plain(_w5, "filter").startswith("Filter: Luminance") and _w5._probe.get("object") == "wasp11",
+              "forty flats that sort ahead of twelve lights: the rows are still read from the lights (the row had read 'Target: flat')",
+              " / ".join(_plain(_w5, k) for k in _w5._rows))
+    with tempfile.TemporaryDirectory() as _td:
+        os.makedirs(os.path.join(_td, "flat"))
+        for _i in range(12):
+            _h = _fits18.Header()
+            _h["IMAGETYP"], _h["OBJECT"] = "FLAT", "flat"
+            _fits18.PrimaryHDU(np.zeros((8, 8), np.uint16), header=_h).writeto(os.path.join(_td, "flat", f"f_{_i:03d}.fit"))
+        _w6 = _open({"target_name": "KEEP-1 b"})
+        fake_qt.QFileDialog.answer = _td
+        _w6._on_pick_folder()
+        check(_w6._probe.get("no_lights") is True and _w6.ed_target_name.text() == "KEEP-1 b"
+              and _w6._rows["site"]["icon"].text() == "!" and "no light frame was read" in _plain(_w6, "site"),
+              "a folder of flats only: nothing is taken from them, the name field is left alone, the rows ask")
+check("_ys = [t_.get_position()[1] for t_ in ax.texts" in src and "ax.set_ylim(_lo, _need)" in src,
+      "the plot makes room for the duration labels parked below a deep transit")
+check('VERSION = "1.0.21"' in src and "1.0.21 - Eight nights: two false alarms, and what stops them" in src,
+      "version 1.0.21 with its changelog entry")
 
 if fails:
     print(f"{len(fails)} FAILURE(S)")
